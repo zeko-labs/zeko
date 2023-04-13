@@ -1,0 +1,16 @@
+{
+  "name": "contracts",
+  "private": true,
+  "scripts": {
+    "test": "hardhat test",
+    "compile": "hardhat compile",
+    "geth:init": "geth account import --datadir geth-db geth-test-account",
+    "geth:start": "geth --datadir geth-db --dev --http"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^2.0.2",
+    "@openzeppelin/contracts": "^4.8.2",
+    "hardhat": "^2.13.1"
+  }
+}
