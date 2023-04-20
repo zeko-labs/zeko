@@ -25,7 +25,7 @@ contract DataAvailabilityLayer is MinaMultisig {
         emit BatchProposed(batchId);
     }
 
-    function signBatch(
+    function addBatchSignature(
         bytes32 batchId,
         MinaSchnorrSignature calldata signature
     ) external validatorExists(hashPublicKey(signature.publicKey)) {

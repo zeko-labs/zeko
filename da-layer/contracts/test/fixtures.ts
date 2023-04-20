@@ -3,11 +3,11 @@ import { PublicKey } from "snarkyjs";
 import { DataAvailabilityLayer } from "../typechain-types";
 import { Proxy } from "../typechain-types/contracts/Multisig";
 import { createCombinedArtifact } from "../utils/abi";
-import { fieldToHex } from "../utils/field";
+import { fieldToHex } from "../utils/mina";
 
 export type DataAvailabilityUpgradeable = DataAvailabilityLayer & Proxy;
 
-export const deployDataAvailabilityContract = async (validators: PublicKey[]) => {
+export const deployDataAvailabilityContract = async (validators: PublicKey[], quorum?: number) => {
   const upgradeableArtifact = await createCombinedArtifact(
     "contracts/Multisig/Proxy.sol:Proxy",
     "DataAvailabilityLayer"
@@ -22,7 +22,7 @@ export const deployDataAvailabilityContract = async (validators: PublicKey[]) =>
 
   const proxy = await proxyFactory.deploy(
     implementation.address,
-    validators.length,
+    quorum ?? validators.length,
     validators.map((validator) => ({
       x: fieldToHex(validator.toGroup().x),
       y: fieldToHex(validator.toGroup().y),
