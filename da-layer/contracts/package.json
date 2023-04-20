@@ -4,8 +4,7 @@
   "scripts": {
     "test": "hardhat test",
     "compile": "hardhat compile",
-    "geth:init": "geth account import --datadir geth-db geth-test-account",
-    "geth:start": "geth --datadir geth-db --dev --http"
+    "geth:start": "geth --datadir geth_db --dev --http"
   },
   "license": "MIT",
   "devDependencies": {

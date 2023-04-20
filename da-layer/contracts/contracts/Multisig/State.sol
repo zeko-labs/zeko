@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.18;
 
-import {Transaction, MinaPublicKey, HashedMinaPublicKey, RollupBatch} from "./Types.sol";
+import {Transaction, MinaPublicKey, HashedMinaPublicKey, RollupBatch} from "../Types.sol";
 
 /**
  * @title State
