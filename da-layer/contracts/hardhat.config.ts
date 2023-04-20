@@ -8,7 +8,7 @@ const config: HardhatUserConfig = {
   networks: {
     dev: {
       url: "http://localhost:8545",
-      accounts: [TESTING_PRIVATE_KEY, process.env.PRIVATE_KEY ?? "0x" + "0".repeat(64)],
+      accounts: [TESTING_PRIVATE_KEY],
     },
   },
 };

@@ -6,14 +6,14 @@ import {MinaSchnorrSignature, MinaPublicKey, HashedMinaPublicKey, RollupBatch} f
 import {MinaMultisig} from "./Multisig/MinaMultisig.sol";
 
 contract DataAvailabilityLayer is MinaMultisig {
-    event BatchAdded(bytes32 indexed batchId);
+    event BatchProposed(bytes32 indexed batchId);
     event BatchSigned(
         bytes32 indexed batchId,
         HashedMinaPublicKey indexed publicKey,
         uint256 signatureCount
     );
 
-    function addBatch(bytes32[] calldata fields) external {
+    function proposeBatch(bytes32[] calldata fields) external {
         require(fields.length > 0, "Fields cannot be empty");
 
         bytes32 batchId = hasher.poseidonHash(NetworkId.NULLNET, fields);
@@ -22,7 +22,7 @@ contract DataAvailabilityLayer is MinaMultisig {
 
         batches[batchId].fields = fields;
 
-        emit BatchAdded(batchId);
+        emit BatchProposed(batchId);
     }
 
     function signBatch(
