@@ -1,19 +1,19 @@
 import { ethers } from "hardhat";
 import { PublicKey } from "snarkyjs";
-import { DataAvailabilityLayer } from "../typechain-types";
-import { Proxy } from "../typechain-types/contracts/Multisig";
+import { DataAvailabilityProxy } from "../typechain-types";
+import { DataAvailabilityDev } from "../typechain-types/contracts/dev";
 import { createCombinedArtifact } from "../utils/abi";
 import { fieldToHex } from "../utils/mina";
 
-export type DataAvailabilityUpgradeable = DataAvailabilityLayer & Proxy;
+export type DataAvailabilityUpgradeable = DataAvailabilityDev & DataAvailabilityProxy;
 
 export const deployDataAvailabilityContract = async (validators: PublicKey[], quorum?: number) => {
   const upgradeableArtifact = await createCombinedArtifact(
-    "contracts/Multisig/Proxy.sol:Proxy",
-    "DataAvailabilityLayer"
+    "DataAvailabilityProxy",
+    "DataAvailabilityDev"
   );
 
-  const implementationFactory = await ethers.getContractFactory("DataAvailabilityLayer");
+  const implementationFactory = await ethers.getContractFactory("DataAvailabilityDev");
   const proxyFactory = await ethers.getContractFactoryFromArtifact(upgradeableArtifact);
 
   const implementation = await implementationFactory.deploy();

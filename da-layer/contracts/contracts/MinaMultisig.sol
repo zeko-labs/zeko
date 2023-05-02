@@ -2,9 +2,9 @@
 pragma solidity 0.8.18;
 
 import {ERC1967Upgrade} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Upgrade.sol";
-import {NetworkId, signer} from "../MinaPrecompiles.sol";
+import {NetworkId, signer} from "./MinaPrecompiles.sol";
 import {State} from "./State.sol";
-import {Transaction, MinaPublicKey, HashedMinaPublicKey, MinaSchnorrSignature} from "../Types.sol";
+import {Transaction, MinaPublicKey, HashedMinaPublicKey, MinaSchnorrSignature} from "./Types.sol";
 import {FieldBytes} from "./FieldBytes.sol";
 
 /**
@@ -298,7 +298,7 @@ abstract contract MinaMultisig is ERC1967Upgrade, State {
 
             require(
                 block.timestamp <= transaction.validatorVotePeriod,
-                "Time expired to vote validator"
+                "Transaction vote period has ended"
             );
 
             require(

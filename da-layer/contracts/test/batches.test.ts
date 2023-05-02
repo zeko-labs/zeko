@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { Field, Poseidon, PrivateKey, Signature, isReady as isSnarkyjsReady } from "snarkyjs";
-import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailabilityLayer";
+import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailability";
 import { fieldToHex, hashPublicKey, signatureToStruct } from "../utils/mina";
 import { deployDataAvailabilityContract } from "./fixtures";
 

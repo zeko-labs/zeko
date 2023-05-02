@@ -2,7 +2,7 @@
 pragma solidity 0.8.18;
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {MinaPublicKey} from "../Types.sol";
+import {MinaPublicKey} from "./Types.sol";
 
 /**
  * @title Proxy
@@ -11,7 +11,7 @@ import {MinaPublicKey} from "../Types.sol";
  *
  * Address of the proxy is also the owner of all the tokens available for conversion.
  */
-contract Proxy is ERC1967Proxy {
+contract DataAvailabilityProxy is ERC1967Proxy {
     constructor(
         address implementation,
         uint256 quorum,

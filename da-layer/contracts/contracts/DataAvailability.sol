@@ -3,9 +3,9 @@ pragma solidity 0.8.18;
 
 import {hasher, signer, NetworkId} from "./MinaPrecompiles.sol";
 import {MinaSchnorrSignature, MinaPublicKey, HashedMinaPublicKey, RollupBatch} from "./Types.sol";
-import {MinaMultisig} from "./Multisig/MinaMultisig.sol";
+import {MinaMultisig} from "./MinaMultisig.sol";
 
-contract DataAvailabilityLayer is MinaMultisig {
+contract DataAvailability is MinaMultisig {
     event BatchProposed(bytes32 indexed batchId);
     event BatchSigned(
         bytes32 indexed batchId,
