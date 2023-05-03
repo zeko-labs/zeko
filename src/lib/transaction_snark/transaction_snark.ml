@@ -165,7 +165,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               , N.n * unit )
               t_typed
 
-      let spec : type a b c d. (a, b, c, d) t_typed -> Spec.single list =
+      let spec : type a b c d. (a, b, c, d) t_typed -> Spec.t =
        fun t ->
         match t with
         | Opt_signed_opt_signed ->
@@ -1827,7 +1827,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                   [ correct_coinbase_target_stack; valid_init_state ] ) )
 
       let main ?(witness : Witness.t option) (spec : Spec.t)
-          ~constraint_constants (statement : Statement.With_sok.Checked.t) =
+          ~constraint_constants (statement : Statement.With_sok.var) =
         let open Impl in
         run_checked (dummy_constraints ()) ;
         let ( ! ) x = Option.value_exn x in
