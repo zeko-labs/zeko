@@ -5,25 +5,38 @@
    base
    core_kernel
    ;; local libraries
+   allocation_functor
+   cache_dir
+   consensus
    crypto_params
    currency
-   pasta_bindings
+   data_hash_lib
+   genesis_constants
    kimchi_backend
    kimchi_backend_common
-   kimchi_pasta
+   kimchi_backend.pasta
    kimchi_backend.pasta.basic
+   kimchi_pasta
+   logger
    mina_base
+   mina_state
+   mina_transaction_logic
+   pasta_bindings
    pickles
    pickles.backend
+   pickles_base
    pickles_types
+   ppx_version.runtime
    random_oracle
-   snarky.backendless
-   snark_params
    sgn
    signature_lib
+   snark_params
+   snarky.backendless
+   transaction_snark
    tuple_lib
-   zkapps_examples)
+   zkapps_examples
+ )
+ (inline_tests)
  (instrumentation (backend bisect_ppx))
  (preprocess
-  (pps
-   ppx_version)))
+  (pps ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare)))
