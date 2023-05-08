@@ -7,17 +7,10 @@ open Snark_params
 open Tick
 open Run
 
-let initial_state = lazy (List.init 8 ~f:(fun _ -> Field.Constant.zero))
-
 let initialize public_key =
   Zkapps_examples.wrap_main
     ~public_key:(Public_key.Compressed.var_of_t public_key)
-    (fun account_update ->
-      let initial_state =
-        List.map ~f:Field.constant (Lazy.force initial_state)
-      in
-      account_update#assert_state_unproved ;
-      account_update#set_full_state initial_state )
+    (fun account_update -> account_update#assert_state_unproved )
 
 include struct
   open Snarky_backendless.Request
@@ -52,9 +45,12 @@ let update_state public_key input =
     exists (Typ.Internal.ref ()) ~request:(fun () -> Txn_snark_proof)
   in
   let prev_state = txn_snark.source.first_pass_ledger in
-	let prev_state_raw = Frozen_ledger_hash0.var_to_field prev_state in
-  let next_state = txn_snark.target.first_pass_ledger in
-	let next_state_raw = Frozen_ledger_hash0.var_to_field next_state in
+  let prev_state_raw = Frozen_ledger_hash0.var_to_field prev_state in
+  let next_state = txn_snark.target.second_pass_ledger in
+  let next_state_raw = Frozen_ledger_hash0.var_to_field next_state in
+  let () = Field.Assert.equal
+    (Frozen_ledger_hash0.var_to_field txn_snark.target.first_pass_ledger)
+    (Frozen_ledger_hash0.var_to_field txn_snark.source.second_pass_ledger) in
   let { previous_proof_statements = _ ; public_output = account_update ; auxiliary_output = () } =
     Zkapps_examples.wrap_main
       ~public_key:(Public_key.Compressed.var_of_t public_key)
