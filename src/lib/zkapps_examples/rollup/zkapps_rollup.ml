@@ -1,8 +1,6 @@
-open Core_kernel
 open Pickles_types
 open Signature_lib
 open Mina_base
-open Mina_state
 open Snark_params
 open Tick
 open Run
@@ -144,17 +142,19 @@ module Make (T : sig val tag : Transaction_snark.tag end) = struct
 	let tag, cache_handle, p, Pickles.Provers.[ init ; step ] =
 	    (Zkapps_examples.compile () ~cache:Cache_dir.cache
 	       ~auxiliary_typ:Impl.Typ.unit
-	       ~branches:(module Nat.N0)
+	       ~branches:(module Nat.N2)
 	       ~max_proofs_verified:(module Nat.N1)
 	       ~name:"rollup"
-	       ~constraint_constants:
-	         Genesis_constants.Constraint_constants.(to_snark_keys_header compiled)
-	       ~choices:(fun ~self ->
+	       ~constraint_constants:Genesis_constants.Constraint_constants.(to_snark_keys_header compiled)
+	       ~choices:(fun ~self:_ ->
 	         [ Rules.Init.rule
            ; Rules.Step.rule T.tag
 	         ] ) )
 
 	let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
+
+	let init w = init ~handler:(Rules.Init.handler w)
+	let step w = step ~handler:(Rules.Step.handler w)
 
   module Proof = (val p)
 end
