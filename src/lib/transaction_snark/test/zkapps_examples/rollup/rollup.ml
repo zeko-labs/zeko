@@ -48,9 +48,9 @@ let%test_module "Tokens test" =
       let proof_level = Genesis_constants.Proof_level.Full
     end)
 
-		module M = Zkapps_rollup.Make(struct
+    module M = Zkapps_rollup.Make (struct
       let tag = T.tag
-		end)
+    end)
 
     let mint_to_keys = gen_keys ()
 
@@ -62,14 +62,24 @@ let%test_module "Tokens test" =
       let init =
         let account_update, () =
           Async.Thread_safe.block_on_async_exn
-            (M.init { public_key = pk; token_id; may_use_token = Inherit_from_parent })
+            (M.init
+               { public_key = pk
+               ; token_id
+               ; may_use_token = Inherit_from_parent
+               } )
         in
         account_update
 
       let step txn_snark txn_snark_proof =
         let account_update, () =
           Async.Thread_safe.block_on_async_exn
-            (M.step { public_key = pk; token_id; may_use_token = Inherit_from_parent; txn_snark; txn_snark_proof } )
+            (M.step
+               { public_key = pk
+               ; token_id
+               ; may_use_token = Inherit_from_parent
+               ; txn_snark
+               ; txn_snark_proof
+               } )
         in
         account_update
     end

@@ -9,9 +9,15 @@ open Mina_base
 module Account_update_under_construction = struct
   module In_circuit = struct
     module Account_condition = struct
-      type t = { state_proved : Boolean.var option ; prev_state: Field.t option Zkapp_state.V.t }
+      type t =
+        { state_proved : Boolean.var option
+        ; prev_state : Field.t option Zkapp_state.V.t
+        }
 
-      let create () = { state_proved = None; prev_state = [ None; None; None; None; None; None; None; None ] }
+      let create () =
+        { state_proved = None
+        ; prev_state = [ None; None; None; None; None; None; None; None ]
+        }
 
       let to_predicate ({ state_proved; prev_state } : t) :
           Zkapp_precondition.Account.Checked.t =
@@ -58,10 +64,13 @@ module Account_update_under_construction = struct
         in
         let state =
           Pickles_types.Vector.map prev_state ~f:(function
-            | None -> Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.false_ Field.zero
-            | Some x -> Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.true_ x )
+            | None ->
+                Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.false_
+                  Field.zero
+            | Some x ->
+                Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.true_ x )
         in
-        { default with proved_state ; state = state }
+        { default with proved_state; state }
 
       let assert_state_proved (t : t) =
         match t.state_proved with
@@ -82,7 +91,8 @@ module Account_update_under_construction = struct
       let set_full_state prev_state (t : t) =
         match prev_state with
         | [ a0; a1; a2; a3; a4; a5; a6; a7 ] ->
-            { t with prev_state =
+            { t with
+              prev_state =
                 [ Some a0
                 ; Some a1
                 ; Some a2
@@ -93,11 +103,13 @@ module Account_update_under_construction = struct
                 ; Some a7
                 ]
             }
-        | _ -> failwith "Incorrect length of app_state"
+        | _ ->
+            failwith "Incorrect length of app_state"
 
       let set_state i value (t : t) =
         if i < 0 || i >= 8 then failwith "Incorrect index" ;
-        { t with prev_state =
+        { t with
+          prev_state =
             Pickles_types.Vector.mapi t.prev_state ~f:(fun j old_value ->
                 if i = j then Some value else old_value )
         }
@@ -349,10 +361,16 @@ module Account_update_under_construction = struct
       }
 
     let set_full_prev_state prev_state (t : t) =
-      { t with account_condition = Account_condition.set_full_state prev_state t.account_condition }
+      { t with
+        account_condition =
+          Account_condition.set_full_state prev_state t.account_condition
+      }
 
     let set_prev_state idx data (t : t) =
-      { t with account_condition = Account_condition.set_state idx data t.account_condition }
+      { t with
+        account_condition =
+          Account_condition.set_state idx data t.account_condition
+      }
 
     let set_full_state app_state (t : t) =
       { t with update = Update.set_full_state app_state t.update }
@@ -421,8 +439,8 @@ class account_update ~public_key ?vk_hash ?token_id ?may_use_token () =
 
     method set_full_prev_state prev_state =
       account_update <-
-        Account_update_under_construction.In_circuit.set_full_prev_state prev_state
-          account_update
+        Account_update_under_construction.In_circuit.set_full_prev_state
+          prev_state account_update
 
     method set_state idx data =
       account_update <-
