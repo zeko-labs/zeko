@@ -12,35 +12,45 @@
    yojson
    ;; local libraries
    cache_dir
+   consensus
    currency
    data_hash_lib
    genesis_constants
-   pasta_bindings
+   genesis_ledger
    kimchi_backend
-   kimchi_pasta
+   kimchi_backend.pasta
    kimchi_backend.pasta.basic
+   kimchi_pasta
    merkle_ledger
    mina_base
    mina_base.import
    mina_ledger
    mina_numbers
    mina_state
+   mina_transaction
    mina_transaction_logic
+   mina_wire_types
+   one_or_two
+   pasta_bindings
    pickles
    pickles.backend
    pickles_types
-   random_oracle_input
+   quickcheck_lib
    random_oracle
+   random_oracle_input
+   sexplib0
    sgn
    signature_lib
    snark_params
    snarky.backendless
+   staged_ledger_diff
+   test_util
    transaction_protocol_state
    transaction_snark
    transaction_snark_tests
    with_hash
-   zkapps_rollup
    zkapps_examples
+   zkapps_rollup
    )
   (inline_tests)
   (preprocess
