@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ethers::{
     prelude::{abigen, SignerMiddleware},
     providers::{Provider, StreamExt, Ws},
@@ -8,8 +6,10 @@ use ethers::{
     utils::hex,
 };
 use log::{info, warn};
+use mina_curves::pasta::fields::{fp::Fp, fq::Fq};
 use mina_signer::{Keypair, PubKey, SecKey};
 use o1_utils::FieldHelpers;
+use std::sync::Arc;
 use tokio::try_join;
 
 use crate::signer::{sign, Message, NetworkId};
@@ -32,6 +32,26 @@ impl IntoSolidityType<MinaPublicKey> for PubKey {
             x: x_bytes.try_into().expect("x coordinate is 32 bytes"),
             y: y_bytes.try_into().expect("y coordinate is 32 bytes"),
         }
+    }
+}
+
+impl IntoSolidityType<[u8; 32]> for Fq {
+    fn into_solidity_type(&self) -> [u8; 32] {
+        let mut bytes = self.to_bytes();
+
+        bytes.resize(32, 0);
+
+        bytes.try_into().expect("field element is 32 bytes")
+    }
+}
+
+impl IntoSolidityType<[u8; 32]> for Fp {
+    fn into_solidity_type(&self) -> [u8; 32] {
+        let mut bytes = self.to_bytes();
+
+        bytes.resize(32, 0);
+
+        bytes.try_into().expect("field element is 32 bytes")
     }
 }
 
@@ -114,16 +134,10 @@ impl DALayer {
 
         let signature = sign(&self.mina_keypair, &msg, NetworkId::TESTNET);
 
-        let mut rx_bytes = signature.rx.to_bytes();
-        let mut s_bytes = signature.s.to_bytes();
-
-        rx_bytes.resize(32, 0);
-        s_bytes.resize(32, 0);
-
         let signature = MinaSchnorrSignature {
             public_key: self.mina_keypair.public.clone().into_solidity_type(),
-            rx: rx_bytes.try_into().expect("rx is 32 bytes"),
-            s: s_bytes.try_into().expect("s is 32 bytes"),
+            rx: signature.rx.into_solidity_type(),
+            s: signature.s.into_solidity_type(),
         };
 
         let tx = self
