@@ -44,11 +44,23 @@ impl FromBase58 for SecKey {
 }
 
 #[derive(Debug, Clone)]
-#[repr(C)]
 pub enum NetworkId {
     MAINNET = 0x00,
     TESTNET = 0x01,
     NULLNET = 0x02,
+}
+
+impl TryFrom<u8> for NetworkId {
+    type Error = Box<dyn Error>;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(NetworkId::MAINNET),
+            0x01 => Ok(NetworkId::TESTNET),
+            0x02 => Ok(NetworkId::NULLNET),
+            _ => Err("Invalid network id".into()),
+        }
+    }
 }
 
 impl From<NetworkId> for u8 {

@@ -11,7 +11,7 @@ use mina_signer::SecKey;
 use signer::FromBase58;
 use std::error::Error;
 
-use crate::da_layer::DALayer;
+use crate::{da_layer::DALayer, signer::NetworkId};
 
 struct Logger;
 
@@ -47,6 +47,9 @@ struct Args {
     #[arg(long, env)]
     mina_private_key: String,
 
+    #[arg(long, env, default_value_t = 1)]
+    mina_network_id: u8,
+
     #[arg(long, env, default_value_t = 0)]
     from_block: u64,
 }
@@ -71,6 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         wallet,
         SecKey::from_base58(&args.mina_private_key)?,
         &args.da_address,
+        NetworkId::try_from(args.mina_network_id)?,
     )?;
 
     info!("Started listening to batches");

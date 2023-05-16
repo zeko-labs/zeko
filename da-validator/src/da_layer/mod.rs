@@ -2,7 +2,7 @@ use ethers::{
     prelude::{abigen, SignerMiddleware},
     providers::{Provider, StreamExt, Ws},
     signers::{LocalWallet, Signer},
-    types::{Address, TransactionReceipt},
+    types::{Address, TransactionReceipt, U256},
     utils::hex,
 };
 use log::{info, warn};
@@ -61,6 +61,7 @@ pub struct DALayer {
     pub client: SignerMiddleware<Provider<Ws>, LocalWallet>,
     pub contract: DAContract<SignerMiddleware<Provider<Ws>, LocalWallet>>,
     pub mina_keypair: Keypair,
+    pub mina_network_id: NetworkId,
 }
 
 impl DALayer {
@@ -69,6 +70,7 @@ impl DALayer {
         wallet: LocalWallet,
         mina_sec_key: SecKey,
         da_contract_address: &str,
+        mina_network_id: NetworkId,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let client = SignerMiddleware::new(ws_provider, wallet);
 
@@ -83,6 +85,7 @@ impl DALayer {
             client,
             contract,
             mina_keypair,
+            mina_network_id,
         })
     }
 
@@ -118,13 +121,15 @@ impl DALayer {
     ) -> Result<Option<TransactionReceipt>, Box<dyn std::error::Error>> {
         let signatures_call = self.contract.get_batch_signatures(batch_id);
         let data_call = self.contract.get_batch_data(batch_id);
+        let quorum_call = self.contract.quorum();
 
-        let (signatures, data): (Vec<MinaSchnorrSignature>, Vec<[u8; 32]>) =
-            try_join!(signatures_call.call(), data_call.call())?;
+        let (signatures, data, quorum): (Vec<MinaSchnorrSignature>, Vec<[u8; 32]>, U256) =
+            try_join!(signatures_call.call(), data_call.call(), quorum_call.call())?;
 
-        if signatures
-            .iter()
-            .any(|s| s.public_key == self.mina_keypair.public.into_solidity_type())
+        if signatures.len() >= quorum.as_usize()
+            || signatures
+                .iter()
+                .any(|s| s.public_key == self.mina_keypair.public.into_solidity_type())
         {
             info!("Skipping batch: {:?}", hex::encode(&batch_id));
             return Ok(None);
@@ -132,7 +137,7 @@ impl DALayer {
 
         let msg = Message::from_bytes_slice(&data)?;
 
-        let signature = sign(&self.mina_keypair, &msg, NetworkId::TESTNET);
+        let signature = sign(&self.mina_keypair, &msg, self.mina_network_id.clone());
 
         let signature = MinaSchnorrSignature {
             public_key: self.mina_keypair.public.clone().into_solidity_type(),
