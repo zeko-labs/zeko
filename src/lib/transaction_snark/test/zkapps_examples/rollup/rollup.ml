@@ -344,7 +344,7 @@ let%test_module "Rollup test" =
 
     let account_id = Account_id.create pk token_id
 
-    let owned_token_id = Account_id.derive_token_id ~owner:account_id
+    (* let owned_token_id = Account_id.derive_token_id ~owner:account_id *)
 
     module T = Transaction_snark.Make (struct
       let constraint_constants = U.constraint_constants
@@ -374,18 +374,20 @@ let%test_module "Rollup test" =
         in
         account_update
 
-      let step txn_snark txn_snark_proof =
-        let account_update, () =
-          Async.Thread_safe.block_on_async_exn
-            (M.step
-               { public_key = pk
-               ; token_id
-               ; may_use_token = Inherit_from_parent
-               ; txn_snark
-               ; txn_snark_proof
-               } )
-        in
-        account_update
+      (*
+             let step txn_snark txn_snark_proof =
+               let account_update, () =
+                 Async.Thread_safe.block_on_async_exn
+                   (M.step
+                      { public_key = pk
+                      ; token_id
+                      ; may_use_token = Inherit_from_parent
+                      ; txn_snark
+                      ; txn_snark_proof
+                      } )
+               in
+               account_update
+      *)
     end
 
     let signers = [| (pk, sk); mint_to_keys |]
@@ -413,8 +415,8 @@ let%test_module "Rollup test" =
       let account =
         []
         (* |> Zkapp_command.Call_forest.cons_tree Account_updates.mint *)
-        |> Zkapp_command.Call_forest.cons_tree Account_updates.init
         (* How do we set fields not constrained? *)
+        |> Zkapp_command.Call_forest.cons_tree Account_updates.init
         |> Zkapp_command.Call_forest.cons
              (Account_updates.deploy ~balance_change:(fee_to_create_signed 1))
         |> test_zkapp_command ~fee_payer_pk:pk ~signers ~initialize_ledger
