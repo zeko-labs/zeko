@@ -397,9 +397,9 @@ let%test_module "Rollup test" =
         let open Currency.Balance in
         let add_amount x y = add_amount y x in
         zero
-        |> add_amount (Currency.Amount.of_nanomina_int_exn 500)
+        |> add_amount (Currency.Amount.of_nanomina_int_exn 5000)
         |> Option.value_exn
-        |> add_amount (fee_to_create 50)
+        |> add_amount (fee_to_create 500)
         |> Option.value_exn
       in
       let account = Account.create account_id balance in
@@ -416,7 +416,6 @@ let%test_module "Rollup test" =
         []
         (* |> Zkapp_command.Call_forest.cons_tree Account_updates.mint *)
         (* How do we set fields not constrained? *)
-        |> Zkapp_command.Call_forest.cons_tree Account_updates.init
         |> Zkapp_command.Call_forest.cons
              (Account_updates.deploy ~balance_change:(fee_to_create_signed 1))
         |> test_zkapp_command ~fee_payer_pk:pk ~signers ~initialize_ledger
