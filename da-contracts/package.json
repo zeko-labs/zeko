@@ -1,5 +1,5 @@
 {
-  "name": "contracts",
+  "name": "da-contracts",
   "private": true,
   "scripts": {
     "test": "hardhat test --network dev",
