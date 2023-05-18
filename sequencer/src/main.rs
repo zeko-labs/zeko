@@ -12,22 +12,22 @@ use mina_daemon::MinaDaemon;
 #[derive(Parser, Debug)]
 #[command(about, long_about = None)]
 struct Args {
-    #[arg(short, long, default_value_t = 8000)]
+    #[arg(short, long, env, default_value_t = 8000)]
     port: u16,
 
-    #[arg(long)]
+    #[arg(long, env)]
     mina_daemon_url: String,
 
-    #[arg(long, default_value_t = String::from("http://localhost:8545"))]
+    #[arg(long, env, default_value_t = String::from("http://localhost:8545"))]
     da_provider: String,
 
-    #[arg(long, default_value_t = 1337)]
+    #[arg(long, env, default_value_t = 1337)]
     da_chainid: u64,
 
-    #[arg(long)]
+    #[arg(long, env)]
     da_private_key: String,
 
-    #[arg(long)]
+    #[arg(long, env)]
     da_address: String,
 }
 

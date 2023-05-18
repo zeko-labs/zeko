@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 async-graphql = "5.0.7"
 async-graphql-poem = "5.0.7"
-clap = { version = "4.2.7", features = ["derive"] }
+clap = { version = "4.2.7", features = ["derive", "env"] }
 ethers = { version = "2.0.4" }
 graphql_client = { version = "0.12.0", features = ["reqwest"] }
 mina-hasher = { git = "https://github.com/o1-labs/proof-systems", version = "0.1.0", tag = "0.1.0" }
