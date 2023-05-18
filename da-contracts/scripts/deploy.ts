@@ -1,5 +1,6 @@
 import { ethers } from "hardhat";
 import { PrivateKey, isReady as isSnarkyjsReady, shutdown as shutdownSnarkyjs } from "snarkyjs";
+import validatorsKeys from "../test-validators.json";
 import { createCombinedArtifact } from "../utils/abi";
 import { fieldToHex } from "../utils/mina";
 
@@ -18,12 +19,13 @@ const main = async () => {
 
   await implementation.deployed();
 
-  const validators = Array.from({ length: 5 }, () => PrivateKey.random());
+  const validators = validatorsKeys.map(PrivateKey.fromBase58);
+  const quorum = Math.floor(validators.length / 2 + 1);
 
   // TODO: set quorum and validators
   const proxy = await proxyFactory.deploy(
     implementation.address,
-    validators.length,
+    quorum,
     validators.map((validator) => {
       const { x, y } = validator.toPublicKey().toGroup();
       return {
