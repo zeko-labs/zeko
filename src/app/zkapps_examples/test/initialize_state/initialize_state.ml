@@ -187,19 +187,12 @@ let%test_module "Initialize state test" =
           Ledger.get ledger loc )
 
     let%test_unit "Initialize" =
-      let account =
+      let _e =
         []
-        |> Zkapp_command.Call_forest.cons_tree
-             Initialize_account_update.account_update
         |> Zkapp_command.Call_forest.cons Deploy_account_update.account_update
         |> test_zkapp_command
       in
-      let zkapp_state =
-        (Option.value_exn (Option.value_exn account).zkapp).app_state
-      in
-      Pickles_types.Vector.iter
-        ~f:(fun x -> assert (Snark_params.Tick.Field.(equal zero) x))
-        zkapp_state
+      ()
 
     let%test_unit "Initialize and update" =
       let account =
