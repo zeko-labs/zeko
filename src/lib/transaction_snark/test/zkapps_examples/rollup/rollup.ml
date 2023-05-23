@@ -414,10 +414,10 @@ let%test_module "Rollup test" =
     let%test_unit "Initialize and mint" =
       let account =
         []
-        (* |> Zkapp_command.Call_forest.cons_tree Account_updates.mint *)
-        (* How do we set fields not constrained? *)
+        |> Zkapp_command.Call_forest.cons_tree Account_updates.init
         |> Zkapp_command.Call_forest.cons
-             (Account_updates.deploy ~balance_change:(fee_to_create_signed 1))
+             (Account_updates.deploy
+                ~balance_change:Account_update.Body.dummy.balance_change )
         |> test_zkapp_command ~fee_payer_pk:pk ~signers ~initialize_ledger
              ~finalize_ledger
       in
