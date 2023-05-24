@@ -56,6 +56,6 @@
   (preprocess
     (pps ppx_snarky ppx_version ppx_jane))
   (instrumentation (backend bisect_ppx))
-	(flags
-		(:standard -w a -warn-error +a))
-	)
+  (flags
+    (:standard -w a -warn-error +a))
+  )

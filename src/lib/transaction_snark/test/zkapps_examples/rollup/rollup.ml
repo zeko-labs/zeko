@@ -2,6 +2,7 @@ open Transaction_snark_tests.Util
 open Core_kernel
 open Mina_base
 open Signature_lib
+module Field = Snark_params.Tick.Run.Field
 module Impl = Pickles.Impls.Step
 module Inner_curve = Snark_params.Tick.Inner_curve
 module Nat = Pickles_types.Nat
@@ -333,7 +334,6 @@ let%test_module "Rollup test" =
       let account =
         []
         |> Zkapp_command.Call_forest.cons_tree (Account_updates.step txn)
-        |> Zkapp_command.Call_forest.cons_tree Account_updates.init
         |> Zkapp_command.Call_forest.cons
              (Account_updates.deploy
                 ~balance_change:Account_update.Body.dummy.balance_change

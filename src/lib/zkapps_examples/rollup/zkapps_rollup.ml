@@ -122,7 +122,6 @@ module Rules = struct
           } =
         Zkapps_examples.wrap_main ~public_key ~token_id
           (fun account_update ->
-            account_update#assert_state_proved ;
             account_update#set_prev_state 0 prev_state_raw ;
             account_update#set_state 0 next_state_raw ;
             () )
