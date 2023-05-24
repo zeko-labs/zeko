@@ -7,19 +7,29 @@ The Mina zk rollup sequencer is a component of the Mina zk rollup that is respon
 The sequencer has following responsibilities:
 
 - Accept user transactions through the GraphQL API with the same interface as the Mina daemon.
-- Keep the rollup's state with the full ledger
-- Observe L1 rollup contract for deposit events, relay them to the DA layer and update the local deposit requests queue.
-- Observe DA layer for new deposit requests and add them to the local deposit requests queue.
-- Consolidate deposit requests and user transactions into a block.
-- Submit the block to the DA layer.
-- Submit the block as a state transition to the Mina daemon to store the state.
+- Apply user transactions to the ledger.
+- Periodically consolidate user transactions into a batch.
+- Submit the batch to the DA layer.
+- Wait for the DA signoff of the batch.
+- Submit the state to the L1 rollup contract.
+- Listen for rollbacks on L1
+
+## Table of contents
+
+- [Mina zk rollup sequencer](#mina-zk-rollup-sequencer)
+  - [Overview](#overview)
+  - [Table of contents](#table-of-contents)
+  - [1. GraphQL API](#1-graphql-api)
+  - [2. Ledger](#2-ledger)
+  - [2.1. Rollback optimalization](#21-rollback-optimalization)
+  - [3. Batch consolidation](#3-batch-consolidation)
+  - [4. Data Availability layer](#4-data-availability-layer)
+  - [5. Bootstrap](#5-bootstrap)
 
 ## 1. GraphQL API
 
-For the rollup to be compatible with the Mina L1 tooling, the GraphQL API of the sequencer is the same as the Mina daemon.
-The difference is that the rollup won't be accepting stake delegation transactions.
-
-This is the rough schema that the sequencer will be implementing:
+For the rollup to be compatible with the Mina L1 tooling, the GraphQL API of the sequencer will be almost same as the Mina daemon GraphQL API.
+The L2 rollup don't have concept of blocks and delegation, therefore the GraphQL API will be simplified.
 
 ```graphql
 mutation {
@@ -29,68 +39,113 @@ mutation {
     ): SendPaymentPayload!
 
     sendZkapp(input: SendZkappInput!): SendZkappPayload!
-
-    addNewBlock(
-        block: BlockInput!
-    ): AddNewBlockPayload!
-
-    setBestChain(
-        stateHash: String!
-        height: Int!
-    ): SetBestChainPayload!
 }
 
 query {
-    syncStatus: SyncStatus! # always returns synced
+    syncStatus: SyncStatus! # always `synced`
+
     account(
         token: TokenId
         publicKey: PublicKey!
     ): Account
     accounts(publicKey: PublicKey!): [Account!]!
+
     tokenOwner(tokenId: TokenId!): Account
     tokenAccounts(tokenId: TokenId!): [Account!]!
-    block(
-        height: Int
-        stateHash: String
-    ): Block!
-    genesisBlock: Block!
+
     transactionStatus(
         zkappTransaction: ID
         payment: ID
     ): TransactionStatus!
+
     validatePayment(
         signature: SignatureInput
         input: SendPaymentInput!
     ): Boolean!
+
+    batch(
+        id: BatchId!
+        transactions: [TransactionId!]!
+    ): Batch
 }
 ```
 
-## 2. State
+## 2. Ledger
 
-The sequencer keeps the full ledger state.
-Since we don't want to be reimplementing the state structuring and fetching logic, the sequencer will hold the state in the Mina daemon.
-We add new mutation to the graphql API of mina daemon accepting new blocks that will be added to the transition frontier and mutation to set the currently best tip for rollbacks.
+The sequencer needs to hold the state of the whole ledger.
+The sequencer will use ledger exported from snarkyjs.
+Since the snarkyjs is a npm package, to avoid embedding the ledger in the sequencer, the ledger will be standalone service written in typescript.
 
-Using the `--demo-mode` option the daemon will be in synced mode by default and won't be participating in the consensus.
+Ledger service will expose following rest endpoints for the ledger operations:
 
-## 3. Deposit requests
+```
+GET /account/:publicKey
 
-The sequencer needs to know current pending requests and their status.
+POST /applyZkappCommand
+POST /applyUserCommand
 
-The `included` status is indicated by present receipt on DA layer with the valid block hash in the current rollup state. In the case of a rollback, the receipt stays on the DA layer, therefore there might be present receipts for the same deposit request in multiple rollup states.
+POST /applyBatches
 
-After the rollback the deposit request can rollback to the `pending` state meaning that the transaction is still `included` on L1, or to the `non-existent` state meaning that the transaction is no longer `included` on L1.
+POST /applyGenesis
+```
 
-Therefore after the L1 rollback, the sequencer needs to rebuild the deposit requests queue from the current rollup state, validating the deposit request transaction against the L1 state and validate the deposit request receipts against the rollup state.
+`/applyGenesis` is used in case of bootstrapping and erases the current ledger. `/applyBatches` is the endpoint used for faster boostrapping.
 
-## 4. Block production
+Currently exported ledger in snarkyjs exposes only [`applyJsonTransaction`](https://github.com/o1-labs/snarkyjs-bindings/blob/54da2c27228984075bf0cacd54c468d7317cb258/ocaml/lib/snarky_js_bindings_lib.ml#LL2773C13-L2773C13) which is wrapped [`apply_zkapp_command`](https://github.com/o1-labs/snarkyjs-bindings/blob/54da2c27228984075bf0cacd54c468d7317cb258/ocaml/lib/snarky_js_bindings_lib.ml#LL2527C5-L2527C36). For basic payments we need to expose also [`apply_user_command`](https://github.com/MinaProtocol/mina/blob/develop/src/lib/transaction_logic/mina_transaction_logic.ml#L1094).
 
-The sequencer will be producing blocks in the following way:
+## 2.1. Rollback optimalization
 
-1. Observe the L1 rollup contract for deposit events, relay them to the DA layer and update the local deposit requests queue.
-2. Observe DA layer for new deposit requests and add them to the local deposit requests queue.
-3. Consolidate deposit requests and user transactions into a block.
-4. Submit the block to the DA layer.
-5. Wait for the DA signoff of the block.
-6. Submit the state to the L1 rollup contract.
-7. Submit the block as a state transition to the Mina daemon to store the state.
+The sequencer can cache `k` last states to avoid full boostrap.
+
+Following endpoints will be exposed:
+
+```
+GET /availableStates
+POST /rollbackTo/:batchId
+```
+
+To store multiple states, deep copy of ledger has to be implemented.
+
+## 3. Batch consolidation
+
+The sequencer will periodically consolidate user transactions into a batch.
+The batch will be a list of zkapp transactions and payments.
+
+## 4. Data Availability layer
+
+Data availability layer is an evm chain with multisignature smart contract and set of validators.
+Validators are represented by mina public keys and their purpose is to sign off the batch, confirming that the batch is available.
+
+The sequencer will submit the batch to the DA layer. Batch consists of list of zkapp command and payments.
+For the batch to be signable with schnorr signature, it needs to be encoded into field elements.
+The sequencer needs to be able decode the batch from field elements.
+
+The solidity struct of the batch is following:
+
+`bytes32` is a field element.
+
+```solidity
+struct Batch {
+  bytes32 id; // Poseidon hash of zkapp commands, payments and previous batch
+  bytes32 previousBatch;
+  bytes32[] zkappCommands;
+  bytes32[] payments;
+}
+```
+
+Every batch is unique by id, therefore validators can sign off the batch by signing the id of the batch.
+
+## 5. Bootstrap
+
+The sequencer needs to be able to bootstrap the chain from the genesis ledger state.
+The single source of truth for current state is L1 contract and for batches data is DA layer.
+
+The bootstrap process will be following:
+
+1. Fetch the current `batchId` from L1 contract.
+2. Fetch available historical states from ledger service.
+3. If the `batchId` is present in available states, use the state as current state.
+4. If not, fetch the batches in retrospective order from DA layer starting from current `batchId` until the genesis state.
+5. Apply the batches to the ledger.
+
+The bootstrap process will be triggered on startup and on L1 rollbacks.
