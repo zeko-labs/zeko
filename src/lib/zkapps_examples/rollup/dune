@@ -39,4 +39,6 @@
  (inline_tests)
  (instrumentation (backend bisect_ppx))
  (preprocess
-  (pps ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare)))
+  (pps ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare))
+ (flags
+	 (:standard -w a -warn-error +a)))
