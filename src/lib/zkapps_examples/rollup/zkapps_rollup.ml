@@ -71,8 +71,7 @@ module Rules = struct
 
     module Witness = struct
       type t =
-        { txn_snark : Transaction_snark.Statement.With_sok.t
-        ; txn_snark_proof : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t
+        { txn : Transaction_snark.t
         ; public_key : Public_key.Compressed.t
         ; token_id : Token_id.t
         ; may_use_token : Account_update.May_use_token.t
@@ -83,9 +82,9 @@ module Rules = struct
         (Snarky_backendless.Request.With { request; respond }) =
       match request with
       | Txn_snark ->
-          respond (Provide w.txn_snark)
+          respond (Provide (Transaction_snark.statement_with_sok w.txn))
       | Txn_snark_proof ->
-          respond (Provide w.txn_snark_proof)
+          respond (Provide (Transaction_snark.proof w.txn))
       | Public_key ->
           respond (Provide w.public_key)
       | Token_id ->
@@ -95,6 +94,7 @@ module Rules = struct
       | _ ->
           respond Unhandled
 
+    (* TODO: Figure out whether we need to check connecting_ledger_hash == connecting_ledger_right *)
     let main input =
       let txn_snark =
         exists Transaction_snark.Statement.With_sok.typ ~request:(fun () ->
