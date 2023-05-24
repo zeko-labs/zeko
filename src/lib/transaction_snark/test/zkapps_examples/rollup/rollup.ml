@@ -10,6 +10,7 @@ module Zkapp_command_segment = Transaction_snark.Zkapp_command_segment
 module Statement = Transaction_snark.Statement
 module U = Transaction_snark_tests.Util
 
+(* Adapted from transaction_snark/test/transaction_union *)
 module Txs = struct
   open Core
   open Mina_ledger
@@ -94,21 +95,12 @@ module Txs = struct
       }
   end
 
-  let test_base_and_merge ~state_hash_and_body1 ~state_hash_and_body2
-      ~carryforward1 ~carryforward2 =
+  let make_some_txn () =
     let module T = (val Lazy.force U.snark_module) in
-    Test_util.with_randomness 123456789 (fun () ->
+    Test_util.with_randomness 502381708 (fun () ->
         let wallets = U.Wallet.random_wallets () in
-        (*let state_body = Lazy.force state_body in
-          let state_body_hash = Lazy.force state_body_hash in*)
-        let state_body_hash1, state_body1 = state_hash_and_body1 in
-        let global_slot1 =
-          Mina_state.Protocol_state.Body.consensus_state state_body1
-          |> Consensus.Data.Consensus_state.global_slot_since_genesis
-        in
-        let state_body_hash2, state_body2 = state_hash_and_body2 in
-        let global_slot2 =
-          Mina_state.Protocol_state.Body.consensus_state state_body2
+        let global_slot =
+          Mina_state.Protocol_state.Body.consensus_state state_body
           |> Consensus.Data.Consensus_state.global_slot_since_genesis
         in
         Ledger.with_ledger ~depth:ledger_depth ~f:(fun ledger ->
@@ -142,10 +134,6 @@ module Txs = struct
               Sparse_ledger.of_ledger_subset_exn ledger
                 (List.concat_map
                    ~f:(fun t ->
-                     (* NB: Shouldn't assume the same next_available_token
-                        for each command normally, but we know statically
-                        that these are payments in this test.
-                     *)
                      Signed_command.accounts_referenced
                        (Signed_command.forget_check t) )
                    [ t1; t2 ] )
@@ -154,18 +142,11 @@ module Txs = struct
             let pending_coinbase_stack_state1 =
               (* No coinbase to add to the stack. *)
               let stack_with_state =
-                Pending_coinbase.Stack.push_state state_body_hash1 global_slot1
+                Pending_coinbase.Stack.push_state state_body_hash global_slot
                   init_stack1
               in
-              (* Since protocol state body is added once per block, the
-                 source would already have the state if [carryforward=true]
-                 from the previous transaction in the sequence of
-                 transactions in a block. We add state to [init_stack] and
-                 then check that it is equal to the target.
-              *)
               let source_stack, target_stack =
-                if carryforward1 then (stack_with_state, stack_with_state)
-                else (init_stack1, stack_with_state)
+                (stack_with_state, stack_with_state)
               in
               { Pc_with_init_stack.pc =
                   { source = source_stack; target = target_stack }
@@ -175,142 +156,28 @@ module Txs = struct
             let proof12 =
               of_user_command' sok_digest ledger t1
                 pending_coinbase_stack_state1.init_stack
-                pending_coinbase_stack_state1.pc state_body1
+                pending_coinbase_stack_state1.pc state_body
                 (unstage @@ Sparse_ledger.handler sparse_ledger)
             in
-            let current_global_slot =
-              Mina_state.Protocol_state.Body.consensus_state state_body1
-              |> Consensus.Data.Consensus_state.global_slot_since_genesis
-            in
-            let sparse_ledger, _ =
-              Sparse_ledger.apply_user_command ~constraint_constants
-                ~txn_global_slot:current_global_slot sparse_ledger t1
-              |> Or_error.ok_exn
-            in
-            let pending_coinbase_stack_state2, state_body2 =
-              let previous_stack = pending_coinbase_stack_state1.pc.target in
-              let stack_with_state2 =
-                Pending_coinbase.Stack.(
-                  push_state state_body_hash2 global_slot2 previous_stack)
-              in
-              (* No coinbase to add. *)
-              let source_stack, target_stack, init_stack, state_body2 =
-                if carryforward2 then
-                  (* Source and target already have the protocol state,
-                     init_stack will be such that
-                     [init_stack + state_body_hash1 = target = source].
-                  *)
-                  (previous_stack, previous_stack, init_stack1, state_body1)
-                else
-                  (* Add the new state such that
-                     [previous_stack + state_body_hash2
-                      = init_stack + state_body_hash2
-                      = target].
-                  *)
-                  ( previous_stack
-                  , stack_with_state2
-                  , previous_stack
-                  , state_body2 )
-              in
-              ( { Pc_with_init_stack.pc =
-                    { source = source_stack; target = target_stack }
-                ; init_stack
-                }
-              , state_body2 )
-            in
-            ignore
-              ( Ledger.apply_user_command ~constraint_constants ledger
-                  ~txn_global_slot:current_global_slot t1
-                |> Or_error.ok_exn
-                : Ledger.Transaction_applied.Signed_command_applied.t ) ;
-            [%test_eq: Frozen_ledger_hash.t]
-              (Ledger.merkle_root ledger)
-              (Sparse_ledger.merkle_root sparse_ledger) ;
-            let proof23 =
-              of_user_command' sok_digest ledger t2
-                pending_coinbase_stack_state2.init_stack
-                pending_coinbase_stack_state2.pc state_body2
-                (unstage @@ Sparse_ledger.handler sparse_ledger)
-            in
-            let current_global_slot =
-              Mina_state.Protocol_state.Body.consensus_state state_body2
-              |> Consensus.Data.Consensus_state.global_slot_since_genesis
-            in
-            let sparse_ledger, _ =
-              Sparse_ledger.apply_user_command ~constraint_constants
-                ~txn_global_slot:current_global_slot sparse_ledger t2
-              |> Or_error.ok_exn
-            in
-            ignore
-              ( Ledger.apply_user_command ledger ~constraint_constants
-                  ~txn_global_slot:current_global_slot t2
-                |> Or_error.ok_exn
-                : Mina_transaction_logic.Transaction_applied
-                  .Signed_command_applied
-                  .t ) ;
-            [%test_eq: Frozen_ledger_hash.t]
-              (Ledger.merkle_root ledger)
-              (Sparse_ledger.merkle_root sparse_ledger) ;
-            let proof13 =
-              Async.Thread_safe.block_on_async_exn (fun () ->
-                  T.merge ~sok_digest proof12 proof23 )
-              |> Or_error.ok_exn
-            in
-            Async.Thread_safe.block_on_async (fun () ->
-                T.verify_against_digest proof13 )
-            |> Result.ok_exn |> Or_error.ok_exn ) )
-
-  let ex1 =
-    let state_hash_and_body1 = (state_body_hash, state_body) in
-    test_base_and_merge ~state_hash_and_body1
-      ~state_hash_and_body2:state_hash_and_body1 ~carryforward1:true
-      ~carryforward2:true
-
-  (*
-     let ex2 =
-       let state_hash_and_body1 = (state_body_hash, state_body) in
-       test_base_and_merge ~state_hash_and_body1
-         ~state_hash_and_body2:state_hash_and_body1 ~carryforward1:false
-         ~carryforward2:true
-
-     let ex3 =
-       let state_hash_and_body1 =
-         let open Staged_ledger_diff in
-         let state_body0 =
-           Mina_state.Protocol_state.negative_one
-             ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-             ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-             ~constraint_constants ~consensus_constants ~genesis_body_reference
-           |> Mina_state.Protocol_state.body
-         in
-         let state_body_hash0 =
-           Mina_state.Protocol_state.Body.hash state_body0
-         in
-         (state_body_hash0, state_body0)
-       in
-       let state_hash_and_body2 = (state_body_hash, state_body) in
-       test_base_and_merge ~state_hash_and_body1 ~state_hash_and_body2
-         ~carryforward1:true ~carryforward2:false
-
-     let ex4 =
-       let state_hash_and_body1 =
-         let state_body0 =
-           let open Staged_ledger_diff in
-           Mina_state.Protocol_state.negative_one
-             ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-             ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-             ~constraint_constants ~consensus_constants ~genesis_body_reference
-           |> Mina_state.Protocol_state.body
-         in
-         let state_body_hash0 =
-           Mina_state.Protocol_state.Body.hash state_body0
-         in
-         (state_body_hash0, state_body0)
-       in
-       let state_hash_and_body2 = (state_body_hash, state_body) in
-       test_base_and_merge ~state_hash_and_body1 ~state_hash_and_body2
-         ~carryforward1:false ~carryforward2:false
-  *)
+            let stmt = Transaction_snark.statement proof12 in
+            print_endline
+              (Frozen_ledger_hash0.to_decimal_string stmt.connecting_ledger_left) ;
+            print_endline
+              (Frozen_ledger_hash0.to_decimal_string
+                 stmt.connecting_ledger_right ) ;
+            print_endline
+              (Frozen_ledger_hash0.to_decimal_string
+                 stmt.source.first_pass_ledger ) ;
+            print_endline
+              (Frozen_ledger_hash0.to_decimal_string
+                 stmt.target.first_pass_ledger ) ;
+            print_endline
+              (Frozen_ledger_hash0.to_decimal_string
+                 stmt.source.second_pass_ledger ) ;
+            print_endline
+              (Frozen_ledger_hash0.to_decimal_string
+                 stmt.target.second_pass_ledger ) ;
+            proof12 ) )
 end
 
 let gen_keys () =
@@ -359,9 +226,61 @@ let%test_module "Rollup test" =
     let mint_to_keys = gen_keys ()
 
     module Account_updates = struct
-      let deploy ~balance_change =
-        Zkapps_examples.Deploy_account_update.full ~balance_change
-          ~access:Either pk token_id M.vk
+      let deploy ~balance_change genesis : Account_update.t =
+        let body =
+          { Account_update.Body.dummy with
+            public_key = pk
+          ; balance_change
+          ; token_id
+          ; update =
+              { Account_update.Update.dummy with
+                app_state =
+                  [ Set (Frozen_ledger_hash0.to_field genesis)
+                  ; Keep
+                  ; Keep
+                  ; Keep
+                  ; Keep
+                  ; Keep
+                  ; Keep
+                  ; Keep
+                  ]
+              ; verification_key =
+                  Set
+                    { data = M.vk
+                    ; hash =
+                        (* TODO: This function should live in
+                           [Side_loaded_verification_key].
+                        *)
+                        Zkapp_account.digest_vk M.vk
+                    }
+              ; permissions =
+                  Set
+                    { edit_state = Proof
+                    ; send = Either
+                    ; receive = None
+                    ; set_delegate = Proof
+                    ; set_permissions = Proof
+                    ; set_verification_key = Proof
+                    ; set_zkapp_uri = Proof
+                    ; edit_action_state = Proof
+                    ; set_token_symbol = Proof
+                    ; increment_nonce = Proof
+                    ; set_voting_for = Proof
+                    ; set_timing = Proof
+                    ; access = Either
+                    }
+              }
+          ; use_full_commitment = true
+          ; preconditions =
+              { Account_update.Preconditions.network =
+                  Zkapp_precondition.Protocol_state.accept
+              ; account = Accept
+              ; valid_while = Ignore
+              }
+          ; authorization_kind = Signature
+          }
+        in
+        { body; authorization = Signature Signature.dummy }
 
       let init =
         let account_update, () =
@@ -374,20 +293,17 @@ let%test_module "Rollup test" =
         in
         account_update
 
-      (*
-             let step txn_snark txn_snark_proof =
-               let account_update, () =
-                 Async.Thread_safe.block_on_async_exn
-                   (M.step
-                      { public_key = pk
-                      ; token_id
-                      ; may_use_token = Inherit_from_parent
-                      ; txn_snark
-                      ; txn_snark_proof
-                      } )
-               in
-               account_update
-      *)
+      let step txn =
+        let account_update, () =
+          Async.Thread_safe.block_on_async_exn
+            (M.step
+               { public_key = pk
+               ; token_id
+               ; may_use_token = Inherit_from_parent
+               ; txn
+               } )
+        in
+        account_update
     end
 
     let signers = [| (pk, sk); mint_to_keys |]
@@ -412,12 +328,16 @@ let%test_module "Rollup test" =
     let finalize_ledger loc ledger = Ledger.get ledger loc
 
     let%test_unit "Initialize and mint" =
+      let txn = Txs.make_some_txn () in
+      let stmt = Transaction_snark.statement txn in
       let account =
         []
+        |> Zkapp_command.Call_forest.cons_tree (Account_updates.step txn)
         |> Zkapp_command.Call_forest.cons_tree Account_updates.init
         |> Zkapp_command.Call_forest.cons
              (Account_updates.deploy
-                ~balance_change:Account_update.Body.dummy.balance_change )
+                ~balance_change:Account_update.Body.dummy.balance_change
+                stmt.source.first_pass_ledger )
         |> test_zkapp_command ~fee_payer_pk:pk ~signers ~initialize_ledger
              ~finalize_ledger
       in
