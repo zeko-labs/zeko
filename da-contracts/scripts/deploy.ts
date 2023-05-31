@@ -22,7 +22,6 @@ const main = async () => {
   const validators = validatorsKeys.map(PrivateKey.fromBase58);
   const quorum = Math.floor(validators.length / 2 + 1);
 
-  // TODO: set quorum and validators
   const proxy = await proxyFactory.deploy(
     implementation.address,
     quorum,
