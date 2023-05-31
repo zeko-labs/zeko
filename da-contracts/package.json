@@ -4,7 +4,7 @@
   "scripts": {
     "test": "hardhat test --network dev",
     "compile": "hardhat compile",
-    "geth:start": "geth --datadir geth_db --dev --http"
+    "geth:start": "geth --datadir geth_db --dev --http --ws"
   },
   "license": "MIT",
   "devDependencies": {
