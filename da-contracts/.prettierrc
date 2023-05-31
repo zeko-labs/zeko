@@ -1,0 +1,13 @@
+{
+  "overrides": [
+    {
+      "files": [
+        "*.{ts,sol}",
+        "!{build,node_modules,typechain-types,cache}/**/*"
+      ],
+      "options": {
+        "printWidth": 99
+      }
+    }
+  ]
+}
