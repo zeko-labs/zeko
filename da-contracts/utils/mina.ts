@@ -1,7 +1,7 @@
 import { BytesLike } from "ethers";
 import { ethers } from "hardhat";
 import { Field, PublicKey, Scalar, Signature } from "snarkyjs";
-import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailabilityLayer";
+import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailability";
 
 export const fieldToHex = (field: Field | Scalar) => {
   const bigEndianHex = BigInt(field.toJSON()).toString(16);
