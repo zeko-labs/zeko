@@ -312,7 +312,7 @@
           name = "mina-with-lsp";
           buildInputs = oa.buildInputs ++ devShellPackages;
           nativeBuildInputs = oa.nativeBuildInputs
-            ++ [ ocamlPackages.ocaml-lsp-server ];
+            ++ [ ocamlPackages.ocaml-lsp-server pkgs.cargo pkgs.rustc ];
           shellHook = ''
             ${oa.shellHook}
             unset MINA_COMMIT_DATE MINA_COMMIT_SHA1 MINA_BRANCH
