@@ -2628,22 +2628,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mina-p2p-messages"
-version = "0.6.4"
-source = "git+https://github.com/openmina/mina-p2p-messages-rs.git#fdac8bd0a69eac216b8c101bfcc99d4220e21f23"
-dependencies = [
- "base64 0.13.1",
- "binprot",
- "binprot_derive",
- "bs58",
- "derive_more",
- "hex",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
 name = "mina-signer"
 version = "0.1.0"
 source = "git+https://github.com/openmina/proof-systems?branch=ledger#e73c3c948e1fc0d9da0b0e222e303bbeb6eac817"
@@ -2684,7 +2668,7 @@ dependencies = [
  "kimchi",
  "mina-curves",
  "mina-hasher",
- "mina-p2p-messages 0.6.4 (git+https://github.com/openmina/mina-p2p-messages-rs?branch=new-types-feb-23)",
+ "mina-p2p-messages",
  "mina-signer",
  "num-bigint",
  "o1-utils",
@@ -3926,7 +3910,7 @@ dependencies = [
  "graphql_client",
  "mina-curves",
  "mina-hasher",
- "mina-p2p-messages 0.6.4 (git+https://github.com/openmina/mina-p2p-messages-rs.git)",
+ "mina-p2p-messages",
  "mina-signer",
  "mina-tree",
  "o1-utils",

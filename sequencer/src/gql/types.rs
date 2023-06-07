@@ -3,39 +3,40 @@ use async_graphql::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PublicKey(pub String);
 scalar!(PublicKey);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Signature(pub String);
 scalar!(Signature);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Field(pub String);
 scalar!(Field);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TokenId(pub String);
 scalar!(TokenId);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TransactionId(pub String);
 scalar!(TransactionId);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TransactionHash(pub String);
 scalar!(TransactionHash);
 
+#[derive(Serialize, Deserialize, Clone)]
 #[allow(non_camel_case_types)]
-pub struct U_Int64(pub u64);
+pub struct U_Int64(pub String);
 
 #[Scalar]
 impl ScalarType for U_Int64 {
     fn parse(value: Value) -> InputValueResult<Self> {
         match &value {
-            Value::Number(value) => Ok(U_Int64(value.as_u64().unwrap_or(0))),
-            Value::String(value) => Ok(value.parse().map(U_Int64)?),
+            Value::Number(value) => Ok(U_Int64(value.to_string())),
+            Value::String(value) => Ok(U_Int64(value.to_owned())),
             _ => Err(InputValueError::expected_type(value)),
         }
     }
@@ -45,15 +46,16 @@ impl ScalarType for U_Int64 {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 #[allow(non_camel_case_types)]
-pub struct U_Int32(pub u32);
+pub struct U_Int32(pub String);
 
 #[Scalar]
 impl ScalarType for U_Int32 {
     fn parse(value: Value) -> InputValueResult<Self> {
         match &value {
-            Value::Number(value) => Ok(U_Int32(value.as_u64().unwrap_or(0) as u32)),
-            Value::String(value) => Ok(value.parse().map(U_Int32)?),
+            Value::Number(value) => Ok(U_Int32(value.to_string())),
+            Value::String(value) => Ok(U_Int32(value.to_owned())),
             _ => Err(InputValueError::expected_type(value)),
         }
     }
@@ -63,13 +65,13 @@ impl ScalarType for U_Int32 {
     }
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct SignatureInput {
     pub scalar: String,
     pub field: String,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct SendPaymentInput {
     pub nonce: U_Int32,
     pub valid_until: U_Int32,
@@ -128,8 +130,8 @@ impl From<mina_tree::Account> for Account {
                 unknown: "0".into(),
                 block_height: "0".into(),
             },
-            nonce: U_Int64(account.nonce.as_u32() as u64),
-            inferred_nonce: U_Int64(account.nonce.as_u32() as u64),
+            nonce: U_Int64(account.nonce.as_u32().to_string()),
+            inferred_nonce: U_Int64(account.nonce.as_u32().to_string()),
             delegate: None,
             delegate_account: None,
             staking_active: false,
@@ -167,27 +169,27 @@ pub struct SendPaymentPayload {
     pub payment: UserCommand,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct FeePayerBodyInput {
     pub public_key: PublicKey,
     pub fee: U_Int64,
-    pub valid_until: U_Int32,
+    pub valid_until: Option<U_Int32>,
     pub nonce: U_Int32,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct ZkappFeePayerInput {
     pub body: FeePayerBodyInput,
-    pub authorization: Signature,
+    pub authorization: Option<[String; 2]>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct VerificationKeyWithHashInput {
     pub data: String,
     pub hash: Field,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct PermissionsInput {
     pub edit_state: String,
     pub access: String,
@@ -204,7 +206,7 @@ pub struct PermissionsInput {
     pub set_timing: String,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct TimingInput {
     pub initial_minimum_balance: String,
     pub cliff_time: String,
@@ -213,9 +215,9 @@ pub struct TimingInput {
     pub vesting_increment: String,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct AccountUpdateModificationInput {
-    pub app_state: Vec<Field>,
+    pub app_state: Vec<Option<Field>>,
     pub delegate: Option<PublicKey>,
     pub verification_key: Option<VerificationKeyWithHashInput>,
     pub permissions: Option<PermissionsInput>,
@@ -225,25 +227,25 @@ pub struct AccountUpdateModificationInput {
     pub voting_for: Option<String>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct BalanceChangeInput {
     pub magnitude: String,
     pub sgn: String,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct LengthIntervalInput {
     pub lower: U_Int32,
     pub upper: U_Int32,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct EpochLedgerPreconditionInput {
-    pub hash: Field,
+    pub hash: Option<Field>,
     pub total_currency: Option<LengthIntervalInput>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct EpochDataPreconditionInput {
     pub ledger: EpochLedgerPreconditionInput,
     pub seed: Option<Field>,
@@ -252,7 +254,7 @@ pub struct EpochDataPreconditionInput {
     pub epoch_length: Option<LengthIntervalInput>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct NetworkPreconditionInput {
     pub snarked_ledger_hash: Option<Field>,
     pub blockchain_length: Option<LengthIntervalInput>,
@@ -263,39 +265,39 @@ pub struct NetworkPreconditionInput {
     pub next_epoch_data: EpochDataPreconditionInput,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct AccountPreconditionInput {
     pub balance: Option<LengthIntervalInput>,
     pub nonce: Option<LengthIntervalInput>,
     pub receipt_chain_hash: Option<Field>,
     pub delegate: Option<PublicKey>,
-    pub state: Vec<Field>,
+    pub state: Vec<Option<Field>>,
     pub action_state: Option<Field>,
     pub proved_state: Option<bool>,
     pub is_new: Option<bool>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct PreconditionsInput {
     pub network: NetworkPreconditionInput,
     pub account: AccountPreconditionInput,
     pub valid_while: Option<LengthIntervalInput>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct MayUseTokenInput {
     pub parents_own_token: bool,
     pub inherit_from_parent: bool,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct AuthorizationKindStructuredInput {
     pub is_signed: bool,
     pub is_proved: bool,
     pub verification_key_hash: Field,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct AccountUpdateBodyInput {
     pub public_key: PublicKey,
     pub token_id: TokenId,
@@ -313,26 +315,26 @@ pub struct AccountUpdateBodyInput {
     pub authorization_kind: AuthorizationKindStructuredInput,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct ControlInput {
     pub proof: Option<String>,
     pub signature: Option<Signature>,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct ZkappAccountUpdateInput {
     pub body: AccountUpdateBodyInput,
     pub authorization: ControlInput,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct ZkappCommandInput {
     pub fee_payer: ZkappFeePayerInput,
     pub account_updates: Vec<ZkappAccountUpdateInput>,
     pub memo: String,
 }
 
-#[derive(InputObject)]
+#[derive(InputObject, Serialize, Deserialize, Clone)]
 pub struct SendZkappInput {
     pub zkapp_command: ZkappCommandInput,
 }
