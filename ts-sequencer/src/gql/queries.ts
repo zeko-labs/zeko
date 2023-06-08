@@ -5,6 +5,7 @@ import {
   Peer,
   QueryResolvers,
   SyncStatus,
+  TransactionStatus,
 } from '../generated/graphql';
 import { RollupContext } from '../rollup';
 
@@ -28,5 +29,29 @@ export const queries: QueryResolvers = {
       PublicKey.fromBase58(publicKey),
       Field(token ?? 1)
     );
+  },
+
+  transactionStatus(
+    _,
+    { zkappTransaction, payment },
+    { rollup }: RollupContext
+  ) {
+    if (
+      rollup.stagedTransactions.some(
+        (t) => t.id === zkappTransaction || t.id === payment
+      )
+    ) {
+      return TransactionStatus.Pending;
+    }
+
+    if (
+      rollup.includedTransactions.some(
+        (t) => t.id === zkappTransaction || t.id === payment
+      )
+    ) {
+      return TransactionStatus.Included;
+    }
+
+    return TransactionStatus.Unknown;
   },
 };

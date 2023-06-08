@@ -15,11 +15,20 @@ export type RollupContext = {
   rollup: Rollup;
 };
 
+export type Transaction = {
+  hash: string;
+  id: string;
+  data: SendPaymentInput | ZkappCommandInput;
+};
+
 export class Rollup {
   public ledger: Ledger;
 
   public readonly networkState;
   public readonly networkConstants;
+
+  public stagedTransactions: Transaction[] = [];
+  public includedTransactions: Transaction[] = [];
 
   constructor(
     genesisAccounts: GenesisAccount[],
@@ -110,18 +119,24 @@ export class Rollup {
     hash: string;
     id: string;
   } {
-    return this.ledger.applyJsonTransaction(
+    const result = this.ledger.applyJsonTransaction(
       JSON.stringify(zkappCommand),
       this.networkConstants.accountCreationFee.toString(),
       JSON.stringify(this.networkState)
     );
+
+    this.stagedTransactions.push({ ...result, data: zkappCommand });
+
+    return result;
   }
 
   applyPayment(
     signature: Signature,
-    { from, to, amount, fee, validUntil, nonce, memo }: SendPaymentInput
+    userCommand: SendPaymentInput
   ): { hash: string; id: string } {
-    return this.ledger.applyPayment(
+    const { from, to, amount, fee, validUntil, nonce, memo } = userCommand;
+
+    const result = this.ledger.applyPayment(
       signature.toBase58(),
       PublicKey.fromBase58(from),
       PublicKey.fromBase58(to),
@@ -133,5 +148,17 @@ export class Rollup {
       this.networkConstants.accountCreationFee.toString(),
       JSON.stringify(this.networkState)
     );
+
+    this.stagedTransactions.push({ ...result, data: userCommand });
+
+    return result;
+  }
+
+  commit(): void {
+    this.stagedTransactions.forEach((tx) => {
+      this.includedTransactions.push(tx);
+    });
+
+    this.stagedTransactions = [];
   }
 }

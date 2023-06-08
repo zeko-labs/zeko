@@ -45,6 +45,13 @@ const run = async () => {
     100
   );
 
+  setInterval(() => {
+    if (rollupState.stagedTransactions.length === 0) return;
+
+    console.log('Committing staged transactions');
+    rollupState.commit();
+  }, 5_000);
+
   const server = new ApolloServer<RollupContext>({
     typeDefs: await loadSchema('schema.graphql'),
     resolvers,
