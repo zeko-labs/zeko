@@ -27,13 +27,19 @@ const run = async () => {
         publicKey: PublicKey.fromBase58(
           'B62qnPZzpnQWA8FLBn9qqJqPTeGuDdHTZgpmEMUNFCq8fWCRSqJS6Jd'
         ),
-        balance: 1_000_000,
+        balance: 1_000_000_000_000,
       },
       {
         publicKey: PublicKey.fromBase58(
           'B62qm8mVEkhAZdnnoE4gzKhTYj2Gre88GNhoknbJdgDrE8JQojNBgWa'
         ),
-        balance: 2_000_000,
+        balance: 2_000_000_000_000,
+      },
+      {
+        publicKey: PublicKey.fromBase58(
+          'B62qrrytZmo8SraqYfJMZ8E3QcK77uAGZhsGJGKmVF5E598E8KX9j6a'
+        ),
+        balance: 3_000_000_000_000,
       },
     ],
     100
