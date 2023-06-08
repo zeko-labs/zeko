@@ -1,17 +1,12 @@
 import { GraphQLError } from 'graphql';
-import { PublicKey, Signature } from 'snarkyjs';
+import { Field, PublicKey, Signature } from 'snarkyjs';
 import { MutationResolvers, SendZkappPayload } from '../generated/graphql';
 import { RollupContext } from '../rollup';
-import { queries } from './queries';
 
 export const mutations: MutationResolvers = {
   sendZkapp(_, { input }, { rollup }: RollupContext): SendZkappPayload {
     try {
-      const { hash, id } = rollup.ledger.applyJsonTransaction(
-        JSON.stringify(input.zkappCommand),
-        rollup.networkConstants.accountCreationFee.toString(),
-        JSON.stringify(rollup.networkState)
-      );
+      const { hash, id } = rollup.applyZkappCommand(input.zkappCommand);
 
       return {
         zkapp: {
@@ -22,6 +17,7 @@ export const mutations: MutationResolvers = {
         },
       };
     } catch (e) {
+      console.error(e);
       if (e instanceof Error) {
         throw new GraphQLError(e.message);
       }
@@ -31,31 +27,27 @@ export const mutations: MutationResolvers = {
 
   sendPayment(_, { input, signature }, { rollup }: RollupContext) {
     try {
-      const { amount, fee, from, memo, nonce, to, validUntil } = input;
-
-      const sigBase58 = Signature.fromJSON({
-        r: signature?.field,
-        s: signature?.scalar,
-      }).toBase58();
-
-      const { hash, id } = rollup.ledger.applyPayment(
-        sigBase58,
-        PublicKey.fromBase58(from),
-        PublicKey.fromBase58(to),
-        amount.toString(),
-        fee.toString(),
-        validUntil.toString(),
-        nonce.toString(),
-        memo?.toString() ?? '',
-        rollup.networkConstants.accountCreationFee.toString(),
-        JSON.stringify(rollup.networkState)
+      const { hash, id } = rollup.applyPayment(
+        Signature.fromJSON({
+          r: signature?.field,
+          s: signature?.scalar,
+        }),
+        input
       );
 
-      // @ts-expect-error
-      const feePayer = queries.account(null, { publicKey: from }, { rollup });
+      const feePayer = rollup.getAccount(
+        PublicKey.fromBase58(input.from),
+        Field(1)
+      );
 
-      // @ts-expect-error
-      const receiver = queries.account(null, { publicKey: to }, { rollup });
+      const receiver = rollup.getAccount(
+        PublicKey.fromBase58(input.to),
+        Field(1)
+      );
+
+      if (feePayer === null || receiver === null) {
+        throw new Error('Unexpected error, account was not created');
+      }
 
       return {
         payment: {
