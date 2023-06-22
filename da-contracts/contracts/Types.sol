@@ -14,8 +14,19 @@ struct MinaSchnorrSignature {
     bytes32 s;
 }
 
+enum MinaCommandType {
+    PAYMENT,
+    ZKAPP
+}
+
+struct MinaCommand {
+    MinaCommandType commandType;
+    bytes data;
+}
+
 struct RollupBatch {
-    bytes32[] fields;
+    bytes32 previousBatchId;
+    MinaCommand[] commands;
     MinaSchnorrSignature[] signatures;
     mapping(HashedMinaPublicKey => bool) validatorSigned;
 }

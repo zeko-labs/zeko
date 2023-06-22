@@ -6,7 +6,7 @@ library FieldBytes {
     uint256 constant FIELD_BYTE_CAPACITY = FIELD_BIT_CAPACITY / 8;
 
     function toFields(bytes memory data) internal pure returns (bytes32[] memory) {
-        uint256 numFields = (data.length * 8 + FIELD_BIT_CAPACITY - 1) / FIELD_BIT_CAPACITY;
+        uint256 numFields = (data.length + FIELD_BYTE_CAPACITY - 1) / FIELD_BYTE_CAPACITY;
 
         bytes32[] memory fields = new bytes32[](numFields);
 

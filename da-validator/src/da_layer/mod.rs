@@ -120,7 +120,7 @@ impl DALayer {
         batch_id: [u8; 32],
     ) -> Result<Option<TransactionReceipt>, Box<dyn std::error::Error>> {
         let signatures_call = self.contract.get_batch_signatures(batch_id);
-        let data_call = self.contract.get_batch_data(batch_id);
+        let data_call = self.contract.get_batch_fields(batch_id);
         let quorum_call = self.contract.quorum();
 
         let (signatures, data, quorum): (Vec<MinaSchnorrSignature>, Vec<[u8; 32]>, U256) =

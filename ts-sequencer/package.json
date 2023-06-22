@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@apollo/server": "^4.7.2",
+    "ethers": "5.7.2",
     "graphql": "^16.6.0",
     "snarkyjs": "file:../../mina/src/lib/snarkyjs"
   },

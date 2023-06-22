@@ -1,4 +1,4 @@
-import { Field, PublicKey } from 'snarkyjs';
+import { Base58Encodings, Field, PublicKey } from 'snarkyjs';
 import {
   Account,
   DaemonStatus,
@@ -16,7 +16,7 @@ export const queries: QueryResolvers = {
 
   daemonStatus() {
     return {
-      chainId: '1337',
+      chainId: '69420',
       syncStatus: SyncStatus.Synced,
       peers: [] as Peer[],
       highestBlockLengthReceived: 0,
@@ -27,7 +27,7 @@ export const queries: QueryResolvers = {
   account(_, { publicKey, token }, { rollup }: RollupContext): Account | null {
     return rollup.getAccount(
       PublicKey.fromBase58(publicKey),
-      Field(token ?? 1)
+      token !== undefined ? Base58Encodings.TokenId.fromBase58(token) : Field(1)
     );
   },
 
@@ -45,13 +45,26 @@ export const queries: QueryResolvers = {
     }
 
     if (
-      rollup.includedTransactions.some(
-        (t) => t.id === zkappTransaction || t.id === payment
-      )
+      rollup.batches
+        .map(({ transactions }) => transactions)
+        .flat()
+        .some((t) => t.id === zkappTransaction || t.id === payment)
     ) {
       return TransactionStatus.Included;
     }
 
     return TransactionStatus.Unknown;
+  },
+
+  bestChain() {
+    return [];
+  },
+
+  events() {
+    return [];
+  },
+
+  actions() {
+    return [];
   },
 };

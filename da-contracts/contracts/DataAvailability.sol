@@ -2,10 +2,16 @@
 pragma solidity 0.8.18;
 
 import {hasher, signer, NetworkId} from "./MinaPrecompiles.sol";
-import {MinaSchnorrSignature, MinaPublicKey, HashedMinaPublicKey, RollupBatch} from "./Types.sol";
+import {MinaSchnorrSignature, MinaPublicKey, HashedMinaPublicKey, RollupBatch, MinaCommand} from "./Types.sol";
 import {MinaMultisig} from "./MinaMultisig.sol";
+import {FieldBytes} from "./FieldBytes.sol";
 
 contract DataAvailability is MinaMultisig {
+    using FieldBytes for bytes;
+
+    // TODO: for testing, this should be fetched from L1 contract
+    bytes32 public lastProposedBatchId;
+
     event BatchProposed(bytes32 indexed batchId);
     event BatchSigned(
         bytes32 indexed batchId,
@@ -13,16 +19,27 @@ contract DataAvailability is MinaMultisig {
         uint256 signatureCount
     );
 
-    function proposeBatch(bytes32[] calldata fields) external {
-        require(fields.length > 0, "Fields cannot be empty");
+    function proposeBatch(bytes32 previousBatchId, MinaCommand[] memory commands) external {
+        require(commands.length > 0, "Fields cannot be empty");
+
+        bytes32[] memory fields = batchToFields(previousBatchId, commands);
 
         bytes32 batchId = hasher.poseidonHash(NetworkId.NULLNET, fields);
 
-        require(batches[batchId].fields.length == 0, "Batch already exists");
+        require(batchId != previousBatchId, "Batch cannot be equal to previous batch");
 
-        batches[batchId].fields = fields;
+        RollupBatch storage batch = batches[batchId];
+
+        require(batch.commands.length == 0, "Batch already exists");
+
+        batch.previousBatchId = previousBatchId;
+
+        for (uint256 i = 0; i < commands.length; i++) {
+            batch.commands.push(commands[i]);
+        }
 
         emit BatchProposed(batchId);
+        lastProposedBatchId = batchId;
     }
 
     function addBatchSignature(
@@ -36,13 +53,15 @@ contract DataAvailability is MinaMultisig {
             "Validator already signed"
         );
 
+        MinaCommand[] memory commands = batch.commands;
+
         bool verified = signer.verify(
             NetworkId.TESTNET,
             signature.publicKey.x,
             signature.publicKey.y,
             signature.rx,
             signature.s,
-            batch.fields
+            batchToFields(batch.previousBatchId, commands)
         );
 
         require(verified, "Invalid signature");
@@ -59,7 +78,25 @@ contract DataAvailability is MinaMultisig {
         return batches[batchId].signatures;
     }
 
-    function getBatchData(bytes32 batchId) external view returns (bytes32[] memory) {
-        return batches[batchId].fields;
+    function getBatchData(bytes32 batchId) external view returns (bytes32, MinaCommand[] memory) {
+        return (batches[batchId].previousBatchId, batches[batchId].commands);
+    }
+
+    function getBatchFields(bytes32 batchId) external view returns (bytes32[] memory) {
+        require(batches[batchId].commands.length > 0, "Batch does not exist");
+
+        return batchToFields(batches[batchId].previousBatchId, batches[batchId].commands);
+    }
+
+    function batchToFields(
+        bytes32 previousBatchId,
+        MinaCommand[] memory commands
+    ) private pure returns (bytes32[] memory) {
+        bytes memory data = abi.encodePacked(previousBatchId);
+
+        for (uint256 i = 0; i < commands.length; i++)
+            data = bytes.concat(data, bytes1(uint8(commands[i].commandType)), commands[i].data);
+
+        return data.toFields();
     }
 }

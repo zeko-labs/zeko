@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { GraphQLResolveInfo, GraphQLScalarType, GraphQLScalarTypeConfig } from 'graphql';
 export type Maybe<T> = T | null;
 export type InputMaybe<T> = Maybe<T>;
@@ -334,6 +335,40 @@ export type AccountVerificationKeyWithHash = {
   verificationKey: Scalars['VerificationKey']['output'];
 };
 
+export type ActionData = {
+  __typename?: 'ActionData';
+  accountUpdateId: Scalars['String']['output'];
+  data: Array<Maybe<Scalars['String']['output']>>;
+  transactionInfo?: Maybe<TransactionInfo>;
+};
+
+export type ActionFilterOptionsInput = {
+  address: Scalars['String']['input'];
+  endActionState?: InputMaybe<Scalars['String']['input']>;
+  from?: InputMaybe<Scalars['Int']['input']>;
+  fromActionState?: InputMaybe<Scalars['String']['input']>;
+  status?: InputMaybe<BlockStatusFilter>;
+  to?: InputMaybe<Scalars['Int']['input']>;
+  tokenId?: InputMaybe<Scalars['String']['input']>;
+};
+
+export type ActionOutput = {
+  __typename?: 'ActionOutput';
+  actionData?: Maybe<Array<Maybe<ActionData>>>;
+  actionState: ActionStates;
+  blockInfo?: Maybe<BlockInfo>;
+  transactionInfo?: Maybe<TransactionInfo>;
+};
+
+export type ActionStates = {
+  __typename?: 'ActionStates';
+  actionStateFive?: Maybe<Scalars['String']['output']>;
+  actionStateFour?: Maybe<Scalars['String']['output']>;
+  actionStateOne?: Maybe<Scalars['String']['output']>;
+  actionStateThree?: Maybe<Scalars['String']['output']>;
+  actionStateTwo?: Maybe<Scalars['String']['output']>;
+};
+
 export type AddAccountInput = {
   /** Password used to encrypt the new account */
   password: Scalars['String']['input'];
@@ -447,6 +482,19 @@ export type Block = {
   winnerAccount: Account;
 };
 
+export type BlockInfo = {
+  __typename?: 'BlockInfo';
+  chainStatus: Scalars['String']['output'];
+  distanceFromMaxBlockHeight: Scalars['Int']['output'];
+  globalSlotSinceGenesis: Scalars['Int']['output'];
+  globalSlotSinceHardfork: Scalars['Int']['output'];
+  height: Scalars['Int']['output'];
+  ledgerHash: Scalars['String']['output'];
+  parentHash: Scalars['String']['output'];
+  stateHash: Scalars['String']['output'];
+  timestamp: Scalars['String']['output'];
+};
+
 export type BlockProducerTimings = {
   __typename?: 'BlockProducerTimings';
   /** Consensus time of the block that was used to determine the next block production time */
@@ -456,6 +504,13 @@ export type BlockProducerTimings = {
   /** Next block production time */
   times: Array<ConsensusTime>;
 };
+
+/** Archive node types */
+export enum BlockStatusFilter {
+  All = 'ALL',
+  Canonical = 'CANONICAL',
+  Pending = 'PENDING'
+}
 
 export type BlockchainState = {
   __typename?: 'BlockchainState';
@@ -657,6 +712,26 @@ export type EpochLedgerPrecondition = {
 export type EpochLedgerPreconditionInput = {
   hash?: InputMaybe<Scalars['Field']['input']>;
   totalCurrency?: InputMaybe<CurrencyAmountIntervalInput>;
+};
+
+export type EventData = {
+  __typename?: 'EventData';
+  data: Array<Maybe<Scalars['String']['output']>>;
+  transactionInfo?: Maybe<TransactionInfo>;
+};
+
+export type EventFilterOptionsInput = {
+  address: Scalars['String']['input'];
+  from?: InputMaybe<Scalars['Int']['input']>;
+  status?: InputMaybe<BlockStatusFilter>;
+  to?: InputMaybe<Scalars['Int']['input']>;
+  tokenId?: InputMaybe<Scalars['String']['input']>;
+};
+
+export type EventOutput = {
+  __typename?: 'EventOutput';
+  blockInfo?: Maybe<BlockInfo>;
+  eventData?: Maybe<Array<Maybe<EventData>>>;
 };
 
 export type ExportLogsPayload = {
@@ -1140,6 +1215,14 @@ export type TimingInput = {
   initialMinimumBalance: Scalars['Balance']['input'];
   vestingIncrement: Scalars['CurrencyAmount']['input'];
   vestingPeriod: Scalars['GlobalSlot']['input'];
+};
+
+export type TransactionInfo = {
+  __typename?: 'TransactionInfo';
+  authorizationKind: Scalars['String']['output'];
+  hash: Scalars['String']['output'];
+  memo: Scalars['String']['output'];
+  status: Scalars['String']['output'];
 };
 
 /** Status of a transaction */
@@ -1662,6 +1745,7 @@ export type Query = {
   account?: Maybe<Account>;
   /** Find all accounts for a public key */
   accounts: Array<Account>;
+  actions: Array<Maybe<ActionOutput>>;
   /**
    * Retrieve a list of blocks from transition frontier's root to the current best
    * tip. Returns an error if the system is bootstrapping.
@@ -1683,6 +1767,8 @@ export type Query = {
    * verified without access to the private key for this vrf evaluation.
    */
   evaluateVrf: VrfEvaluation;
+  /** Archiven node queries */
+  events: Array<Maybe<EventOutput>>;
   /** Get the genesis block */
   genesisBlock: Block;
   /** The constants used to determine the configuration of the genesis block and all of its transitive dependencies */
@@ -1749,6 +1835,11 @@ export type QueryAccountsArgs = {
 };
 
 
+export type QueryActionsArgs = {
+  input: ActionFilterOptionsInput;
+};
+
+
 export type QueryBestChainArgs = {
   maxLength?: InputMaybe<Scalars['Int']['input']>;
 };
@@ -1769,6 +1860,11 @@ export type QueryEvaluateVrfArgs = {
   message: VrfMessageInput;
   publicKey: Scalars['PublicKey']['input'];
   vrfThreshold?: InputMaybe<VrfThresholdInput>;
+};
+
+
+export type QueryEventsArgs = {
+  input: EventFilterOptionsInput;
 };
 
 
@@ -1929,6 +2025,10 @@ export type ResolversTypes = {
   AccountUpdateModificationInput: AccountUpdateModificationInput;
   AccountVerificationKeyWithHash: ResolverTypeWrapper<AccountVerificationKeyWithHash>;
   Action: ResolverTypeWrapper<Scalars['Action']['output']>;
+  ActionData: ResolverTypeWrapper<ActionData>;
+  ActionFilterOptionsInput: ActionFilterOptionsInput;
+  ActionOutput: ResolverTypeWrapper<ActionOutput>;
+  ActionStates: ResolverTypeWrapper<ActionStates>;
   AddAccountInput: AddAccountInput;
   AddAccountPayload: ResolverTypeWrapper<AddAccountPayload>;
   AddrsAndPorts: ResolverTypeWrapper<AddrsAndPorts>;
@@ -1944,7 +2044,9 @@ export type ResolversTypes = {
   BalanceInterval: ResolverTypeWrapper<BalanceInterval>;
   BalanceIntervalInput: BalanceIntervalInput;
   Block: ResolverTypeWrapper<Block>;
+  BlockInfo: ResolverTypeWrapper<BlockInfo>;
   BlockProducerTimings: ResolverTypeWrapper<BlockProducerTimings>;
+  BlockStatusFilter: BlockStatusFilter;
   BlockTime: ResolverTypeWrapper<Scalars['BlockTime']['output']>;
   BlockchainState: ResolverTypeWrapper<BlockchainState>;
   BodyReference: ResolverTypeWrapper<Scalars['BodyReference']['output']>;
@@ -1971,6 +2073,9 @@ export type ResolversTypes = {
   EpochLedgerPrecondition: ResolverTypeWrapper<EpochLedgerPrecondition>;
   EpochLedgerPreconditionInput: EpochLedgerPreconditionInput;
   EpochSeed: ResolverTypeWrapper<Scalars['EpochSeed']['output']>;
+  EventData: ResolverTypeWrapper<EventData>;
+  EventFilterOptionsInput: EventFilterOptionsInput;
+  EventOutput: ResolverTypeWrapper<EventOutput>;
   ExportLogsPayload: ResolverTypeWrapper<ExportLogsPayload>;
   ExtensionalBlock: ResolverTypeWrapper<Scalars['ExtensionalBlock']['output']>;
   Fee: ResolverTypeWrapper<Scalars['Fee']['output']>;
@@ -2066,6 +2171,7 @@ export type ResolversTypes = {
   TokenId: ResolverTypeWrapper<Scalars['TokenId']['output']>;
   TransactionHash: ResolverTypeWrapper<Scalars['TransactionHash']['output']>;
   TransactionId: ResolverTypeWrapper<Scalars['TransactionId']['output']>;
+  TransactionInfo: ResolverTypeWrapper<TransactionInfo>;
   TransactionStatus: TransactionStatus;
   TransactionStatusFailure: ResolverTypeWrapper<Scalars['TransactionStatusFailure']['output']>;
   Transactions: ResolverTypeWrapper<Transactions>;
@@ -2122,6 +2228,10 @@ export type ResolversParentTypes = {
   AccountUpdateModificationInput: AccountUpdateModificationInput;
   AccountVerificationKeyWithHash: AccountVerificationKeyWithHash;
   Action: Scalars['Action']['output'];
+  ActionData: ActionData;
+  ActionFilterOptionsInput: ActionFilterOptionsInput;
+  ActionOutput: ActionOutput;
+  ActionStates: ActionStates;
   AddAccountInput: AddAccountInput;
   AddAccountPayload: AddAccountPayload;
   AddrsAndPorts: AddrsAndPorts;
@@ -2137,6 +2247,7 @@ export type ResolversParentTypes = {
   BalanceInterval: BalanceInterval;
   BalanceIntervalInput: BalanceIntervalInput;
   Block: Block;
+  BlockInfo: BlockInfo;
   BlockProducerTimings: BlockProducerTimings;
   BlockTime: Scalars['BlockTime']['output'];
   BlockchainState: BlockchainState;
@@ -2163,6 +2274,9 @@ export type ResolversParentTypes = {
   EpochLedgerPrecondition: EpochLedgerPrecondition;
   EpochLedgerPreconditionInput: EpochLedgerPreconditionInput;
   EpochSeed: Scalars['EpochSeed']['output'];
+  EventData: EventData;
+  EventFilterOptionsInput: EventFilterOptionsInput;
+  EventOutput: EventOutput;
   ExportLogsPayload: ExportLogsPayload;
   ExtensionalBlock: Scalars['ExtensionalBlock']['output'];
   Fee: Scalars['Fee']['output'];
@@ -2257,6 +2371,7 @@ export type ResolversParentTypes = {
   TokenId: Scalars['TokenId']['output'];
   TransactionHash: Scalars['TransactionHash']['output'];
   TransactionId: Scalars['TransactionId']['output'];
+  TransactionInfo: TransactionInfo;
   TransactionStatusFailure: Scalars['TransactionStatusFailure']['output'];
   Transactions: Transactions;
   TrustStatusPayload: TrustStatusPayload;
@@ -2410,6 +2525,30 @@ export interface ActionScalarConfig extends GraphQLScalarTypeConfig<ResolversTyp
   name: 'Action';
 }
 
+export type ActionDataResolvers<ContextType = any, ParentType extends ResolversParentTypes['ActionData'] = ResolversParentTypes['ActionData']> = {
+  accountUpdateId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  data?: Resolver<Array<Maybe<ResolversTypes['String']>>, ParentType, ContextType>;
+  transactionInfo?: Resolver<Maybe<ResolversTypes['TransactionInfo']>, ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
+export type ActionOutputResolvers<ContextType = any, ParentType extends ResolversParentTypes['ActionOutput'] = ResolversParentTypes['ActionOutput']> = {
+  actionData?: Resolver<Maybe<Array<Maybe<ResolversTypes['ActionData']>>>, ParentType, ContextType>;
+  actionState?: Resolver<ResolversTypes['ActionStates'], ParentType, ContextType>;
+  blockInfo?: Resolver<Maybe<ResolversTypes['BlockInfo']>, ParentType, ContextType>;
+  transactionInfo?: Resolver<Maybe<ResolversTypes['TransactionInfo']>, ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
+export type ActionStatesResolvers<ContextType = any, ParentType extends ResolversParentTypes['ActionStates'] = ResolversParentTypes['ActionStates']> = {
+  actionStateFive?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  actionStateFour?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  actionStateOne?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  actionStateThree?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  actionStateTwo?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
 export type AddAccountPayloadResolvers<ContextType = any, ParentType extends ResolversParentTypes['AddAccountPayload'] = ResolversParentTypes['AddAccountPayload']> = {
   account?: Resolver<ResolversTypes['Account'], ParentType, ContextType>;
   publicKey?: Resolver<ResolversTypes['PublicKey'], ParentType, ContextType>;
@@ -2482,6 +2621,19 @@ export type BlockResolvers<ContextType = any, ParentType extends ResolversParent
   stateHashField?: Resolver<ResolversTypes['StateHashAsDecimal'], ParentType, ContextType>;
   transactions?: Resolver<ResolversTypes['Transactions'], ParentType, ContextType>;
   winnerAccount?: Resolver<ResolversTypes['Account'], ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
+export type BlockInfoResolvers<ContextType = any, ParentType extends ResolversParentTypes['BlockInfo'] = ResolversParentTypes['BlockInfo']> = {
+  chainStatus?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  distanceFromMaxBlockHeight?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  globalSlotSinceGenesis?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  globalSlotSinceHardfork?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  height?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  ledgerHash?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  parentHash?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  stateHash?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  timestamp?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 };
 
@@ -2644,6 +2796,18 @@ export type EpochLedgerPreconditionResolvers<ContextType = any, ParentType exten
 export interface EpochSeedScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes['EpochSeed'], any> {
   name: 'EpochSeed';
 }
+
+export type EventDataResolvers<ContextType = any, ParentType extends ResolversParentTypes['EventData'] = ResolversParentTypes['EventData']> = {
+  data?: Resolver<Array<Maybe<ResolversTypes['String']>>, ParentType, ContextType>;
+  transactionInfo?: Resolver<Maybe<ResolversTypes['TransactionInfo']>, ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
+export type EventOutputResolvers<ContextType = any, ParentType extends ResolversParentTypes['EventOutput'] = ResolversParentTypes['EventOutput']> = {
+  blockInfo?: Resolver<Maybe<ResolversTypes['BlockInfo']>, ParentType, ContextType>;
+  eventData?: Resolver<Maybe<Array<Maybe<ResolversTypes['EventData']>>>, ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
 
 export type ExportLogsPayloadResolvers<ContextType = any, ParentType extends ResolversParentTypes['ExportLogsPayload'] = ResolversParentTypes['ExportLogsPayload']> = {
   exportLogs?: Resolver<ResolversTypes['TarFile'], ParentType, ContextType>;
@@ -3044,6 +3208,14 @@ export interface TransactionIdScalarConfig extends GraphQLScalarTypeConfig<Resol
   name: 'TransactionId';
 }
 
+export type TransactionInfoResolvers<ContextType = any, ParentType extends ResolversParentTypes['TransactionInfo'] = ResolversParentTypes['TransactionInfo']> = {
+  authorizationKind?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  hash?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  memo?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  status?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
 export interface TransactionStatusFailureScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes['TransactionStatusFailure'], any> {
   name: 'TransactionStatusFailure';
 }
@@ -3281,12 +3453,14 @@ export type ProtocolStateProofResolvers<ContextType = any, ParentType extends Re
 export type QueryResolvers<ContextType = any, ParentType extends ResolversParentTypes['query'] = ResolversParentTypes['query']> = {
   account?: Resolver<Maybe<ResolversTypes['Account']>, ParentType, ContextType, RequireFields<QueryAccountArgs, 'publicKey'>>;
   accounts?: Resolver<Array<ResolversTypes['Account']>, ParentType, ContextType, RequireFields<QueryAccountsArgs, 'publicKey'>>;
+  actions?: Resolver<Array<Maybe<ResolversTypes['ActionOutput']>>, ParentType, ContextType, RequireFields<QueryActionsArgs, 'input'>>;
   bestChain?: Resolver<Maybe<Array<ResolversTypes['Block']>>, ParentType, ContextType, Partial<QueryBestChainArgs>>;
   block?: Resolver<ResolversTypes['Block'], ParentType, ContextType, Partial<QueryBlockArgs>>;
   blockchainVerificationKey?: Resolver<ResolversTypes['JSON'], ParentType, ContextType>;
   checkVrf?: Resolver<ResolversTypes['VrfEvaluation'], ParentType, ContextType, RequireFields<QueryCheckVrfArgs, 'input'>>;
   daemonStatus?: Resolver<ResolversTypes['DaemonStatus'], ParentType, ContextType>;
   evaluateVrf?: Resolver<ResolversTypes['VrfEvaluation'], ParentType, ContextType, RequireFields<QueryEvaluateVrfArgs, 'message' | 'publicKey'>>;
+  events?: Resolver<Array<Maybe<ResolversTypes['EventOutput']>>, ParentType, ContextType, RequireFields<QueryEventsArgs, 'input'>>;
   genesisBlock?: Resolver<ResolversTypes['Block'], ParentType, ContextType>;
   genesisConstants?: Resolver<ResolversTypes['GenesisConstants'], ParentType, ContextType>;
   getPeers?: Resolver<Array<ResolversTypes['Peer']>, ParentType, ContextType>;
@@ -3324,6 +3498,9 @@ export type Resolvers<ContextType = any> = {
   AccountUpdateModification?: AccountUpdateModificationResolvers<ContextType>;
   AccountVerificationKeyWithHash?: AccountVerificationKeyWithHashResolvers<ContextType>;
   Action?: GraphQLScalarType;
+  ActionData?: ActionDataResolvers<ContextType>;
+  ActionOutput?: ActionOutputResolvers<ContextType>;
+  ActionStates?: ActionStatesResolvers<ContextType>;
   AddAccountPayload?: AddAccountPayloadResolvers<ContextType>;
   AddrsAndPorts?: AddrsAndPortsResolvers<ContextType>;
   Amount?: GraphQLScalarType;
@@ -3335,6 +3512,7 @@ export type Resolvers<ContextType = any> = {
   BalanceChange?: BalanceChangeResolvers<ContextType>;
   BalanceInterval?: BalanceIntervalResolvers<ContextType>;
   Block?: BlockResolvers<ContextType>;
+  BlockInfo?: BlockInfoResolvers<ContextType>;
   BlockProducerTimings?: BlockProducerTimingsResolvers<ContextType>;
   BlockTime?: GraphQLScalarType;
   BlockchainState?: BlockchainStateResolvers<ContextType>;
@@ -3354,6 +3532,8 @@ export type Resolvers<ContextType = any> = {
   EpochDataPrecondition?: EpochDataPreconditionResolvers<ContextType>;
   EpochLedgerPrecondition?: EpochLedgerPreconditionResolvers<ContextType>;
   EpochSeed?: GraphQLScalarType;
+  EventData?: EventDataResolvers<ContextType>;
+  EventOutput?: EventOutputResolvers<ContextType>;
   ExportLogsPayload?: ExportLogsPayloadResolvers<ContextType>;
   ExtensionalBlock?: GraphQLScalarType;
   Fee?: GraphQLScalarType;
@@ -3425,6 +3605,7 @@ export type Resolvers<ContextType = any> = {
   TokenId?: GraphQLScalarType;
   TransactionHash?: GraphQLScalarType;
   TransactionId?: GraphQLScalarType;
+  TransactionInfo?: TransactionInfoResolvers<ContextType>;
   TransactionStatusFailure?: GraphQLScalarType;
   Transactions?: TransactionsResolvers<ContextType>;
   TrustStatusPayload?: TrustStatusPayloadResolvers<ContextType>;

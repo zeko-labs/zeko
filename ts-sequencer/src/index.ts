@@ -41,16 +41,24 @@ const run = async () => {
         ),
         balance: 3_000_000_000_000,
       },
+      {
+        publicKey: PublicKey.fromBase58(
+          'B62qkJbh5dsbPFq6kn1SCmgSfeamgdnnNV9Jqf7hj7BPyRBNPMbuTfC'
+        ),
+        balance: 4_000_000_000_000,
+      },
     ],
-    100
+    1_000_000_000 // 1 MINA
   );
 
-  setInterval(() => {
-    if (rollupState.stagedTransactions.length === 0) return;
+  // await rollupState.bootstrap(await daLayerContract.lastProposedBatchId());
 
-    console.log('Committing staged transactions');
-    rollupState.commit();
-  }, 5_000);
+  // setInterval(() => {
+  //   if (rollupState.stagedTransactions.length === 0) return;
+
+  //   console.log('Committing staged transactions');
+  //   rollupState.commit();
+  // }, 10_000);
 
   const server = new ApolloServer<RollupContext>({
     typeDefs: await loadSchema('schema.graphql'),

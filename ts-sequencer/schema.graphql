@@ -233,7 +233,11 @@ type query {
   Evaluate a vrf for the given public key. This includes a witness which may be
   verified without access to the private key for this vrf evaluation.
   """
-  evaluateVrf(vrfThreshold: VrfThresholdInput, publicKey: PublicKey!, message: VrfMessageInput!): VrfEvaluation!
+  evaluateVrf(
+    vrfThreshold: VrfThresholdInput
+    publicKey: PublicKey!
+    message: VrfMessageInput!
+  ): VrfEvaluation!
 
   """
   Check a vrf evaluation commitment. This can be used to check vrf evaluations
@@ -245,6 +249,12 @@ type query {
   The pickles verification key for the protocol state proof
   """
   blockchainVerificationKey: JSON!
+
+  """
+  Archiven node queries
+  """
+  events(input: EventFilterOptionsInput!): [EventOutput]!
+  actions(input: ActionFilterOptionsInput!): [ActionOutput]!
 }
 
 """
@@ -2500,27 +2510,32 @@ type mutation {
   """
   Add a wallet - this will create a new keypair and store it in the daemon
   """
-  addWallet(input: AddAccountInput!): AddAccountPayload! @deprecated(reason: "use createAccount instead")
+  addWallet(input: AddAccountInput!): AddAccountPayload!
+    @deprecated(reason: "use createAccount instead")
 
   """
   Allow transactions to be sent from the unlocked account
   """
-  unlockWallet(input: UnlockInput!): UnlockPayload! @deprecated(reason: "use unlockAccount instead")
+  unlockWallet(input: UnlockInput!): UnlockPayload!
+    @deprecated(reason: "use unlockAccount instead")
 
   """
   Lock an unlocked account to prevent transaction being sent from it
   """
-  lockWallet(input: LockInput!): LockPayload! @deprecated(reason: "use lockAccount instead")
+  lockWallet(input: LockInput!): LockPayload!
+    @deprecated(reason: "use lockAccount instead")
 
   """
   Delete the private key for an account that you track
   """
-  deleteWallet(input: DeleteAccountInput!): DeleteAccountPayload! @deprecated(reason: "use deleteAccount instead")
+  deleteWallet(input: DeleteAccountInput!): DeleteAccountPayload!
+    @deprecated(reason: "use deleteAccount instead")
 
   """
   Reload tracked account information from disk
   """
-  reloadWallets: ReloadAccountsPayload! @deprecated(reason: "use reloadAccounts instead")
+  reloadWallets: ReloadAccountsPayload!
+    @deprecated(reason: "use reloadAccounts instead")
 
   """
   Send a payment
@@ -2605,7 +2620,9 @@ type mutation {
   """
   Send a transaction in Rosetta format
   """
-  sendRosettaTransaction(input: RosettaTransaction!): SendRosettaTransactionPayload!
+  sendRosettaTransaction(
+    input: RosettaTransaction!
+  ): SendRosettaTransactionPayload!
 }
 
 """
@@ -3738,4 +3755,81 @@ type UserCommandPayment implements UserCommand {
   null is no failure or status unknown, reason for failure otherwise.
   """
   failureReason: TransactionStatusFailure
+}
+
+"""
+Archive node types
+"""
+enum BlockStatusFilter {
+  ALL
+  PENDING
+  CANONICAL
+}
+
+input EventFilterOptionsInput {
+  address: String!
+  tokenId: String
+  status: BlockStatusFilter
+  to: Int
+  from: Int
+}
+
+input ActionFilterOptionsInput {
+  address: String!
+  tokenId: String
+  status: BlockStatusFilter
+  to: Int
+  from: Int
+  fromActionState: String
+  endActionState: String
+}
+
+type EventData {
+  transactionInfo: TransactionInfo
+  data: [String]!
+}
+
+type ActionData {
+  accountUpdateId: String!
+  transactionInfo: TransactionInfo
+  data: [String]!
+}
+
+type BlockInfo {
+  height: Int!
+  stateHash: String!
+  parentHash: String!
+  ledgerHash: String!
+  chainStatus: String!
+  timestamp: String!
+  globalSlotSinceHardfork: Int!
+  globalSlotSinceGenesis: Int!
+  distanceFromMaxBlockHeight: Int!
+}
+
+type TransactionInfo {
+  status: String!
+  hash: String!
+  memo: String!
+  authorizationKind: String!
+}
+
+type ActionStates {
+  actionStateOne: String
+  actionStateTwo: String
+  actionStateThree: String
+  actionStateFour: String
+  actionStateFive: String
+}
+
+type EventOutput {
+  blockInfo: BlockInfo
+  eventData: [EventData]
+}
+
+type ActionOutput {
+  blockInfo: BlockInfo
+  transactionInfo: TransactionInfo
+  actionData: [ActionData]
+  actionState: ActionStates!
 }
