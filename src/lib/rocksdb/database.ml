@@ -1,11 +1,12 @@
 (* rocksdb.ml -- expose RocksDB operations for Coda *)
 
-open Core
+open Core_kernel
 
 type t = { uuid : Uuid.Stable.V1.t; db : (Rocks.t[@sexp.opaque]) }
 [@@deriving sexp]
 
 let create directory =
+  Core.Unix.mkdir_p directory ;
   let opts = Rocks.Options.create () in
   Rocks.Options.set_create_if_missing opts true ;
   Rocks.Options.set_prefix_extractor opts
@@ -142,9 +143,9 @@ let%test_unit "checkpoint read" =
           Deferred.unit
       | `Ok db_hashtbl -> (
           let cp_hashtbl = Hashtbl.copy db_hashtbl in
-          let db_dir = Filename.temp_dir "test_db" "" in
+          let db_dir = Core.Filename.temp_dir "test_db" "" in
           let cp_dir =
-            Filename.temp_dir_name ^/ "test_cp"
+            Core.(Filename.temp_dir_name ^/ "test_cp")
             ^ String.init 16 ~f:(fun _ -> (Int.to_string (Random.int 10)).[0])
           in
           let db = create db_dir in

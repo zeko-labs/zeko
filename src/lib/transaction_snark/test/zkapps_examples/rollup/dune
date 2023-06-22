@@ -35,6 +35,7 @@
    pickles
    pickles.backend
    pickles_types
+   promise
    quickcheck_lib
    random_oracle
    random_oracle_input

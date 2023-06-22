@@ -6,16 +6,13 @@
    ;; opam libraries
    base.caml
    async_kernel
-   async
    sexplib0
    core_kernel.uuid
    integers
    bitstring
    core_kernel
    yojson
-   core
    base.base_internalhash_types
-   core.uuid
    stdio
    ;; local libraries
    debug_assert

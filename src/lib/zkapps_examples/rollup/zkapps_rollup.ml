@@ -95,7 +95,7 @@ module Rules = struct
           respond Unhandled
 
     (* TODO: Figure out whether we need to check connecting_ledger_hash == connecting_ledger_right *)
-    let main input =
+    let main { Pickles.Inductive_rule.public_input = vk_hash } =
       let txn_snark =
         exists Transaction_snark.Statement.With_sok.typ ~request:(fun () ->
             Txn_snark )
@@ -116,17 +116,12 @@ module Rules = struct
           (Frozen_ledger_hash0.var_to_field txn_snark.target.first_pass_ledger)
           (Frozen_ledger_hash0.var_to_field txn_snark.source.second_pass_ledger)
       in
-      let { previous_proof_statements = _
-          ; public_output = account_update
-          ; auxiliary_output = ()
-          } =
-        Zkapps_examples.wrap_main ~public_key ~token_id
-          (fun account_update ->
-            account_update#set_prev_state 0 prev_state_raw ;
-            account_update#set_state 0 next_state_raw ;
-            () )
-          input
-      in
+			let rec undefined : unit -> 'a = fun () -> undefined () in
+		  let account_update =
+		    new Zkapps_examples.account_update ~token_id ~public_key ~vk_hash ()
+		  in
+      account_update#set_prev_state 0 prev_state_raw ;
+      account_update#set_state 0 next_state_raw ;
       let open Pickles.Inductive_rule in
       { previous_proof_statements =
           [ { public_input = txn_snark
@@ -151,8 +146,9 @@ module Make (T : sig
   val tag : Transaction_snark.tag
 end) =
 struct
-  let tag, cache_handle, p, Pickles.Provers.[ init; step ] =
-    Zkapps_examples.compile () ~cache:Cache_dir.cache
+  let tag, cache_handle, p, Pickles.Provers.[ init_; step_ ] =
+    Zkapps_examples.compile_promise ()
+      ~cache:Cache_dir.cache
       ~auxiliary_typ:Impl.Typ.unit
       ~branches:(module Nat.N2)
       ~max_proofs_verified:(module Nat.N1)
@@ -163,9 +159,9 @@ struct
 
   let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-  let init w = init ~handler:(Rules.Init.handler w)
+  let init w = init_ ~handler:(Rules.Init.handler w)
 
-  let step w = step ~handler:(Rules.Step.handler w)
+  let step w = step_ ~handler:(Rules.Step.handler w)
 
   module Proof = (val p)
 end

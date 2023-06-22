@@ -273,7 +273,7 @@ let create ~(constraint_constants : Genesis_constants.Constraint_constants.t)
   let checkpoint_window_slots_per_year, checkpoint_window_size_in_slots =
     let per_year = 12 in
     let slots_per_year =
-      let one_year_ms = Core.Time.Span.(to_ms (of_day 365.)) |> Float.to_int in
+      let one_year_ms = Time.Span.(to_ms (of_day 365.)) |> Float.to_int in
       one_year_ms
       / (Block_time.Span.to_ms constants.slot_duration_ms |> Int64.to_int_exn)
     in
@@ -413,7 +413,7 @@ module Checked = struct
       in
       let%bind slots_per_year, _ =
         let one_year_ms =
-          constant (Core.Time.Span.(to_ms (of_day 365.)) |> Float.to_int)
+          constant (Time.Span.(to_ms (of_day 365.)) |> Float.to_int)
         in
         N.div_mod one_year_ms slot_duration_ms
       in

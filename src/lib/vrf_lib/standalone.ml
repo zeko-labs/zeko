@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 
 module Context = struct
   type ('message, 'pk) t = { message : 'message; public_key : 'pk }
@@ -288,7 +288,7 @@ end = struct
   end
 end
 
-open Core
+open Core_kernel
 
 module Bigint_scalar
     (Impl : Snarky_backendless.Snark_intf.S) (M : sig

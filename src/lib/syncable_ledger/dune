@@ -11,8 +11,6 @@
    bin_prot.shape
    base.caml
    sexplib0
-   core
-   async
    ;; local libraries
    trust_system
    logger

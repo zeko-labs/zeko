@@ -520,7 +520,6 @@ let%test_module "Transaction union tests" =
                   pending_coinbase_stack_state2.pc state_body2
                   (unstage @@ Sparse_ledger.handler sparse_ledger)
               in
-              let ddd = proof23.proof in
               let current_global_slot =
                 Mina_state.Protocol_state.Body.consensus_state state_body2
                 |> Consensus.Data.Consensus_state.global_slot_since_genesis

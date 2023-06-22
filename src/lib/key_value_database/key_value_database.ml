@@ -34,64 +34,63 @@ module Monad = struct
   end
 end
 
-module Intf = struct
-  module type S = sig
-    type t
+module type S = sig
+  type t [@@deriving sexp]
 
-    type key
+  type key
 
-    type value
+  type value
 
-    type config
+  type config
 
-    module M : Monad.S
+  val create : config -> t
 
-    val create : config -> t
+  val close : t -> unit
 
-    val close : t -> unit
+  val get : t -> key:key -> value option
 
-    val get : t -> key:key -> value option M.t
+  val get_batch : t -> keys:key list -> value option list
 
-    val get_batch : t -> keys:key list -> value option list M.t
+  val set : t -> key:key -> data:value -> unit
 
-    val set : t -> key:key -> data:value -> unit M.t
+  val remove : t -> key:key -> unit
 
-    val remove : t -> key:key -> unit M.t
+  val set_batch :
+    t -> ?remove_keys:key list -> key_data_pairs:(key * value) list -> unit
 
-    val set_batch :
-      t -> ?remove_keys:key list -> update_pairs:(key * value) list -> unit M.t
+  val to_alist : t -> (key * value) list
 
-    val to_alist : t -> (key * value) list M.t
-  end
+  val create_checkpoint : t -> string -> t
 
-  module type Ident = S with module M := Monad.Ident
+  val make_checkpoint : t -> string -> unit
 
-  module type Mock = sig
-    include Ident
+  val get_uuid : t -> Uuid.t
 
-    val random_key : t -> key option
-
-    val to_sexp :
-      t -> key_sexp:(key -> Sexp.t) -> value_sexp:(value -> Sexp.t) -> Sexp.t
-  end
+  (* an association list, sorted by key *)
 end
 
 module Make_mock
-    (Key : Hashable.S) (Value : sig
+    (Key : sig
       type t
+      include Hashable.S with type t := t
+      val sexp_of_t : t -> Sexp.t
+    end) (Value : sig
+      type t [@@deriving sexp]
     end) :
-  Intf.Mock
+  S
     with type t = Value.t Key.Table.t
      and type key := Key.t
      and type value := Value.t
-     and type config := unit = struct
+     and type config := string = struct
   type t = Value.t Key.Table.t
 
-  let to_sexp t ~key_sexp ~value_sexp =
+  let sexp_of_t t =
     Key.Table.to_alist t
     |> List.map ~f:(fun (key, value) ->
-           [%sexp_of: Sexp.t * Sexp.t] (key_sexp key, value_sexp value) )
+           [%sexp_of: Sexp.t * Sexp.t] (Key.sexp_of_t key, Value.sexp_of_t value) )
     |> [%sexp_of: Sexp.t list]
+
+  let t_of_sexp _ = raise (Failure "unimplemented mock t_of_sexp")
 
   let create _ = Key.Table.create ()
 
@@ -105,13 +104,14 @@ module Make_mock
 
   let close _ = ()
 
-  let random_key t =
-    let keys = Key.Table.keys t in
-    List.random_element keys
-
-  let set_batch t ?(remove_keys = []) ~update_pairs =
-    List.iter update_pairs ~f:(fun (key, data) -> set t ~key ~data) ;
+  let set_batch t ?(remove_keys = []) ~key_data_pairs =
+    List.iter key_data_pairs ~f:(fun (key, data) -> set t ~key ~data) ;
     List.iter remove_keys ~f:(fun key -> remove t ~key)
 
   let to_alist = Key.Table.to_alist
+
+  let get_uuid _ = raise (Failure "no mock UUID")
+
+  let create_checkpoint _ _ = raise (Failure "unimplemented mock create_checkpoint")
+  let make_checkpoint _ _ = raise (Failure "unimplemented mock make_checkpoint")
 end

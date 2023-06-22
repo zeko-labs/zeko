@@ -1,7 +1,8 @@
 (* masking_merkle_tree.ml -- implements a mask in front of a Merkle tree; see
    RFC 0004 and docs/specs/merkle_tree.md *)
 
-open Core
+open Core_kernel
+open Async_kernel
 
 (* builds a Merkle tree mask; it's a Merkle tree, with some additional
    operations
@@ -31,11 +32,11 @@ module Make (Inputs : Inputs_intf.S) = struct
   end
 
   module Detached_parent_signal = struct
-    type t = unit Async.Ivar.t
+    type t = unit Ivar.t
 
     let sexp_of_t (_ : t) = Sexp.List []
 
-    let t_of_sexp (_ : Sexp.t) : t = Async.Ivar.create ()
+    let t_of_sexp (_ : Sexp.t) : t = Ivar.create ()
   end
 
   type t =
@@ -54,9 +55,9 @@ module Make (Inputs : Inputs_intf.S) = struct
   type unattached = t [@@deriving sexp]
 
   let create ~depth () =
-    { uuid = Uuid_unix.create ()
+    { uuid = Uuid.create_random (Random.State.make_self_init ())
     ; parent = Error __LOC__
-    ; detached_parent_signal = Async.Ivar.create ()
+    ; detached_parent_signal = Ivar.create ()
     ; account_tbl = Location_binable.Table.create ()
     ; token_owners = Token_id.Table.create ()
     ; hash_tbl = Addr.Table.create ()
@@ -108,7 +109,7 @@ module Make (Inputs : Inputs_intf.S) = struct
       assert (Result.is_ok t.parent) ;
       t.parent <- Error loc ;
       if trigger_signal then
-        Async.Ivar.fill_if_empty t.detached_parent_signal () ;
+        Ivar.fill_if_empty t.detached_parent_signal () ;
       t
 
     let assert_is_attached t =
@@ -118,7 +119,7 @@ module Make (Inputs : Inputs_intf.S) = struct
       | Ok _ ->
           ()
 
-    let detached_signal t = Async.Ivar.read t.detached_parent_signal
+    let detached_signal t = Ivar.read t.detached_parent_signal
 
     let get_parent ({ parent = opt; _ } as t) =
       assert_is_attached t ; Result.ok_or_failwith opt
@@ -394,9 +395,9 @@ module Make (Inputs : Inputs_intf.S) = struct
 
     (* copy tables in t; use same parent *)
     let copy t =
-      { uuid = Uuid_unix.create ()
+      { uuid = Uuid.create_random (Random.State.make_self_init ())
       ; parent = Ok (get_parent t)
-      ; detached_parent_signal = Async.Ivar.create ()
+      ; detached_parent_signal = Ivar.create ()
       ; account_tbl = Location_binable.Table.copy t.account_tbl
       ; token_owners = Token_id.Table.copy t.token_owners
       ; location_tbl = Account_id.Table.copy t.location_tbl
@@ -595,7 +596,7 @@ module Make (Inputs : Inputs_intf.S) = struct
       Location_binable.Table.clear t.account_tbl ;
       Addr.Table.clear t.hash_tbl ;
       Account_id.Table.clear t.location_tbl ;
-      Async.Ivar.fill_if_empty t.detached_parent_signal ()
+      Ivar.fill_if_empty t.detached_parent_signal ()
 
     let index_of_account_exn t key =
       assert_is_attached t ;
@@ -739,7 +740,7 @@ module Make (Inputs : Inputs_intf.S) = struct
 
   let set_parent t parent =
     assert (Result.is_error t.parent) ;
-    assert (Option.is_none (Async.Ivar.peek t.detached_parent_signal)) ;
+    assert (Option.is_none (Ivar.peek t.detached_parent_signal)) ;
     assert (Int.equal t.depth (Base.depth parent)) ;
     t.parent <- Ok parent ;
     t.current_location <- Attached.last_filled t ;

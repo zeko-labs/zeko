@@ -748,6 +748,185 @@ let compile :
   in
   (tag, cache_handle, proof, provers)
 
+let compile_promise :
+    type auxiliary_var auxiliary_value prev_varss prev_valuess widthss heightss max_proofs_verified branches.
+       ?self:
+         ( Zkapp_statement.Checked.t
+         , Zkapp_statement.t
+         , max_proofs_verified
+         , branches )
+         Pickles.Tag.t
+    -> ?cache:_
+    -> ?disk_keys:(_, branches) Vector.t * _
+    -> auxiliary_typ:(auxiliary_var, auxiliary_value) Typ.t
+    -> branches:(module Nat.Intf with type n = branches)
+    -> max_proofs_verified:
+         (module Nat.Add.Intf with type n = max_proofs_verified)
+    -> name:string
+    -> constraint_constants:_
+    -> choices:
+         (   self:
+               ( Zkapp_statement.Checked.t
+               , Zkapp_statement.t
+               , max_proofs_verified
+               , branches )
+               Pickles.Tag.t
+          -> ( prev_varss
+             , prev_valuess
+             , widthss
+             , heightss
+             , Field.t
+             , Field.Constant.t
+             , account_update
+             , unit (* TODO: Remove? *)
+             , auxiliary_var
+             , auxiliary_value )
+             H4_6.T(Pickles.Inductive_rule).t )
+    -> unit
+    -> ( Zkapp_statement.Checked.t
+       , Zkapp_statement.t
+       , max_proofs_verified
+       , branches )
+       Pickles.Tag.t
+       * _
+       * (module Pickles.Proof_intf
+            with type t = ( max_proofs_verified
+                          , max_proofs_verified )
+                          Pickles.Proof.t
+             and type statement = Zkapp_statement.t )
+       * ( prev_valuess
+         , widthss
+         , heightss
+         , unit
+         , ( ( Account_update.t
+             , Zkapp_command.Digest.Account_update.t
+             , Zkapp_command.Digest.Forest.t )
+             Zkapp_command.Call_forest.Tree.t
+           * auxiliary_value )
+           Promise.t )
+         H3_2.T(Pickles.Prover).t =
+ fun ?self ?cache ?disk_keys ~auxiliary_typ ~branches ~max_proofs_verified ~name
+     ~constraint_constants ~choices () ->
+  let vk_hash = ref None in
+  let choices ~self =
+    let rec go :
+        type prev_varss prev_valuess widthss heightss.
+           ( prev_varss
+           , prev_valuess
+           , widthss
+           , heightss
+           , Field.t
+           , Field.Constant.t
+           , account_update
+           , unit
+           , auxiliary_var
+           , auxiliary_value )
+           H4_6.T(Pickles.Inductive_rule).t
+        -> ( prev_varss
+           , prev_valuess
+           , widthss
+           , heightss
+           , unit
+           , unit
+           , Zkapp_statement.Checked.t
+           , Zkapp_statement.t
+           , return_type Prover_value.t * auxiliary_var
+           , return_type * auxiliary_value )
+           H4_6.T(Pickles.Inductive_rule).t = function
+      | [] ->
+          []
+      | { identifier; prevs; main; feature_flags } :: choices ->
+          { identifier
+          ; prevs
+          ; feature_flags
+          ; main =
+              (fun { Pickles.Inductive_rule.public_input = () } ->
+                let vk_hash =
+                  exists Field.typ ~compute:(fun () ->
+                      Lazy.force @@ Option.value_exn !vk_hash )
+                in
+                let { Pickles.Inductive_rule.previous_proof_statements
+                    ; public_output = account_update_under_construction
+                    ; auxiliary_output
+                    } =
+                  main { Pickles.Inductive_rule.public_input = vk_hash }
+                in
+                let public_output, account_update_tree =
+                  to_account_update account_update_under_construction
+                in
+                { previous_proof_statements
+                ; public_output
+                ; auxiliary_output = (account_update_tree, auxiliary_output)
+                } )
+          }
+          :: go choices
+    in
+    go (choices ~self)
+  in
+  let tag, cache_handle, proof, provers =
+    Pickles.compile_promise () ?self ?cache ?disk_keys
+      ~public_input:(Output Zkapp_statement.typ)
+      ~auxiliary_typ:Typ.(Prover_value.typ () * auxiliary_typ)
+      ~branches ~max_proofs_verified ~name ~constraint_constants ~choices
+  in
+  let () =
+    vk_hash :=
+      Some
+        ( lazy
+          ( Zkapp_account.digest_vk
+          @@ Pickles.Side_loaded.Verification_key.of_compiled tag ) )
+  in
+  let provers =
+    let rec go :
+        type prev_valuess widthss heightss.
+           ( prev_valuess
+           , widthss
+           , heightss
+           , unit
+           , ( Zkapp_statement.t
+             * (return_type * auxiliary_value)
+             * (max_proofs_verified, max_proofs_verified) Pickles.Proof.t )
+             Promise.t )
+           H3_2.T(Pickles.Prover).t
+        -> ( prev_valuess
+           , widthss
+           , heightss
+           , unit
+           , ( ( Account_update.t
+               , Zkapp_command.Digest.Account_update.t
+               , Zkapp_command.Digest.Forest.t )
+               Zkapp_command.Call_forest.Tree.t
+             * auxiliary_value )
+             Promise.t )
+           H3_2.T(Pickles.Prover).t = function
+      | [] ->
+          []
+      | prover :: provers ->
+          let prover ?handler () =
+            let open Promise.Let_syntax in
+            let%map ( _stmt
+                    , ( { account_update; account_update_digest; calls }
+                      , auxiliary_value )
+                    , proof ) =
+              prover ?handler ()
+            in
+            let account_update : Account_update.t =
+              { body = account_update
+              ; authorization = Proof (Pickles.Side_loaded.Proof.of_proof proof)
+              }
+            in
+            ( { Zkapp_command.Call_forest.Tree.account_update
+              ; account_update_digest
+              ; calls
+              }
+            , auxiliary_value )
+          in
+          prover :: go provers
+    in
+    go provers
+  in
+  (tag, cache_handle, proof, provers)
+
 let mk_update_body ?(token_id = Token_id.default)
     ?(update = Account_update.Update.dummy)
     ?(balance_change = Amount.Signed.zero) ?(increment_nonce = false)

@@ -1,4 +1,5 @@
-open Core
+open Core_kernel
+open Async_kernel
 
 module type Inputs_intf = sig
   include Base_inputs_intf.S
@@ -7,7 +8,10 @@ module type Inputs_intf = sig
 
   module Location_binable : Hashable.S_binable with type t := Location.t
 
-  module Kvdb : Intf.Key_value_database with type config := string
+  module Kvdb : Key_value_database.S
+    with type config := string
+     and type key := Bigstring.t
+     and type value := Bigstring.t
 
   module Storage_locations : Intf.Storage_locations
 end
@@ -46,11 +50,11 @@ module Make (Inputs : Inputs_intf) :
   type path = Path.t
 
   module Detached_parent_signal = struct
-    type t = unit Async.Ivar.t
+    type t = unit Ivar.t
 
     let sexp_of_t (_ : t) = Sexp.List []
 
-    let t_of_sexp (_ : Sexp.t) : t = Async.Ivar.create ()
+    let t_of_sexp (_ : Sexp.t) : t = Ivar.create ()
   end
 
   type t =
@@ -70,34 +74,33 @@ module Make (Inputs : Inputs_intf) :
 
   let create ?directory_name ~depth () =
     assert (depth < 0xfe) ;
-    let uuid = Uuid_unix.create () in
+    let uuid = Uuid.create_random (Random.State.make_self_init ()) in
     let directory =
       match directory_name with
       | None ->
           (* Create in the autogen path, where we know we have write
              permissions.
           *)
-          Cache_dir.autogen_path ^/ Uuid.to_string uuid
+          Cache_dir.autogen_path ^ "/" ^ Uuid.to_string uuid
       | Some name ->
           name
     in
-    Unix.mkdir_p directory ;
     let kvdb = Kvdb.create directory in
     { uuid
     ; kvdb
     ; depth
     ; directory
-    ; detached_parent_signal = Async.Ivar.create ()
+    ; detached_parent_signal = Ivar.create ()
     }
 
   let create_checkpoint t ~directory_name () =
-    let uuid = Uuid_unix.create () in
+    let uuid = Uuid.create_random (Random.State.make_self_init ()) in
     let kvdb = Kvdb.create_checkpoint t.kvdb directory_name in
     { uuid
     ; kvdb
     ; depth = t.depth
     ; directory = directory_name
-    ; detached_parent_signal = Async.Ivar.create ()
+    ; detached_parent_signal = Ivar.create ()
     }
 
   let make_checkpoint t ~directory_name =
@@ -106,10 +109,10 @@ module Make (Inputs : Inputs_intf) :
   let close { kvdb; uuid = _; depth = _; directory = _; detached_parent_signal }
       =
     Kvdb.close kvdb ;
-    Async.Ivar.fill_if_empty detached_parent_signal ()
+    Ivar.fill_if_empty detached_parent_signal ()
 
   let detached_signal { detached_parent_signal; _ } =
-    Async.Ivar.read detached_parent_signal
+    Ivar.read detached_parent_signal
 
   let with_ledger ~depth ~f =
     let t = create ~depth () in
@@ -547,6 +550,7 @@ module Make (Inputs : Inputs_intf) :
   let set_hash mdb location new_hash =
     set_hash_batch mdb [ (location, new_hash) ]
 
+(*
   module For_tests = struct
     let gen_account_location ~ledger_depth =
       let open Quickcheck.Let_syntax in
@@ -559,6 +563,7 @@ module Make (Inputs : Inputs_intf) :
       in
       build_account dirs
   end
+*)
 
   let set mdb location account =
     set_bin mdb location Account.bin_size_t Account.bin_write_t account ;

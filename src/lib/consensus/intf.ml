@@ -1,6 +1,5 @@
 open Core_kernel
 open Mina_numbers
-open Async
 open Currency
 open Signature_lib
 open Mina_base
@@ -562,7 +561,7 @@ module type S = sig
 
       val next_epoch_data : Value.t -> Mina_base.Epoch_data.Value.t
 
-      val graphql_type : unit -> ('ctx, Value.t option) Graphql_async.Schema.typ
+      (* val graphql_type : unit -> ('ctx, Value.t option) Graphql_async.Schema.typ *)
 
       val curr_slot : Value.t -> Slot.t
 
@@ -745,6 +744,7 @@ module type S = sig
       -> local_state:Local_state.t
       -> local_state_sync option
 
+(*
     (**
      * Synchronize local state over the network.
 
@@ -767,6 +767,7 @@ module type S = sig
             -> unit )
       -> local_state_sync
       -> unit Deferred.Or_error.t
+*)
 
     module Make_state_hooks
         (Blockchain_state : Blockchain_state)

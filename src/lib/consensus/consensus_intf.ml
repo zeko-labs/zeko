@@ -21,5 +21,5 @@ module type Full = sig
   [%%endif]
 
   module Proof_of_stake = Proof_of_stake
-  module Graphql_scalars = Graphql_scalars
+  (* module Graphql_scalars = Graphql_scalars *)
 end

@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 
 module type S = sig
   (** a Merkle hash associated with the root node *)
