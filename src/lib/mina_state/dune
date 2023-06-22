@@ -2,6 +2,7 @@
  (name mina_state)
  (public_name mina_state)
  (inline_tests)
+ (modules snarked_ledger_state Snarked_ledger_state_intf registers local_state protocol_state protocol_state_intf blockchain_state)
  (preprocessor_deps ../../config.mlh)
  (instrumentation (backend bisect_ppx))
  (preprocess (pps ppx_custom_printf ppx_mina ppx_version ppx_snarky ppx_optcomp ppx_bin_prot ppx_compare ppx_sexp_conv ppx_hash ppx_fields_conv ppx_let ppx_inline_test ppx_assert ppx_deriving.std ppx_deriving_yojson h_list.ppx))
@@ -14,7 +15,6 @@
    base
    sexplib0
    core_kernel
-   core
    ;; local libraries
    signature_lib
    pickles.backend
@@ -22,12 +22,12 @@
    pickles
    random_oracle_input
    random_oracle
+   consensus
    genesis_constants
    block_time
    mina_base
    mina_transaction_logic
    snark_params
-   consensus
    bitstring_lib
    fold_lib
    tuple_lib

@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 open Mina_base
 module Impl = Pickles.Impls.Step
 

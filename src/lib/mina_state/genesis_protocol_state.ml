@@ -15,10 +15,12 @@ let t ~genesis_ledger ~genesis_epoch_data ~constraint_constants
            ~consensus_constants ~genesis_body_reference ))
       .state_hash
   in
+(*
   let genesis_consensus_state =
     Consensus.Data.Consensus_state.create_genesis
       ~negative_one_protocol_state_hash ~genesis_ledger ~genesis_epoch_data
       ~constraint_constants ~constants:consensus_constants
+*)
   in
   let state =
     Protocol_state.create_value

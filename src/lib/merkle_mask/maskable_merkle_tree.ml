@@ -1,6 +1,6 @@
 (* maskable_merkle_tree.ml -- Merkle tree that can have associated masks *)
 
-open Core
+open Core_kernel
 
 module type Inputs_intf = sig
   include Inputs_intf.S
@@ -131,7 +131,7 @@ module Make (Inputs : Inputs_intf) = struct
         , `Hash
             ( try C.merkle_root c
               with _ ->
-                Core.printf !"CAUGHT %{sexp: Uuid.t}\n%!" uuid ;
+                Core_kernel.Printf.printf !"CAUGHT %{sexp: Uuid.t}\n%!" uuid ;
                 Hash.empty_account ) )
       in
       match Uuid.Table.find registered_masks (C.get_uuid c) with

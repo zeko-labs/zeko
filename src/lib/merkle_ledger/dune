@@ -10,15 +10,10 @@
    bin_prot.shape
    sexplib0
    integers
-   core.uuid
-   async
-   core
    extlib
-   rocks
    core_kernel
    base.caml
    base.base_internalhash_types
-   async_unix
    ;; local libraries
    merkle_address
    immutable_array
@@ -30,6 +25,7 @@
    visualization
    ppx_version.runtime
  )
+ (modules (:standard \ graphviz))
  (preprocess
   (pps ppx_mina ppx_version ppx_jane ppx_compare ppx_deriving.show ppx_deriving_yojson))
  (instrumentation (backend bisect_ppx))

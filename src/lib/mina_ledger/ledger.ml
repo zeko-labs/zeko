@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 open Signature_lib
 open Merkle_ledger
 open Mina_base
@@ -25,8 +25,35 @@ module Ledger_inner = struct
     include Hashable.Make_binable (Arg) [@@deriving sexp, compare, hash, yojson]
   end
 
-  module Kvdb : Intf.Key_value_database with type config := string =
-    Rocksdb.Database
+  module Bigstring_hashable = struct
+    type t = Bigstring.t
+
+    let hash (bs : t) : int =
+      let h = ref 5381 in
+      for i = 0 to Bigstring.length bs - 1 do
+        let c = Caml.Char.code (Bigstring.get bs i) in
+        h := (!h * 33) lxor c
+      done;
+      !h
+
+    let hash_fold_t state bs =
+      Hash.fold_int state (hash bs)
+
+    let compare = Bigstring.compare
+    let sexp_of_t = Bigstring.sexp_of_t
+    let t_of_sexp = Bigstring.t_of_sexp
+  end
+
+  module Bigstring_hashable_made = struct
+    include Bigstring
+    include Hashable.Make (Bigstring_hashable)
+  end
+
+  module Kvdb : Key_value_database.S
+    with type config := string
+     and type key := Bigstring.t
+     and type value := Bigstring.t
+      = Key_value_database.Make_mock (Bigstring_hashable_made) (Bigstring)
 
   module Storage_locations : Intf.Storage_locations = struct
     let key_value_db_dir = "mina_key_value_db"

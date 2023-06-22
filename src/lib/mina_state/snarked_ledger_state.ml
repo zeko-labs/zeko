@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 open Mina_base
 open Snark_params
 module Global_slot = Mina_numbers.Global_slot_since_genesis

@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 open Signature_lib
 open Mina_base
 open Mina_transaction
@@ -8,6 +8,7 @@ module Global_slot_since_genesis = Mina_numbers.Global_slot_since_genesis
 open Currency
 open Pickles_types
 module Wire_types = Mina_wire_types.Transaction_snark
+open Async_kernel
 
 module Make_sig (A : Wire_types.Types.S) = struct
   module type S = Transaction_snark_intf.Full with type Stable.V2.t = A.V2.t
@@ -3314,13 +3315,13 @@ module Make_str (A : Wire_types.Concrete) = struct
     module type S = sig
       val tag : tag
 
-      val verify : (t * Sok_message.t) list -> unit Or_error.t Async.Deferred.t
+      val verify : (t * Sok_message.t) list -> unit Or_error.t Deferred.t
 
       val id : Pickles.Verification_key.Id.t Lazy.t
 
       val verification_key : Pickles.Verification_key.t Lazy.t
 
-      val verify_against_digest : t -> unit Or_error.t Async.Deferred.t
+      val verify_against_digest : t -> unit Or_error.t Deferred.t
 
       val constraint_system_digests : (string * Md5_lib.t) list Lazy.t
     end
@@ -3338,30 +3339,30 @@ module Make_str (A : Wire_types.Concrete) = struct
       -> init_stack:Pending_coinbase.Stack.t
       -> Transaction.Valid.t Transaction_protocol_state.t
       -> Tick.Handler.t
-      -> t Async.Deferred.t
+      -> t Deferred.t
 
     val of_user_command :
          statement:Statement.With_sok.t
       -> init_stack:Pending_coinbase.Stack.t
       -> Signed_command.With_valid_signature.t Transaction_protocol_state.t
       -> Tick.Handler.t
-      -> t Async.Deferred.t
+      -> t Deferred.t
 
     val of_fee_transfer :
          statement:Statement.With_sok.t
       -> init_stack:Pending_coinbase.Stack.t
       -> Fee_transfer.t Transaction_protocol_state.t
       -> Tick.Handler.t
-      -> t Async.Deferred.t
+      -> t Deferred.t
 
     val of_zkapp_command_segment_exn :
          statement:Statement.With_sok.t
       -> witness:Zkapp_command_segment.Witness.t
       -> spec:Zkapp_command_segment.Basic.t
-      -> t Async.Deferred.t
+      -> t Deferred.t
 
     val merge :
-      t -> t -> sok_digest:Sok_message.Digest.t -> t Async.Deferred.Or_error.t
+      t -> t -> sok_digest:Sok_message.Digest.t -> t Deferred.Or_error.t
   end
 
   let check_transaction_union ?(preeval = false) ~constraint_constants
@@ -3503,7 +3504,7 @@ module Make_str (A : Wire_types.Concrete) = struct
         key
         (List.map ts ~f:(fun ({ statement; proof }, _) -> (statement, proof)))
     else
-      Async.return
+      Async_kernel.return
         (Or_error.error_string
            "Transaction_snark.verify: Mismatched sok_message" )
 
@@ -3954,7 +3955,7 @@ module Make_str (A : Wire_types.Concrete) = struct
         Proof.verify
           (List.map ts ~f:(fun ({ statement; proof }, _) -> (statement, proof)))
       else
-        Async.return
+        Async_kernel.return
           (Or_error.error_string
              "Transaction_snark.verify: Mismatched sok_message" )
 
@@ -4002,7 +4003,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       (pi, vk)
 
     let of_zkapp_command_segment_exn ~(statement : Proof.statement) ~witness
-        ~(spec : Zkapp_command_segment.Basic.t) : t Async.Deferred.t =
+        ~(spec : Zkapp_command_segment.Basic.t) : t Deferred.t =
       Base.Zkapp_command_snark.witness := Some witness ;
       let res =
         match spec with
@@ -4020,14 +4021,14 @@ module Make_str (A : Wire_types.Concrete) = struct
                   ~handler:(Base.Zkapp_command_snark.handle_zkapp_proof p)
                   statement )
       in
-      let open Async in
+      let open Async_kernel in
       let%map (), (), proof = res in
       Base.Zkapp_command_snark.witness := None ;
       { proof; statement }
 
     let of_transaction_union ~statement ~init_stack transaction state_body
         global_slot handler =
-      let open Async in
+      let open Async_kernel in
       let%map (), (), proof =
         base
           ~handler:
@@ -4081,15 +4082,16 @@ module Make_str (A : Wire_types.Concrete) = struct
 
     let merge ({ statement = t12; _ } as x12) ({ statement = t23; _ } as x23)
         ~sok_digest =
-      let open Async.Deferred.Or_error.Let_syntax in
+      let open Deferred.Or_error.Let_syntax in
       let%bind s =
-        Async.return
+        return
           (Statement.merge
              ({ t12 with sok_digest = () } : Statement.t)
              { t23 with sok_digest = () } )
       in
+      let%bind s = Async_kernel.return s in
       let s = { s with sok_digest } in
-      let open Async in
+      let open Async_kernel in
       let%map (), (), proof =
         merge
           ~handler:
@@ -4161,7 +4163,7 @@ module Make_str (A : Wire_types.Concrete) = struct
           ~choices:(fun ~self:_ -> [ trivial_rule ])
       in
       let trivial_prover ?handler stmt =
-        let open Async.Deferred.Let_syntax in
+        let open Deferred.Let_syntax in
         let%map (), (), proof = trivial_prover ?handler stmt in
         ((), (), Pickles.Side_loaded.Proof.of_proof proof)
       in
@@ -4810,8 +4812,8 @@ module Make_str (A : Wire_types.Concrete) = struct
       let snapp_zkapp_command_keypairs =
         List.zip_exn snapp_zkapp_command spec.zkapp_account_keypairs
       in
-      let%map.Async.Deferred snapp_zkapp_command =
-        Async.Deferred.List.map snapp_zkapp_command_keypairs
+      let%map.Deferred snapp_zkapp_command =
+        Deferred.List.map snapp_zkapp_command_keypairs
           ~f:(fun
                ( ( (snapp_account_update, simple_snapp_account_update)
                  , tx_statement )
@@ -4823,7 +4825,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                     (Snarky_backendless.Request.With { request; respond }) =
                   match request with _ -> respond Unhandled
                 in
-                let%map.Async.Deferred (), (), (pi : Pickles.Side_loaded.Proof.t)
+                let%map.Deferred (), (), (pi : Pickles.Side_loaded.Proof.t)
                     =
                   prover ~handler tx_statement
                 in
@@ -4841,13 +4843,13 @@ module Make_str (A : Wire_types.Concrete) = struct
                   Signature_lib.Schnorr.Chunked.sign snapp_keypair.private_key
                     (Random_oracle.Input.Chunked.field commitment)
                 in
-                Async.Deferred.return
+                Deferred.return
                   ( { body = simple_snapp_account_update.body
                     ; authorization = Signature signature
                     }
                     : Account_update.Simple.t )
             | None ->
-                Async.Deferred.return
+                Deferred.return
                   ( { body = simple_snapp_account_update.body
                     ; authorization = None_given
                     }
@@ -5085,7 +5087,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       let handler (Snarky_backendless.Request.With { request; respond }) =
         match request with _ -> respond Unhandled
       in
-      let%map.Async.Deferred (), (), (pi : Pickles.Side_loaded.Proof.t) =
+      let%map.Deferred (), (), (pi : Pickles.Side_loaded.Proof.t) =
         trivial_prover ~handler tx_statement
       in
       let fee_payer_signature_auth =

@@ -1,9 +1,10 @@
 module type Full = sig
-  open Core
+  open Core_kernel
   open Mina_base
   open Mina_transaction
   open Snark_params
   open Currency
+  open Async_kernel
   module Transaction_validator = Transaction_validator
 
   (** For debugging. Logs to stderr the inputs to the top hash. *)
@@ -43,19 +44,19 @@ module type Full = sig
   val verify :
        (t * Sok_message.t) list
     -> key:Pickles.Verification_key.t
-    -> unit Or_error.t Async.Deferred.t
+    -> unit Or_error.t Deferred.t
 
   module Verification : sig
     module type S = sig
       val tag : tag
 
-      val verify : (t * Sok_message.t) list -> unit Or_error.t Async.Deferred.t
+      val verify : (t * Sok_message.t) list -> unit Or_error.t Deferred.t
 
       val id : Pickles.Verification_key.Id.t Lazy.t
 
       val verification_key : Pickles.Verification_key.t Lazy.t
 
-      val verify_against_digest : t -> unit Or_error.t Async.Deferred.t
+      val verify_against_digest : t -> unit Or_error.t Deferred.t
 
       val constraint_system_digests : (string * Md5_lib.t) list Lazy.t
     end
@@ -136,30 +137,30 @@ module type Full = sig
       -> init_stack:Pending_coinbase.Stack.t
       -> Transaction.Valid.t Transaction_protocol_state.t
       -> Tick.Handler.t
-      -> t Async.Deferred.t
+      -> t Deferred.t
 
     val of_user_command :
          statement:Statement.With_sok.t
       -> init_stack:Pending_coinbase.Stack.t
       -> Signed_command.With_valid_signature.t Transaction_protocol_state.t
       -> Tick.Handler.t
-      -> t Async.Deferred.t
+      -> t Deferred.t
 
     val of_fee_transfer :
          statement:Statement.With_sok.t
       -> init_stack:Pending_coinbase.Stack.t
       -> Fee_transfer.t Transaction_protocol_state.t
       -> Tick.Handler.t
-      -> t Async.Deferred.t
+      -> t Deferred.t
 
     val of_zkapp_command_segment_exn :
          statement:Statement.With_sok.t
       -> witness:Zkapp_command_segment.Witness.t
       -> spec:Zkapp_command_segment.Basic.t
-      -> t Async.Deferred.t
+      -> t Deferred.t
 
     val merge :
-      t -> t -> sok_digest:Sok_message.Digest.t -> t Async.Deferred.Or_error.t
+      t -> t -> sok_digest:Sok_message.Digest.t -> t Deferred.Or_error.t
   end
 
   (** [zkapp_command_witnesses_exn ledger zkapp_commands] generates the zkapp_command segment witnesses
@@ -348,7 +349,7 @@ module type Full = sig
            , unit
            , Zkapp_statement.t
            , (unit * unit * (Nat.N2.n, Nat.N2.n) Pickles.Proof.t)
-             Async.Deferred.t )
+             Deferred.t )
            Pickles.Prover.t
            * ( Pickles.Side_loaded.Verification_key.t
              , Snark_params.Tick.Field.t )
@@ -356,7 +357,7 @@ module type Full = sig
       -> ?empty_sender:bool
       -> constraint_constants:Genesis_constants.Constraint_constants.t
       -> Update_states_spec.t
-      -> Zkapp_command.t Async.Deferred.t
+      -> Zkapp_command.t Deferred.t
 
     val create_trivial_predicate_snapp :
          constraint_constants:Genesis_constants.Constraint_constants.t
@@ -364,7 +365,7 @@ module type Full = sig
       -> snapp_kp:Signature_lib.Keypair.t
       -> Mina_transaction_logic.For_tests.Transaction_spec.t
       -> Mina_ledger.Ledger.t
-      -> Zkapp_command.t Async.Deferred.t
+      -> Zkapp_command.t Deferred.t
 
     val trivial_zkapp_account :
          ?permissions:Permissions.t
@@ -389,7 +390,7 @@ module type Full = sig
               , unit
               , Zkapp_statement.t
               , (unit * unit * (Nat.N2.n, Nat.N2.n) Pickles.Proof.t)
-                Async.Deferred.t )
+                Deferred.t )
               Pickles.Prover.t ]
 
     module Multiple_transfers_spec : sig

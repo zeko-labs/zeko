@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 open Signed
 open Unsigned
 open Num_util

@@ -4,33 +4,28 @@
  (inline_tests)
  (instrumentation (backend bisect_ppx))
  (preprocess (pps ppx_version ppx_let ppx_custom_printf ppx_base ppx_deriving_yojson ppx_inline_test ppx_assert))
+ (modules (:standard \ sync_ledger))
  (libraries
    ;; opam libraries
-   rocks
    integers
    async_kernel
    base.caml
    base
-   core
    core_kernel
    sexplib0
    bin_prot.shape
    base.base_internalhash_types
-   async
    core_kernel.uuid
    ppx_inline_test.config
    ;; local libraries
    mina_wire_types
    sgn
-   syncable_ledger
    snark_params
    zkapp_command_builder
    pickles
    pickles.backend
    pickles_types
    mina_base.import
-   o1trace
-   rocksdb
    random_oracle
    currency
    genesis_constants

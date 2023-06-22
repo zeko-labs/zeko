@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 
 module type Key = sig
   type t [@@deriving sexp]
@@ -107,35 +107,6 @@ end
 
 module type Depth = sig
   val depth : int
-end
-
-module type Key_value_database = sig
-  type t [@@deriving sexp]
-
-  type config
-
-  include
-    Key_value_database.Intf.Ident
-      with type t := t
-       and type key := Bigstring.t
-       and type value := Bigstring.t
-       and type config := config
-
-  val create_checkpoint : t -> string -> t
-
-  val make_checkpoint : t -> string -> unit
-
-  val get_uuid : t -> Uuid.t
-
-  val set_batch :
-       t
-    -> ?remove_keys:Bigstring.t list
-    -> key_data_pairs:(Bigstring.t * Bigstring.t) list
-    -> unit
-
-  val to_alist : t -> (Bigstring.t * Bigstring.t) list
-
-  (* an association list, sorted by key *)
 end
 
 module type Storage_locations = sig

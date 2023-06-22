@@ -38,7 +38,7 @@ end
 let gen (constants : Constants.t) =
   let open Quickcheck.Let_syntax in
   let epoch_length = constants.slots_per_epoch |> UInt32.to_int in
-  Core.Int.gen_incl 0 epoch_length >>| UInt32.of_int
+  Int.gen_incl 0 epoch_length >>| UInt32.of_int
 
 let%test_unit "in_seed_update_range unchecked vs. checked equality" =
   let constants = Lazy.force Constants.for_unit_tests in

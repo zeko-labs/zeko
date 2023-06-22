@@ -7,7 +7,6 @@
    ;; local libraries
    allocation_functor
    cache_dir
-   consensus
    crypto_params
    currency
    data_hash_lib
