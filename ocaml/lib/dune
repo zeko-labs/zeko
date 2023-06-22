@@ -2,7 +2,7 @@
  (name snarky_js_bindings_lib)
  (libraries
   ;; rollup ;;
-	transaction_snark
+  transaction_snark
   zkapps_rollup
   ;; opam libraries ;;
   core_kernel
