@@ -3,6 +3,7 @@
 
 //Provides: caml_raise_with_string (const, const)
 function caml_raise_with_string(tag, msg) {
+  globalThis.console.log("Throwing!")
   throw globalThis.Error(msg.c);
 }
 
