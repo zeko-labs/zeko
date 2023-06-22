@@ -1,7 +1,7 @@
 (env
  (_
   (js_of_ocaml
-   (compilation_mode whole_program))))
+   (compilation_mode separate))))
 
 (data_only_dirs test_module)
 
@@ -15,7 +15,7 @@
  (link_flags
   (-noautolink -g))
  (js_of_ocaml
-  (flags +toplevel.js +dynlink.js --pretty --source-map)
+  (flags +toplevel.js +dynlink.js --pretty --source-map --debug-info)
   (link_flags --source-map)
   (javascript_files overrides.js))
  (libraries snarky_js_bindings_lib node_backend)
@@ -42,7 +42,6 @@
   ../kimchi/js/web/plonk_wasm_bg.wasm)
  (instrumentation
   (backend bisect_ppx))
- (forbidden_libraries async core re2 ctypes)
  (preprocess
   (pps ppx_version js_of_ocaml-ppx)))
 
