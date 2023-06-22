@@ -589,15 +589,15 @@ module Make (Inputs : Inputs_intf) :
 
   let to_list mdb =
     let num_accounts = num_accounts mdb in
-    Async.Deferred.List.init ~how:`Parallel num_accounts ~f:(fun i ->
-        Async.Deferred.return @@ get_at_index_exn mdb i )
+    Deferred.List.init ~how:`Parallel num_accounts ~f:(fun i ->
+        Deferred.return @@ get_at_index_exn mdb i )
 
   let to_list_sequential mdb =
     let num_accounts = num_accounts mdb in
     List.init num_accounts ~f:(fun i -> get_at_index_exn mdb i)
 
   let accounts mdb =
-    let%map.Async.Deferred accts = to_list mdb in
+    let%map.Deferred accts = to_list mdb in
     List.map accts ~f:Account.identifier |> Account_id.Set.of_list
 
   let get_or_create_account mdb account_id account =
@@ -651,7 +651,7 @@ module Make (Inputs : Inputs_intf) :
     foldi_with_ignored_accounts t Account_id.Set.empty ~init ~f
 
   let fold_until t ~init ~f ~finish =
-    let%map.Async.Deferred accts = to_list t in
+    let%map.Deferred accts = to_list t in
     List.fold_until accts ~init ~f ~finish
 
   let merkle_root mdb = get_hash mdb Location.root_hash

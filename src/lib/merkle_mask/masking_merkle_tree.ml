@@ -617,8 +617,8 @@ module Make (Inputs : Inputs_intf.S) = struct
     let to_list t =
       assert_is_attached t ;
       let num_accounts = num_accounts t in
-      Async.Deferred.List.init ~how:`Parallel num_accounts ~f:(fun i ->
-          Async.Deferred.return @@ get_at_index_exn t i )
+      Deferred.List.init ~how:`Parallel num_accounts ~f:(fun i ->
+          Deferred.return @@ get_at_index_exn t i )
 
     let to_list_sequential t =
       assert_is_attached t ;
@@ -628,7 +628,7 @@ module Make (Inputs : Inputs_intf.S) = struct
     (* keys from this mask and all ancestors *)
     let accounts t =
       assert_is_attached t ;
-      let%map.Async.Deferred accts = to_list t in
+      let%map.Deferred accts = to_list t in
       List.map accts ~f:Account.identifier |> Account_id.Set.of_list
 
     let iteri t ~f =
