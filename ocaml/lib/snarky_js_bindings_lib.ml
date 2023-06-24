@@ -1,33 +1,38 @@
 module Js = Js_of_ocaml.Js
 
 let rollup =
-  let module T = Transaction_snark.Make (struct
-    let constraint_constants = Genesis_constants.Constraint_constants.compiled
-
-    let proof_level = Genesis_constants.Proof_level.Full
-  end) in
-  let module M = Zkapps_rollup.Make (struct
-    let tag = T.tag
-  end) in
-  let module Proof = M.Proof in
-  let step pk token_id txn =
-    let account_update, () =
-      Promise.block_on_async_exn
-        (M.step
-           { public_key = pk
-           ; token_id
-           ; may_use_token = Inherit_from_parent
-           ; txn
-           } )
-    in
-    account_update
-  in
-
   object%js
-    method vk = M.vk
+    method vk () : Mina_base.Side_loaded_verification_key.t =
+      let module T = Transaction_snark.Make (struct
+        let constraint_constants =
+          Genesis_constants.Constraint_constants.compiled
 
-    method step = step
+        let proof_level = Genesis_constants.Proof_level.Full
+      end) in
+      (*
+      let module M = Zkapps_rollup.Make (struct
+        let tag = T.tag
+      end) in
+*)
+      Pickles.Side_loaded.Verification_key.of_compiled T.tag
   end
+(*
+
+      let module Proof = M.Proof in
+
+      let step pk token_id txn =
+        let account_update, () =
+          Promise.block_on_async_exn
+            (M.step
+               { public_key = pk
+               ; token_id
+               ; may_use_token = Inherit_from_parent
+               ; txn
+               } )
+        in
+        account_update
+      in
+*)
 
 let export () =
   Js.export "Snarky" Snarky_bindings.snarky ;
