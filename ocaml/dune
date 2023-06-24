@@ -1,7 +1,7 @@
 (env
  (_
   (js_of_ocaml
-   (compilation_mode separate))))
+   (compilation_mode whole_program))))
 
 (data_only_dirs test_module)
 
