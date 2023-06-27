@@ -60,8 +60,39 @@ export const queries: QueryResolvers = {
     return [];
   },
 
-  events() {
-    return [];
+  events(_, { input }, { rollup }: RollupContext) {
+    const { address, tokenId } = input;
+
+    const events = rollup.events.get(
+      `${address}-${tokenId ?? Base58Encodings.TokenId.toBase58(Field(1))}`
+    );
+
+    return (
+      events?.map((event) => ({
+        eventData: [
+          {
+            data: event.data,
+            transactionInfo: {
+              hash: event.txHash,
+              status: event.txStatus,
+              memo: event.txMemo,
+              authorizationKind: event.authorizationKind,
+            },
+          },
+        ],
+        blockInfo: {
+          height: 0,
+          stateHash: '',
+          parentHash: '',
+          ledgerHash: '',
+          chainStatus: '',
+          timestamp: '',
+          globalSlotSinceHardfork: 0,
+          globalSlotSinceGenesis: 0,
+          distanceFromMaxBlockHeight: 1, // due to https://github.com/o1-labs/snarkyjs/blob/main/src/lib/fetch.ts#L847-L852
+        },
+      })) ?? []
+    );
   },
 
   actions() {

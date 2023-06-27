@@ -44,6 +44,10 @@ export type Batch = {
 
 export type ZkappEvent = {
   data: string[];
+  txHash: string;
+  txStatus: string;
+  txMemo: string;
+  authorizationKind: string;
 };
 
 export class Rollup {
@@ -55,7 +59,7 @@ export class Rollup {
   public stagedTransactions: Transaction[] = [];
   public batches: Batch[] = [];
 
-  public events: Map<[string, string], ZkappEvent[]> = new Map();
+  public events: Map<string, ZkappEvent[]> = new Map();
 
   constructor(
     genesisAccounts: GenesisAccount[],
@@ -153,6 +157,30 @@ export class Rollup {
       this.networkConstants.accountCreationFee.toString(),
       JSON.stringify(this.networkState)
     );
+
+    zkappCommand.accountUpdates.forEach((accountUpdate) => {
+      const {
+        publicKey,
+        tokenId,
+        events,
+      }: { publicKey: string; tokenId: string; events: string[][] } =
+        accountUpdate.body;
+
+      if (events.length === 0) return;
+
+      const previousEvents = this.events.get(`${publicKey}-${tokenId}`) ?? [];
+
+      this.events.set(`${publicKey}-${tokenId}`, [
+        ...events.map((event) => ({
+          data: event,
+          txHash: result.hash,
+          txStatus: 'applied',
+          txMemo: zkappCommand.memo,
+          authorizationKind: 'Proof',
+        })),
+        ...previousEvents,
+      ]);
+    });
 
     this.stagedTransactions.push({
       ...result,
