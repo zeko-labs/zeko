@@ -50,16 +50,29 @@ export type ZkappEvent = {
   authorizationKind: string;
 };
 
+export type ZkappAction = {
+  data: string[];
+  state: string[];
+  accountUpdateId: number;
+  txHash: string;
+  txStatus: string;
+  txMemo: string;
+  authorizationKind: string;
+};
+
 export class Rollup {
   public ledger: Ledger;
 
-  public readonly networkState;
   public readonly networkConstants;
+  public networkState;
 
   public stagedTransactions: Transaction[] = [];
   public batches: Batch[] = [];
 
   public events: Map<string, ZkappEvent[]> = new Map();
+  public actions: Map<string, ZkappAction[]> = new Map();
+
+  public accountUpdateCounter = 0;
 
   constructor(
     genesisAccounts: GenesisAccount[],
@@ -148,6 +161,69 @@ export class Rollup {
     };
   }
 
+  storeActions(
+    publicKey: string,
+    tokenId: string,
+    txHash: string,
+    txMemo: string,
+    actions: string[][]
+  ) {
+    if (actions.length === 0) return;
+
+    const zkappAccount = this.ledger.getAccount(
+      PublicKey.fromBase58(publicKey),
+      Base58Encodings.TokenId.fromBase58(tokenId)
+    );
+
+    if (zkappAccount === undefined || zkappAccount.zkapp === null) return;
+
+    const previousActions = this.actions.get(`${publicKey}-${tokenId}`) ?? [];
+
+    this.actions.set(`${publicKey}-${tokenId}`, [
+      ...actions.map((action) => ({
+        data: action,
+        // @ts-expect-error zkapp can't be null, typescript is just dumb
+        state: zkappAccount.zkapp.actionState,
+        accountUpdateId: this.accountUpdateCounter,
+        txHash,
+        txStatus: 'applied',
+        txMemo,
+        authorizationKind: 'Proof',
+      })),
+      ...previousActions,
+    ]);
+  }
+
+  storeEvents(
+    publicKey: string,
+    tokenId: string,
+    txHash: string,
+    txMemo: string,
+    events: string[][]
+  ) {
+    if (events.length === 0) return;
+
+    const previousEvents = this.events.get(`${publicKey}-${tokenId}`) ?? [];
+
+    this.events.set(`${publicKey}-${tokenId}`, [
+      ...events.map((event) => ({
+        data: event,
+        txHash,
+        txStatus: 'applied',
+        txMemo,
+        authorizationKind: 'Proof',
+      })),
+      ...previousEvents,
+    ]);
+  }
+
+  updateNetworkState() {
+    this.networkState.blockchainLength =
+      this.networkState.blockchainLength.add(1);
+    this.networkState.globalSlotSinceGenesis =
+      this.networkState.globalSlotSinceGenesis.add(1);
+  }
+
   applyZkappCommand(zkappCommand: ZkappCommandInput): {
     hash: string;
     id: string;
@@ -159,28 +235,37 @@ export class Rollup {
     );
 
     zkappCommand.accountUpdates.forEach((accountUpdate) => {
+      this.accountUpdateCounter++;
+
       const {
         publicKey,
         tokenId,
         events,
-      }: { publicKey: string; tokenId: string; events: string[][] } =
-        accountUpdate.body;
+        actions,
+      }: {
+        publicKey: string;
+        tokenId: string;
+        events: string[][];
+        actions: string[][];
+      } = accountUpdate.body;
 
-      if (events.length === 0) return;
-
-      const previousEvents = this.events.get(`${publicKey}-${tokenId}`) ?? [];
-
-      this.events.set(`${publicKey}-${tokenId}`, [
-        ...events.map((event) => ({
-          data: event,
-          txHash: result.hash,
-          txStatus: 'applied',
-          txMemo: zkappCommand.memo,
-          authorizationKind: 'Proof',
-        })),
-        ...previousEvents,
-      ]);
+      this.storeActions(
+        publicKey,
+        tokenId,
+        result.hash,
+        zkappCommand.memo,
+        actions
+      );
+      this.storeEvents(
+        publicKey,
+        tokenId,
+        result.hash,
+        zkappCommand.memo,
+        events
+      );
     });
+
+    this.updateNetworkState();
 
     this.stagedTransactions.push({
       ...result,
@@ -208,6 +293,8 @@ export class Rollup {
       this.networkConstants.accountCreationFee.toString(),
       JSON.stringify(this.networkState)
     );
+
+    this.updateNetworkState();
 
     this.stagedTransactions.push({
       ...result,

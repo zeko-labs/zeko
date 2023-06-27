@@ -95,7 +95,46 @@ export const queries: QueryResolvers = {
     );
   },
 
-  actions() {
-    return [];
+  actions(_, { input }, { rollup }: RollupContext) {
+    const { address, tokenId } = input;
+
+    const actions = rollup.actions.get(
+      `${address}-${tokenId ?? Base58Encodings.TokenId.toBase58(Field(1))}`
+    );
+
+    return (
+      actions?.map((action) => ({
+        actionState: {
+          actionStateOne: action.state.at(0),
+          actionStateTwo: action.state.at(1),
+          actionStateThree: action.state.at(2),
+          actionStateFour: action.state.at(3),
+          actionStateFive: action.state.at(4),
+        },
+        actionData: [
+          {
+            accountUpdateId: action.accountUpdateId.toString(),
+            data: action.data,
+            transactionInfo: {
+              hash: action.txHash,
+              status: action.txStatus,
+              memo: action.txMemo,
+              authorizationKind: action.authorizationKind,
+            },
+          },
+        ],
+        blockInfo: {
+          height: 0,
+          stateHash: '',
+          parentHash: '',
+          ledgerHash: '',
+          chainStatus: '',
+          timestamp: '',
+          globalSlotSinceHardfork: 0,
+          globalSlotSinceGenesis: 0,
+          distanceFromMaxBlockHeight: 1, // due to https://github.com/o1-labs/snarkyjs/blob/main/src/lib/fetch.ts#L847-L852
+        },
+      })) ?? []
+    );
   },
 };
