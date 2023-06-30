@@ -14,6 +14,8 @@ export { getSnarky, getWasm, withThreadPool };
 
 let getSnarky = () => snarky;
 
+wasm.console_error_panic_hook_set_once();
+
 function getWasm() {
   return wasm;
 }

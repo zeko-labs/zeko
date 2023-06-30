@@ -2,18 +2,16 @@ module Js = Js_of_ocaml.Js
 
 let rollup =
   object%js
-    method vk () : Mina_base.Side_loaded_verification_key.t =
+    method vk : Mina_base.Side_loaded_verification_key.t =
       let module T = Transaction_snark.Make (struct
         let constraint_constants =
           Genesis_constants.Constraint_constants.compiled
 
         let proof_level = Genesis_constants.Proof_level.Full
       end) in
-      (*
       let module M = Zkapps_rollup.Make (struct
         let tag = T.tag
       end) in
-*)
       Pickles.Side_loaded.Verification_key.of_compiled T.tag
   end
 (*

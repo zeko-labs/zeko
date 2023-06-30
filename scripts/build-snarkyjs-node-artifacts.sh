@@ -62,7 +62,8 @@ sed -i 's/function invalid_arg(s){throw \[0,Invalid_argument,s\]/function invali
 sed -i 's/return \[0,Exn,t\]/return joo_global_object.Error(t.c)/' "$BINDINGS_PATH"/snarky_js_node.bc.cjs
 # TODO: this doesn't cover all cases, maybe should rewrite to_exn instead
 sed -i 's/function raise(t){throw caml_call1(to_exn$0,t)}/function raise(t){throw Error(t?.[1]?.c ?? "Unknown error thrown by raise")}/' "$BINDINGS_PATH"/snarky_js_node.bc.cjs
+# Fix https://github.com/o1-labs/snarkyjs-bindings/issues/62
+sed -i 's/"port":""/"port":"0"/' "$BINDINGS_PATH"/snarky_js_node.bc.cjs
 
 chmod 777 "$BINDINGS_PATH"/*
 node "$SNARKY_JS_PATH/src/build/fix-wasm-bindings-node.js" "$BINDINGS_PATH/plonk_wasm.cjs"
-
