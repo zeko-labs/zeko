@@ -113,11 +113,7 @@ export default [
     name: 'Rollup',
     props: [
       {
-        name: 'vk',
-        type: 'function',
-      },
-      {
-        name: 'step',
+        name: 'compile',
         type: 'function',
       },
     ],

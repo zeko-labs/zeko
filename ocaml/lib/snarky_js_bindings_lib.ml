@@ -2,7 +2,7 @@ module Js = Js_of_ocaml.Js
 
 let rollup =
   object%js
-    method vk : Mina_base.Side_loaded_verification_key.t =
+    method compile =
       let module T = Transaction_snark.Make (struct
         let constraint_constants =
           Genesis_constants.Constraint_constants.compiled
@@ -12,9 +12,6 @@ let rollup =
       let module M = Zkapps_rollup.Make (struct
         let tag = T.tag
       end) in
-      Pickles.Side_loaded.Verification_key.of_compiled T.tag
-  end
-(*
 
       let module Proof = M.Proof in
 
@@ -30,7 +27,11 @@ let rollup =
         in
         account_update
       in
-*)
+      object%js
+        val vk = Pickles.Side_loaded.Verification_key.of_compiled T.tag
+        val step = step
+      end
+  end
 
 let export () =
   Js.export "Snarky" Snarky_bindings.snarky ;

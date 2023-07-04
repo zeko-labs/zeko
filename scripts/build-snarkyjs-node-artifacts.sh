@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -e
 
@@ -58,6 +58,7 @@ rm -f _build/snarky_js_node.bc.map
 # TODO: find a less hacky way to make adjustments to jsoo compiler output
 # `s` is the jsoo representation of the error message string, and `s.c` is the actual JS string
 sed -i 's/function failwith(s){throw \[0,Failure,s\]/function failwith(s){throw joo_global_object.Error(s.c)/' "$BINDINGS_PATH"/snarky_js_node.bc.cjs
+echo "this is the path" "$BINDINGS_PATH"/snarky_js_node.bc.cjs
 sed -i 's/function invalid_arg(s){throw \[0,Invalid_argument,s\]/function invalid_arg(s){throw joo_global_object.Error(s.c)/' "$BINDINGS_PATH"/snarky_js_node.bc.cjs
 sed -i 's/return \[0,Exn,t\]/return joo_global_object.Error(t.c)/' "$BINDINGS_PATH"/snarky_js_node.bc.cjs
 # TODO: this doesn't cover all cases, maybe should rewrite to_exn instead
