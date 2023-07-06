@@ -15,8 +15,8 @@ struct MinaSchnorrSignature {
 }
 
 enum MinaCommandType {
-    PAYMENT,
-    ZKAPP
+    SIGNED_COMMAND,
+    ZKAPP_COMMAND
 }
 
 struct MinaCommand {
@@ -25,7 +25,7 @@ struct MinaCommand {
 }
 
 struct RollupBatch {
-    bytes32 previousBatchId;
+    bytes32 previousLedgerHash;
     MinaCommand[] commands;
     MinaSchnorrSignature[] signatures;
     mapping(HashedMinaPublicKey => bool) validatorSigned;

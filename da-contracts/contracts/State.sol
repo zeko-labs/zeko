@@ -76,4 +76,6 @@ abstract contract State {
      * hash of the batch fields.
      */
     mapping(bytes32 => RollupBatch) internal batches;
+
+    address public sequencer;
 }

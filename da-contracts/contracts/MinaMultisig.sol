@@ -112,12 +112,14 @@ abstract contract MinaMultisig is ERC1967Upgrade, State {
 
     function initialize(
         uint256 quorum_,
-        MinaPublicKey[] calldata validators_
+        MinaPublicKey[] calldata validators_,
+        address sequencer_
     ) public validQuorumRequirement(validators_.length, quorum_) {
         require(!initialized, "Contract already initialized");
         initialized = true;
 
         quorum = quorum_;
+        sequencer = sequencer_;
 
         for (uint256 i = 0; i < validators_.length; i++) {
             HashedMinaPublicKey hashedValidator = hashPublicKey(validators_[i]);

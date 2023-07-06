@@ -15,11 +15,17 @@ contract DataAvailabilityProxy is ERC1967Proxy {
     constructor(
         address implementation,
         uint256 quorum,
-        MinaPublicKey[] memory validators
+        MinaPublicKey[] memory validators,
+        address sequencer
     )
         ERC1967Proxy(
             implementation,
-            abi.encodeWithSignature("initialize(uint256,(bytes32,bytes32)[])", quorum, validators)
+            abi.encodeWithSignature(
+                "initialize(uint256,(bytes32,bytes32)[],address)",
+                quorum,
+                validators,
+                sequencer
+            )
         )
     {}
 }

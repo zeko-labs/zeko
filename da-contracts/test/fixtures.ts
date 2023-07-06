@@ -7,7 +7,13 @@ import { fieldToHex } from "../utils/mina";
 
 export type DataAvailabilityUpgradeable = DataAvailabilityDev & DataAvailabilityProxy;
 
-export const deployDataAvailabilityContract = async (validators: PublicKey[], quorum?: number) => {
+export const deployDataAvailabilityContract = async (
+  validators: PublicKey[],
+  quorum?: number,
+  sequencerAddress?: string
+) => {
+  const [sequencer] = await ethers.getSigners();
+
   const upgradeableArtifact = await createCombinedArtifact(
     "DataAvailabilityProxy",
     "DataAvailabilityDev"
@@ -26,7 +32,8 @@ export const deployDataAvailabilityContract = async (validators: PublicKey[], qu
     validators.map((validator) => ({
       x: fieldToHex(validator.toGroup().x),
       y: fieldToHex(validator.toGroup().y),
-    }))
+    })),
+    sequencerAddress ?? sequencer.address
   );
 
   return proxy as DataAvailabilityUpgradeable;
