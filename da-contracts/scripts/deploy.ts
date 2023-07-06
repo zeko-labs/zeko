@@ -22,7 +22,6 @@ const main = async () => {
   const validators = validatorsKeys.map(PrivateKey.fromBase58);
   const quorum = Math.floor(validators.length / 2 + 1);
 
-  // TODO: set quorum and validators
   const proxy = await proxyFactory.deploy(
     implementation.address,
     quorum,
@@ -32,7 +31,8 @@ const main = async () => {
         x: fieldToHex(x),
         y: fieldToHex(y),
       };
-    })
+    }),
+    "0xd78C987031B0256C9EA6289185E151C25EFD0e36"
   );
 
   console.log("DataAvailabilityProxy deployed to:", proxy.address);

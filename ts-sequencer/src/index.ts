@@ -2,6 +2,7 @@ import { ApolloServer } from '@apollo/server';
 import { startStandaloneServer } from '@apollo/server/standalone';
 import fs from 'fs/promises';
 import { PublicKey } from 'snarkyjs';
+import { daLayerContract } from './daLayer';
 import { Resolvers } from './generated/graphql';
 import { mutations } from './gql/mutations';
 import { queries } from './gql/queries';
@@ -51,14 +52,14 @@ const run = async () => {
     1_000_000_000 // 1 MINA
   );
 
-  // await rollupState.bootstrap(await daLayerContract.lastProposedBatchId());
+  await rollupState.bootstrap(await daLayerContract.lastProposedBatch());
 
-  // setInterval(() => {
-  //   if (rollupState.stagedTransactions.length === 0) return;
+  setInterval(() => {
+    if (rollupState.stagedTransactions.length === 0) return;
 
-  //   console.log('Committing staged transactions');
-  //   rollupState.commit();
-  // }, 10_000);
+    console.log('Committing staged transactions');
+    rollupState.commit();
+  }, 10_000);
 
   const server = new ApolloServer<RollupContext>({
     typeDefs: await loadSchema('schema.graphql'),

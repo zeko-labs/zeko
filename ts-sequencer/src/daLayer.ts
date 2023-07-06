@@ -12,7 +12,7 @@ export const wallet = new ethers.Wallet(
 );
 
 export const daLayerContract = new ethers.Contract(
-  '0x0A3825CD4b413141e89249620e1Ad98cf2Ac6B24',
+  '0x0C389955c7558F3759f6192827304dff5105D0eE',
   DALayerAbi,
   wallet
 ) as DataAvailability;

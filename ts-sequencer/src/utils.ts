@@ -1,5 +1,5 @@
+import { Field, Scalar } from 'snarkyjs';
 import { AuthRequired } from 'snarkyjs/dist/node/bindings/mina-transaction/transaction-leaves-json';
-import { MlBytes } from 'snarkyjs/dist/node/snarky';
 import { AccountAuthRequired } from './generated/graphql';
 
 export const convAuthRequiredToGqlType = (authRequired: AuthRequired) => {
@@ -17,17 +17,15 @@ export const convAuthRequiredToGqlType = (authRequired: AuthRequired) => {
   }
 };
 
-export const MlBytesToBigInt = (x: MlBytes): bigint => {
-  const buffer = Buffer.from(x.c, 'binary');
-  return BigInt(buffer.reverse().toString('hex'));
-};
+export const fieldToHex = (field: Field | Scalar) => {
+  const bigEndianHex = BigInt(field.toJSON()).toString(16);
 
-export const BigIntToMlBytes = (x: bigint): MlBytes => {
-  const buffer = Buffer.from(x.toString(16), 'hex');
+  const littleEndianHex =
+    bigEndianHex
+      .padStart(64, '0')
+      .match(/.{1,2}/g)
+      ?.reverse()
+      .join('') ?? '';
 
-  return {
-    t: 0,
-    c: buffer.reverse().toString('binary'),
-    l: buffer.length,
-  };
+  return `0x${littleEndianHex}`;
 };

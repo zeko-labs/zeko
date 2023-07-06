@@ -16,7 +16,7 @@ import {
   ZkappCommandInput,
 } from './generated/graphql';
 import { MinaCommandStruct } from './typechain-types/contracts/DataAvailability';
-import { convAuthRequiredToGqlType } from './utils';
+import { convAuthRequiredToGqlType, fieldToHex } from './utils';
 
 export type GenesisAccount = {
   publicKey: PublicKey;
@@ -38,7 +38,7 @@ export type Transaction = {
 };
 
 export type Batch = {
-  batchId: string;
+  ledgerHash: string;
   transactions: Transaction[];
 };
 
@@ -356,22 +356,22 @@ export class Rollup {
     this.batches.push(batch);
   }
 
-  async bootstrap(lastBatchId: string): Promise<void> {
-    console.log('Bootstrapping the branch', lastBatchId);
+  async bootstrap(lastBatchLedgerHash: string): Promise<void> {
+    console.log('Bootstrapping the branch to: ', lastBatchLedgerHash);
 
-    let currentBatchId = lastBatchId;
-    let previousBatchId;
+    let currentLedgerHash = lastBatchLedgerHash;
+    let previousLedgerHash;
     let transactions;
 
     const reversedBatches: Batch[] = [];
 
-    while (currentBatchId !== ethers.constants.HashZero) {
-      [previousBatchId, transactions] = await daLayerContract.getBatchData(
-        currentBatchId
+    while (currentLedgerHash !== ethers.constants.HashZero) {
+      [previousLedgerHash, transactions] = await daLayerContract.getBatchData(
+        currentLedgerHash
       );
 
       const batch = {
-        batchId: currentBatchId,
+        ledgerHash: currentLedgerHash,
         transactions: transactions.map((tx) => ({
           id: Buffer.from(tx.data.slice(2), 'hex').toString('base64'),
           commandType: tx.commandType,
@@ -380,12 +380,12 @@ export class Rollup {
 
       reversedBatches.push(batch);
 
-      currentBatchId = previousBatchId;
+      currentLedgerHash = previousLedgerHash;
     }
 
     reversedBatches.reverse().forEach((batch) => {
       this.applyBatch(batch);
-      console.log('Applied batch: ', batch.batchId);
+      console.log('Applied batch: ', batch.ledgerHash);
     });
   }
 
@@ -393,8 +393,9 @@ export class Rollup {
     const stagedTransactions = this.stagedTransactions.slice();
     this.stagedTransactions = [];
 
-    const previousBatchId =
-      this.batches.at(-1)?.batchId ?? ethers.constants.HashZero;
+    const ledgerHash = fieldToHex(Field.random()); // TODO: get from ledger
+    const previousLedgerHash =
+      this.batches.at(-1)?.ledgerHash ?? fieldToHex(Field(0));
 
     const proposedCommands: MinaCommandStruct[] = stagedTransactions.map(
       ({ id, commandType }) => ({
@@ -404,70 +405,68 @@ export class Rollup {
     );
 
     const tx = await daLayerContract.proposeBatch(
-      previousBatchId,
+      ledgerHash,
+      previousLedgerHash,
       proposedCommands
     );
 
-    const receipt = await tx.wait();
+    await tx.wait();
 
-    const proposedBatchId = receipt.events?.find(
-      (e) => e.event === 'BatchProposed'
-    )?.args?.batchId;
-
-    console.log('Batch posted: ', proposedBatchId);
+    console.log('Batch posted: ', ledgerHash);
 
     this.batches.push({
-      batchId: proposedBatchId,
+      ledgerHash,
       transactions: stagedTransactions,
     });
 
     const quorum = await daLayerContract.quorum();
 
-    const batchFields = (
-      await daLayerContract.getBatchFields(proposedBatchId)
-    ).map((hexField) =>
-      Field.fromBytes(Array.from(Buffer.from(hexField.slice(2), 'hex')))
+    daLayerContract.on(
+      'BatchSigned',
+      async (signedLedgerHash, _, signatureCount) => {
+        if (signatureCount < quorum || signedLedgerHash !== ledgerHash) return;
+
+        const solSignatures = await daLayerContract.getBatchSignatures(
+          ledgerHash
+        );
+
+        const signatures = solSignatures.map((sig) => {
+          const pubKeyGroup = Group.fromJSON({
+            x: Field.fromBytes(
+              Array.from(Buffer.from(sig.publicKey.x.slice(2), 'hex'))
+            ).toString(),
+            y: Field.fromBytes(
+              Array.from(Buffer.from(sig.publicKey.y.slice(2), 'hex'))
+            ).toString(),
+          });
+
+          if (pubKeyGroup === null) throw new Error('Invalid public key');
+
+          const publicKey = PublicKey.fromGroup(pubKeyGroup);
+
+          const signature = Signature.fromJSON({
+            r: Field.fromBytes(
+              Array.from(Buffer.from(sig.rx.slice(2), 'hex'))
+            ).toString(),
+            s: Scalar.fromJSON(
+              Field.fromBytes(
+                Array.from(Buffer.from(sig.s.slice(2), 'hex'))
+              ).toString()
+            ),
+          });
+
+          return {
+            publicKey,
+            signature,
+          };
+        });
+
+        console.log(
+          'Signatures collected for: ',
+          ledgerHash,
+          signatures.length
+        );
+      }
     );
-
-    daLayerContract.on('BatchSigned', async (batchId, _, signatureCount) => {
-      if (signatureCount < quorum || proposedBatchId !== batchId) return;
-
-      const solSignatures = await daLayerContract.getBatchSignatures(batchId);
-
-      const signatures = solSignatures.map((sig) => {
-        const pubKeyGroup = Group.fromJSON({
-          x: Field.fromBytes(
-            Array.from(Buffer.from(sig.publicKey.x.slice(2), 'hex'))
-          ).toString(),
-          y: Field.fromBytes(
-            Array.from(Buffer.from(sig.publicKey.y.slice(2), 'hex'))
-          ).toString(),
-        });
-
-        if (pubKeyGroup === null) throw new Error('Invalid public key');
-
-        const publicKey = PublicKey.fromGroup(pubKeyGroup);
-
-        const signature = Signature.fromJSON({
-          r: Field.fromBytes(
-            Array.from(Buffer.from(sig.rx.slice(2), 'hex'))
-          ).toString(),
-          s: Scalar.fromJSON(
-            Field.fromBytes(
-              Array.from(Buffer.from(sig.s.slice(2), 'hex'))
-            ).toString()
-          ),
-        });
-
-        console.log(signature.verify(publicKey, batchFields).toBoolean());
-
-        return {
-          publicKey,
-          signature,
-        };
-      });
-
-      console.log('Batch committed: ', batchId, signatures.length);
-    });
   }
 }
