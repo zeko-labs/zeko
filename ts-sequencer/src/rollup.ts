@@ -28,8 +28,8 @@ export type RollupContext = {
 };
 
 export enum CommandType {
-  Payment = 0,
-  Zkapp = 1,
+  SignedCommand = 0,
+  ZkappCommand = 1,
 }
 
 export type Transaction = {
@@ -297,7 +297,7 @@ export class Rollup {
 
     this.stagedTransactions.push({
       ...result,
-      commandType: CommandType.Zkapp,
+      commandType: CommandType.ZkappCommand,
     });
 
     return result;
@@ -326,7 +326,7 @@ export class Rollup {
 
     this.stagedTransactions.push({
       ...result,
-      commandType: CommandType.Payment,
+      commandType: CommandType.SignedCommand,
     });
 
     return result;
@@ -335,7 +335,7 @@ export class Rollup {
   applyBatch(batch: Batch): void {
     batch.transactions.forEach((tx) => {
       switch (tx.commandType) {
-        case CommandType.Payment:
+        case CommandType.SignedCommand:
           this.ledger.applyBase64Payment(
             tx.id,
             this.networkConstants.accountCreationFee.toString(),
@@ -343,7 +343,7 @@ export class Rollup {
           );
 
           break;
-        case CommandType.Zkapp:
+        case CommandType.ZkappCommand:
           this.ledger.applyJsonTransaction(
             Ledger.encoding.jsonZkappCommandFromBase64(tx.id),
             this.networkConstants.accountCreationFee.toString(),
