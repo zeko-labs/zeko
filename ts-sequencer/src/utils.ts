@@ -2,7 +2,7 @@ import { AuthRequired } from 'snarkyjs/dist/node/bindings/mina-transaction/trans
 import { MlBytes } from 'snarkyjs/dist/node/snarky';
 import { AccountAuthRequired } from './generated/graphql';
 
-export const authRequiredToGql = (authRequired: AuthRequired) => {
+export const convAuthRequiredToGqlType = (authRequired: AuthRequired) => {
   switch (authRequired) {
     case 'Either':
       return AccountAuthRequired.Either;

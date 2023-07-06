@@ -16,7 +16,7 @@ import {
   ZkappCommandInput,
 } from './generated/graphql';
 import { MinaCommandStruct } from './typechain-types/contracts/DataAvailability';
-import { authRequiredToGql } from './utils';
+import { convAuthRequiredToGqlType } from './utils';
 
 export type GenesisAccount = {
   publicKey: PublicKey;
@@ -112,23 +112,31 @@ export class Rollup {
       nonce: acc.nonce,
       inferredNonce: acc.nonce,
       permissions: {
-        access: authRequiredToGql(acc.permissions.access),
-        editActionState: authRequiredToGql(acc.permissions.editActionState),
-        editState: authRequiredToGql(acc.permissions.editState),
-        incrementNonce: authRequiredToGql(acc.permissions.incrementNonce),
-        receive: authRequiredToGql(acc.permissions.receive),
-        send: authRequiredToGql(acc.permissions.send),
-        setDelegate: authRequiredToGql(acc.permissions.setDelegate),
-        setPermissions: authRequiredToGql(acc.permissions.setPermissions),
-        setTiming: authRequiredToGql(acc.permissions.setTiming),
-        setTokenSymbol: authRequiredToGql(acc.permissions.setTokenSymbol),
-        setVerificationKey: authRequiredToGql(
+        access: convAuthRequiredToGqlType(acc.permissions.access),
+        editActionState: convAuthRequiredToGqlType(
+          acc.permissions.editActionState
+        ),
+        editState: convAuthRequiredToGqlType(acc.permissions.editState),
+        incrementNonce: convAuthRequiredToGqlType(
+          acc.permissions.incrementNonce
+        ),
+        receive: convAuthRequiredToGqlType(acc.permissions.receive),
+        send: convAuthRequiredToGqlType(acc.permissions.send),
+        setDelegate: convAuthRequiredToGqlType(acc.permissions.setDelegate),
+        setPermissions: convAuthRequiredToGqlType(
+          acc.permissions.setPermissions
+        ),
+        setTiming: convAuthRequiredToGqlType(acc.permissions.setTiming),
+        setTokenSymbol: convAuthRequiredToGqlType(
+          acc.permissions.setTokenSymbol
+        ),
+        setVerificationKey: convAuthRequiredToGqlType(
           acc.permissions.setVerificationKey
         ),
-        setVotingFor: authRequiredToGql(acc.permissions.setVotingFor),
-        setZkappUri: authRequiredToGql(acc.permissions.setZkappUri),
+        setVotingFor: convAuthRequiredToGqlType(acc.permissions.setVotingFor),
+        setZkappUri: convAuthRequiredToGqlType(acc.permissions.setZkappUri),
       },
-      provedState: false,
+      provedState: false, // TODO
       receiptChainHash: Base58Encodings.ReceiptChainHash.toBase58(
         Field(acc.receiptChainHash)
       ),
@@ -144,20 +152,22 @@ export class Rollup {
       },
       zkappState: acc.zkapp?.appState,
       zkappUri: acc.zkapp?.zkappUri,
-
       actionState: acc.zkapp?.actionState,
-      index: null,
-      leafHash: null,
-      locked: false,
-      merklePath: null,
-      privateKeyPath: '',
 
+      // we don't support delegation
       delegate: null,
       delegateAccount: null,
       delegators: null,
       lastEpochDelegators: null,
       stakingActive: false,
       votingFor: null,
+
+      // TODO
+      index: null,
+      leafHash: null,
+      locked: false,
+      merklePath: null,
+      privateKeyPath: '',
     };
   }
 
@@ -166,7 +176,8 @@ export class Rollup {
     tokenId: string,
     txHash: string,
     txMemo: string,
-    actions: string[][]
+    actions: string[][],
+    authorizationKind: string
   ) {
     if (actions.length === 0) return;
 
@@ -182,13 +193,13 @@ export class Rollup {
     this.actions.set(`${publicKey}-${tokenId}`, [
       ...actions.map((action) => ({
         data: action,
-        // @ts-expect-error zkapp can't be null, typescript is just dumb
+        // @ts-expect-error we checked if zkapp is null, typescript is just dumb
         state: zkappAccount.zkapp.actionState,
         accountUpdateId: this.accountUpdateCounter,
         txHash,
         txStatus: 'applied',
         txMemo,
-        authorizationKind: 'Proof',
+        authorizationKind,
       })),
       ...previousActions,
     ]);
@@ -199,7 +210,8 @@ export class Rollup {
     tokenId: string,
     txHash: string,
     txMemo: string,
-    events: string[][]
+    events: string[][],
+    authorizationKind: string
   ) {
     if (events.length === 0) return;
 
@@ -211,7 +223,7 @@ export class Rollup {
         txHash,
         txStatus: 'applied',
         txMemo,
-        authorizationKind: 'Proof',
+        authorizationKind,
       })),
       ...previousEvents,
     ]);
@@ -242,26 +254,42 @@ export class Rollup {
         tokenId,
         events,
         actions,
+        authorizationKind,
       }: {
         publicKey: string;
         tokenId: string;
         events: string[][];
         actions: string[][];
+        authorizationKind: {
+          isProved: boolean;
+          isSigned: boolean;
+        };
       } = accountUpdate.body;
+
+      let authorizationKindString: string;
+
+      if (authorizationKind.isProved && authorizationKind.isSigned)
+        authorizationKindString = 'Either';
+      else if (authorizationKind.isSigned)
+        authorizationKindString = 'Signature';
+      else if (authorizationKind.isProved) authorizationKindString = 'Proof';
+      else authorizationKindString = 'None';
 
       this.storeActions(
         publicKey,
         tokenId,
         result.hash,
         zkappCommand.memo,
-        actions
+        actions,
+        authorizationKindString
       );
       this.storeEvents(
         publicKey,
         tokenId,
         result.hash,
         zkappCommand.memo,
-        events
+        events,
+        authorizationKindString
       );
     });
 
@@ -283,8 +311,8 @@ export class Rollup {
 
     const result = this.ledger.applyPayment(
       signature.toBase58(),
-      PublicKey.fromBase58(from),
-      PublicKey.fromBase58(to),
+      from,
+      to,
       amount.toString(),
       fee.toString(),
       validUntil.toString(),
