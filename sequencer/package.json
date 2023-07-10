@@ -1,5 +1,5 @@
 {
-  "name": "ts-sequencer",
+  "name": "sequencer",
   "private": true,
   "main": "build/index.js",
   "scripts": {

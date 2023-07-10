@@ -1,3 +1,0 @@
-query ValidatePayment($signature: SignatureInput, $input: SendPaymentInput!) {
-  validatePayment(signature: $signature, input: $input)
-}
