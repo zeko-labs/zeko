@@ -1,22 +1,9 @@
-import { ethers } from 'ethers';
-import {
-  Base58Encodings,
-  Field,
-  Group,
-  Ledger,
-  Mina,
-  PublicKey,
-  Scalar,
-  Signature,
-} from 'snarkyjs';
-import { daLayerContract } from './daLayer';
-import {
-  Account,
-  SendPaymentInput,
-  ZkappCommandInput,
-} from './generated/graphql';
-import { MinaCommandStruct } from './typechain-types/contracts/DataAvailability';
-import { convAuthRequiredToGqlType, fieldToHex } from './utils';
+import { ethers } from "ethers";
+import { Base58Encodings, Field, Group, Ledger, Mina, PublicKey, Scalar, Signature } from "snarkyjs";
+import { daLayerContract } from "./daLayer";
+import { Account, SendPaymentInput, ZkappCommandInput } from "./generated/graphql";
+import { MinaCommandStruct } from "./typechain-types/contracts/DataAvailability";
+import { convAuthRequiredToGqlType, fieldToHex } from "./utils";
 
 export type GenesisAccount = {
   publicKey: PublicKey;
@@ -74,10 +61,7 @@ export class Rollup {
 
   public accountUpdateCounter = 0;
 
-  constructor(
-    genesisAccounts: GenesisAccount[],
-    accountCreationFee: number | string
-  ) {
+  constructor(genesisAccounts: GenesisAccount[], accountCreationFee: number | string) {
     this.ledger = Ledger.create(
       genesisAccounts.map(({ publicKey, balance }) => ({
         publicKey,
@@ -104,42 +88,30 @@ export class Rollup {
       balance: {
         blockHeight: this.networkState.blockchainLength,
         liquid: acc.balance,
-        locked: '0',
+        locked: "0",
         stateHash: this.networkState.snarkedLedgerHash,
         total: acc.balance,
-        unknown: '0',
+        unknown: "0",
       },
       nonce: acc.nonce,
       inferredNonce: acc.nonce,
       permissions: {
         access: convAuthRequiredToGqlType(acc.permissions.access),
-        editActionState: convAuthRequiredToGqlType(
-          acc.permissions.editActionState
-        ),
+        editActionState: convAuthRequiredToGqlType(acc.permissions.editActionState),
         editState: convAuthRequiredToGqlType(acc.permissions.editState),
-        incrementNonce: convAuthRequiredToGqlType(
-          acc.permissions.incrementNonce
-        ),
+        incrementNonce: convAuthRequiredToGqlType(acc.permissions.incrementNonce),
         receive: convAuthRequiredToGqlType(acc.permissions.receive),
         send: convAuthRequiredToGqlType(acc.permissions.send),
         setDelegate: convAuthRequiredToGqlType(acc.permissions.setDelegate),
-        setPermissions: convAuthRequiredToGqlType(
-          acc.permissions.setPermissions
-        ),
+        setPermissions: convAuthRequiredToGqlType(acc.permissions.setPermissions),
         setTiming: convAuthRequiredToGqlType(acc.permissions.setTiming),
-        setTokenSymbol: convAuthRequiredToGqlType(
-          acc.permissions.setTokenSymbol
-        ),
-        setVerificationKey: convAuthRequiredToGqlType(
-          acc.permissions.setVerificationKey
-        ),
+        setTokenSymbol: convAuthRequiredToGqlType(acc.permissions.setTokenSymbol),
+        setVerificationKey: convAuthRequiredToGqlType(acc.permissions.setVerificationKey),
         setVotingFor: convAuthRequiredToGqlType(acc.permissions.setVotingFor),
         setZkappUri: convAuthRequiredToGqlType(acc.permissions.setZkappUri),
       },
       provedState: false, // TODO
-      receiptChainHash: Base58Encodings.ReceiptChainHash.toBase58(
-        Field(acc.receiptChainHash)
-      ),
+      receiptChainHash: Base58Encodings.ReceiptChainHash.toBase58(Field(acc.receiptChainHash)),
       timing: acc.timing,
 
       tokenId: acc.tokenId,
@@ -167,7 +139,7 @@ export class Rollup {
       leafHash: null,
       locked: false,
       merklePath: null,
-      privateKeyPath: '',
+      privateKeyPath: "",
     };
   }
 
@@ -197,7 +169,7 @@ export class Rollup {
         state: zkappAccount.zkapp.actionState,
         accountUpdateId: this.accountUpdateCounter,
         txHash,
-        txStatus: 'applied',
+        txStatus: "applied",
         txMemo,
         authorizationKind,
       })),
@@ -221,7 +193,7 @@ export class Rollup {
       ...events.map((event) => ({
         data: event,
         txHash,
-        txStatus: 'applied',
+        txStatus: "applied",
         txMemo,
         authorizationKind,
       })),
@@ -230,10 +202,8 @@ export class Rollup {
   }
 
   updateNetworkState() {
-    this.networkState.blockchainLength =
-      this.networkState.blockchainLength.add(1);
-    this.networkState.globalSlotSinceGenesis =
-      this.networkState.globalSlotSinceGenesis.add(1);
+    this.networkState.blockchainLength = this.networkState.blockchainLength.add(1);
+    this.networkState.globalSlotSinceGenesis = this.networkState.globalSlotSinceGenesis.add(1);
   }
 
   applyZkappCommand(zkappCommand: ZkappCommandInput): {
@@ -268,29 +238,13 @@ export class Rollup {
 
       let authorizationKindString: string;
 
-      if (authorizationKind.isProved && authorizationKind.isSigned)
-        authorizationKindString = 'Either';
-      else if (authorizationKind.isSigned)
-        authorizationKindString = 'Signature';
-      else if (authorizationKind.isProved) authorizationKindString = 'Proof';
-      else authorizationKindString = 'None';
+      if (authorizationKind.isProved && authorizationKind.isSigned) authorizationKindString = "Either";
+      else if (authorizationKind.isSigned) authorizationKindString = "Signature";
+      else if (authorizationKind.isProved) authorizationKindString = "Proof";
+      else authorizationKindString = "None";
 
-      this.storeActions(
-        publicKey,
-        tokenId,
-        result.hash,
-        zkappCommand.memo,
-        actions,
-        authorizationKindString
-      );
-      this.storeEvents(
-        publicKey,
-        tokenId,
-        result.hash,
-        zkappCommand.memo,
-        events,
-        authorizationKindString
-      );
+      this.storeActions(publicKey, tokenId, result.hash, zkappCommand.memo, actions, authorizationKindString);
+      this.storeEvents(publicKey, tokenId, result.hash, zkappCommand.memo, events, authorizationKindString);
     });
 
     this.updateNetworkState();
@@ -303,10 +257,7 @@ export class Rollup {
     return result;
   }
 
-  applyPayment(
-    signature: Signature,
-    userCommand: SendPaymentInput
-  ): { hash: string; id: string } {
+  applyPayment(signature: Signature, userCommand: SendPaymentInput): { hash: string; id: string } {
     const { from, to, amount, fee, validUntil, nonce, memo } = userCommand;
 
     const result = this.ledger.applyPayment(
@@ -317,7 +268,7 @@ export class Rollup {
       fee.toString(),
       validUntil.toString(),
       nonce.toString(),
-      Ledger.memoToBase58(memo?.toString() ?? ''),
+      Ledger.memoToBase58(memo?.toString() ?? ""),
       this.networkConstants.accountCreationFee.toString(),
       JSON.stringify(this.networkState)
     );
@@ -357,7 +308,7 @@ export class Rollup {
   }
 
   async bootstrap(lastBatchLedgerHash: string): Promise<void> {
-    console.log('Bootstrapping the branch to: ', lastBatchLedgerHash);
+    console.log("Bootstrapping the branch to: ", lastBatchLedgerHash);
 
     let currentLedgerHash = lastBatchLedgerHash;
     let previousLedgerHash;
@@ -366,14 +317,12 @@ export class Rollup {
     const reversedBatches: Batch[] = [];
 
     while (currentLedgerHash !== ethers.constants.HashZero) {
-      [previousLedgerHash, transactions] = await daLayerContract.getBatchData(
-        currentLedgerHash
-      );
+      [previousLedgerHash, transactions] = await daLayerContract.getBatchData(currentLedgerHash);
 
       const batch = {
         ledgerHash: currentLedgerHash,
         transactions: transactions.map((tx) => ({
-          id: Buffer.from(tx.data.slice(2), 'hex').toString('base64'),
+          id: Buffer.from(tx.data.slice(2), "hex").toString("base64"),
           commandType: tx.commandType,
         })),
       };
@@ -385,7 +334,7 @@ export class Rollup {
 
     reversedBatches.reverse().forEach((batch) => {
       this.applyBatch(batch);
-      console.log('Applied batch: ', batch.ledgerHash);
+      console.log("Applied batch: ", batch.ledgerHash);
     });
   }
 
@@ -394,25 +343,18 @@ export class Rollup {
     this.stagedTransactions = [];
 
     const ledgerHash = fieldToHex(Field.random()); // TODO: get from ledger
-    const previousLedgerHash =
-      this.batches.at(-1)?.ledgerHash ?? fieldToHex(Field(0));
+    const previousLedgerHash = this.batches.at(-1)?.ledgerHash ?? fieldToHex(Field(0));
 
-    const proposedCommands: MinaCommandStruct[] = stagedTransactions.map(
-      ({ id, commandType }) => ({
-        commandType,
-        data: Buffer.from(id, 'base64'),
-      })
-    );
+    const proposedCommands: MinaCommandStruct[] = stagedTransactions.map(({ id, commandType }) => ({
+      commandType,
+      data: Buffer.from(id, "base64"),
+    }));
 
-    const tx = await daLayerContract.proposeBatch(
-      ledgerHash,
-      previousLedgerHash,
-      proposedCommands
-    );
+    const tx = await daLayerContract.proposeBatch(ledgerHash, previousLedgerHash, proposedCommands);
 
     await tx.wait();
 
-    console.log('Batch posted: ', ledgerHash);
+    console.log("Batch posted: ", ledgerHash);
 
     this.batches.push({
       ledgerHash,
@@ -421,52 +363,33 @@ export class Rollup {
 
     const quorum = await daLayerContract.quorum();
 
-    daLayerContract.on(
-      'BatchSigned',
-      async (signedLedgerHash, _, signatureCount) => {
-        if (signatureCount < quorum || signedLedgerHash !== ledgerHash) return;
+    daLayerContract.on("BatchSigned", async (signedLedgerHash, _, signatureCount) => {
+      if (signatureCount < quorum || signedLedgerHash !== ledgerHash) return;
 
-        const solSignatures = await daLayerContract.getBatchSignatures(
-          ledgerHash
-        );
+      const solSignatures = await daLayerContract.getBatchSignatures(ledgerHash);
 
-        const signatures = solSignatures.map((sig) => {
-          const pubKeyGroup = Group.fromJSON({
-            x: Field.fromBytes(
-              Array.from(Buffer.from(sig.publicKey.x.slice(2), 'hex'))
-            ).toString(),
-            y: Field.fromBytes(
-              Array.from(Buffer.from(sig.publicKey.y.slice(2), 'hex'))
-            ).toString(),
-          });
-
-          if (pubKeyGroup === null) throw new Error('Invalid public key');
-
-          const publicKey = PublicKey.fromGroup(pubKeyGroup);
-
-          const signature = Signature.fromJSON({
-            r: Field.fromBytes(
-              Array.from(Buffer.from(sig.rx.slice(2), 'hex'))
-            ).toString(),
-            s: Scalar.fromJSON(
-              Field.fromBytes(
-                Array.from(Buffer.from(sig.s.slice(2), 'hex'))
-              ).toString()
-            ),
-          });
-
-          return {
-            publicKey,
-            signature,
-          };
+      const signatures = solSignatures.map((sig) => {
+        const pubKeyGroup = Group.fromJSON({
+          x: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.x.slice(2), "hex"))).toString(),
+          y: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.y.slice(2), "hex"))).toString(),
         });
 
-        console.log(
-          'Signatures collected for: ',
-          ledgerHash,
-          signatures.length
-        );
-      }
-    );
+        if (pubKeyGroup === null) throw new Error("Invalid public key");
+
+        const publicKey = PublicKey.fromGroup(pubKeyGroup);
+
+        const signature = Signature.fromJSON({
+          r: Field.fromBytes(Array.from(Buffer.from(sig.rx.slice(2), "hex"))).toString(),
+          s: Scalar.fromJSON(Field.fromBytes(Array.from(Buffer.from(sig.s.slice(2), "hex"))).toString()),
+        });
+
+        return {
+          publicKey,
+          signature,
+        };
+      });
+
+      console.log("Signatures collected for: ", ledgerHash, signatures.length);
+    });
   }
 }
