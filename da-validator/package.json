@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "ethers": "^5.7.2",
-    "snarkyjs": "file:../../mina/src/lib/snarkyjs",
+    "snarkyjs": "file:../../mina-rollup/src/lib/snarkyjs",
     "zod": "^3.21.4"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import { Ledger, Poseidon, PrivateKey, Signature } from "snarkyjs";
+import { Field, Poseidon, PrivateKey, RollupCommitments, Signature } from "snarkyjs";
 import config from "./config";
 import { daLayerContract } from "./daLayer";
 import { MinaSchnorrSignatureStruct } from "./typechain-types/contracts/DataAvailability";
@@ -27,13 +27,15 @@ const signBatch = async (
     ...commands.map(({ commandType, data }) => {
       switch (commandType) {
         case CommandType.SignedCommand:
-          const fields = Ledger.paymentInput(Buffer.from(data.slice(2), "hex").toString("base64"));
+          const fields = RollupCommitments.paymentCommitmentFromBase64(
+            Buffer.from(data.slice(2), "hex").toString("base64")
+          ).map(Field);
           return Poseidon.hash(fields);
 
         case CommandType.ZkappCommand:
-          return Ledger.transactionCommitments(
-            Ledger.encoding.jsonZkappCommandFromBase64(Buffer.from(data.slice(2), "hex").toString("base64"))
-          ).fullCommitment;
+          return Field(
+            RollupCommitments.zkappCommandCommitmentFromBase64(Buffer.from(data.slice(2), "hex").toString("base64"))
+          );
 
         default:
           throw new Error(`Unknown command type: ${commandType}`);
