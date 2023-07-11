@@ -1,0 +1,18 @@
+[
+  {
+    "publicKey": "B62qnPZzpnQWA8FLBn9qqJqPTeGuDdHTZgpmEMUNFCq8fWCRSqJS6Jd",
+    "balance": 1000000000000
+  },
+  {
+    "publicKey": "B62qm8mVEkhAZdnnoE4gzKhTYj2Gre88GNhoknbJdgDrE8JQojNBgWa",
+    "balance": 2000000000000
+  },
+  {
+    "publicKey": "B62qrrytZmo8SraqYfJMZ8E3QcK77uAGZhsGJGKmVF5E598E8KX9j6a",
+    "balance": 3000000000000
+  },
+  {
+    "publicKey": "B62qkJbh5dsbPFq6kn1SCmgSfeamgdnnNV9Jqf7hj7BPyRBNPMbuTfC",
+    "balance": 4000000000000
+  }
+]

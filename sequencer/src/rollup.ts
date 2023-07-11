@@ -2,12 +2,8 @@ import { ethers } from "ethers";
 import { Base58Encodings, Field, FieldConst, Ledger, Mina, MlPublicKey, Signature, Test } from "snarkyjs";
 import { fetchBatches, postBatch } from "./daLayer";
 import { Account, SendPaymentInput, ZkappCommandInput } from "./generated/graphql";
+import { GenesisAccount } from "./genesis";
 import { convAuthRequiredToGqlType, fieldToHex } from "./utils";
-
-export type GenesisAccount = {
-  publicKey: MlPublicKey;
-  balance: number | string;
-};
 
 export type RollupContext = {
   rollup: Rollup;
