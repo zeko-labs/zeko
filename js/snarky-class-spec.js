@@ -40,6 +40,19 @@ export default [
     ],
   },
   {
+    name: 'RollupCommitments',
+    props: [
+      {
+        name: 'paymentCommitmentFromBase64',
+        type: 'function',
+      },
+      {
+        name: 'zkappCommandCommitmentFromBase64',
+        type: 'function',
+      },
+    ],
+  },
+  {
     name: 'Pickles',
     props: [
       {
