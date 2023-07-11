@@ -1,7 +1,7 @@
-import { GraphQLError } from 'graphql';
-import { Field, PublicKey, Signature } from 'snarkyjs';
-import { MutationResolvers, SendZkappPayload } from '../generated/graphql';
-import { RollupContext } from '../rollup';
+import { GraphQLError } from "graphql";
+import { FieldConst, Signature, Test } from "snarkyjs";
+import { MutationResolvers, SendZkappPayload } from "../generated/graphql";
+import { RollupContext } from "../rollup";
 
 export const mutations: MutationResolvers = {
   sendZkapp(_, { input }, { rollup }: RollupContext): SendZkappPayload {
@@ -21,7 +21,7 @@ export const mutations: MutationResolvers = {
       if (e instanceof Error) {
         throw new GraphQLError(e.message);
       }
-      throw new GraphQLError('Unknown error');
+      throw new GraphQLError("Unknown error");
     }
   },
 
@@ -35,41 +35,35 @@ export const mutations: MutationResolvers = {
         input
       );
 
-      const feePayer = rollup.getAccount(
-        PublicKey.fromBase58(input.from),
-        Field(1)
-      );
+      const feePayer = rollup.getAccount(Test.encoding.publicKeyOfBase58(input.from), FieldConst[1]);
 
-      const receiver = rollup.getAccount(
-        PublicKey.fromBase58(input.to),
-        Field(1)
-      );
+      const receiver = rollup.getAccount(Test.encoding.publicKeyOfBase58(input.from), FieldConst[1]);
 
       if (feePayer === null || receiver === null) {
-        throw new Error('Unexpected error, account was not created');
+        throw new Error("Unexpected error, account was not created");
       }
 
       return {
         payment: {
-          __typename: 'UserCommandPayment',
+          __typename: "UserCommandPayment",
           amount: input.amount,
           failureReason: null,
           fee: input.fee,
           feePayer,
-          feeToken: '1',
+          feeToken: "1",
           from: input.from,
           fromAccount: feePayer,
           hash: hash,
           id,
           isDelegation: false,
-          kind: 'Payment',
-          memo: input.memo ?? '',
+          kind: "Payment",
+          memo: input.memo ?? "",
           nonce: input.nonce,
           receiver,
           source: feePayer,
           to: input.to,
           toAccount: receiver,
-          token: '1',
+          token: "1",
           validUntil: input.validUntil,
         },
       };
@@ -78,7 +72,7 @@ export const mutations: MutationResolvers = {
       if (e instanceof Error) {
         throw new GraphQLError(e.message);
       }
-      throw new GraphQLError('Unknown error');
+      throw new GraphQLError("Unknown error");
     }
   },
 };

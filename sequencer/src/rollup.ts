@@ -1,12 +1,24 @@
 import { ethers } from "ethers";
-import { Base58Encodings, Field, Group, Ledger, Mina, PublicKey, Scalar, Signature } from "snarkyjs";
+import {
+  Base58Encodings,
+  Field,
+  FieldConst,
+  Group,
+  Ledger,
+  Mina,
+  MlPublicKey,
+  PublicKey,
+  Scalar,
+  Signature,
+  Test,
+} from "snarkyjs";
 import { daLayerContract } from "./daLayer";
 import { Account, SendPaymentInput, ZkappCommandInput } from "./generated/graphql";
 import { MinaCommandStruct } from "./typechain-types/contracts/DataAvailability";
 import { convAuthRequiredToGqlType, fieldToHex } from "./utils";
 
 export type GenesisAccount = {
-  publicKey: PublicKey;
+  publicKey: MlPublicKey;
   balance: number | string;
 };
 
@@ -62,12 +74,11 @@ export class Rollup {
   public accountUpdateCounter = 0;
 
   constructor(genesisAccounts: GenesisAccount[], accountCreationFee: number | string) {
-    this.ledger = Ledger.create(
-      genesisAccounts.map(({ publicKey, balance }) => ({
-        publicKey,
-        balance: balance.toString(),
-      }))
-    );
+    this.ledger = Ledger.create();
+
+    genesisAccounts.forEach(({ publicKey, balance }) => {
+      this.ledger.addAccount(publicKey, balance.toString());
+    });
 
     const dummyBlockchain = Mina.LocalBlockchain({
       accountCreationFee: accountCreationFee.toString(),
@@ -78,7 +89,9 @@ export class Rollup {
     this.networkConstants = dummyBlockchain.getNetworkConstants();
   }
 
-  getAccount(publicKey: PublicKey, token: Field): Account | null {
+  getAccount(publicKey: MlPublicKey, token: FieldConst): Account | null {
+    Test.tokenId;
+
     const acc = this.ledger.getAccount(publicKey, token);
 
     if (acc === undefined) return null;
@@ -154,8 +167,8 @@ export class Rollup {
     if (actions.length === 0) return;
 
     const zkappAccount = this.ledger.getAccount(
-      PublicKey.fromBase58(publicKey),
-      Base58Encodings.TokenId.fromBase58(tokenId)
+      Test.encoding.publicKeyOfBase58(publicKey),
+      Test.encoding.tokenIdOfBase58(tokenId)
     );
 
     if (zkappAccount === undefined || zkappAccount.zkapp === null) return;
@@ -210,7 +223,7 @@ export class Rollup {
     hash: string;
     id: string;
   } {
-    const result = this.ledger.applyJsonTransaction(
+    const result = this.ledger.applyZkappCommand(
       JSON.stringify(zkappCommand),
       this.networkConstants.accountCreationFee.toString(),
       JSON.stringify(this.networkState)
@@ -268,7 +281,7 @@ export class Rollup {
       fee.toString(),
       validUntil.toString(),
       nonce.toString(),
-      Ledger.memoToBase58(memo?.toString() ?? ""),
+      Test.encoding.memoToBase58(memo?.toString() ?? ""),
       this.networkConstants.accountCreationFee.toString(),
       JSON.stringify(this.networkState)
     );
@@ -287,7 +300,7 @@ export class Rollup {
     batch.transactions.forEach((tx) => {
       switch (tx.commandType) {
         case CommandType.SignedCommand:
-          this.ledger.applyBase64Payment(
+          this.ledger.applyPaymentFromBase64(
             tx.id,
             this.networkConstants.accountCreationFee.toString(),
             JSON.stringify(this.networkState)
@@ -295,8 +308,8 @@ export class Rollup {
 
           break;
         case CommandType.ZkappCommand:
-          this.ledger.applyJsonTransaction(
-            Ledger.encoding.jsonZkappCommandFromBase64(tx.id),
+          this.ledger.applyZkappCommandFromBase64(
+            tx.id,
             this.networkConstants.accountCreationFee.toString(),
             JSON.stringify(this.networkState)
           );

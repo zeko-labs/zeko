@@ -1,13 +1,6 @@
-import { Base58Encodings, Field, PublicKey } from 'snarkyjs';
-import {
-  Account,
-  DaemonStatus,
-  Peer,
-  QueryResolvers,
-  SyncStatus,
-  TransactionStatus,
-} from '../generated/graphql';
-import { RollupContext } from '../rollup';
+import { FieldConst, Test } from "snarkyjs";
+import { Account, DaemonStatus, Peer, QueryResolvers, SyncStatus, TransactionStatus } from "../generated/graphql";
+import { RollupContext } from "../rollup";
 
 export const queries: QueryResolvers = {
   syncStatus() {
@@ -16,7 +9,7 @@ export const queries: QueryResolvers = {
 
   daemonStatus() {
     return {
-      chainId: '69420',
+      chainId: "69420",
       syncStatus: SyncStatus.Synced,
       peers: [] as Peer[],
       highestBlockLengthReceived: 0,
@@ -26,21 +19,13 @@ export const queries: QueryResolvers = {
 
   account(_, { publicKey, token }, { rollup }: RollupContext): Account | null {
     return rollup.getAccount(
-      PublicKey.fromBase58(publicKey),
-      token !== undefined ? Base58Encodings.TokenId.fromBase58(token) : Field(1)
+      Test.encoding.publicKeyOfBase58(publicKey),
+      token !== undefined ? Test.encoding.tokenIdOfBase58(token) : FieldConst[1]
     );
   },
 
-  transactionStatus(
-    _,
-    { zkappTransaction, payment },
-    { rollup }: RollupContext
-  ) {
-    if (
-      rollup.stagedTransactions.some(
-        (t) => t.id === zkappTransaction || t.id === payment
-      )
-    ) {
+  transactionStatus(_, { zkappTransaction, payment }, { rollup }: RollupContext) {
+    if (rollup.stagedTransactions.some((t) => t.id === zkappTransaction || t.id === payment)) {
       return TransactionStatus.Pending;
     }
 
@@ -63,9 +48,7 @@ export const queries: QueryResolvers = {
   events(_, { input }, { rollup }: RollupContext) {
     const { address, tokenId } = input;
 
-    const events = rollup.events.get(
-      `${address}-${tokenId ?? Base58Encodings.TokenId.toBase58(Field(1))}`
-    );
+    const events = rollup.events.get(`${address}-${tokenId ?? Test.encoding.tokenIdToBase58(FieldConst[1])}`);
 
     return (
       events?.map((event) => ({
@@ -82,11 +65,11 @@ export const queries: QueryResolvers = {
         ],
         blockInfo: {
           height: 0,
-          stateHash: '',
-          parentHash: '',
-          ledgerHash: '',
-          chainStatus: '',
-          timestamp: '',
+          stateHash: "",
+          parentHash: "",
+          ledgerHash: "",
+          chainStatus: "",
+          timestamp: "",
           globalSlotSinceHardfork: 0,
           globalSlotSinceGenesis: 0,
           distanceFromMaxBlockHeight: 1, // due to https://github.com/o1-labs/snarkyjs/blob/main/src/lib/fetch.ts#L847-L852
@@ -98,9 +81,7 @@ export const queries: QueryResolvers = {
   actions(_, { input }, { rollup }: RollupContext) {
     const { address, tokenId } = input;
 
-    const actions = rollup.actions.get(
-      `${address}-${tokenId ?? Base58Encodings.TokenId.toBase58(Field(1))}`
-    );
+    const actions = rollup.actions.get(`${address}-${tokenId ?? Test.encoding.tokenIdToBase58(FieldConst[1])}`);
 
     return (
       actions?.map((action) => ({
@@ -125,11 +106,11 @@ export const queries: QueryResolvers = {
         ],
         blockInfo: {
           height: 0,
-          stateHash: '',
-          parentHash: '',
-          ledgerHash: '',
-          chainStatus: '',
-          timestamp: '',
+          stateHash: "",
+          parentHash: "",
+          ledgerHash: "",
+          chainStatus: "",
+          timestamp: "",
           globalSlotSinceHardfork: 0,
           globalSlotSinceGenesis: 0,
           distanceFromMaxBlockHeight: 1, // due to https://github.com/o1-labs/snarkyjs/blob/main/src/lib/fetch.ts#L847-L852
