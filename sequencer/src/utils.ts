@@ -30,5 +30,16 @@ export const fieldToHex = (field: Field | Scalar) => {
   return `0x${littleEndianHex}`;
 };
 
+export const hexToField = (hex: string): Field => {
+  const littleEndianHex =
+    hex
+      .slice(2)
+      .match(/.{1,2}/g)
+      ?.reverse()
+      .join("") ?? "";
+
+  return Field(BigInt(`0x${littleEndianHex}`));
+};
+
 export const MINA_NUMBER_OF_DECIMALS = 9;
 export const minaToDecimal = (amount: number) => amount * 10 ** MINA_NUMBER_OF_DECIMALS;

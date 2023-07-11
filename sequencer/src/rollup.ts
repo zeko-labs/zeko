@@ -1,20 +1,7 @@
 import { ethers } from "ethers";
-import {
-  Base58Encodings,
-  Field,
-  FieldConst,
-  Group,
-  Ledger,
-  Mina,
-  MlPublicKey,
-  PublicKey,
-  Scalar,
-  Signature,
-  Test,
-} from "snarkyjs";
-import { daLayerContract } from "./daLayer";
+import { Base58Encodings, Field, FieldConst, Ledger, Mina, MlPublicKey, Signature, Test } from "snarkyjs";
+import { fetchBatches, postBatch } from "./daLayer";
 import { Account, SendPaymentInput, ZkappCommandInput } from "./generated/graphql";
-import { MinaCommandStruct } from "./typechain-types/contracts/DataAvailability";
 import { convAuthRequiredToGqlType, fieldToHex } from "./utils";
 
 export type GenesisAccount = {
@@ -323,29 +310,9 @@ export class Rollup {
   async bootstrap(lastBatchLedgerHash: string): Promise<void> {
     console.log("Bootstrapping the branch to: ", lastBatchLedgerHash);
 
-    let currentLedgerHash = lastBatchLedgerHash;
-    let previousLedgerHash;
-    let transactions;
+    const batches = await fetchBatches(lastBatchLedgerHash);
 
-    const reversedBatches: Batch[] = [];
-
-    while (currentLedgerHash !== ethers.constants.HashZero) {
-      [previousLedgerHash, transactions] = await daLayerContract.getBatchData(currentLedgerHash);
-
-      const batch = {
-        ledgerHash: currentLedgerHash,
-        transactions: transactions.map((tx) => ({
-          id: Buffer.from(tx.data.slice(2), "hex").toString("base64"),
-          commandType: tx.commandType,
-        })),
-      };
-
-      reversedBatches.push(batch);
-
-      currentLedgerHash = previousLedgerHash;
-    }
-
-    reversedBatches.reverse().forEach((batch) => {
+    batches.forEach((batch) => {
       this.applyBatch(batch);
       console.log("Applied batch: ", batch.ledgerHash);
     });
@@ -356,53 +323,17 @@ export class Rollup {
     this.stagedTransactions = [];
 
     const ledgerHash = fieldToHex(Field.random()); // TODO: get from ledger
-    const previousLedgerHash = this.batches.at(-1)?.ledgerHash ?? fieldToHex(Field(0));
+    const previousLedgerHash = this.batches.at(-1)?.ledgerHash ?? ethers.constants.HashZero;
 
-    const proposedCommands: MinaCommandStruct[] = stagedTransactions.map(({ id, commandType }) => ({
-      commandType,
-      data: Buffer.from(id, "base64"),
-    }));
-
-    const tx = await daLayerContract.proposeBatch(ledgerHash, previousLedgerHash, proposedCommands);
-
-    await tx.wait();
-
-    console.log("Batch posted: ", ledgerHash);
-
-    this.batches.push({
+    const batch = {
       ledgerHash,
       transactions: stagedTransactions,
-    });
+    };
 
-    const quorum = await daLayerContract.quorum();
+    this.batches.push(batch);
 
-    daLayerContract.on("BatchSigned", async (signedLedgerHash, _, signatureCount) => {
-      if (signatureCount < quorum || signedLedgerHash !== ledgerHash) return;
+    const signatures = await postBatch(batch, previousLedgerHash);
 
-      const solSignatures = await daLayerContract.getBatchSignatures(ledgerHash);
-
-      const signatures = solSignatures.map((sig) => {
-        const pubKeyGroup = Group.fromJSON({
-          x: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.x.slice(2), "hex"))).toString(),
-          y: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.y.slice(2), "hex"))).toString(),
-        });
-
-        if (pubKeyGroup === null) throw new Error("Invalid public key");
-
-        const publicKey = PublicKey.fromGroup(pubKeyGroup);
-
-        const signature = Signature.fromJSON({
-          r: Field.fromBytes(Array.from(Buffer.from(sig.rx.slice(2), "hex"))).toString(),
-          s: Scalar.fromJSON(Field.fromBytes(Array.from(Buffer.from(sig.s.slice(2), "hex"))).toString()),
-        });
-
-        return {
-          publicKey,
-          signature,
-        };
-      });
-
-      console.log("Signatures collected for: ", ledgerHash, signatures.length);
-    });
+    console.log("Signatures collected for: ", batch.ledgerHash, signatures.length);
   }
 }

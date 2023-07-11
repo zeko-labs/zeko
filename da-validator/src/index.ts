@@ -1,7 +1,6 @@
 import { Field, Poseidon, PrivateKey, RollupCommitments, Signature } from "snarkyjs";
 import config from "./config";
-import { daLayerContract } from "./daLayer";
-import { MinaSchnorrSignatureStruct } from "./typechain-types/contracts/DataAvailability";
+import { daLayerContract, postSignature } from "./daLayer";
 import { fieldToHex, hexToField, signatureToStruct } from "./utils";
 
 const minaPrivateKey = PrivateKey.fromBase58(config.MINA_SIGNING_KEY);
@@ -10,12 +9,6 @@ export enum CommandType {
   SignedCommand = 0,
   ZkappCommand = 1,
 }
-
-const postSignature = async (ledgerHash: string, batchCommitment: string, signature: MinaSchnorrSignatureStruct) => {
-  const tx = await daLayerContract.addBatchSignature(ledgerHash, [batchCommitment], signature);
-
-  await tx.wait();
-};
 
 const signBatch = async (
   privateKey: PrivateKey,
