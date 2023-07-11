@@ -224,7 +224,7 @@ let apply_zkapp_command_transaction l (txn : Zkapp_command.t)
   in
   match applied.command.status with
   | Applied ->
-      ()
+      applied
   | Failed failures ->
       Util.raise_error
         ( Mina_base.Transaction_status.Failure.Collection.to_yojson failures
@@ -237,9 +237,126 @@ let apply_json_transaction l (tx_json : Js.js_string Js.t)
     Zkapp_command.of_json @@ Yojson.Safe.from_string @@ Js.to_string tx_json
   in
   let network_state = protocol_state_of_json network_json in
-  apply_zkapp_command_transaction l txn
-    (Js.to_string account_creation_fee)
-    network_state
+  let applied =
+    apply_zkapp_command_transaction l txn
+      (Js.to_string account_creation_fee)
+      network_state
+  in
+  let hash =
+    Mina_transaction.Transaction_hash.hash_command
+      (Zkapp_command applied.command.data)
+    |> Mina_transaction.Transaction_hash.to_base58_check |> Js.string
+  in
+  let id = Zkapp_command.to_base64 applied.command.data |> Js.string in
+  Js.Unsafe.obj
+    [| ("hash", Js.Unsafe.inject hash); ("id", Js.Unsafe.inject id) |]
+
+let apply_user_command ledger payment (account_creation_fee : string)
+    (network_state : Mina_base.Zkapp_precondition.Protocol_state.View.t) =
+  let result =
+    T.apply_user_command
+      ~constraint_constants:
+        { Genesis_constants.Constraint_constants.compiled with
+          account_creation_fee = Currency.Fee.of_string account_creation_fee
+        }
+      ~txn_global_slot:network_state.global_slot_since_genesis ledger payment
+  in
+  let applied =
+    match result with
+    | Ok applied ->
+        applied
+    | Error err ->
+        raise_error (Error.to_string_hum err)
+  in
+  let hash =
+    Mina_transaction.Transaction_hash.hash_command
+      (Signed_command applied.common.user_command.data)
+    |> Mina_transaction.Transaction_hash.to_base58_check |> Js.string
+  in
+  let id =
+    Mina_base.Signed_command.to_base64 applied.common.user_command.data
+    |> Js.string
+  in
+  Js.Unsafe.obj
+    [| ("hash", Js.Unsafe.inject hash); ("id", Js.Unsafe.inject id) |]
+
+let apply_payment l (signature : Js.js_string Js.t)
+    (from_base58 : Js.js_string Js.t) (to_base58 : Js.js_string Js.t)
+    (amount : Js.js_string Js.t) (fee : Js.js_string Js.t)
+    (valid_until : Js.js_string Js.t) (nonce : Js.js_string Js.t)
+    (memo : Js.js_string Js.t) (account_creation_fee : Js.js_string Js.t)
+    (network_json : Js.js_string Js.t) =
+  let ledger = l##.value in
+  let network_state = protocol_state_of_json network_json in
+  let from =
+    Signature_lib.Public_key.Compressed.of_base58_check_exn
+    @@ Js.to_string from_base58
+  in
+  let to_ =
+    Signature_lib.Public_key.Compressed.of_base58_check_exn
+    @@ Js.to_string to_base58
+  in
+  let payload =
+    Mina_base.Signed_command.Payload.create
+      ~fee:(Currency.Fee.of_string @@ Js.to_string @@ fee)
+      ~fee_payer_pk:from
+      ~valid_until:
+        ( Option.some @@ Mina_numbers.Global_slot_since_genesis.of_string
+        @@ Js.to_string @@ valid_until )
+      ~nonce:(Mina_numbers.Global_slot_legacy.of_string @@ Js.to_string @@ nonce)
+      ~memo:
+        ( Mina_base.Signed_command_memo.of_base58_check_exn @@ Js.to_string
+        @@ memo )
+      ~body:
+        (Payment
+           { receiver_pk = to_
+           ; amount = Currency.Amount.of_string @@ Js.to_string @@ amount
+           } )
+  in
+  let signature_kind = Mina_signature_kind.Testnet in
+  let txn =
+    Mina_base.Signed_command.create_with_signature_checked ~signature_kind
+      (Mina_base.Signature.of_base58_check_exn @@ Js.to_string @@ signature)
+      from payload
+  in
+  match txn with
+  | None ->
+      raise_error "Invalid signature"
+  | Some txn ->
+      apply_user_command ledger txn
+        (Js.to_string account_creation_fee)
+        network_state
+
+let apply_payment_from_base64 l (base64_payment : Js.js_string Js.t)
+    (account_creation_fee : Js.js_string Js.t) (network_json : Js.js_string Js.t)
+    =
+  match Mina_base.Signed_command.of_base64 (Js.to_string base64_payment) with
+  | Error _ ->
+      raise_error "Invalid base64 payment"
+  | Ok payment -> (
+      match Mina_base.Signed_command.check payment with
+      | None ->
+          raise_error "Invalid signature"
+      | Some payment ->
+          let ledger = l##.value in
+          let network_state = protocol_state_of_json network_json in
+          apply_user_command ledger payment
+            (Js.to_string account_creation_fee)
+            network_state )
+
+let apply_zkapp_command_from_base64 l (base64_zkapp_command : Js.js_string Js.t)
+    (account_creation_fee : Js.js_string Js.t) (network_json : Js.js_string Js.t)
+    =
+  match
+    Mina_base.Zkapp_command.of_base64 (Js.to_string base64_zkapp_command)
+  with
+  | Error _ ->
+      raise_error "Invalid base64 payment"
+  | Ok zkapp_command ->
+      let network_state = protocol_state_of_json network_json in
+      apply_zkapp_command_transaction l zkapp_command
+        (Js.to_string account_creation_fee)
+        network_state
 
 let method_ class_ (name : string) (f : _ Js.t -> _) =
   let prototype = Js.Unsafe.get class_ (Js.string "prototype") in
@@ -254,4 +371,10 @@ let () =
 
   method_ "getAccount" get_account ;
   method_ "addAccount" add_account ;
-  method_ "applyJsonTransaction" apply_json_transaction
+  method_ "applyJsonTransaction" apply_json_transaction ;
+
+  method_ "applyZkappCommand" apply_json_transaction ;
+  method_ "applyPayment" apply_payment ;
+
+  method_ "applyZkappCommandFromBase64" apply_zkapp_command_from_base64 ;
+  method_ "applyPaymentFromBase64" apply_payment_from_base64
