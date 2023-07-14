@@ -4,6 +4,11 @@
   ;; rollup ;;
   transaction_snark
   zkapps_rollup
+  mina_state
+  genesis_ledger
+  consensus
+  staged_ledger_diff
+  transaction_protocol_state
   ;; opam libraries ;;
   core_kernel
   base
@@ -43,6 +48,7 @@
   mina_signature_kind
   mina_transaction
   mina_transaction_logic
+  mina_ledger
   random_oracle
   random_oracle_input
   sgn
