@@ -8,7 +8,6 @@
    bin_prot.shape
    base.caml
    base.base_internalhash_types
-   core
    ;; local libraries
    currency
    transaction_snark
