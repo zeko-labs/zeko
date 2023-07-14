@@ -15,8 +15,8 @@
  (link_flags
   (-noautolink -g))
  (js_of_ocaml
-  (flags +toplevel.js +dynlink.js --pretty --source-map-inline --debug-info)
-  (link_flags --source-map-inline)
+  (flags +toplevel.js +dynlink.js --pretty --source-map --debug-info)
+  (link_flags --source-map)
   (javascript_files overrides.js))
  (libraries snarky_js_bindings_lib node_backend)
  (link_deps
