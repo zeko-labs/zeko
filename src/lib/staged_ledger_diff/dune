@@ -5,7 +5,6 @@
    ;; opam libraries
    core_kernel
    sexplib0
-   async
    bin_prot.shape
    base.caml
    blake2
@@ -13,7 +12,6 @@
    ppx_inline_test.config
    splittable_random
    stdio
-   async_unix
    async_kernel
    ;; local libraries
    mina_base
