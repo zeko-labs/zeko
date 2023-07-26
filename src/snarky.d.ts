@@ -12,7 +12,7 @@ import type {
 } from './lib/ml/base.js';
 import type { MlHashInput } from './lib/ml/conversion.js';
 
-export { ProvablePure, Provable, Ledger, Pickles, Gate };
+export { ProvablePure, Provable, Ledger, Pickles, Gate, RollupCommitments };
 
 // internal
 export { Snarky, Test, JsonGate, MlPublicKey, MlPublicKeyVar };
@@ -404,6 +404,40 @@ declare class Ledger {
   ): void;
 
   /**
+   * Applies a JSON transaction to the ledger.
+   */
+  applyZkappCommand(
+    txJson: string,
+    accountCreationFee: string,
+    networkState: string
+  ): { hash: string; id: string };
+
+  applyPayment(
+    signature: string,
+    from: string,
+    to: string,
+    amount: string,
+    fee: string,
+    validUntil: string,
+    nonce: string,
+    memo: string,
+    accountCreationFee: string,
+    networkState: String
+  ): { hash: string; id: string };
+
+  applyZkappCommandFromBase64(
+    txBase64: string,
+    accountCreationFee: string,
+    networkState: string
+  ): { hash: string; id: string };
+
+  applyPaymentFromBase64(
+    txBase64: string,
+    accountCreationFee: string,
+    networkState: string
+  ): { hash: string; id: string };
+
+  /**
    * Returns an account.
    */
   getAccount(
@@ -411,6 +445,11 @@ declare class Ledger {
     tokenId: FieldConst
   ): JsonAccount | undefined;
 }
+
+declare const RollupCommitments: {
+  paymentCommitmentFromBase64(base64Payment: string): FieldConst[];
+  zkappCommandCommitmentFromBase64(base64ZkappCommand: string): FieldConst;
+};
 
 declare const Test: {
   encoding: {
