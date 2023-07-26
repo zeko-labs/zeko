@@ -1,6 +1,8 @@
-import { Field, Scalar } from "snarkyjs";
+import { Field, Scalar, Test } from "snarkyjs";
 import { AuthRequired } from "snarkyjs/dist/node/bindings/mina-transaction/transaction-leaves-json";
 import { AccountAuthRequired } from "./generated/graphql";
+
+export const MinaEncoding = Test.encoding;
 
 export const convAuthRequiredToGqlType = (authRequired: AuthRequired) => {
   switch (authRequired) {

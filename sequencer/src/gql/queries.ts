@@ -1,6 +1,7 @@
-import { FieldConst, Test } from "snarkyjs";
+import { FieldConst } from "snarkyjs";
 import { Account, DaemonStatus, Peer, QueryResolvers, SyncStatus, TransactionStatus } from "../generated/graphql";
 import { RollupContext } from "../rollup";
+import { MinaEncoding } from "../utils";
 
 export const queries: QueryResolvers = {
   syncStatus() {
@@ -19,8 +20,8 @@ export const queries: QueryResolvers = {
 
   account(_, { publicKey, token }, { rollup }: RollupContext): Account | null {
     return rollup.getAccount(
-      Test.encoding.publicKeyOfBase58(publicKey),
-      token !== undefined ? Test.encoding.tokenIdOfBase58(token) : FieldConst[1]
+      MinaEncoding.publicKeyOfBase58(publicKey),
+      token !== undefined ? MinaEncoding.tokenIdOfBase58(token) : FieldConst[1]
     );
   },
 
@@ -48,7 +49,7 @@ export const queries: QueryResolvers = {
   events(_, { input }, { rollup }: RollupContext) {
     const { address, tokenId } = input;
 
-    const events = rollup.events.get(`${address}-${tokenId ?? Test.encoding.tokenIdToBase58(FieldConst[1])}`);
+    const events = rollup.events.get(`${address}-${tokenId ?? MinaEncoding.tokenIdToBase58(FieldConst[1])}`);
 
     return (
       events?.map((event) => ({
@@ -81,7 +82,7 @@ export const queries: QueryResolvers = {
   actions(_, { input }, { rollup }: RollupContext) {
     const { address, tokenId } = input;
 
-    const actions = rollup.actions.get(`${address}-${tokenId ?? Test.encoding.tokenIdToBase58(FieldConst[1])}`);
+    const actions = rollup.actions.get(`${address}-${tokenId ?? MinaEncoding.tokenIdToBase58(FieldConst[1])}`);
 
     return (
       actions?.map((action) => ({

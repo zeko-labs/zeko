@@ -1,7 +1,8 @@
 import { GraphQLError } from "graphql";
-import { FieldConst, Signature, Test } from "snarkyjs";
+import { FieldConst, Signature } from "snarkyjs";
 import { MutationResolvers, SendZkappPayload } from "../generated/graphql";
 import { RollupContext } from "../rollup";
+import { MinaEncoding } from "../utils";
 
 export const mutations: MutationResolvers = {
   sendZkapp(_, { input }, { rollup }: RollupContext): SendZkappPayload {
@@ -35,9 +36,9 @@ export const mutations: MutationResolvers = {
         input
       );
 
-      const feePayer = rollup.getAccount(Test.encoding.publicKeyOfBase58(input.from), FieldConst[1]);
+      const feePayer = rollup.getAccount(MinaEncoding.publicKeyOfBase58(input.from), FieldConst[1]);
 
-      const receiver = rollup.getAccount(Test.encoding.publicKeyOfBase58(input.from), FieldConst[1]);
+      const receiver = rollup.getAccount(MinaEncoding.publicKeyOfBase58(input.from), FieldConst[1]);
 
       if (feePayer === null || receiver === null) {
         throw new Error("Unexpected error, account was not created");

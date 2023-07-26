@@ -1,7 +1,8 @@
 import fs from "fs/promises";
-import { MlPublicKey, Test } from "snarkyjs";
+import { MlPublicKey } from "snarkyjs";
 import { z } from "zod";
 import config from "./config";
+import { MinaEncoding } from "./utils";
 
 export type GenesisAccount = {
   publicKey: MlPublicKey;
@@ -22,7 +23,7 @@ export const loadAccounts = async (): Promise<GenesisAccount[]> => {
   const parsedAccounts = genesisAccountsSchema.parse(accounts);
 
   return parsedAccounts.map(({ publicKey, balance }) => ({
-    publicKey: Test.encoding.publicKeyOfBase58(publicKey),
+    publicKey: MinaEncoding.publicKeyOfBase58(publicKey),
     balance,
   }));
 };

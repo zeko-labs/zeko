@@ -1,9 +1,9 @@
 import { ethers } from "ethers";
-import { Base58Encodings, Field, FieldConst, Ledger, Mina, MlPublicKey, Signature, Test } from "snarkyjs";
+import { Base58Encodings, Field, FieldConst, Ledger, Mina, MlPublicKey, Signature } from "snarkyjs";
 import { fetchBatches, postBatch } from "./daLayer";
 import { Account, SendPaymentInput, ZkappCommandInput } from "./generated/graphql";
 import { GenesisAccount } from "./genesis";
-import { convAuthRequiredToGqlType, fieldToHex } from "./utils";
+import { MinaEncoding, convAuthRequiredToGqlType, fieldToHex } from "./utils";
 
 export type RollupContext = {
   rollup: Rollup;
@@ -73,8 +73,6 @@ export class Rollup {
   }
 
   getAccount(publicKey: MlPublicKey, token: FieldConst): Account | null {
-    Test.tokenId;
-
     const acc = this.ledger.getAccount(publicKey, token);
 
     if (acc === undefined) return null;
@@ -150,8 +148,8 @@ export class Rollup {
     if (actions.length === 0) return;
 
     const zkappAccount = this.ledger.getAccount(
-      Test.encoding.publicKeyOfBase58(publicKey),
-      Test.encoding.tokenIdOfBase58(tokenId)
+      MinaEncoding.publicKeyOfBase58(publicKey),
+      MinaEncoding.tokenIdOfBase58(tokenId)
     );
 
     if (zkappAccount === undefined || zkappAccount.zkapp === null) return;
@@ -264,7 +262,7 @@ export class Rollup {
       fee.toString(),
       validUntil.toString(),
       nonce.toString(),
-      Test.encoding.memoToBase58(memo?.toString() ?? ""),
+      MinaEncoding.memoToBase58(memo?.toString() ?? ""),
       this.networkConstants.accountCreationFee.toString(),
       JSON.stringify(this.networkState)
     );
