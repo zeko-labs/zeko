@@ -1,13 +1,22 @@
-# Sample Hardhat Project
+# Zeko data availability contracts
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a script that deploys that contract.
+## Installation
 
-Try running some of the following tasks:
+```bash
+npm install
+npm run compile
+```
 
-```shell
-npx hardhat help
-npx hardhat test
-REPORT_GAS=true npx hardhat test
-npx hardhat node
-npx hardhat run scripts/deploy.ts
+## Deploy of data availability contract
+
+```bash
+npm run geth:start
+npx hardhat run scripts/deploy.ts --network dev
+```
+
+## Testing
+
+```bash
+npm run compile
+npm run test
 ```
