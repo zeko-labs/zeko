@@ -254,7 +254,7 @@ let apply_json_transaction l (tx_json : Js.js_string Js.t)
 let apply_user_command ledger payment (account_creation_fee : string)
     (network_state : Mina_base.Zkapp_precondition.Protocol_state.View.t) =
   let result =
-    T.apply_user_command
+    Transaction_logic.apply_user_command
       ~constraint_constants:
         { Genesis_constants.Constraint_constants.compiled with
           account_creation_fee = Currency.Fee.of_string account_creation_fee
@@ -266,7 +266,7 @@ let apply_user_command ledger payment (account_creation_fee : string)
     | Ok applied ->
         applied
     | Error err ->
-        raise_error (Error.to_string_hum err)
+        Util.raise_error (Error.to_string_hum err)
   in
   let hash =
     Mina_transaction.Transaction_hash.hash_command
@@ -321,7 +321,7 @@ let apply_payment l (signature : Js.js_string Js.t)
   in
   match txn with
   | None ->
-      raise_error "Invalid signature"
+      Util.raise_error "Invalid signature"
   | Some txn ->
       apply_user_command ledger txn
         (Js.to_string account_creation_fee)
@@ -332,11 +332,11 @@ let apply_payment_from_base64 l (base64_payment : Js.js_string Js.t)
     =
   match Mina_base.Signed_command.of_base64 (Js.to_string base64_payment) with
   | Error _ ->
-      raise_error "Invalid base64 payment"
+      Util.raise_error "Invalid base64 payment"
   | Ok payment -> (
       match Mina_base.Signed_command.check payment with
       | None ->
-          raise_error "Invalid signature"
+          Util.raise_error "Invalid signature"
       | Some payment ->
           let ledger = l##.value in
           let network_state = protocol_state_of_json network_json in
@@ -351,7 +351,7 @@ let apply_zkapp_command_from_base64 l (base64_zkapp_command : Js.js_string Js.t)
     Mina_base.Zkapp_command.of_base64 (Js.to_string base64_zkapp_command)
   with
   | Error _ ->
-      raise_error "Invalid base64 payment"
+      Util.raise_error "Invalid base64 payment"
   | Ok zkapp_command ->
       let network_state = protocol_state_of_json network_json in
       apply_zkapp_command_transaction l zkapp_command

@@ -8,7 +8,7 @@ let rollup_commitments =
           Mina_base.Signed_command.of_base64 @@ Js.to_string @@ base64_payment
         with
         | Error _ ->
-            raise_error "Invalid base64 payment"
+            Util.raise_error "Invalid base64 payment"
         | Ok tx ->
             let roi = Mina_base.Signed_command.to_input_legacy tx.payload in
             Random_oracle.Legacy.pack_input roi |> Js.array
@@ -20,14 +20,15 @@ let rollup_commitments =
           @@ base64_zkapp_command
         with
         | Error _ ->
-            raise_error "Invalid base64 zkapp command"
+            Util.raise_error "Invalid base64 zkapp command"
         | Ok zkapp_command ->
-            let commitment = Zkapp_command.commitment zkapp_command in
+            let commitment = Mina_base.Zkapp_command.commitment zkapp_command in
             let fee_payer_hash =
-              Zkapp_command.Digest.Account_update.create
-              @@ Account_update.of_fee_payer zkapp_command.fee_payer
+              Mina_base.Zkapp_command.Digest.Account_update.create
+              @@ Mina_base.Account_update.of_fee_payer zkapp_command.fee_payer
             in
-            Zkapp_command.Transaction_commitment.create_complete commitment
+            Mina_base.Zkapp_command.Transaction_commitment.create_complete
+              commitment
               ~memo_hash:(Mina_base.Signed_command_memo.hash zkapp_command.memo)
               ~fee_payer_hash
   end
