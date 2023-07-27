@@ -1,4 +1,5 @@
 module Js = Js_of_ocaml.Js
+open Core_kernel
 
 let rollup =
   let open Mina_base in
@@ -200,10 +201,10 @@ let export_global () =
     Js.Unsafe.(
       let i = inject in
       obj
-        [| ("Snarky", i snarky)
-         ; ("Ledger", i Ledger.ledger_class)
-         ; ("Pickles", i pickles)
-         ; ("Test", i test)
+        [| ("Snarky", i Snarky_bindings.snarky)
+         ; ("Ledger", i Local_ledger.ledger_class)
+         ; ("Pickles", i Pickles_bindings.pickles)
+         ; ("Test", i Consistency_test.test)
          ; ("Rollup", i rollup)
         |])
   in
