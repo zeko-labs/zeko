@@ -1,3 +1,5 @@
-import { Add } from './Add.js';
+import { MerkleMapQueue } from './MerkleMapQueue';
+import { MerkleTreeArray } from './MerkleTreeArray';
+import { ZekoBridge } from './ZekoBridge';
 
-export { Add };
+export { MerkleMapQueue, MerkleTreeArray, ZekoBridge };
