@@ -17,16 +17,6 @@ import config from './config';
 
 const MINA = 1e9;
 
-const buildMerkleTree = (requests: WrappingRequest[]): MerkleTree => {
-  const tree = new MerkleTree(TREE_HEIGHT);
-
-  requests.forEach((request) => {
-    tree.setLeaf(request.index.toBigInt(), request.hash());
-  });
-
-  return tree;
-};
-
 describe('ZekoBridge', () => {
   let senderKey: PrivateKey;
   let senderAddress: PublicKey;
@@ -68,12 +58,12 @@ describe('ZekoBridge', () => {
   it('deploys the `WrappingRequestList` zkapp', async () => {
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
     expect(zkapp.firstIndex.get()).toEqual(Field(0));
-    expect(zkapp.lastIndex.get()).toEqual(Field(-1));
+    expect(zkapp.counter.get()).toEqual(Field(0));
   });
 
   it('creates first wrapping request', async () => {
     const request = new WrappingRequest({
-      index: zkapp.lastIndex.get().add(1),
+      id: zkapp.counter.get(),
       amount: UInt64.from(5 * MINA),
       receiver: senderAddress,
     });
@@ -81,26 +71,29 @@ describe('ZekoBridge', () => {
     const tx = await Mina.transaction(senderAddress, () => {
       zkapp.createWrappingRequest(
         request,
-        new QueueWitness(merkleTree.getWitness(request.index.toBigInt()))
+        new QueueWitness(merkleTree.getWitness(request.index()))
       );
     });
 
-    merkleTree.setLeaf(request.index.toBigInt(), request.hash());
+    merkleTree.setLeaf(request.index(), request.hash());
     requests.push(request);
 
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
-    expect(buildMerkleTree(requests).getRoot()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
 
     expect(zkapp.firstIndex.get()).toEqual(Field(0));
-    expect(zkapp.lastIndex.get()).toEqual(Field(0));
+    expect(zkapp.counter.get()).toEqual(Field(1));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(0));
   });
 
   it('creates second wrapping request', async () => {
     const request = new WrappingRequest({
-      index: zkapp.lastIndex.get().add(1),
+      id: zkapp.counter.get(),
       amount: UInt64.from(5 * MINA),
       receiver: senderAddress,
     });
@@ -108,26 +101,29 @@ describe('ZekoBridge', () => {
     const tx = await Mina.transaction(senderAddress, () => {
       zkapp.createWrappingRequest(
         request,
-        new QueueWitness(merkleTree.getWitness(request.index.toBigInt()))
+        new QueueWitness(merkleTree.getWitness(request.index()))
       );
     });
 
-    merkleTree.setLeaf(request.index.toBigInt(), request.hash());
+    merkleTree.setLeaf(request.index(), request.hash());
     requests.push(request);
 
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
-    expect(buildMerkleTree(requests).getRoot()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
 
     expect(zkapp.firstIndex.get()).toEqual(Field(0));
-    expect(zkapp.lastIndex.get()).toEqual(Field(1));
+    expect(zkapp.counter.get()).toEqual(Field(2));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(1));
   });
 
   it('creates third wrapping request', async () => {
     const request = new WrappingRequest({
-      index: zkapp.lastIndex.get().add(1),
+      id: zkapp.counter.get(),
       amount: UInt64.from(5 * MINA),
       receiver: senderAddress,
     });
@@ -135,21 +131,24 @@ describe('ZekoBridge', () => {
     const tx = await Mina.transaction(senderAddress, () => {
       zkapp.createWrappingRequest(
         request,
-        new QueueWitness(merkleTree.getWitness(request.index.toBigInt()))
+        new QueueWitness(merkleTree.getWitness(request.index()))
       );
     });
 
-    merkleTree.setLeaf(request.index.toBigInt(), request.hash());
+    merkleTree.setLeaf(request.index(), request.hash());
     requests.push(request);
 
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
-    expect(buildMerkleTree(requests).getRoot()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
 
     expect(zkapp.firstIndex.get()).toEqual(Field(0));
-    expect(zkapp.lastIndex.get()).toEqual(Field(2));
+    expect(zkapp.counter.get()).toEqual(Field(3));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(2));
   });
 
   it('pops first wrapping request', async () => {
@@ -158,21 +157,24 @@ describe('ZekoBridge', () => {
     const tx = await Mina.transaction(senderAddress, () => {
       zkapp.popWrappingRequest(
         request.hash(),
-        new QueueWitness(merkleTree.getWitness(request.index.toBigInt()))
+        new QueueWitness(merkleTree.getWitness(request.index()))
       );
     });
 
-    merkleTree.setLeaf(request.index.toBigInt(), Field(0));
+    merkleTree.setLeaf(request.index(), Field(0));
     requests.shift();
 
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
-    expect(buildMerkleTree(requests).getRoot()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
 
     expect(zkapp.firstIndex.get()).toEqual(Field(1));
-    expect(zkapp.lastIndex.get()).toEqual(Field(2));
+    expect(zkapp.counter.get()).toEqual(Field(3));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(2));
   });
 
   it('pops second wrapping request', async () => {
@@ -181,26 +183,29 @@ describe('ZekoBridge', () => {
     const tx = await Mina.transaction(senderAddress, () => {
       zkapp.popWrappingRequest(
         request.hash(),
-        new QueueWitness(merkleTree.getWitness(request.index.toBigInt()))
+        new QueueWitness(merkleTree.getWitness(request.index()))
       );
     });
 
-    merkleTree.setLeaf(request.index.toBigInt(), Field(0));
+    merkleTree.setLeaf(request.index(), Field(0));
     requests.shift();
 
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
-    expect(buildMerkleTree(requests).getRoot()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
 
     expect(zkapp.firstIndex.get()).toEqual(Field(2));
-    expect(zkapp.lastIndex.get()).toEqual(Field(2));
+    expect(zkapp.counter.get()).toEqual(Field(3));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(2));
   });
 
   it('creates fourth wrapping request', async () => {
     const request = new WrappingRequest({
-      index: zkapp.lastIndex.get().add(1),
+      id: zkapp.counter.get(),
       amount: UInt64.from(5 * MINA),
       receiver: senderAddress,
     });
@@ -208,21 +213,24 @@ describe('ZekoBridge', () => {
     const tx = await Mina.transaction(senderAddress, () => {
       zkapp.createWrappingRequest(
         request,
-        new QueueWitness(merkleTree.getWitness(request.index.toBigInt()))
+        new QueueWitness(merkleTree.getWitness(request.index()))
       );
     });
 
-    merkleTree.setLeaf(request.index.toBigInt(), request.hash());
+    merkleTree.setLeaf(request.index(), request.hash());
     requests.push(request);
 
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
-    expect(buildMerkleTree(requests).getRoot()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
 
     expect(zkapp.firstIndex.get()).toEqual(Field(2));
-    expect(zkapp.lastIndex.get()).toEqual(Field(3));
+    expect(zkapp.counter.get()).toEqual(Field(4));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(3));
   });
 
   it('pops third wrapping request', async () => {
@@ -231,21 +239,54 @@ describe('ZekoBridge', () => {
     const tx = await Mina.transaction(senderAddress, () => {
       zkapp.popWrappingRequest(
         request.hash(),
-        new QueueWitness(merkleTree.getWitness(request.index.toBigInt()))
+        new QueueWitness(merkleTree.getWitness(request.index()))
       );
     });
 
-    merkleTree.setLeaf(request.index.toBigInt(), Field(0));
+    merkleTree.setLeaf(request.index(), Field(0));
     requests.shift();
 
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
-    expect(buildMerkleTree(requests).getRoot()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
 
     expect(zkapp.firstIndex.get()).toEqual(Field(3));
-    expect(zkapp.lastIndex.get()).toEqual(Field(3));
+    expect(zkapp.counter.get()).toEqual(Field(4));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(3));
+  });
+
+  it('creates fifth wrapping request and wraps the queue around the tree', async () => {
+    const request = new WrappingRequest({
+      id: zkapp.counter.get(),
+      amount: UInt64.from(5 * MINA),
+      receiver: senderAddress,
+    });
+
+    const tx = await Mina.transaction(senderAddress, () => {
+      zkapp.createWrappingRequest(
+        request,
+        new QueueWitness(merkleTree.getWitness(request.index()))
+      );
+    });
+
+    merkleTree.setLeaf(request.index(), request.hash());
+    requests.push(request);
+
+    await tx.prove();
+    await tx.sign([senderKey, zkappKey]).send();
+
+    expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
+
+    expect(zkapp.firstIndex.get()).toEqual(Field(3));
+    expect(zkapp.counter.get()).toEqual(Field(5));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(0));
   });
 
   it('pops fourth wrapping request', async () => {
@@ -254,20 +295,49 @@ describe('ZekoBridge', () => {
     const tx = await Mina.transaction(senderAddress, () => {
       zkapp.popWrappingRequest(
         request.hash(),
-        new QueueWitness(merkleTree.getWitness(request.index.toBigInt()))
+        new QueueWitness(merkleTree.getWitness(request.index()))
       );
     });
 
-    merkleTree.setLeaf(request.index.toBigInt(), Field(0));
+    merkleTree.setLeaf(request.index(), Field(0));
     requests.shift();
 
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
-    expect(buildMerkleTree(requests).getRoot()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
 
-    expect(zkapp.firstIndex.get()).toEqual(Field(4));
-    expect(zkapp.lastIndex.get()).toEqual(Field(3));
+    expect(zkapp.firstIndex.get()).toEqual(Field(0));
+    expect(zkapp.counter.get()).toEqual(Field(5));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(0));
+  });
+
+  it('pops fifth wrapping request', async () => {
+    const request = requests[0];
+
+    const tx = await Mina.transaction(senderAddress, () => {
+      zkapp.popWrappingRequest(
+        request.hash(),
+        new QueueWitness(merkleTree.getWitness(request.index()))
+      );
+    });
+
+    merkleTree.setLeaf(request.index(), Field(0));
+    requests.shift();
+
+    await tx.prove();
+    await tx.sign([senderKey, zkappKey]).send();
+
+    expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
+    expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+      merkleTree.getRoot()
+    );
+
+    expect(zkapp.firstIndex.get()).toEqual(Field(1));
+    expect(zkapp.counter.get()).toEqual(Field(5));
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(0));
   });
 });
