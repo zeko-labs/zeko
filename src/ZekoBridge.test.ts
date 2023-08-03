@@ -5,8 +5,10 @@ import {
   Mina,
   PrivateKey,
   PublicKey,
+  TokenId,
   UInt64,
 } from 'snarkyjs';
+import { ExampleToken } from './ExampleToken';
 import {
   QueueWitness,
   TREE_HEIGHT,
@@ -24,6 +26,10 @@ describe('ZekoBridge', () => {
   let zkappKey: PrivateKey;
   let zkappAddress: PublicKey;
   let zkapp: ZekoBridge;
+
+  let tokenKey: PrivateKey;
+  let tokenAddress: PublicKey;
+  let tokenZkapp: ExampleToken;
 
   let merkleTree: MerkleTree;
   let requests: WrappingRequest[];
@@ -43,33 +49,59 @@ describe('ZekoBridge', () => {
     zkappAddress = zkappKey.toPublicKey();
     zkapp = new ZekoBridge(zkappAddress);
 
-    const deployTx = await Mina.transaction(senderAddress, () => {
-      AccountUpdate.fundNewAccount(senderAddress, 1);
-      zkapp.deploy({ zkappKey });
-    });
-
-    await deployTx.prove();
-    await deployTx.sign([senderKey, zkappKey]).send();
+    tokenKey = PrivateKey.random();
+    tokenAddress = tokenKey.toPublicKey();
+    tokenZkapp = new ExampleToken(tokenAddress);
 
     merkleTree = new MerkleTree(TREE_HEIGHT);
     requests = [];
   });
 
-  it('deploys the `WrappingRequestList` zkapp', async () => {
+  it('deploys the `ZekoBridge` zkapp', async () => {
+    const deployTx = await Mina.transaction(senderAddress, () => {
+      AccountUpdate.fundNewAccount(senderAddress, 2);
+      zkapp.deploy({ zkappKey });
+      tokenZkapp.deploy({ zkappKey: tokenKey });
+    });
+
+    await deployTx.prove();
+    await deployTx.sign([senderKey, zkappKey, tokenKey]).send();
+
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
     expect(zkapp.firstIndex.get()).toEqual(Field(0));
     expect(zkapp.counter.get()).toEqual(Field(0));
   });
 
+  it('deploys and mints the example token', async () => {
+    const amount = UInt64.from(100 * MINA);
+
+    const mintTx = await Mina.transaction(senderAddress, () => {
+      AccountUpdate.fundNewAccount(senderAddress, 2);
+      tokenZkapp.mintTokens(senderAddress, amount);
+      tokenZkapp.mintTokens(zkappAddress, amount);
+      tokenZkapp.requireSignature();
+    });
+
+    await mintTx.prove();
+    await mintTx.sign([senderKey, tokenKey]).send();
+
+    expect(Mina.getBalance(senderAddress, tokenZkapp.token.id)).toEqual(amount);
+    expect(Mina.getBalance(zkappAddress, tokenZkapp.token.id)).toEqual(amount);
+  });
+
   it('creates first wrapping request', async () => {
+    const amount = UInt64.from(5 * MINA);
+    const zkappBeforeBalance = Mina.getBalance(zkappAddress);
+
     const request = new WrappingRequest({
       id: zkapp.counter.get(),
-      amount: UInt64.from(5 * MINA),
+      amount,
+      tokenId: TokenId.default,
       receiver: senderAddress,
     });
 
     const tx = await Mina.transaction(senderAddress, () => {
-      zkapp.createWrappingRequest(
+      zkapp.createMinaWrappingRequest(
         request,
         new QueueWitness(merkleTree.getWitness(request.index()))
       );
@@ -81,6 +113,9 @@ describe('ZekoBridge', () => {
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
+    expect(Mina.getBalance(zkappAddress)).toEqual(
+      zkappBeforeBalance.add(amount)
+    );
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
     expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
       merkleTree.getRoot()
@@ -92,14 +127,18 @@ describe('ZekoBridge', () => {
   });
 
   it('creates second wrapping request', async () => {
+    const amount = UInt64.from(5 * MINA);
+    const zkappBeforeBalance = Mina.getBalance(zkappAddress);
+
     const request = new WrappingRequest({
       id: zkapp.counter.get(),
-      amount: UInt64.from(5 * MINA),
+      amount,
+      tokenId: TokenId.default,
       receiver: senderAddress,
     });
 
     const tx = await Mina.transaction(senderAddress, () => {
-      zkapp.createWrappingRequest(
+      zkapp.createMinaWrappingRequest(
         request,
         new QueueWitness(merkleTree.getWitness(request.index()))
       );
@@ -111,6 +150,9 @@ describe('ZekoBridge', () => {
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
+    expect(Mina.getBalance(zkappAddress)).toEqual(
+      zkappBeforeBalance.add(amount)
+    );
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
     expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
       merkleTree.getRoot()
@@ -122,14 +164,18 @@ describe('ZekoBridge', () => {
   });
 
   it('creates third wrapping request', async () => {
+    const amount = UInt64.from(5 * MINA);
+    const zkappBeforeBalance = Mina.getBalance(zkappAddress);
+
     const request = new WrappingRequest({
       id: zkapp.counter.get(),
-      amount: UInt64.from(5 * MINA),
+      amount,
+      tokenId: TokenId.default,
       receiver: senderAddress,
     });
 
     const tx = await Mina.transaction(senderAddress, () => {
-      zkapp.createWrappingRequest(
+      zkapp.createMinaWrappingRequest(
         request,
         new QueueWitness(merkleTree.getWitness(request.index()))
       );
@@ -141,6 +187,9 @@ describe('ZekoBridge', () => {
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
+    expect(Mina.getBalance(zkappAddress)).toEqual(
+      zkappBeforeBalance.add(amount)
+    );
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
     expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
       merkleTree.getRoot()
@@ -204,14 +253,18 @@ describe('ZekoBridge', () => {
   });
 
   it('creates fourth wrapping request', async () => {
+    const amount = UInt64.from(5 * MINA);
+    const zkappBeforeBalance = Mina.getBalance(zkappAddress);
+
     const request = new WrappingRequest({
       id: zkapp.counter.get(),
-      amount: UInt64.from(5 * MINA),
+      amount,
+      tokenId: TokenId.default,
       receiver: senderAddress,
     });
 
     const tx = await Mina.transaction(senderAddress, () => {
-      zkapp.createWrappingRequest(
+      zkapp.createMinaWrappingRequest(
         request,
         new QueueWitness(merkleTree.getWitness(request.index()))
       );
@@ -223,6 +276,9 @@ describe('ZekoBridge', () => {
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
+    expect(Mina.getBalance(zkappAddress)).toEqual(
+      zkappBeforeBalance.add(amount)
+    );
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
     expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
       merkleTree.getRoot()
@@ -260,14 +316,18 @@ describe('ZekoBridge', () => {
   });
 
   it('creates fifth wrapping request and wraps the queue around the tree', async () => {
+    const amount = UInt64.from(5 * MINA);
+    const zkappBeforeBalance = Mina.getBalance(zkappAddress);
+
     const request = new WrappingRequest({
       id: zkapp.counter.get(),
-      amount: UInt64.from(5 * MINA),
+      amount,
+      tokenId: TokenId.default,
       receiver: senderAddress,
     });
 
     const tx = await Mina.transaction(senderAddress, () => {
-      zkapp.createWrappingRequest(
+      zkapp.createMinaWrappingRequest(
         request,
         new QueueWitness(merkleTree.getWitness(request.index()))
       );
@@ -279,6 +339,9 @@ describe('ZekoBridge', () => {
     await tx.prove();
     await tx.sign([senderKey, zkappKey]).send();
 
+    expect(Mina.getBalance(zkappAddress)).toEqual(
+      zkappBeforeBalance.add(amount)
+    );
     expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
     expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
       merkleTree.getRoot()
@@ -339,5 +402,59 @@ describe('ZekoBridge', () => {
     expect(zkapp.firstIndex.get()).toEqual(Field(1));
     expect(zkapp.counter.get()).toEqual(Field(5));
     expect(zkapp.lastIndex()).toEqual(UInt64.from(0));
+  });
+
+  it('creates token wrapping request', async () => {
+    const amount = UInt64.from(5 * MINA);
+    const zkappBeforeTokenBalance = Mina.getBalance(
+      zkappAddress,
+      tokenZkapp.token.id
+    );
+
+    const request = new WrappingRequest({
+      id: zkapp.counter.get(),
+      amount,
+      tokenId: tokenZkapp.token.id,
+      receiver: senderAddress,
+    });
+
+    const tx = await Mina.transaction(senderAddress, () => {
+      tokenZkapp.sendTokens(senderAddress, zkappAddress, amount);
+
+      const receiverUpdate = tokenZkapp.self.children.accountUpdates[1];
+
+      zkapp.createTokenWrappingRequest(
+        request,
+        receiverUpdate,
+        new QueueWitness(merkleTree.getWitness(request.index()))
+      );
+    });
+
+    console.log(tx.toPretty());
+
+    console.log(
+      tx.transaction.accountUpdates.map((u) => ({
+        label: u.label,
+        children: u.children.accountUpdates.map((u) => u.label),
+      }))
+    );
+
+    // merkleTree.setLeaf(request.index(), request.hash());
+    // requests.push(request);
+
+    await tx.prove();
+    await tx.sign([senderKey, zkappKey, tokenKey]).send();
+
+    // expect(Mina.getBalance(zkappAddress, tokenZkapp.token.id)).toEqual(
+    //   zkappBeforeTokenBalance.add(amount)
+    // );
+    // expect(zkapp.treeRoot.get()).toEqual(merkleTree.getRoot());
+    // expect(WrappingRequest.buildMerkleTree(requests).getRoot()).toEqual(
+    //   merkleTree.getRoot()
+    // );
+
+    // expect(zkapp.firstIndex.get()).toEqual(Field(3));
+    // expect(zkapp.counter.get()).toEqual(Field(5));
+    // expect(zkapp.lastIndex()).toEqual(UInt64.from(0));
   });
 });

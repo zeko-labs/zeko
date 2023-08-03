@@ -9,6 +9,7 @@ import {
   SmartContract,
   State,
   Struct,
+  TokenId,
   UInt64,
   method,
   state,
@@ -20,6 +21,7 @@ export const TREE_CAPACITY = new MerkleTree(TREE_HEIGHT).leafCount;
 export class WrappingRequest extends Struct({
   id: Field,
   amount: UInt64,
+  tokenId: Field,
   receiver: PublicKey,
 }) {
   hash(): Field {
@@ -64,15 +66,7 @@ export class ZekoBridge extends SmartContract {
     return new UInt64(this.counter.get().sub(1)).mod(new UInt64(TREE_CAPACITY));
   }
 
-  @method createWrappingRequest(
-    request: WrappingRequest,
-    witness: QueueWitness
-  ) {
-    // Create account update that sends funds from the sender to the zkapp
-    request.amount.assertGreaterThan(UInt64.zero);
-    const senderUpdate = AccountUpdate.createSigned(this.sender);
-    senderUpdate.send({ to: this, amount: request.amount });
-
+  appendWrappingRequest(request: WrappingRequest, witness: QueueWitness) {
     // Public inputs
     const treeRoot = this.treeRoot.getAndAssertEquals();
     const counter = this.counter.getAndAssertEquals();
@@ -95,6 +89,45 @@ export class ZekoBridge extends SmartContract {
 
     this.treeRoot.set(newRoot);
     this.counter.set(counter.add(1));
+  }
+
+  @method createMinaWrappingRequest(
+    request: WrappingRequest,
+    witness: QueueWitness
+  ) {
+    // Assert the request is for Mina and not token
+    request.tokenId.assertEquals(TokenId.default);
+
+    // Create account update that sends funds from the sender to the zkapp
+    request.amount.assertGreaterThan(UInt64.zero);
+    const senderUpdate = AccountUpdate.createSigned(this.sender);
+    senderUpdate.send({ to: this, amount: request.amount });
+
+    // Append queue
+    this.appendWrappingRequest(request, witness);
+
+    this.emitEvent('wrapping-request', request);
+  }
+
+  @method createTokenWrappingRequest(
+    request: WrappingRequest,
+    selfTokenAccountUpdate: AccountUpdate,
+    witness: QueueWitness
+  ) {
+    // Assert correct token account update
+    selfTokenAccountUpdate.body.balanceChange.sgn.isPositive().assertTrue();
+    selfTokenAccountUpdate.body.balanceChange.magnitude.assertEquals(
+      request.amount
+    );
+    request.amount.assertGreaterThan(UInt64.zero);
+
+    selfTokenAccountUpdate.tokenId.assertEquals(request.tokenId);
+    selfTokenAccountUpdate.publicKey.assertEquals(this.self.publicKey);
+
+    this.self.approve(selfTokenAccountUpdate);
+
+    // Append queue
+    this.appendWrappingRequest(request, witness);
 
     this.emitEvent('wrapping-request', request);
   }
