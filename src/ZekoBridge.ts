@@ -124,7 +124,7 @@ export class ZekoBridge extends SmartContract {
     selfTokenAccountUpdate.tokenId.assertEquals(request.tokenId);
     selfTokenAccountUpdate.publicKey.assertEquals(this.self.publicKey);
 
-    this.self.approve(selfTokenAccountUpdate);
+    // this.self.approve(selfTokenAccountUpdate);
 
     // Append queue
     this.appendWrappingRequest(request, witness);
