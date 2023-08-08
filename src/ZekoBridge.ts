@@ -76,14 +76,17 @@ export class WrappingRequestAction extends Struct({
   ): Promise<ActionsReducerProof> {
     const actionsCopy = actions.slice();
     let proof: ActionsReducerProof | undefined = undefined;
-    let stateAux = new ReducerState(oldState);
+    let publicInput = new ReducerPublicInput({
+      currentState: new ReducerState(oldState),
+      initialState: new ReducerState(oldState),
+    });
 
     while (actionsCopy.length > 0) {
       const batch = actionsCopy.splice(0, BATCH_SIZE);
 
       const witnesses = batch.map((action) => {
         const request = new WrappingRequest({
-          id: stateAux.counter,
+          id: publicInput.currentState.counter,
           amount: action.amount,
           tokenId: action.tokenId,
           receiver: action.receiver,
@@ -92,10 +95,16 @@ export class WrappingRequestAction extends Struct({
         const w = new QueueWitness(tree.getWitness(request.index()));
         tree.setLeaf(request.index(), request.hash());
 
-        stateAux = new ReducerState({
-          actionState: updateActionsState(stateAux.actionState, action.hash()),
-          treeRoot: tree.getRoot(),
-          counter: stateAux.counter.add(1),
+        publicInput = new ReducerPublicInput({
+          currentState: new ReducerState({
+            actionState: updateActionsState(
+              publicInput.currentState.actionState,
+              action.hash()
+            ),
+            treeRoot: tree.getRoot(),
+            counter: publicInput.currentState.counter.add(1),
+          }),
+          initialState: publicInput.initialState,
         });
 
         return new OptionalQueueWitness({
@@ -113,12 +122,11 @@ export class WrappingRequestAction extends Struct({
       proof =
         proof === undefined
           ? await ActionsRecursiveReducer.first(
-              stateAux,
-              oldState,
+              publicInput,
               new ActionsBatch({ witnesses })
             )
           : await ActionsRecursiveReducer.step(
-              stateAux,
+              publicInput,
               proof,
               new ActionsBatch({ witnesses })
             );
@@ -227,20 +235,21 @@ export class ReducerState extends Struct({
   }
 }
 
+export class ReducerPublicInput extends Struct({
+  currentState: ReducerState,
+  initialState: ReducerState,
+}) {}
+
 export const ActionsRecursiveReducer = Experimental.ZkProgram({
-  publicInput: ReducerState,
+  publicInput: ReducerPublicInput,
 
   methods: {
     first: {
-      privateInputs: [ReducerState, ActionsBatch],
+      privateInputs: [ActionsBatch],
 
-      method(
-        publicInput: ReducerState,
-        oldState: ReducerState,
-        batch: ActionsBatch
-      ) {
-        const newState = batch.reduce(oldState);
-        publicInput.assertEquals(newState);
+      method(publicInput: ReducerPublicInput, batch: ActionsBatch) {
+        const newState = batch.reduce(publicInput.initialState);
+        publicInput.currentState.assertEquals(newState);
       },
     },
 
@@ -248,14 +257,17 @@ export const ActionsRecursiveReducer = Experimental.ZkProgram({
       privateInputs: [SelfProof, ActionsBatch],
 
       method(
-        publicInput: ReducerState,
-        prevProof: SelfProof<ReducerState, FlexibleProvablePure<unknown>>,
+        publicInput: ReducerPublicInput,
+        prevProof: SelfProof<ReducerPublicInput, FlexibleProvablePure<unknown>>,
         batch: ActionsBatch
       ) {
         prevProof.verify();
 
-        const newState = batch.reduce(prevProof.publicInput);
-        publicInput.assertEquals(newState);
+        publicInput.initialState.assertEquals(
+          prevProof.publicInput.initialState
+        );
+        const newState = batch.reduce(prevProof.publicInput.currentState);
+        publicInput.currentState.assertEquals(newState);
       },
     },
   },
@@ -291,47 +303,7 @@ export class ZekoBridge extends SmartContract {
     return new UInt64(this.counter.get().sub(1)).mod(new UInt64(TREE_CAPACITY));
   }
 
-  appendWrappingRequest(request: WrappingRequest, witness: QueueWitness) {
-    // Public inputs
-    const treeRoot = this.treeRoot.getAndAssertEquals();
-    const counter = this.counter.getAndAssertEquals();
-
-    // Assert correct new request index
-    counter.assertEquals(request.id);
-
-    // Assert correct witness
-    const requestIndex = new UInt64(request.id).mod(new UInt64(TREE_CAPACITY));
-
-    new UInt64(witness.calculateIndex()).assertEquals(requestIndex);
-    witness.calculateRoot(Field(0)).assertEquals(treeRoot);
-
-    // Calculate new root
-    const requestHash = request.hash();
-    const newRoot = witness.calculateRoot(requestHash);
-
-    this.treeRoot.set(newRoot);
-    this.counter.set(counter.add(1));
-  }
-
-  @method createMinaWrappingRequest(
-    request: WrappingRequest,
-    witness: QueueWitness
-  ) {
-    // Assert the request is for Mina and not custom token
-    request.tokenId.assertEquals(TokenId.default);
-
-    // Create an account update that sends funds from the sender to the zkapp
-    request.amount.assertGreaterThan(UInt64.zero);
-    const senderUpdate = AccountUpdate.createSigned(this.sender);
-    senderUpdate.send({ to: this, amount: request.amount });
-
-    // Append queue
-    this.appendWrappingRequest(request, witness);
-
-    this.emitEvent('wrapping-request', request);
-  }
-
-  @method dispatchMinaWrappingRequest(request: WrappingRequestAction) {
+  @method createMinaWrappingRequest(request: WrappingRequestAction) {
     // Assert the request is for Mina and not custom token
     request.tokenId.assertEquals(TokenId.default);
 
@@ -344,14 +316,24 @@ export class ZekoBridge extends SmartContract {
     this.reducer.dispatch(request);
   }
 
-  @method rollupRequests(proof: ActionsReducerProof) {
-    this.account.actionState.assertEquals(proof.publicInput.actionState);
+  @method rollupRequestsWithProof(proof: ActionsReducerProof) {
+    const treeRoot = this.treeRoot.getAndAssertEquals();
+    const counter = this.counter.getAndAssertEquals();
+    const actionState = this.actionState.getAndAssertEquals();
+
+    treeRoot.assertEquals(proof.publicInput.initialState.treeRoot);
+    counter.assertEquals(proof.publicInput.initialState.counter);
+    actionState.assertEquals(proof.publicInput.initialState.actionState);
+
+    this.account.actionState.assertEquals(
+      proof.publicInput.currentState.actionState
+    );
 
     proof.verify();
 
-    this.actionState.set(proof.publicInput.actionState);
-    this.treeRoot.set(proof.publicInput.treeRoot);
-    this.counter.set(proof.publicInput.counter);
+    this.actionState.set(proof.publicInput.currentState.actionState);
+    this.treeRoot.set(proof.publicInput.currentState.treeRoot);
+    this.counter.set(proof.publicInput.currentState.counter);
   }
 
   @method popWrappingRequest(requestHash: Field, witness: QueueWitness) {
