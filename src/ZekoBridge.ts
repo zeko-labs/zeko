@@ -20,7 +20,7 @@ import {
   method,
   state,
 } from 'snarkyjs';
-import { hashAction, updateActionsState } from './utils';
+import { hashAction, updateActionsState } from './poseidon';
 
 export const TREE_HEIGHT = process.env.NODE_ENV !== 'test' ? 32 : 3;
 export const TREE_CAPACITY = new MerkleTree(TREE_HEIGHT).leafCount;
@@ -69,6 +69,57 @@ export class WrappingRequestAction extends Struct({
     );
   }
 
+  static buildBatch(
+    actions: WrappingRequestAction[],
+    oldState: ReducerState,
+    tree: MerkleTree
+  ) {
+    if (actions.length > BATCH_SIZE) {
+      throw new Error(
+        `Cannot build batch with more than ${BATCH_SIZE} actions`
+      );
+    }
+
+    let currentState = new ReducerState(oldState);
+
+    const witnesses = actions.map((action) => {
+      const request = new WrappingRequest({
+        id: currentState.counter,
+        amount: action.amount,
+        tokenId: action.tokenId,
+        receiver: action.receiver,
+      });
+
+      const w = new QueueWitness(tree.getWitness(request.index()));
+      tree.setLeaf(request.index(), request.hash());
+
+      currentState = new ReducerState({
+        actionState: updateActionsState(
+          currentState.actionState,
+          action.hash()
+        ),
+        treeRoot: tree.getRoot(),
+        counter: currentState.counter.add(1),
+      });
+
+      return new OptionalQueueWitness({
+        action,
+        w,
+        exists: Bool(true),
+      });
+    });
+
+    // Fill with empty witnesses
+    for (let i = witnesses.length; i < BATCH_SIZE; i++) {
+      witnesses.push(OptionalQueueWitness.empty());
+    }
+
+    return {
+      batch: new ActionsBatch({ witnesses }),
+      newState: currentState,
+    };
+  }
+
   static async buildReducerProof(
     actions: WrappingRequestAction[],
     oldState: ReducerState,
@@ -77,58 +128,28 @@ export class WrappingRequestAction extends Struct({
     const actionsCopy = actions.slice();
     let proof: ActionsReducerProof | undefined = undefined;
     let publicInput = new ReducerPublicInput({
-      currentState: new ReducerState(oldState),
+      newState: new ReducerState(oldState),
       initialState: new ReducerState(oldState),
     });
 
     while (actionsCopy.length > 0) {
       const batch = actionsCopy.splice(0, BATCH_SIZE);
 
-      const witnesses = batch.map((action) => {
-        const request = new WrappingRequest({
-          id: publicInput.currentState.counter,
-          amount: action.amount,
-          tokenId: action.tokenId,
-          receiver: action.receiver,
-        });
+      const { batch: witnessesBatch, newState } =
+        WrappingRequestAction.buildBatch(batch, publicInput.newState, tree);
 
-        const w = new QueueWitness(tree.getWitness(request.index()));
-        tree.setLeaf(request.index(), request.hash());
-
-        publicInput = new ReducerPublicInput({
-          currentState: new ReducerState({
-            actionState: updateActionsState(
-              publicInput.currentState.actionState,
-              action.hash()
-            ),
-            treeRoot: tree.getRoot(),
-            counter: publicInput.currentState.counter.add(1),
-          }),
-          initialState: publicInput.initialState,
-        });
-
-        return new OptionalQueueWitness({
-          action,
-          w,
-          exists: Bool(true),
-        });
+      publicInput = new ReducerPublicInput({
+        newState,
+        initialState: publicInput.initialState,
       });
-
-      // Fill with empty witnesses
-      for (let i = witnesses.length; i < BATCH_SIZE; i++) {
-        witnesses.push(OptionalQueueWitness.empty());
-      }
 
       proof =
         proof === undefined
-          ? await ActionsRecursiveReducer.first(
-              publicInput,
-              new ActionsBatch({ witnesses })
-            )
+          ? await ActionsRecursiveReducer.first(publicInput, witnessesBatch)
           : await ActionsRecursiveReducer.step(
               publicInput,
               proof,
-              new ActionsBatch({ witnesses })
+              witnessesBatch
             );
     }
 
@@ -236,7 +257,7 @@ export class ReducerState extends Struct({
 }
 
 export class ReducerPublicInput extends Struct({
-  currentState: ReducerState,
+  newState: ReducerState,
   initialState: ReducerState,
 }) {}
 
@@ -249,7 +270,7 @@ export const ActionsRecursiveReducer = Experimental.ZkProgram({
 
       method(publicInput: ReducerPublicInput, batch: ActionsBatch) {
         const newState = batch.reduce(publicInput.initialState);
-        publicInput.currentState.assertEquals(newState);
+        publicInput.newState.assertEquals(newState);
       },
     },
 
@@ -266,8 +287,8 @@ export const ActionsRecursiveReducer = Experimental.ZkProgram({
         publicInput.initialState.assertEquals(
           prevProof.publicInput.initialState
         );
-        const newState = batch.reduce(prevProof.publicInput.currentState);
-        publicInput.currentState.assertEquals(newState);
+        const newState = batch.reduce(prevProof.publicInput.newState);
+        publicInput.newState.assertEquals(newState);
       },
     },
   },
@@ -316,6 +337,26 @@ export class ZekoBridge extends SmartContract {
     this.reducer.dispatch(request);
   }
 
+  @method rollupRequests(batch: ActionsBatch) {
+    const treeRoot = this.treeRoot.getAndAssertEquals();
+    const counter = this.counter.getAndAssertEquals();
+    const actionState = this.actionState.getAndAssertEquals();
+
+    const initialState = new ReducerState({
+      actionState,
+      treeRoot,
+      counter,
+    });
+
+    const newState = batch.reduce(initialState);
+
+    this.account.actionState.assertEquals(newState.actionState);
+
+    this.actionState.set(newState.actionState);
+    this.treeRoot.set(newState.treeRoot);
+    this.counter.set(newState.counter);
+  }
+
   @method rollupRequestsWithProof(proof: ActionsReducerProof) {
     const treeRoot = this.treeRoot.getAndAssertEquals();
     const counter = this.counter.getAndAssertEquals();
@@ -326,14 +367,14 @@ export class ZekoBridge extends SmartContract {
     actionState.assertEquals(proof.publicInput.initialState.actionState);
 
     this.account.actionState.assertEquals(
-      proof.publicInput.currentState.actionState
+      proof.publicInput.newState.actionState
     );
 
     proof.verify();
 
-    this.actionState.set(proof.publicInput.currentState.actionState);
-    this.treeRoot.set(proof.publicInput.currentState.treeRoot);
-    this.counter.set(proof.publicInput.currentState.counter);
+    this.actionState.set(proof.publicInput.newState.actionState);
+    this.treeRoot.set(proof.publicInput.newState.treeRoot);
+    this.counter.set(proof.publicInput.newState.counter);
   }
 
   @method popWrappingRequest(requestHash: Field, witness: QueueWitness) {

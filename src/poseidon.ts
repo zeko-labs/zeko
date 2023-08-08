@@ -1,6 +1,6 @@
 import { Field, Poseidon } from 'snarkyjs';
 
-export const prefixToField = (prefix: string) => {
+const prefixToField = (prefix: string) => {
   if (prefix.length * 8 >= 255) throw Error('prefix too long');
   let bits = [...prefix]
     .map((char) => {

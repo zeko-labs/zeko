@@ -179,12 +179,10 @@ describe('ZekoBridge', () => {
     // Assert
 
     // Check that the zkapp state has been updated with the proof
-    expect(zkapp.treeRoot.get()).toEqual(
-      proof.publicInput.currentState.treeRoot
-    );
-    expect(zkapp.counter.get()).toEqual(proof.publicInput.currentState.counter);
+    expect(zkapp.treeRoot.get()).toEqual(proof.publicInput.newState.treeRoot);
+    expect(zkapp.counter.get()).toEqual(proof.publicInput.newState.counter);
     expect(zkapp.actionState.get()).toEqual(
-      proof.publicInput.currentState.actionState
+      proof.publicInput.newState.actionState
     );
 
     // Check that the tree root is correct
@@ -349,12 +347,10 @@ describe('ZekoBridge', () => {
     // Assert
 
     // Check that the zkapp state has been updated with the proof
-    expect(zkapp.treeRoot.get()).toEqual(
-      proof.publicInput.currentState.treeRoot
-    );
-    expect(zkapp.counter.get()).toEqual(proof.publicInput.currentState.counter);
+    expect(zkapp.treeRoot.get()).toEqual(proof.publicInput.newState.treeRoot);
+    expect(zkapp.counter.get()).toEqual(proof.publicInput.newState.counter);
     expect(zkapp.actionState.get()).toEqual(
-      proof.publicInput.currentState.actionState
+      proof.publicInput.newState.actionState
     );
 
     // Check that the tree root is correct
@@ -367,5 +363,103 @@ describe('ZekoBridge', () => {
     expect(zkapp.counter.get()).toEqual(Field(5));
 
     expect(zkapp.lastIndex()).toEqual(UInt64.from(0));
+  });
+
+  it('dispatches one wrapping request', async () => {
+    // Arrange
+    const amount = UInt64.from(5 * MINA);
+    const zkappBeforeBalance = Mina.getBalance(zkappAddress);
+
+    pendingActions.push(
+      new WrappingRequestAction({
+        amount,
+        tokenId: TokenId.default,
+        receiver: senderAddress,
+      })
+    );
+
+    // Act
+    const tx = await Mina.transaction(senderAddress, () => {
+      zkapp.createMinaWrappingRequest(pendingActions[0]);
+    });
+
+    await tx.prove();
+    await tx.sign([senderKey, zkappKey]).send();
+
+    // Assert
+
+    // Check that the zkapp's balance has increased by the amount of the three
+    // wrapping requests.
+    expect(Mina.getBalance(zkappAddress)).toEqual(
+      zkappBeforeBalance.add(amount)
+    );
+
+    // Check that the zkapp's action state has been updated to the correct value.
+    expect(zkapp.account.actionState.get()).toEqual(
+      WrappingRequestAction.getActionState(
+        pendingActions,
+        zkapp.actionState.get()
+      )
+    );
+
+    // Check that the dispatched actions are same as local pending actions.
+    expect(
+      (
+        await zkapp.reducer.fetchActions({
+          fromActionState: zkapp.actionState.get(),
+        })
+      ).flat()
+    ).toEqual(pendingActions);
+  });
+
+  it('rolls up actions without the proof', async () => {
+    // Arrange
+    const { batch, newState } = WrappingRequestAction.buildBatch(
+      pendingActions,
+      new ReducerState({
+        actionState: zkapp.actionState.get(),
+        treeRoot: zkapp.treeRoot.get(),
+        counter: zkapp.counter.get(),
+      }),
+      WrappingRequest.buildMerkleTree(requests)
+    );
+
+    pendingActions.reduce((counter, action) => {
+      requests.push(
+        new WrappingRequest({
+          id: counter,
+          ...action,
+        })
+      );
+      return counter.add(1);
+    }, zkapp.counter.get());
+
+    pendingActions = [];
+
+    // Act
+    const tx = await Mina.transaction(senderAddress, () => {
+      zkapp.rollupRequests(batch);
+    });
+
+    await tx.prove();
+    await tx.sign([senderKey, zkappKey]).send();
+
+    // Assert
+
+    // Check that the zkapp state has been updated with the proof
+    expect(zkapp.treeRoot.get()).toEqual(newState.treeRoot);
+    expect(zkapp.counter.get()).toEqual(newState.counter);
+    expect(zkapp.actionState.get()).toEqual(newState.actionState);
+
+    // Check that the tree root is correct
+    expect(zkapp.treeRoot.get()).toEqual(
+      WrappingRequest.buildMerkleTree(requests).getRoot()
+    );
+
+    // Check that indices are correct
+    expect(zkapp.firstIndex.get()).toEqual(Field(2));
+    expect(zkapp.counter.get()).toEqual(Field(6));
+
+    expect(zkapp.lastIndex()).toEqual(UInt64.from(1));
   });
 });
