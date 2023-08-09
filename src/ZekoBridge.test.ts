@@ -160,6 +160,8 @@ describe('ZekoBridge', () => {
       requests.push(
         new WrappingRequest({
           id: counter,
+          actionState:
+            requests.at(-1)?.getNextActionState() ?? Reducer.initialActionState,
           ...action,
         })
       );
@@ -328,6 +330,8 @@ describe('ZekoBridge', () => {
       requests.push(
         new WrappingRequest({
           id: counter,
+          actionState:
+            requests.at(-1)?.getNextActionState() ?? Reducer.initialActionState,
           ...action,
         })
       );
@@ -428,6 +432,8 @@ describe('ZekoBridge', () => {
       requests.push(
         new WrappingRequest({
           id: counter,
+          actionState:
+            requests.at(-1)?.getNextActionState() ?? Reducer.initialActionState,
           ...action,
         })
       );

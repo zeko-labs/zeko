@@ -27,6 +27,7 @@ export const TREE_CAPACITY = new MerkleTree(TREE_HEIGHT).leafCount;
 
 export class WrappingRequest extends Struct({
   id: Field,
+  actionState: Field,
   amount: UInt64,
   tokenId: Field,
   receiver: PublicKey,
@@ -37,6 +38,18 @@ export class WrappingRequest extends Struct({
 
   index() {
     return this.id.toBigInt() % TREE_CAPACITY;
+  }
+
+  toAction() {
+    return new WrappingRequestAction({
+      amount: this.amount,
+      tokenId: this.tokenId,
+      receiver: this.receiver,
+    });
+  }
+
+  getNextActionState() {
+    return updateActionsState(this.actionState, this.toAction().hash());
   }
 
   static buildMerkleTree(requests: WrappingRequest[]): MerkleTree {
@@ -85,6 +98,7 @@ export class WrappingRequestAction extends Struct({
     const witnesses = actions.map((action) => {
       const request = new WrappingRequest({
         id: currentState.counter,
+        actionState: currentState.actionState,
         amount: action.amount,
         tokenId: action.tokenId,
         receiver: action.receiver,
@@ -145,7 +159,7 @@ export class WrappingRequestAction extends Struct({
 
       proof =
         proof === undefined
-          ? await ActionsRecursiveReducer.first(publicInput, witnessesBatch)
+          ? await ActionsRecursiveReducer.init(publicInput, witnessesBatch)
           : await ActionsRecursiveReducer.step(
               publicInput,
               proof,
@@ -205,6 +219,7 @@ export class ActionsBatch extends Struct({
       );
       const request = new WrappingRequest({
         id: stateAux.counter,
+        actionState: stateAux.actionState,
         amount: action.amount,
         tokenId: action.tokenId,
         receiver: action.receiver,
@@ -265,7 +280,7 @@ export const ActionsRecursiveReducer = Experimental.ZkProgram({
   publicInput: ReducerPublicInput,
 
   methods: {
-    first: {
+    init: {
       privateInputs: [ActionsBatch],
 
       method(publicInput: ReducerPublicInput, batch: ActionsBatch) {
