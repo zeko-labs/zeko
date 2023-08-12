@@ -1,4 +1,4 @@
 [submodule "src/snarkyjs-bindings"]
 	path = src/bindings
 	url = git@github.com:dcSpark/mina-rollup.git
-	branch = bindings-berkeley
+	branch = rollup-bindings
