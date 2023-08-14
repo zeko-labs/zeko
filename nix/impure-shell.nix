@@ -19,8 +19,10 @@ pkgs.mkShell {
     ncurses
     rustup
     wasm-pack
+    wasm-bindgen-cli
     lmdb
     rosetta-cli
+    nodejs
   ];
   OPAMSWITCH = "mina";
   shellHook = ''
