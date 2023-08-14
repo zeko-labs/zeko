@@ -359,7 +359,10 @@ export class ZekoBridge extends SmartContract {
     // Assert the request is for a custom token
     request.tokenId.assertNotEquals(TokenId.default);
 
+    // Force the layout of the tree
+    this.approve(tokenAccountUpdate, AccountUpdate.Layout.StaticChildren(2));
     tokenAccountUpdate.publicKey.equals(this.address).assertFalse();
+
     const [au1, au2] = tokenAccountUpdate.children.accountUpdates;
 
     const senderUpdate = Provable.switch(
@@ -390,8 +393,6 @@ export class ZekoBridge extends SmartContract {
 
     senderUpdate.body.balanceChange.sgn.isPositive().assertFalse();
     receiverUpdate.body.balanceChange.sgn.isPositive().assertTrue();
-
-    this.approve(tokenAccountUpdate, AccountUpdate.Layout.StaticChildren(2));
 
     // Dispatch action
     this.reducer.dispatch(request);

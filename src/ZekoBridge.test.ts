@@ -37,7 +37,12 @@ describe('ZekoBridge', () => {
   let pendingActions: WrappingRequestAction[];
 
   beforeAll(async () => {
-    if (config.PROOFS_ENABLED) await ZekoBridge.compile();
+    await ActionsRecursiveReducer.compile();
+
+    if (config.PROOFS_ENABLED) {
+      await ExampleToken.compile();
+      await ZekoBridge.compile();
+    }
 
     const Local = Mina.LocalBlockchain({
       proofsEnabled: config.PROOFS_ENABLED,
@@ -57,8 +62,6 @@ describe('ZekoBridge', () => {
 
     requests = [];
     pendingActions = [];
-
-    await ActionsRecursiveReducer.compile();
   });
 
   it('deploys the `ZekoBridge` zkapp', async () => {
