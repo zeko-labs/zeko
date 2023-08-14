@@ -11,7 +11,7 @@ module type S = sig
 
   val with_ledger : depth:int -> f:(t -> 'a) -> 'a
 
-(*
+  (*
   module For_tests : sig
     val gen_account_location :
       ledger_depth:int -> Location.t Core.Quickcheck.Generator.t

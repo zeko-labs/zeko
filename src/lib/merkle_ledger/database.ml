@@ -8,10 +8,11 @@ module type Inputs_intf = sig
 
   module Location_binable : Hashable.S_binable with type t := Location.t
 
-  module Kvdb : Key_value_database.S
-    with type config := string
-     and type key := Bigstring.t
-     and type value := Bigstring.t
+  module Kvdb :
+    Key_value_database.S
+      with type config := string
+       and type key := Bigstring.t
+       and type value := Bigstring.t
 
   module Storage_locations : Intf.Storage_locations
 end
@@ -86,12 +87,7 @@ module Make (Inputs : Inputs_intf) :
           name
     in
     let kvdb = Kvdb.create directory in
-    { uuid
-    ; kvdb
-    ; depth
-    ; directory
-    ; detached_parent_signal = Ivar.create ()
-    }
+    { uuid; kvdb; depth; directory; detached_parent_signal = Ivar.create () }
 
   let create_checkpoint t ~directory_name () =
     let uuid = Uuid.create_random (Random.State.make_self_init ()) in
@@ -550,7 +546,7 @@ module Make (Inputs : Inputs_intf) :
   let set_hash mdb location new_hash =
     set_hash_batch mdb [ (location, new_hash) ]
 
-(*
+  (*
   module For_tests = struct
     let gen_account_location ~ledger_depth =
       let open Quickcheck.Let_syntax in

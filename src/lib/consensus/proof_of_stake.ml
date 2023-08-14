@@ -80,7 +80,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       (Float.of_int num_delegators) ;
     outer_table
 
-(*
+  (*
   let compute_delegatee_table_sparse_ledger keys ledger =
     compute_delegatee_table keys ~iter_accounts:(fun f ->
         Mina_ledger.Sparse_ledger.iteri ledger ~f:(fun i acct -> f i acct) )
@@ -292,7 +292,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                 ()
             | Ledger_db ledger ->
                 Mina_ledger.Ledger.Db.close ledger
-                (* FIXME File_system.rmrf location *)
+          (* FIXME File_system.rmrf location *)
 
           let ledger_subset keys ledger =
             let open Mina_ledger in
@@ -317,10 +317,10 @@ module Make_str (A : Wire_types.Concrete) = struct
               Public_key.Compressed.Table.t
           }
 
-(* FIXME
-        let delegators t key =
-          Public_key.Compressed.Table.find t.delegatee_table key
-*)
+        (* FIXME
+                let delegators t key =
+                  Public_key.Compressed.Table.find t.delegatee_table key
+        *)
 
         let to_yojson { ledger; delegatee_table } =
           `Assoc
@@ -387,7 +387,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       let staking_epoch_ledger_location (t : t) =
         !t.epoch_ledger_location ^ Uuid.to_string !t.epoch_ledger_uuids.staking
 
-(*
+      (*
       let next_epoch_ledger_location (t : t) =
         !t.epoch_ledger_location ^ Uuid.to_string !t.epoch_ledger_uuids.next
 *)
@@ -612,50 +612,50 @@ module Make_str (A : Wire_types.Concrete) = struct
         | Next_epoch_snapshot ->
             !t.next_epoch_snapshot <- v
 
-(* FIXME
-      let reset_snapshot ~context:(module Context : CONTEXT) (t : t) id
-          ~sparse_ledger =
-        let open Context in
-        let open Or_error.Let_syntax in
-        let module Ledger_transfer =
-          Mina_ledger.Ledger_transfer.From_sparse_ledger (Mina_ledger.Ledger.Db) in
-        let delegatee_table =
-          compute_delegatee_table_sparse_ledger
-            (current_block_production_keys t)
-            sparse_ledger
-        in
-        match id with
-        | Staking_epoch_snapshot ->
-            let location = staking_epoch_ledger_location t in
-            Snapshot.Ledger_snapshot.remove !t.staking_epoch_snapshot.ledger
-              ~location ;
-            let ledger =
-              Mina_ledger.Ledger.Db.create ~directory_name:location
-                ~depth:constraint_constants.ledger_depth ()
-            in
-            let%map (_ : Mina_ledger.Ledger.Db.t) =
-              Ledger_transfer.transfer_accounts ~src:sparse_ledger ~dest:ledger
-            in
-            !t.staking_epoch_snapshot <-
-              { delegatee_table
-              ; ledger = Snapshot.Ledger_snapshot.Ledger_db ledger
-              }
-        | Next_epoch_snapshot ->
-            let location = next_epoch_ledger_location t in
-            Snapshot.Ledger_snapshot.remove !t.next_epoch_snapshot.ledger
-              ~location ;
-            let ledger =
-              Mina_ledger.Ledger.Db.create ~directory_name:location
-                ~depth:constraint_constants.ledger_depth ()
-            in
-            let%map (_ : Mina_ledger.Ledger.Db.t) =
-              Ledger_transfer.transfer_accounts ~src:sparse_ledger ~dest:ledger
-            in
-            !t.next_epoch_snapshot <-
-              { delegatee_table
-              ; ledger = Snapshot.Ledger_snapshot.Ledger_db ledger
-              }
-*)
+      (* FIXME
+            let reset_snapshot ~context:(module Context : CONTEXT) (t : t) id
+                ~sparse_ledger =
+              let open Context in
+              let open Or_error.Let_syntax in
+              let module Ledger_transfer =
+                Mina_ledger.Ledger_transfer.From_sparse_ledger (Mina_ledger.Ledger.Db) in
+              let delegatee_table =
+                compute_delegatee_table_sparse_ledger
+                  (current_block_production_keys t)
+                  sparse_ledger
+              in
+              match id with
+              | Staking_epoch_snapshot ->
+                  let location = staking_epoch_ledger_location t in
+                  Snapshot.Ledger_snapshot.remove !t.staking_epoch_snapshot.ledger
+                    ~location ;
+                  let ledger =
+                    Mina_ledger.Ledger.Db.create ~directory_name:location
+                      ~depth:constraint_constants.ledger_depth ()
+                  in
+                  let%map (_ : Mina_ledger.Ledger.Db.t) =
+                    Ledger_transfer.transfer_accounts ~src:sparse_ledger ~dest:ledger
+                  in
+                  !t.staking_epoch_snapshot <-
+                    { delegatee_table
+                    ; ledger = Snapshot.Ledger_snapshot.Ledger_db ledger
+                    }
+              | Next_epoch_snapshot ->
+                  let location = next_epoch_ledger_location t in
+                  Snapshot.Ledger_snapshot.remove !t.next_epoch_snapshot.ledger
+                    ~location ;
+                  let ledger =
+                    Mina_ledger.Ledger.Db.create ~directory_name:location
+                      ~depth:constraint_constants.ledger_depth ()
+                  in
+                  let%map (_ : Mina_ledger.Ledger.Db.t) =
+                    Ledger_transfer.transfer_accounts ~src:sparse_ledger ~dest:ledger
+                  in
+                  !t.next_epoch_snapshot <-
+                    { delegatee_table
+                    ; ledger = Snapshot.Ledger_snapshot.Ledger_db ledger
+                    }
+      *)
 
       let next_epoch_ledger (t : t) =
         Snapshot.ledger @@ get_snapshot t Next_epoch_snapshot
@@ -709,7 +709,7 @@ module Make_str (A : Wire_types.Concrete) = struct
         ; total_currency = genesis_ledger_total_currency ~ledger
         }
 
-(*
+      (*
       let graphql_type () : ('ctx, Value.t option) Graphql_async.Schema.typ =
         let open Graphql_async in
         let open Schema in
@@ -973,7 +973,7 @@ module Make_str (A : Wire_types.Concrete) = struct
 
         val typ : (Mina_base.State_hash.var, t) Typ.t
 
-(*
+        (*
         type graphql_type
 
         val graphql_type : unit -> ('ctx, graphql_type) Graphql_async.Schema.typ
@@ -1011,7 +1011,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             ~var_to_hlist:Poly.to_hlist ~var_of_hlist:Poly.of_hlist
             ~value_to_hlist:Poly.to_hlist ~value_of_hlist:Poly.of_hlist
 
-(*
+        (*
         let graphql_type name =
           let open Graphql_async in
           let open Schema in
@@ -1085,16 +1085,16 @@ module Make_str (A : Wire_types.Concrete) = struct
 
         let null = Mina_base.State_hash.(of_hash zero)
 
-(* FIXME
-        open Graphql_async
-        open Schema
+        (* FIXME
+                open Graphql_async
+                open Schema
 
-        type graphql_type = string
+                type graphql_type = string
 
-        let graphql_type () = non_null string
+                let graphql_type () = non_null string
 
-        let resolve = to_base58_check
-*)
+                let resolve = to_base58_check
+        *)
       end
 
       module Staking = Make (T)
@@ -1584,7 +1584,8 @@ module Make_str (A : Wire_types.Concrete) = struct
             let module GS = Mina_numbers.Global_slot_since_hard_fork in
             let%bind prev_global_slot = small_positive_int in
             let%bind slot_diffs =
-              Core_kernel.List.gen_with_length num_global_slots_to_test gen_slot_diff
+              Core_kernel.List.gen_with_length num_global_slots_to_test
+                gen_slot_diff
             in
             let _, global_slots =
               List.fold slot_diffs ~init:(prev_global_slot, [])
@@ -2474,7 +2475,7 @@ module Make_str (A : Wire_types.Concrete) = struct
           }
       end
 
-(*
+      (*
       let graphql_type () : ('ctx, Value.t option) Graphql_async.Schema.typ =
         let open Graphql_async in
         let open Signature_lib_unix.Graphql_scalars in
@@ -2735,10 +2736,10 @@ module Make_str (A : Wire_types.Concrete) = struct
           }
     [@@deriving to_yojson]
 
-(* FIXME
-    let local_state_sync_count (s : local_state_sync) =
-      match s with One _ -> 1 | Both _ -> 2
-*)
+    (* FIXME
+        let local_state_sync_count (s : local_state_sync) =
+          match s with One _ -> 1 | Both _ -> 2
+    *)
 
     let required_local_state_sync ~constants
         ~(consensus_state : Consensus_state.Value.t) ~local_state =
@@ -2780,7 +2781,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                    ; staking = staking.expected_root
                    } ) )
 
-(*
+    (*
     let sync_local_state ~context:(module Context : CONTEXT) ~trust_system
         ~local_state ~glue_sync_ledger requested_syncs =
       let open Context in
@@ -3841,80 +3842,80 @@ module Make_str (A : Wire_types.Concrete) = struct
         in
         test_update constraint_constants_with_fork
 
-(* FIXME: uncomment
-      let%test_unit "vrf win rate" =
-        let constants = Lazy.force Constants.for_unit_tests in
-        let constraint_constants =
-          Genesis_constants.Constraint_constants.for_unit_tests
-        in
-        let previous_protocol_state_hash =
-          Mina_base.State_hash.(of_hash zero)
-        in
-        let previous_consensus_state =
-          Consensus_state.create_genesis
-            ~negative_one_protocol_state_hash:previous_protocol_state_hash
-            ~genesis_ledger:Genesis_ledger.t ~genesis_epoch_data
-            ~constraint_constants ~constants
-        in
-        let seed = previous_consensus_state.staking_epoch_data.seed in
-        let maybe_sk, account = Genesis_ledger.largest_account_exn () in
-        let private_key = Option.value_exn maybe_sk in
-        let public_key_compressed = Account.public_key account in
-        let total_stake =
-          genesis_ledger_total_currency ~ledger:Genesis_ledger.t
-        in
-        let block_producer_pubkeys =
-          Public_key.Compressed.Set.of_list [ public_key_compressed ]
-        in
-        let ledger = Lazy.force Genesis_ledger.t in
-        let delegatee_table =
-          compute_delegatee_table_genesis_ledger block_producer_pubkeys ledger
-        in
-        let epoch_snapshot =
-          { Local_state.Snapshot.delegatee_table
-          ; ledger = Genesis_epoch_ledger ledger
-          }
-        in
-        let balance = Balance.to_nanomina_int account.balance in
-        let total_stake_int = Currency.Amount.to_nanomina_int total_stake in
-        let stake_fraction =
-          float_of_int balance /. float_of_int total_stake_int
-        in
-        let expected = stake_fraction *. 0.75 in
-        let samples = 1000 in
-        let check i =
-          let global_slot = Mina_numbers.Global_slot_since_hard_fork.of_int i in
-          let%map result =
-            Interruptible.force
-              (Vrf.check
-                 ~context:(module Context)
-                 ~global_slot ~seed ~producer_private_key:private_key
-                 ~producer_public_key:public_key_compressed ~total_stake
-                 ~get_delegators:
-                   (Local_state.Snapshot.delegators epoch_snapshot) )
-          in
-          match Result.ok_exn result with Some _ -> 1 | None -> 0
-        in
-        let rec loop acc_count i =
-          match i < samples with
-          | true ->
-              let%bind count = check i in
-              loop (acc_count + count) (i + 1)
-          | false ->
-              return acc_count
-        in
-        let actual =
-          Async_kernel.block_on_async_exn (fun () -> loop 0 0)
-        in
-        let diff =
-          Float.abs (float_of_int actual -. (expected *. float_of_int samples))
-        in
-        let tolerance = 100. in
-        (* 100 is a reasonable choice for samples = 1000 and for very low likelihood of failure; this should be recalculated if sample count was to be adjusted *)
-        let within_tolerance = Float.(diff < tolerance) in
-        if not within_tolerance then
-          failwithf "actual vs. expected: %d vs %f" actual expected ()
-*)
+      (* FIXME: uncomment
+            let%test_unit "vrf win rate" =
+              let constants = Lazy.force Constants.for_unit_tests in
+              let constraint_constants =
+                Genesis_constants.Constraint_constants.for_unit_tests
+              in
+              let previous_protocol_state_hash =
+                Mina_base.State_hash.(of_hash zero)
+              in
+              let previous_consensus_state =
+                Consensus_state.create_genesis
+                  ~negative_one_protocol_state_hash:previous_protocol_state_hash
+                  ~genesis_ledger:Genesis_ledger.t ~genesis_epoch_data
+                  ~constraint_constants ~constants
+              in
+              let seed = previous_consensus_state.staking_epoch_data.seed in
+              let maybe_sk, account = Genesis_ledger.largest_account_exn () in
+              let private_key = Option.value_exn maybe_sk in
+              let public_key_compressed = Account.public_key account in
+              let total_stake =
+                genesis_ledger_total_currency ~ledger:Genesis_ledger.t
+              in
+              let block_producer_pubkeys =
+                Public_key.Compressed.Set.of_list [ public_key_compressed ]
+              in
+              let ledger = Lazy.force Genesis_ledger.t in
+              let delegatee_table =
+                compute_delegatee_table_genesis_ledger block_producer_pubkeys ledger
+              in
+              let epoch_snapshot =
+                { Local_state.Snapshot.delegatee_table
+                ; ledger = Genesis_epoch_ledger ledger
+                }
+              in
+              let balance = Balance.to_nanomina_int account.balance in
+              let total_stake_int = Currency.Amount.to_nanomina_int total_stake in
+              let stake_fraction =
+                float_of_int balance /. float_of_int total_stake_int
+              in
+              let expected = stake_fraction *. 0.75 in
+              let samples = 1000 in
+              let check i =
+                let global_slot = Mina_numbers.Global_slot_since_hard_fork.of_int i in
+                let%map result =
+                  Interruptible.force
+                    (Vrf.check
+                       ~context:(module Context)
+                       ~global_slot ~seed ~producer_private_key:private_key
+                       ~producer_public_key:public_key_compressed ~total_stake
+                       ~get_delegators:
+                         (Local_state.Snapshot.delegators epoch_snapshot) )
+                in
+                match Result.ok_exn result with Some _ -> 1 | None -> 0
+              in
+              let rec loop acc_count i =
+                match i < samples with
+                | true ->
+                    let%bind count = check i in
+                    loop (acc_count + count) (i + 1)
+                | false ->
+                    return acc_count
+              in
+              let actual =
+                Async_kernel.block_on_async_exn (fun () -> loop 0 0)
+              in
+              let diff =
+                Float.abs (float_of_int actual -. (expected *. float_of_int samples))
+              in
+              let tolerance = 100. in
+              (* 100 is a reasonable choice for samples = 1000 and for very low likelihood of failure; this should be recalculated if sample count was to be adjusted *)
+              let within_tolerance = Float.(diff < tolerance) in
+              if not within_tolerance then
+                failwithf "actual vs. expected: %d vs %f" actual expected ()
+      *)
 
       (* Consensus selection tests. *)
 

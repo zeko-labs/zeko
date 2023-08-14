@@ -746,7 +746,7 @@ module type S = sig
       -> local_state:Local_state.t
       -> local_state_sync option
 
-(*
+    (*
     (**
      * Synchronize local state over the network.
 
@@ -769,7 +769,7 @@ module type S = sig
             -> unit )
       -> local_state_sync
       -> unit Deferred.Or_error.t
-*)
+     *)
 
     module Make_state_hooks
         (Blockchain_state : Blockchain_state)

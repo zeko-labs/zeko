@@ -116,10 +116,10 @@ module Rules = struct
           (Frozen_ledger_hash0.var_to_field txn_snark.target.first_pass_ledger)
           (Frozen_ledger_hash0.var_to_field txn_snark.source.second_pass_ledger)
       in
-			let rec undefined : unit -> 'a = fun () -> undefined () in
-		  let account_update =
-		    new Zkapps_examples.account_update ~token_id ~public_key ~vk_hash ()
-		  in
+      let rec undefined : unit -> 'a = fun () -> undefined () in
+      let account_update =
+        new Zkapps_examples.account_update ~token_id ~public_key ~vk_hash ()
+      in
       account_update#set_prev_state 0 prev_state_raw ;
       account_update#set_state 0 next_state_raw ;
       let open Pickles.Inductive_rule in
@@ -147,8 +147,7 @@ module Make (T : sig
 end) =
 struct
   let tag, cache_handle, p, Pickles.Provers.[ init_; step_ ] =
-    Zkapps_examples.compile_promise ()
-      ~cache:Cache_dir.cache
+    Zkapps_examples.compile_promise () ~cache:Cache_dir.cache
       ~auxiliary_typ:Impl.Typ.unit
       ~branches:(module Nat.N2)
       ~max_proofs_verified:(module Nat.N1)

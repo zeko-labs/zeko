@@ -108,8 +108,7 @@ module Make (Inputs : Inputs_intf.S) = struct
     let unset_parent ?(trigger_signal = true) ~loc t =
       assert (Result.is_ok t.parent) ;
       t.parent <- Error loc ;
-      if trigger_signal then
-        Ivar.fill_if_empty t.detached_parent_signal () ;
+      if trigger_signal then Ivar.fill_if_empty t.detached_parent_signal () ;
       t
 
     let assert_is_attached t =

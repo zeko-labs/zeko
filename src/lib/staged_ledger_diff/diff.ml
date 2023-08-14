@@ -334,8 +334,8 @@ module Make_str (A : Wire_types.Concrete) = struct
   let validate_commands (t : t)
       ~(check :
             User_command.t With_status.t list
-         -> (User_command.Valid.t list, 'e) Result.t Deferred.Or_error.t
-         ) : (With_valid_signatures.t, 'e) Result.t Deferred.Or_error.t =
+         -> (User_command.Valid.t list, 'e) Result.t Deferred.Or_error.t ) :
+      (With_valid_signatures.t, 'e) Result.t Deferred.Or_error.t =
     let map t ~f = Deferred.Or_error.map t ~f:(Result.map ~f) in
     let validate cs =
       map (check cs)

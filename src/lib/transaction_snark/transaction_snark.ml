@@ -4825,8 +4825,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                     (Snarky_backendless.Request.With { request; respond }) =
                   match request with _ -> respond Unhandled
                 in
-                let%map.Deferred (), (), (pi : Pickles.Side_loaded.Proof.t)
-                    =
+                let%map.Deferred (), (), (pi : Pickles.Side_loaded.Proof.t) =
                   prover ~handler tx_statement
                 in
                 ( { body = simple_snapp_account_update.body

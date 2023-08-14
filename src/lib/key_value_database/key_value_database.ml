@@ -69,14 +69,15 @@ module type S = sig
   (* an association list, sorted by key *)
 end
 
-module Make_mock
-    (Key : sig
-      type t
-      include Hashable.S with type t := t
-      val sexp_of_t : t -> Sexp.t
-    end) (Value : sig
-      type t [@@deriving sexp]
-    end) :
+module Make_mock (Key : sig
+  type t
+
+  include Hashable.S with type t := t
+
+  val sexp_of_t : t -> Sexp.t
+end) (Value : sig
+  type t [@@deriving sexp]
+end) :
   S
     with type t = Value.t Key.Table.t
      and type key := Key.t
@@ -112,6 +113,8 @@ module Make_mock
 
   let get_uuid _ = raise (Failure "no mock UUID")
 
-  let create_checkpoint _ _ = raise (Failure "unimplemented mock create_checkpoint")
+  let create_checkpoint _ _ =
+    raise (Failure "unimplemented mock create_checkpoint")
+
   let make_checkpoint _ _ = raise (Failure "unimplemented mock make_checkpoint")
 end
