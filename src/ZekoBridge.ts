@@ -352,6 +352,51 @@ export class ZekoBridge extends SmartContract {
     this.reducer.dispatch(request);
   }
 
+  @method createTokenWrappingRequest(
+    request: WrappingRequestAction,
+    tokenAccountUpdate: AccountUpdate
+  ) {
+    // Assert the request is for a custom token
+    request.tokenId.assertNotEquals(TokenId.default);
+
+    tokenAccountUpdate.publicKey.equals(this.address).assertFalse();
+    const [au1, au2] = tokenAccountUpdate.children.accountUpdates;
+
+    const senderUpdate = Provable.switch(
+      [
+        au1.body.publicKey.equals(this.sender),
+        au2.body.publicKey.equals(this.sender),
+      ],
+      AccountUpdate,
+      [au1, au2]
+    );
+    senderUpdate.publicKey.assertEquals(this.sender);
+    senderUpdate.tokenId.assertEquals(request.tokenId);
+
+    const receiverUpdate = Provable.switch(
+      [
+        au1.body.publicKey.equals(this.address),
+        au2.body.publicKey.equals(this.address),
+      ],
+      AccountUpdate,
+      [au1, au2]
+    );
+    receiverUpdate.publicKey.assertEquals(this.address);
+    receiverUpdate.tokenId.assertEquals(request.tokenId);
+
+    request.amount.assertGreaterThan(UInt64.zero);
+    request.amount.assertEquals(senderUpdate.body.balanceChange.magnitude);
+    request.amount.assertEquals(receiverUpdate.body.balanceChange.magnitude);
+
+    senderUpdate.body.balanceChange.sgn.isPositive().assertFalse();
+    receiverUpdate.body.balanceChange.sgn.isPositive().assertTrue();
+
+    this.approve(tokenAccountUpdate, AccountUpdate.Layout.StaticChildren(2));
+
+    // Dispatch action
+    this.reducer.dispatch(request);
+  }
+
   @method rollupRequests(batch: ActionsBatch) {
     const treeRoot = this.treeRoot.getAndAssertEquals();
     const counter = this.counter.getAndAssertEquals();
