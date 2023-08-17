@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.18;
 
-import {Transaction, MinaPublicKey, HashedMinaPublicKey, RollupBatch} from "./Types.sol";
+import {Transaction, MinaCommand, MinaPublicKey, MinaSchnorrSignature, HashedMinaPublicKey, RollupBatch} from "./Types.sol";
 
 /**
  * @title State
@@ -76,6 +76,10 @@ abstract contract State {
      * hash of the batch fields.
      */
     mapping(bytes32 => RollupBatch) internal batches;
+
+    MinaCommand[] public commands;
+    mapping(uint256 => MinaSchnorrSignature[]) public commandSignatures;
+    mapping(uint256 => mapping(HashedMinaPublicKey => bool)) public validatorSignedCommand;
 
     address public sequencer;
 }

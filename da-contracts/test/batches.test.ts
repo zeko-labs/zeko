@@ -12,7 +12,7 @@ function randomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min) + min);
 }
 
-describe("DataAvailability", () => {
+describe("Batches DataAvailability", () => {
   before(async () => {
     await isSnarkyjsReady;
   });

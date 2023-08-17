@@ -19,6 +19,13 @@ contract DataAvailability is MinaMultisig {
         uint256 signatureCount
     );
 
+    event CommandPosted(uint256 indexed index, MinaCommand command);
+    event CommandSigned(
+        uint256 indexed index,
+        HashedMinaPublicKey indexed publicKey,
+        uint256 signatureCount
+    );
+
     modifier onlySequencer() {
         require(msg.sender == sequencer, "Only sequencer can call this function");
         _;
@@ -26,6 +33,45 @@ contract DataAvailability is MinaMultisig {
 
     function setSequencer(address sequencer_) external onlyMultisig {
         sequencer = sequencer_;
+    }
+
+    function postCommand(MinaCommand memory command) external onlySequencer {
+        commands.push(command);
+        emit CommandPosted(commands.length - 1, command);
+    }
+
+    function addCommandSignature(
+        uint256 commandIndex,
+        bytes32 commandCommitment,
+        MinaSchnorrSignature calldata signature
+    ) external validatorExists(hashPublicKey(signature.publicKey)) {
+        require(
+            !validatorSignedCommand[commandIndex][hashPublicKey(signature.publicKey)],
+            "Validator already signed"
+        );
+
+        bytes32[] memory sigData = new bytes32[](1);
+        sigData[0] = commandCommitment;
+
+        bool verified = signer.verify(
+            NetworkId.TESTNET,
+            signature.publicKey.x,
+            signature.publicKey.y,
+            signature.rx,
+            signature.s,
+            sigData
+        );
+
+        require(verified, "Invalid signature");
+
+        commandSignatures[commandIndex].push(signature);
+        validatorSignedCommand[commandIndex][hashPublicKey(signature.publicKey)] = true;
+
+        emit CommandSigned(
+            commandIndex,
+            hashPublicKey(signature.publicKey),
+            commandSignatures[commandIndex].length
+        );
     }
 
     function proposeBatch(
@@ -95,22 +141,13 @@ contract DataAvailability is MinaMultisig {
         return (batches[ledgerHash].previousLedgerHash, batches[ledgerHash].commands);
     }
 
-    // function getBatchFields(bytes32 ledgerHash) external view returns (bytes32[] memory) {
-    //     require(batches[ledgerHash].commands.length > 0, "Batch does not exist");
+    function getCommandSignatures(
+        uint256 commandIndex
+    ) external view returns (MinaSchnorrSignature[] memory) {
+        return commandSignatures[commandIndex];
+    }
 
-    //     return batchToFields(batches[ledgerHash].previousLedgerHash, batches[ledgerHash].commands);
-    // }
-
-    // function batchToFields(
-    //     bytes32 ledgerHash,
-    //     bytes32 previousLedgerHash,
-    //     MinaCommand[] memory commands
-    // ) private pure returns (bytes32[] memory) {
-    //     bytes memory data = abi.encodePacked(ledgerHash, previousLedgerHash);
-
-    //     for (uint256 i = 0; i < commands.length; i++)
-    //         data = bytes.concat(data, bytes1(uint8(commands[i].commandType)), commands[i].data);
-
-    //     return data.toFields();
-    // }
+    function getCommandData(uint256 commandIndex) external view returns (MinaCommand memory) {
+        return commands[commandIndex];
+    }
 }
