@@ -2,9 +2,9 @@ import { ethers } from "ethers";
 import { Field, Group, PublicKey, Signature } from "snarkyjs";
 import { abi as DALayerAbi } from "./artifacts/DataAvailability.json";
 import config from "./config";
-import { Batch } from "./rollup";
+import { Batch, Transaction } from "./rollup";
 import { DataAvailability } from "./typechain-types";
-import { MinaCommandStruct } from "./typechain-types/contracts/DataAvailability";
+import { CommandPostedEvent, MinaCommandStruct } from "./typechain-types/contracts/DataAvailability";
 
 export const provider = new ethers.providers.WebSocketProvider(config.DA_LAYER_WEBSOCKET_URL);
 
@@ -66,6 +66,59 @@ export const postBatch = async (batch: Batch, previousLedgerHash: string) => {
       if (signatureCount < quorum || signedLedgerHash !== batch.ledgerHash) return;
 
       const solSignatures = await daLayerContract.getBatchSignatures(batch.ledgerHash);
+
+      const signatures = solSignatures.map((sig) => {
+        const pubKeyGroup = Group.fromJSON({
+          x: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.x.slice(2), "hex"))).toString(),
+          y: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.y.slice(2), "hex"))).toString(),
+        });
+
+        if (pubKeyGroup === null) throw new Error("Invalid public key");
+
+        const publicKey = PublicKey.fromGroup(pubKeyGroup);
+
+        const signature = Signature.fromJSON({
+          r: Field.fromBytes(Array.from(Buffer.from(sig.rx.slice(2), "hex"))).toString(),
+          s: Field.fromBytes(Array.from(Buffer.from(sig.s.slice(2), "hex"))).toString(),
+        });
+
+        return {
+          publicKey,
+          signature,
+        };
+      });
+
+      resolve(signatures);
+    });
+  });
+};
+
+export const postCommand = async (command: Transaction) => {
+  const tx = await daLayerContract.postCommand({
+    commandType: command.commandType,
+    data: Buffer.from(command.id, "base64"),
+  });
+
+  const receipt = await tx.wait();
+
+  const commandPostedEvent = receipt.events?.find(({ event }) => event === "CommandPosted") as CommandPostedEvent;
+
+  const commandIndex = commandPostedEvent.args.index;
+
+  console.log(`Command posted with id: ${command.id.slice(0, 8)}...`);
+
+  const quorum = await daLayerContract.quorum();
+
+  return new Promise<
+    {
+      publicKey: PublicKey;
+      signature: Signature;
+    }[]
+  >((resolve) => {
+    daLayerContract.on("CommandSigned", async (index, _, signatureCount) => {
+      if (signatureCount < quorum || !commandIndex.eq(index)) return;
+
+      const solSignatures = await daLayerContract.getCommandSignatures(commandIndex);
 
       const signatures = solSignatures.map((sig) => {
         const pubKeyGroup = Group.fromJSON({

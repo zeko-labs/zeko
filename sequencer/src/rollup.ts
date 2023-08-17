@@ -1,6 +1,6 @@
 import { ethers } from "ethers";
 import { Base58Encodings, Field, FieldConst, Ledger, Mina, MlPublicKey, Signature } from "snarkyjs";
-import { fetchBatches, postBatch } from "./daLayer";
+import { fetchBatches, postBatch, postCommand } from "./daLayer";
 import { Account, SendPaymentInput, ZkappCommandInput } from "./generated/graphql";
 import { GenesisAccount } from "./genesis";
 import { MinaEncoding, convAuthRequiredToGqlType, fieldToHex } from "./utils";
@@ -243,9 +243,16 @@ export class Rollup {
 
     this.updateNetworkState();
 
-    this.stagedTransactions.push({
+    const tx = {
       ...result,
       commandType: CommandType.ZkappCommand,
+    };
+
+    this.stagedTransactions.push(tx);
+
+    setImmediate(async () => {
+      const signatures = await postCommand(tx);
+      console.log(`Signatures collected for: ${tx.id.slice(0, 8)}..., ${signatures.length}`);
     });
 
     return result;
@@ -269,9 +276,16 @@ export class Rollup {
 
     this.updateNetworkState();
 
-    this.stagedTransactions.push({
+    const tx = {
       ...result,
       commandType: CommandType.SignedCommand,
+    };
+
+    this.stagedTransactions.push(tx);
+
+    setImmediate(async () => {
+      const signatures = await postCommand(tx);
+      console.log(`Signatures collected for: ${tx.id.slice(0, 8)}..., ${signatures.length}`);
     });
 
     return result;
