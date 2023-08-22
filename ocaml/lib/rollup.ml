@@ -290,9 +290,6 @@ let rollup =
                            return merged'
                        | Error e ->
                            Error.raise e )
-                   (*
-                      let%bind r =
-                   *)
                    | None ->
                        return next ) )
 
