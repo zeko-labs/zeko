@@ -147,7 +147,7 @@ module Make (T : sig
 end) =
 struct
   let tag, cache_handle, p, Pickles.Provers.[ init_; step_ ] =
-    Zkapps_examples.compile_promise () ~cache:Cache_dir.cache
+    Zkapps_examples.compile () ~cache:Cache_dir.cache
       ~auxiliary_typ:Impl.Typ.unit
       ~branches:(module Nat.N2)
       ~max_proofs_verified:(module Nat.N1)
