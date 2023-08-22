@@ -120,7 +120,7 @@ let rollup =
             { body; authorization = Signature Mina_base.Signature.dummy }
           in
           object%js
-            val account_update = acup
+            val account_update : Js.js_string Js.t = Js.string @@ Yojson.Safe.to_string @@ Account_update.to_yojson acup
 
             val rollup : t =
               object%js
