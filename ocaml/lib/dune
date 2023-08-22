@@ -2,6 +2,8 @@
  (name snarky_js_bindings_lib)
  (libraries
   ;; rollup ;;
+  async_kernel
+  async_js
   transaction_snark
   zkapps_rollup
   mina_state
@@ -75,4 +77,4 @@
  (instrumentation
   (backend bisect_ppx))
  (preprocess
-  (pps ppx_custom_printf ppx_version js_of_ocaml-ppx)))
+  (pps ppx_jane ppx_custom_printf ppx_version js_of_ocaml-ppx)))
