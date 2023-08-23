@@ -118,4 +118,13 @@ export default [
       },
     ],
   },
+  {
+    name: 'Async_js',
+    props: [
+      {
+        name: 'init',
+        type: 'function',
+      },
+    ],
+  },
 ];

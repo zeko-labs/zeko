@@ -12,19 +12,19 @@ type t =
   ; sk : S.Private_key.t Js.readonly_prop
   ; slot : int Js.prop
   ; name : Js.js_string Js.t Js.readonly_prop
-  ; txn_snark : Transaction_snark.t Deferred.t option Js.prop >
+  ; txnSnark : Transaction_snark.t Deferred.t option Js.prop >
   Js.t
 
 type user_command =
   < signature : Js.js_string Js.t Js.readonly_prop
-  ; from_base58 : Js.js_string Js.t Js.readonly_prop
-  ; to_base58 : Js.js_string Js.t Js.readonly_prop
+  ; fromBase58 : Js.js_string Js.t Js.readonly_prop
+  ; toBase58 : Js.js_string Js.t Js.readonly_prop
   ; amount : Js.js_string Js.t Js.readonly_prop
   ; fee : Js.js_string Js.t Js.readonly_prop
-  ; valid_until : Js.js_string Js.t Js.readonly_prop
+  ; validUntil : Js.js_string Js.t Js.readonly_prop
   ; nonce : Js.js_string Js.t Js.readonly_prop
   ; memo : Js.js_string Js.t Js.readonly_prop
-  ; account_creation_fee : Js.js_string Js.t Js.readonly_prop >
+  ; accountCreationFee : Js.js_string Js.t Js.readonly_prop >
   Js.t
 
 module Step = Pickles.Impls.Step
@@ -62,9 +62,21 @@ let rollup =
         Initialise a rollup with the given name.
         Returns an empty ledger, the keys for the account, and the account update.
         *)
-        method create_zkapp name =
+        method createZkapp name =
           let pk, sk = gen_keys () in
           let l = L.create ~depth:constraint_constants.ledger_depth () in
+
+          let account_id =
+            Account_id.of_public_key @@ S.Public_key.decompress_exn
+            @@ S.Public_key.Compressed.of_base58_check_exn
+                 "B62qnPZzpnQWA8FLBn9qqJqPTeGuDdHTZgpmEMUNFCq8fWCRSqJS6Jd"
+          in
+          let balance = Unsigned.UInt64.of_int64 1_000_000_000_000L in
+          let account =
+            Account.create account_id (Currency.Balance.of_uint64 balance)
+          in
+          L.create_new_account_exn l account_id account ;
+
           let acup : Account_update.t =
             let body =
               { Account_update.Body.dummy with
@@ -120,7 +132,9 @@ let rollup =
             { body; authorization = Signature Mina_base.Signature.dummy }
           in
           object%js
-            val account_update : Js.js_string Js.t = Js.string @@ Yojson.Safe.to_string @@ Account_update.to_yojson acup
+            val accountUpdate : Js.js_string Js.t =
+              Js.string @@ Yojson.Safe.to_string
+              @@ Account_update.to_yojson acup
 
             val rollup : t =
               object%js
@@ -132,22 +146,21 @@ let rollup =
 
                 val mutable slot = 0
 
-                val mutable txn_snark = None
+                val mutable txnSnark = None
               end
           end
 
         (*
         Applies a user command to a ledger immediately with the specified public key.
         *)
-        method apply_user_command (rollup : t) (user_command_js : user_command)
-            =
+        method applyUserCommand (rollup : t) (user_command_js : user_command) =
           let from =
             S.Public_key.Compressed.of_base58_check_exn
-            @@ Js.to_string user_command_js##.from_base58
+            @@ Js.to_string user_command_js##.fromBase58
           in
           let to_ =
             S.Public_key.Compressed.of_base58_check_exn
-            @@ Js.to_string user_command_js##.to_base58
+            @@ Js.to_string user_command_js##.toBase58
           in
           let payload =
             Mina_base.Signed_command.Payload.create
@@ -155,7 +168,7 @@ let rollup =
               ~fee_payer_pk:from
               ~valid_until:
                 ( Option.some @@ Mina_numbers.Global_slot_since_genesis.of_string
-                @@ Js.to_string user_command_js##.valid_until )
+                @@ Js.to_string user_command_js##.validUntil )
               ~nonce:
                 ( Mina_numbers.Global_slot_legacy.of_string
                 @@ Js.to_string user_command_js##.nonce )
@@ -170,13 +183,13 @@ let rollup =
                        @@ Js.to_string user_command_js##.amount
                    } )
           in
-          let signature_kind =
-            Mina_signature_kind.Other_network (Js.to_string rollup##.name)
-          in
+          (* let signature_kind =
+               Mina_signature_kind.Other_network (Js.to_string rollup##.name)
+             in *)
           let user_command =
             match
               Mina_base.Signed_command.create_with_signature_checked
-                ~signature_kind
+                ~signature_kind:Mina_signature_kind.Testnet
                 ( Mina_base.Signature.of_base58_check_exn
                 @@ Js.to_string user_command_js##.signature )
                 from payload
@@ -205,8 +218,8 @@ let rollup =
             | Error e ->
                 Error.raise e
           in
-          let prev = rollup##.txn_snark in
-          rollup##.txn_snark :=
+          let prev = rollup##.txnSnark in
+          rollup##.txnSnark :=
             Some
               (Async_kernel.schedule' (fun () ->
                    let target = L.merkle_root l in
@@ -297,7 +310,7 @@ let rollup =
           let pk =
             S.Public_key.compress @@ S.Public_key.of_private_key_exn rollup##.sk
           in
-          match rollup##.txn_snark with
+          match rollup##.txnSnark with
           | None ->
               raise (Failure "nothing to commit")
           | Some txn ->
@@ -320,7 +333,7 @@ let rollup =
                         Zkapp_command.Digest.Forest.to_yojson
                    @@ Zkapp_command.Call_forest.(cons_tree acup []) )
 
-        method get_account (rollup : t) (pk : S.Public_key.Compressed.t)
+        method getAccount (rollup : t) (pk : S.Public_key.Compressed.t)
             (token : Step.field) =
           let module Let_syntax = Option in
           let acid = Account_id.create pk (Token_id.of_field token) in
