@@ -7,27 +7,27 @@ type t
 
 type user_command =
   < signature : Js.js_string Js.t Js.readonly_prop
-  ; from_base58 : Js.js_string Js.t Js.readonly_prop
-  ; to_base58 : Js.js_string Js.t Js.readonly_prop
+  ; fromBase58 : Js.js_string Js.t Js.readonly_prop
+  ; toBase58 : Js.js_string Js.t Js.readonly_prop
   ; amount : Js.js_string Js.t Js.readonly_prop
   ; fee : Js.js_string Js.t Js.readonly_prop
-  ; valid_until : Js.js_string Js.t Js.readonly_prop
+  ; validUntil : Js.js_string Js.t Js.readonly_prop
   ; nonce : Js.js_string Js.t Js.readonly_prop
   ; memo : Js.js_string Js.t Js.readonly_prop
-  ; account_creation_fee : Js.js_string Js.t Js.readonly_prop >
+  ; accountCreationFee : Js.js_string Js.t Js.readonly_prop >
   Js.t
 
 val rollup :
   < compile :
-      < apply_user_command : t -> user_command -> unit Js.meth
+      < applyUserCommand : t -> user_command -> unit Js.meth
       ; commit : t -> (Js.js_string Js.t -> unit) -> unit Deferred.t Js.meth
-      ; create_zkapp :
+      ; createZkapp :
              Js.js_string Js.t
-          -> < account_update : Js.js_string Js.t Js.readonly_prop
+          -> < accountUpdate : Js.js_string Js.t Js.readonly_prop
              ; rollup : t Js.readonly_prop >
              Js.t
              Js.meth
-      ; get_account : t -> Account.key -> Step.field -> 'a option Js.meth
+      ; getAccount : t -> Account.key -> Step.field -> 'a option Js.meth
       ; vk : Side_loaded_verification_key.t Js.readonly_prop >
       Js.t
       Js.meth >
