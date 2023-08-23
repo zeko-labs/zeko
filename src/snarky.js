@@ -1,13 +1,12 @@
-import './bindings/crypto/bindings.js';
-import { getSnarky, withThreadPool } from './bindings/js/wrapper.js';
-import snarkySpec from './bindings/js/snarky-class-spec.js';
 import { proxyClasses } from './bindings/js/proxy.js';
+import snarkySpec from './bindings/js/snarky-class-spec.js';
+import { getSnarky, withThreadPool } from './bindings/js/wrapper.js';
 
-export { Snarky, Ledger, Pickles, Test, Rollup, withThreadPool };
+export { Async_js, Ledger, Pickles, Rollup, Snarky, Test, withThreadPool };
 let isReadyBoolean = true;
 let isItReady = () => isReadyBoolean;
 
-let { Snarky, Ledger, Pickles, Test, Rollup } = proxyClasses(
+let { Snarky, Ledger, Pickles, Test, Rollup, Async_js } = proxyClasses(
   getSnarky,
   isItReady,
   snarkySpec

@@ -1,21 +1,31 @@
 import type { Account as JsonAccount } from './bindings/mina-transaction/gen/transaction-json.js';
+import type { Bool, BoolVar } from './lib/bool.js';
 import type { Field, FieldConst, FieldVar } from './lib/field.js';
-import type { BoolVar, Bool } from './lib/bool.js';
-import type { ScalarConst } from './lib/scalar.js';
 import type {
   MlArray,
-  MlTuple,
-  MlList,
-  MlOption,
   MlBool,
   MlBytes,
+  MlList,
+  MlOption,
+  MlTuple,
 } from './lib/ml/base.js';
 import type { MlHashInput } from './lib/ml/conversion.js';
+import type { ScalarConst } from './lib/scalar.js';
 
-export { ProvablePure, Provable, Ledger, Pickles, Gate };
+export {
+  Async_js,
+  Gate,
+  Ledger,
+  Pickles,
+  Provable,
+  ProvablePure,
+  Rollup,
+  RollupMethods,
+  UserCommand,
+};
 
 // internal
-export { Snarky, Test, JsonGate, MlPublicKey, MlPublicKeyVar };
+export { JsonGate, MlPublicKey, MlPublicKeyVar, Snarky, Test };
 
 /**
  * `Provable<T>` is the general circuit type interface in o1js. `Provable<T>` interface describes how a type `T` is made up of {@link Field} elements and "auxiliary" (non-provable) data.
@@ -574,4 +584,48 @@ declare const Pickles: {
   ) => [0 | 1 | 2, Pickles.Proof];
 
   proofToBase64Transaction: (proof: Pickles.Proof) => string;
+};
+
+declare const Async_js: {
+  init(): void;
+};
+
+type UserCommand = {
+  signature: string;
+  fromBase58: string;
+  toBase58: string;
+  amount: string;
+  fee: string;
+  validUntil: string;
+  nonce: string;
+  memo: string;
+  accountCreationFee: string;
+};
+
+type RollupInstance = unknown;
+
+type RollupMethods = {
+  vk: unknown;
+
+  createZkapp(name: unknown): {
+    accountUpdate: string;
+    rollup: RollupInstance;
+  };
+
+  applyUserCommand(rollup: RollupInstance, userCommand: UserCommand): void;
+
+  commit(
+    rollup: RollupInstance,
+    callback: (accountUpdate: string) => void
+  ): Promise<void>;
+
+  getAccount(
+    rollup: RollupInstance,
+    pk: MlPublicKey,
+    token: FieldConst
+  ): string;
+};
+
+declare const Rollup: {
+  compile(): RollupMethods;
 };
