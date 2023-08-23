@@ -17,7 +17,7 @@ type link = Blake2.t
 
 let link_size = Blake2.digest_size_in_bytes
 
-let absolute_max_links_per_block = Stdint.Uint16.(to_int max_int)
+let absolute_max_links_per_block = 65535
 
 (** A bitswap block schema consists of a series of branch-blocks and leaf-blocks.
  *  A branch-block contains both links to successive blocks, as well as data. A
