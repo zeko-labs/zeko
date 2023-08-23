@@ -273,9 +273,10 @@ let create ~(constraint_constants : Genesis_constants.Constraint_constants.t)
   let checkpoint_window_slots_per_year, checkpoint_window_size_in_slots =
     let per_year = 12 in
     let slots_per_year =
-      let one_year_ms = Time.Span.(to_ms (of_day 365.)) |> Float.to_int in
-      one_year_ms
-      / (Block_time.Span.to_ms constants.slot_duration_ms |> Int64.to_int_exn)
+      let one_year_ms = Time.Span.(to_ms (of_day 365.)) in
+      Float.( / ) one_year_ms
+        (Block_time.Span.to_ms constants.slot_duration_ms |> Int64.to_float)
+      |> Float.to_int
     in
     let size_in_slots =
       assert (slots_per_year mod per_year = 0) ;
