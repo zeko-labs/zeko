@@ -116,7 +116,6 @@ module Rules = struct
           (Frozen_ledger_hash0.var_to_field txn_snark.target.first_pass_ledger)
           (Frozen_ledger_hash0.var_to_field txn_snark.source.second_pass_ledger)
       in
-      let rec undefined : unit -> 'a = fun () -> undefined () in
       let account_update =
         new Zkapps_examples.account_update ~token_id ~public_key ~vk_hash ()
       in
