@@ -285,7 +285,7 @@ let%test_module "Rollup test" =
 
       let init =
         let account_update, () =
-          Promise.block_on_async_exn
+          Async.Thread_safe.block_on_async_exn
             (M.init
                { public_key = pk
                ; token_id
@@ -296,7 +296,7 @@ let%test_module "Rollup test" =
 
       let step txn =
         let account_update, () =
-          Promise.block_on_async_exn
+          Async.Thread_safe.block_on_async_exn
             (M.step
                { public_key = pk
                ; token_id
