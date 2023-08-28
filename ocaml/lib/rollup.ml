@@ -66,6 +66,7 @@ let rollup =
           let pk, sk = gen_keys () in
           let l = L.create ~depth:constraint_constants.ledger_depth () in
 
+          (* todo: add genesis accounts param *)
           let account_id =
             Account_id.of_public_key @@ S.Public_key.decompress_exn
             @@ S.Public_key.Compressed.of_base58_check_exn
@@ -186,10 +187,11 @@ let rollup =
           (* let signature_kind =
                Mina_signature_kind.Other_network (Js.to_string rollup##.name)
              in *)
+          let signature_kind = Mina_signature_kind.Testnet in
           let user_command =
             match
               Mina_base.Signed_command.create_with_signature_checked
-                ~signature_kind:Mina_signature_kind.Testnet
+                ~signature_kind
                 ( Mina_base.Signature.of_base58_check_exn
                 @@ Js.to_string user_command_js##.signature )
                 from payload
@@ -208,6 +210,11 @@ let rollup =
           let sk = rollup##.sk in
           let pk = S.Public_key.(compress @@ of_private_key_exn sk) in
           let source = L.merkle_root l in
+          let sparse_ledger =
+            Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
+              (Signed_command.accounts_referenced
+                 (Signed_command.forget_check user_command) )
+          in
           let () =
             match
               L.apply_user_command ~constraint_constants
@@ -267,11 +274,6 @@ let rollup =
                    let sok_digest =
                      Sok_message.create ~fee:Currency.Fee.zero ~prover:pk
                      |> Sok_message.digest
-                   in
-                   let sparse_ledger =
-                     Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
-                       (Signed_command.accounts_referenced
-                          (Signed_command.forget_check user_command) )
                    in
                    let statement =
                      Transaction_snark.Statement.Poly.with_empty_local_state
