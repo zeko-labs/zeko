@@ -210,18 +210,40 @@ let rollup =
           let sk = rollup##.sk in
           let pk = S.Public_key.(compress @@ of_private_key_exn sk) in
           let source = L.merkle_root l in
+          let state_body =
+            (* FIXME: Use the correct values *)
+            let compile_time_genesis =
+              Mina_state.Genesis_protocol_state.t
+                ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+                ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+                ~constraint_constants ~consensus_constants
+                ~genesis_body_reference:
+                  Staged_ledger_diff.genesis_body_reference
+            in
+            Mina_state.Protocol_state.body compile_time_genesis.data
+          in
           let sparse_ledger =
             Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
               (Signed_command.accounts_referenced
                  (Signed_command.forget_check user_command) )
           in
-          let () =
+          let txn =
+            Mina_transaction.Transaction.Command
+              (User_command.Signed_command
+                 (Signed_command.forget_check user_command) )
+          in
+          let txn_applied =
             match
-              L.apply_user_command ~constraint_constants
-                ~txn_global_slot:global_slot l user_command
+              Result.( >>= )
+                (L.apply_transaction_first_pass ~constraint_constants
+                   ~global_slot
+                   ~txn_state_view:
+                     (Mina_state.Protocol_state.Body.view state_body)
+                   l txn )
+                (L.apply_transaction_second_pass l)
             with
-            | Ok _ ->
-                ()
+            | Ok txn_applied ->
+                txn_applied
             | Error e ->
                 Error.raise e
           in
@@ -231,20 +253,6 @@ let rollup =
               (Async_kernel.schedule' (fun () ->
                    let target = L.merkle_root l in
                    let init_stack = Mina_base.Pending_coinbase.Stack.empty in
-                   let state_body =
-                     (* FIXME: Use the correct values *)
-                     let compile_time_genesis =
-                       Mina_state.Genesis_protocol_state.t
-                         ~genesis_ledger:
-                           Genesis_ledger.(Packed.t for_unit_tests)
-                         ~genesis_epoch_data:
-                           Consensus.Genesis_epoch_data.for_unit_tests
-                         ~constraint_constants ~consensus_constants
-                         ~genesis_body_reference:
-                           Staged_ledger_diff.genesis_body_reference
-                     in
-                     Mina_state.Protocol_state.body compile_time_genesis.data
-                   in
                    let user_command_in_block =
                      { Transaction_protocol_state.Poly.transaction =
                          user_command
@@ -264,12 +272,13 @@ let rollup =
                      { source = stack_with_state; target = stack_with_state }
                    in
                    let user_command_supply_increase =
-                     Currency.Amount.Signed.zero
-                   in
-                   let txn =
-                     Mina_transaction.Transaction.Command
-                       (User_command.Signed_command
-                          (Signed_command.forget_check user_command) )
+                     match
+                       L.Transaction_applied.supply_increase txn_applied
+                     with
+                     | Ok x ->
+                         x
+                     | Error e ->
+                         Error.raise e
                    in
                    let sok_digest =
                      Sok_message.create ~fee:Currency.Fee.zero ~prover:pk
