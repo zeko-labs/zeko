@@ -247,11 +247,11 @@ let rollup =
             | Error e ->
                 Error.raise e
           in
+          let target = L.merkle_root l in
           let prev = rollup##.txnSnark in
           rollup##.txnSnark :=
             Some
               (Async_kernel.schedule' (fun () ->
-                   let target = L.merkle_root l in
                    let init_stack = Mina_base.Pending_coinbase.Stack.empty in
                    let user_command_in_block =
                      { Transaction_protocol_state.Poly.transaction =
