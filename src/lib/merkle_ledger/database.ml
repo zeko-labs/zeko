@@ -75,7 +75,7 @@ module Make (Inputs : Inputs_intf) :
 
   let create ?directory_name ~depth () =
     assert (depth < 0xfe) ;
-    let uuid = Uuid.create_random (Random.State.make_self_init ()) in
+    let uuid = Uuid.create_random (Random.State.make_self_init ~allow_in_tests:true ()) in
     let directory =
       match directory_name with
       | None ->
@@ -90,7 +90,7 @@ module Make (Inputs : Inputs_intf) :
     { uuid; kvdb; depth; directory; detached_parent_signal = Ivar.create () }
 
   let create_checkpoint t ~directory_name () =
-    let uuid = Uuid.create_random (Random.State.make_self_init ()) in
+    let uuid = Uuid.create_random (Random.State.make_self_init ~allow_in_tests:true ()) in
     let kvdb = Kvdb.create_checkpoint t.kvdb directory_name in
     { uuid
     ; kvdb
