@@ -9,7 +9,7 @@ module Util = Util'
 
 type t =
   < ledger : L.t Js.readonly_prop
-  ; sk : S.Private_key.t Js.readonly_prop
+  ; sk : Js.js_string Js.t Js.readonly_prop
   ; slot : int Js.prop
   ; name : Js.js_string Js.t Js.readonly_prop
   ; txnSnark : Transaction_snark.t Deferred.t option Js.prop >
@@ -83,6 +83,7 @@ let rollup =
               { Account_update.Body.dummy with
                 public_key = pk
               ; token_id
+              ; implicit_account_creation_fee = false
               ; update =
                   { Account_update.Update.dummy with
                     app_state =
@@ -129,19 +130,19 @@ let rollup =
               ; authorization_kind = Signature
               }
             in
-            (* FIXME: dummy sig *)
-            { body; authorization = Signature Mina_base.Signature.dummy }
+            { body; authorization = None_given }
           in
           object%js
             val accountUpdate : Js.js_string Js.t =
               Js.string @@ Yojson.Safe.to_string
-              @@ Account_update.to_yojson acup
+              @@ Account_update.Graphql_repr.to_json
+              @@ Account_update.to_graphql_repr acup ~call_depth:0
 
             val rollup : t =
               object%js
                 val ledger = l
 
-                val sk = sk
+                val sk = Js.string (S.Private_key.to_base58_check sk)
 
                 val name = name
 
@@ -184,6 +185,7 @@ let rollup =
                        @@ Js.to_string user_command_js##.amount
                    } )
           in
+          (* todo: change to custom salt when it will be available in snarkyjs and auro wallet *)
           (* let signature_kind =
                Mina_signature_kind.Other_network (Js.to_string rollup##.name)
              in *)
@@ -206,8 +208,10 @@ let rollup =
           let global_slot =
             Mina_numbers.Global_slot_since_genesis.of_int rollup##.slot
           in
-          let () = rollup##.slot := rollup##.slot + 1 in
-          let sk = rollup##.sk in
+          (* let () = rollup##.slot := rollup##.slot + 1 in *)
+          let sk =
+            S.Private_key.of_base58_check_exn @@ Js.to_string rollup##.sk
+          in
           let pk = S.Public_key.(compress @@ of_private_key_exn sk) in
           let source = L.merkle_root l in
           let state_body =
@@ -318,8 +322,11 @@ let rollup =
                        return next ) )
 
         method commit (rollup : t) (k : Js.js_string Js.t -> unit) =
+          let sk =
+            S.Private_key.of_base58_check_exn @@ Js.to_string rollup##.sk
+          in
           let pk =
-            S.Public_key.compress @@ S.Public_key.of_private_key_exn rollup##.sk
+            S.Public_key.compress @@ S.Public_key.of_private_key_exn sk
           in
           match rollup##.txnSnark with
           | None ->
@@ -338,10 +345,7 @@ let rollup =
               return
               @@ k
                    ( Js.string @@ Yojson.Safe.to_string
-                   @@ Zkapp_command.Call_forest.to_yojson
-                        Account_update.to_yojson
-                        Zkapp_command.Digest.Account_update.to_yojson
-                        Zkapp_command.Digest.Forest.to_yojson
+                   @@ Zkapp_command.account_updates_to_json
                    @@ Zkapp_command.Call_forest.(cons_tree acup []) )
 
         method getAccount (rollup : t) (pk : S.Public_key.Compressed.t)
