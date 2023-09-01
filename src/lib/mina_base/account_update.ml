@@ -1704,6 +1704,9 @@ module T = struct
         ~body:!.Body.Graphql_repr.deriver
         ~authorization:!.Control.deriver
       |> finish "ZkappAccountUpdate" ~t_toplevel_annots
+
+    let to_json x =
+      Fields_derivers_zkapps.(to_json (deriver @@ Derivers.o ())) x
   end
 
   module Simple = struct
