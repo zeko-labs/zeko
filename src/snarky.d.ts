@@ -607,7 +607,10 @@ type RollupInstance = unknown;
 type RollupMethods = {
   vk: unknown;
 
-  createZkapp(name: unknown): {
+  createZkapp(
+    name: string,
+    genesisAccounts: { publicKey: string; balance: string }[]
+  ): {
     accountUpdate: string;
     rollup: RollupInstance;
   };
