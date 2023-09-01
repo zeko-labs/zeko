@@ -62,22 +62,32 @@ let rollup =
         Initialise a rollup with the given name.
         Returns an empty ledger, the keys for the account, and the account update.
         *)
-        method createZkapp name =
+        method createZkapp name
+            (genesis_accounts :
+              < publicKey : Js.js_string Js.t Js.prop
+              ; balance : Js.js_string Js.t Js.prop >
+              Js.t
+              Js.js_array
+              Js.t ) =
           let pk, sk = gen_keys () in
           let l = L.create ~depth:constraint_constants.ledger_depth () in
-
-          (* todo: add genesis accounts param *)
-          let account_id =
-            Account_id.of_public_key @@ S.Public_key.decompress_exn
-            @@ S.Public_key.Compressed.of_base58_check_exn
-                 "B62qnPZzpnQWA8FLBn9qqJqPTeGuDdHTZgpmEMUNFCq8fWCRSqJS6Jd"
+          let () =
+            Array.iter (Js.to_array genesis_accounts) ~f:(fun account ->
+                let pk =
+                  S.Public_key.Compressed.of_base58_check_exn
+                  @@ Js.to_string account##.publicKey
+                in
+                let account_id =
+                  Account_id.of_public_key (S.Public_key.decompress_exn pk)
+                in
+                let balance =
+                  Unsigned.UInt64.of_string @@ Js.to_string account##.balance
+                in
+                let account =
+                  Account.create account_id (Currency.Balance.of_uint64 balance)
+                in
+                L.create_new_account_exn l account_id account )
           in
-          let balance = Unsigned.UInt64.of_int64 1_000_000_000_000L in
-          let account =
-            Account.create account_id (Currency.Balance.of_uint64 balance)
-          in
-          L.create_new_account_exn l account_id account ;
-
           let acup : Account_update.t =
             let body =
               { Account_update.Body.dummy with
