@@ -23,6 +23,11 @@ val rollup :
       ; commit : t -> (Js.js_string Js.t -> unit) -> unit Deferred.t Js.meth
       ; createZkapp :
              Js.js_string Js.t
+          -> < publicKey : Js.js_string Js.t Js.prop
+             ; balance : Js.js_string Js.t Js.prop >
+             Js.t
+             Js.js_array
+             Js.t
           -> < accountUpdate : Js.js_string Js.t Js.readonly_prop
              ; rollup : t Js.readonly_prop >
              Js.t
