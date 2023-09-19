@@ -1161,6 +1161,62 @@ export function caml_fq_srs_h(srs) {
 }
 
 /**
+* @param {string} name
+*/
+export function greet(name) {
+    const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    wasm.greet(ptr0, len0);
+}
+
+/**
+* @param {string} s
+*/
+export function console_log(s) {
+    const ptr0 = passStringToWasm0(s, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    wasm.console_log(ptr0, len0);
+}
+
+/**
+* @returns {number}
+*/
+export function create_zero_u32_ptr() {
+    const ret = wasm.create_zero_u32_ptr();
+    return ret;
+}
+
+/**
+* @param {number} ptr
+*/
+export function free_u32_ptr(ptr) {
+    wasm.free_u32_ptr(ptr);
+}
+
+/**
+* @param {number} ptr
+* @param {number} arg
+*/
+export function set_u32_ptr(ptr, arg) {
+    wasm.set_u32_ptr(ptr, arg);
+}
+
+/**
+* @param {number} ptr
+* @returns {number}
+*/
+export function wait_until_non_zero(ptr) {
+    const ret = wasm.wait_until_non_zero(ptr);
+    return ret >>> 0;
+}
+
+/**
+*/
+export function console_error_panic_hook_set_once() {
+    wasm.console_error_panic_hook_set_once();
+}
+
+/**
 * @param {number | undefined} offset
 * @param {WasmFpSrs} srs
 * @param {string} path
@@ -1859,56 +1915,6 @@ export function caml_bigint_256_deep_copy(x) {
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
     }
-}
-
-/**
-* @param {string} name
-*/
-export function greet(name) {
-    const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    wasm.greet(ptr0, len0);
-}
-
-/**
-* @param {string} s
-*/
-export function console_log(s) {
-    const ptr0 = passStringToWasm0(s, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    wasm.console_log(ptr0, len0);
-}
-
-/**
-* @returns {number}
-*/
-export function create_zero_u32_ptr() {
-    const ret = wasm.create_zero_u32_ptr();
-    return ret;
-}
-
-/**
-* @param {number} ptr
-*/
-export function free_u32_ptr(ptr) {
-    wasm.free_u32_ptr(ptr);
-}
-
-/**
-* @param {number} ptr
-* @param {number} arg
-*/
-export function set_u32_ptr(ptr, arg) {
-    wasm.set_u32_ptr(ptr, arg);
-}
-
-/**
-* @param {number} ptr
-* @returns {number}
-*/
-export function wait_until_non_zero(ptr) {
-    const ret = wasm.wait_until_non_zero(ptr);
-    return ret >>> 0;
 }
 
 /**
@@ -7545,6 +7551,12 @@ function getImports() {
         const ret = getStringFromWasm0(arg0, arg1);
         return addHeapObject(ret);
     };
+    imports.wbg.__wbg_alert_ceb64c1bad1f3790 = function(arg0, arg1) {
+        alert(getStringFromWasm0(arg0, arg1));
+    };
+    imports.wbg.__wbg_log_bb81d0229855b402 = function(arg0, arg1) {
+        console.log(getStringFromWasm0(arg0, arg1));
+    };
     imports.wbg.__wbg_startWorkers_f430e3766320935f = function(arg0, arg1, arg2) {
         const ret = startWorkers(takeObject(arg0), takeObject(arg1), PoolBuilder.__wrap(arg2));
         return addHeapObject(ret);
@@ -7552,12 +7564,6 @@ function getImports() {
     imports.wbg.__wbg_terminateWorkers_bf82de78d64704cb = function() {
         const ret = terminateWorkers();
         return addHeapObject(ret);
-    };
-    imports.wbg.__wbg_alert_ceb64c1bad1f3790 = function(arg0, arg1) {
-        alert(getStringFromWasm0(arg0, arg1));
-    };
-    imports.wbg.__wbg_log_bb81d0229855b402 = function(arg0, arg1) {
-        console.log(getStringFromWasm0(arg0, arg1));
     };
     imports.wbg.__wbg_new_abda76e883ba8a5f = function() {
         const ret = new Error();

@@ -16,10 +16,11 @@ type user_command =
   ; memo : Js.js_string Js.t Js.readonly_prop >
   Js.t
 
-type 't txn_snark_input =
+type txn_snark_input =
   { sparse_ledger : Mina_ledger.Sparse_ledger.t
   ; statement : Transaction_snark.Statement.With_sok.t
-  ; user_command_in_block : 't Transaction_protocol_state.t
+  ; command : Signed_command.With_valid_signature.t
+  ; global_slot : Mina_numbers.Global_slot_since_genesis.t
   ; init_stack : Pending_coinbase.Stack_versioned.t
   ; sok_digest : Sok_message.Digest.t
   }
@@ -27,19 +28,17 @@ type 't txn_snark_input =
 val rollup :
   < compile :
       < applyUserCommand :
-          (   t
-           -> user_command
-           -> < txHash : Js.js_string Js.t Js.readonly_prop
-              ; txId : Js.js_string Js.t Js.readonly_prop
-              ; txnSnarkInput :
-                  Signed_command.With_valid_signature.t txn_snark_input
-                  Js.readonly_prop >
-              Js.t )
-          Js.meth
+             t
+          -> user_command
+          -> < txHash : Js.js_string Js.t Js.readonly_prop
+             ; txId : Js.js_string Js.t Js.readonly_prop
+             ; txnSnarkInputJson : txn_snark_input Js.readonly_prop >
+             Js.t
+             Js.meth
       ; proveUserCommand :
-             Signed_command.With_valid_signature.t txn_snark_input
-          -> Transaction_snark.t option
-          -> (Transaction_snark.t -> unit)
+             txn_snark_input
+          -> Js.js_string Js.t
+          -> (Js.js_string Js.t -> unit)
           -> unit Deferred.t Js.meth
       ; commit :
              t
@@ -48,6 +47,7 @@ val rollup :
           -> unit Deferred.t Js.meth
       ; createZkapp :
              Js.js_string Js.t
+          -> Account.key
           -> < publicKey : Account.key Js.prop
              ; balance : Js.js_string Js.t Js.prop >
              Js.t

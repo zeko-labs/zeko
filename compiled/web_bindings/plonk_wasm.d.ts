@@ -362,6 +362,35 @@ export function caml_fq_srs_batch_accumulator_generate(srs: WasmFqSrs, comms: nu
 */
 export function caml_fq_srs_h(srs: WasmFqSrs): WasmGPallas;
 /**
+* @param {string} name
+*/
+export function greet(name: string): void;
+/**
+* @param {string} s
+*/
+export function console_log(s: string): void;
+/**
+* @returns {number}
+*/
+export function create_zero_u32_ptr(): number;
+/**
+* @param {number} ptr
+*/
+export function free_u32_ptr(ptr: number): void;
+/**
+* @param {number} ptr
+* @param {number} arg
+*/
+export function set_u32_ptr(ptr: number, arg: number): void;
+/**
+* @param {number} ptr
+* @returns {number}
+*/
+export function wait_until_non_zero(ptr: number): number;
+/**
+*/
+export function console_error_panic_hook_set_once(): void;
+/**
 * @param {number | undefined} offset
 * @param {WasmFpSrs} srs
 * @param {string} path
@@ -612,32 +641,6 @@ export function caml_bigint_256_of_bytes(x: Uint8Array): Uint8Array;
 * @returns {Uint8Array}
 */
 export function caml_bigint_256_deep_copy(x: Uint8Array): Uint8Array;
-/**
-* @param {string} name
-*/
-export function greet(name: string): void;
-/**
-* @param {string} s
-*/
-export function console_log(s: string): void;
-/**
-* @returns {number}
-*/
-export function create_zero_u32_ptr(): number;
-/**
-* @param {number} ptr
-*/
-export function free_u32_ptr(ptr: number): void;
-/**
-* @param {number} ptr
-* @param {number} arg
-*/
-export function set_u32_ptr(ptr: number, arg: number): void;
-/**
-* @param {number} ptr
-* @returns {number}
-*/
-export function wait_until_non_zero(ptr: number): number;
 /**
 * @param {WasmFpGateVector} gates
 * @param {number} public_
@@ -2069,6 +2072,13 @@ export interface InitOutput {
   readonly caml_pasta_fq_plonk_gate_vector_create: () => number;
   readonly __wbg_set_wasmfqgate_wires: (a: number, b: number) => void;
   readonly __wbg_wasmfqgatevector_free: (a: number) => void;
+  readonly greet: (a: number, b: number) => void;
+  readonly console_log: (a: number, b: number) => void;
+  readonly create_zero_u32_ptr: () => number;
+  readonly free_u32_ptr: (a: number) => void;
+  readonly set_u32_ptr: (a: number, b: number) => void;
+  readonly wait_until_non_zero: (a: number) => number;
+  readonly console_error_panic_hook_set_once: () => void;
   readonly __wbg_wasmpallasgprojective_free: (a: number) => void;
   readonly __wbg_wasmfpdomain_free: (a: number) => void;
   readonly __wbg_get_wasmfpdomain_log_size_of_group: (a: number) => number;
@@ -2416,12 +2426,6 @@ export interface InitOutput {
   readonly __wbg_get_wasmfqpolycomm_shifted: (a: number) => number;
   readonly __wbg_set_wasmfqpolycomm_shifted: (a: number, b: number) => void;
   readonly __wbg_wasmfqpolycomm_free: (a: number) => void;
-  readonly greet: (a: number, b: number) => void;
-  readonly console_log: (a: number, b: number) => void;
-  readonly create_zero_u32_ptr: () => number;
-  readonly free_u32_ptr: (a: number) => void;
-  readonly set_u32_ptr: (a: number, b: number) => void;
-  readonly wait_until_non_zero: (a: number) => number;
   readonly __wbg_wasmpastafpplonkindex_free: (a: number) => void;
   readonly caml_pasta_fp_plonk_index_create: (a: number, b: number, c: number, d: number, e: number) => void;
   readonly caml_pasta_fp_plonk_index_max_degree: (a: number) => number;

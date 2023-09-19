@@ -1,7 +1,7 @@
-import { isMainThread, parentPort, workerData, Worker } from 'worker_threads';
 import os from 'os';
-import wasm_ from '../../compiled/_node_bindings/plonk_wasm.cjs';
 import { fileURLToPath } from 'url';
+import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
+import wasm_ from '../../compiled/_node_bindings/plonk_wasm.cjs';
 let url = import.meta.url;
 let filename = url !== undefined ? fileURLToPath(url) : __filename;
 
@@ -19,7 +19,7 @@ let workersReady;
 globalThis.startWorkers = startWorkers;
 globalThis.terminateWorkers = terminateWorkers;
 
-if (!isMainThread) {
+if (!isMainThread && !workerData.isSnarkyMainThread) {
   parentPort.postMessage({ type: 'wasm_bindgen_worker_ready' });
   wasm.wbg_rayon_start_worker(workerData.receiver);
 }
@@ -80,7 +80,7 @@ async function withThreadPool(run) {
 }
 
 async function initThreadPool() {
-  if (!isMainThread) return;
+  if (!isMainThread && !workerData.isSnarkyMainThread) return;
   workersReady = new Promise((resolve) => (workersReadyResolve = resolve));
   await wasm.initThreadPool(getEfficientNumWorkers(), filename);
   await workersReady;
@@ -88,7 +88,7 @@ async function initThreadPool() {
 }
 
 async function exitThreadPool() {
-  if (!isMainThread) return;
+  if (!isMainThread && !workerData.isSnarkyMainThread) return;
   await wasm.exitThreadPool();
 }
 

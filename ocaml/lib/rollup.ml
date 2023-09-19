@@ -14,10 +14,9 @@ end
 
 type t =
   < ledger : L.t Js.readonly_prop
-  ; sk : Js.js_string Js.t Js.readonly_prop
+  ; pk : S.Public_key.Compressed.t Js.readonly_prop
   ; slot : int Js.prop
-  ; name : Js.js_string Js.t Js.readonly_prop
-  ; txnSnark : Transaction_snark.t option Js.prop >
+  ; name : Js.js_string Js.t Js.readonly_prop >
   Js.t
 
 type user_command =
@@ -31,160 +30,17 @@ type user_command =
   ; memo : Js.js_string Js.t Js.readonly_prop >
   Js.t
 
-type 't txn_snark_input =
+type txn_snark_input =
   { sparse_ledger : Mina_ledger.Sparse_ledger.t
   ; statement : Transaction_snark.Statement.With_sok.t
-  ; user_command_in_block : 't Transaction_protocol_state.t
+  ; command : Signed_command.With_valid_signature.t
+  ; global_slot : Mina_numbers.Global_slot_since_genesis.t
   ; init_stack : Pending_coinbase.Stack_versioned.t
   ; sok_digest : Sok_message.Digest.t
   }
+[@@deriving yojson]
 
 module Step = Pickles.Impls.Step
-
-let apply_user_command ~constraint_constants ~consensus_constants (rollup : t)
-    (user_command_js : user_command) =
-  let from =
-    S.Public_key.Compressed.of_base58_check_exn
-    @@ Js.to_string user_command_js##.fromBase58
-  in
-  let to_ =
-    S.Public_key.Compressed.of_base58_check_exn
-    @@ Js.to_string user_command_js##.toBase58
-  in
-  let payload =
-    Mina_base.Signed_command.Payload.create
-      ~fee:(Currency.Fee.of_string @@ Js.to_string user_command_js##.fee)
-      ~fee_payer_pk:from
-      ~valid_until:
-        ( Option.some @@ Mina_numbers.Global_slot_since_genesis.of_string
-        @@ Js.to_string user_command_js##.validUntil )
-      ~nonce:
-        ( Mina_numbers.Global_slot_legacy.of_string
-        @@ Js.to_string user_command_js##.nonce )
-      ~memo:
-        ( Mina_base.Signed_command_memo.of_base58_check_exn
-        @@ Js.to_string user_command_js##.memo )
-      ~body:
-        (Payment
-           { receiver_pk = to_
-           ; amount =
-               Currency.Amount.of_string
-               @@ Js.to_string user_command_js##.amount
-           } )
-  in
-  (* FIXME: change to custom salt when it will be available in snarkyjs and auro wallet *)
-  (* let signature_kind =
-       Mina_signature_kind.Other_network (Js.to_string rollup##.name)
-     in *)
-  let signature_kind = Mina_signature_kind.Testnet in
-  let user_command =
-    match
-      Mina_base.Signed_command.create_with_signature_checked ~signature_kind
-        ( Mina_base.Signature.of_base58_check_exn
-        @@ Js.to_string user_command_js##.signature )
-        from payload
-    with
-    | Some x ->
-        x
-    | None ->
-        raise (Failure "apply_user_command failed: invalid signature")
-  in
-  let l : L.t = rollup##.ledger in
-  let global_slot =
-    Mina_numbers.Global_slot_since_genesis.of_int rollup##.slot
-  in
-  (* FIXME: Fix global slot in txn snark *)
-  (* let () = rollup##.slot := rollup##.slot + 1 in *)
-  let sk = S.Private_key.of_base58_check_exn @@ Js.to_string rollup##.sk in
-  let pk = S.Public_key.(compress @@ of_private_key_exn sk) in
-  let source = L.merkle_root l in
-  let state_body =
-    (* FIXME: Use the correct values *)
-    let compile_time_genesis =
-      Mina_state.Genesis_protocol_state.t
-        ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-        ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-        ~constraint_constants ~consensus_constants
-        ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-    in
-    Mina_state.Protocol_state.body compile_time_genesis.data
-  in
-  let sparse_ledger =
-    Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
-      (Signed_command.accounts_referenced
-         (Signed_command.forget_check user_command) )
-  in
-  let txn =
-    Mina_transaction.Transaction.Command
-      (User_command.Signed_command (Signed_command.forget_check user_command))
-  in
-  let txn_applied =
-    match
-      Result.( >>= )
-        (L.apply_transaction_first_pass ~constraint_constants ~global_slot
-           ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-           l txn )
-        (L.apply_transaction_second_pass l)
-    with
-    | Ok txn_applied ->
-        txn_applied
-    | Error e ->
-        Error.raise e
-  in
-  let target = L.merkle_root l in
-  let init_stack = Mina_base.Pending_coinbase.Stack.empty in
-  let user_command_in_block =
-    { Transaction_protocol_state.Poly.transaction = user_command
-    ; block_data = state_body
-    ; global_slot
-    }
-  in
-  let state_body_hash = Mina_state.Protocol_state.Body.hash state_body in
-  let pc : Transaction_snark.Pending_coinbase_stack_state.t =
-    (* No coinbase to add to the stack. *)
-    let stack_with_state =
-      Pending_coinbase.Stack.push_state state_body_hash global_slot init_stack
-    in
-    { source = stack_with_state; target = stack_with_state }
-  in
-  let user_command_supply_increase =
-    match L.Transaction_applied.supply_increase txn_applied with
-    | Ok x ->
-        x
-    | Error e ->
-        Error.raise e
-  in
-  let sok_digest =
-    Sok_message.create ~fee:Currency.Fee.zero ~prover:pk |> Sok_message.digest
-  in
-  let statement =
-    Transaction_snark.Statement.Poly.with_empty_local_state
-      ~source_first_pass_ledger:source ~target_first_pass_ledger:target
-      ~source_second_pass_ledger:target ~target_second_pass_ledger:target
-      ~connecting_ledger_left:target ~connecting_ledger_right:target ~sok_digest
-      ~fee_excess:
-        (Or_error.ok_exn (Mina_transaction.Transaction.fee_excess txn))
-      ~supply_increase:user_command_supply_increase
-      ~pending_coinbase_stack_state:pc
-  in
-  object%js
-    val txHash =
-      Js.string @@ Mina_transaction.Transaction_hash.to_base58_check
-      @@ Mina_transaction.Transaction_hash.hash_command
-           (Signed_command (Signed_command.forget_check user_command))
-
-    val txId =
-      Js.string @@ Signed_command.to_base64
-      @@ Signed_command.forget_check user_command
-
-    val txnSnarkInput =
-      { sparse_ledger
-      ; statement
-      ; user_command_in_block
-      ; init_stack
-      ; sok_digest
-      }
-  end
 
 let rollup =
   object%js
@@ -197,7 +53,17 @@ let rollup =
         Consensus.Constants.create ~constraint_constants
           ~protocol_constants:genesis_constants.protocol
       in
-
+      let state_body =
+        (* FIXME: Use the correct values *)
+        let compile_time_genesis =
+          Mina_state.Genesis_protocol_state.t
+            ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+            ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+            ~constraint_constants ~consensus_constants
+            ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+        in
+        Mina_state.Protocol_state.body compile_time_genesis.data
+      in
       let module T = Transaction_snark.Make (struct
         let constraint_constants = constraint_constants
 
@@ -207,10 +73,6 @@ let rollup =
         let tag = T.tag
       end) in
       let module Proof = M.Proof in
-      let gen_keys () =
-        let kp = S.Keypair.create () in
-        (S.Public_key.compress kp.public_key, kp.private_key)
-      in
       let token_id = Mina_base.Token_id.default in
       object%js
         val vk = Pickles.Side_loaded.Verification_key.of_compiled T.tag
@@ -219,14 +81,13 @@ let rollup =
         Initialise a rollup with the given name.
         Returns an empty ledger, the keys for the account, and the account update.
         *)
-        method createZkapp name
+        method createZkapp name (pk : S.Public_key.Compressed.t)
             (genesis_accounts :
               < publicKey : S.Public_key.Compressed.t Js.prop
               ; balance : Js.js_string Js.t Js.prop >
               Js.t
               Js.js_array
               Js.t ) =
-          let pk, sk = gen_keys () in
           let l = L.create ~depth:constraint_constants.ledger_depth () in
           let () =
             Array.iter (Js.to_array genesis_accounts) ~f:(fun account ->
@@ -306,59 +167,220 @@ let rollup =
               object%js
                 val ledger = l
 
-                val sk = Js.string (S.Private_key.to_base58_check sk)
+                val pk = pk
 
                 val name = name
 
                 val mutable slot = 0
-
-                val mutable txnSnark = None
               end
           end
 
         (*
         Applies a user command to a ledger immediately with the specified public key.
         *)
-        method applyUserCommand : user_command_applied =
-          apply_user_command ~constraint_constants ~consensus_constants
+        method applyUserCommand (rollup : t) (user_command_js : user_command) =
+          let from =
+            S.Public_key.Compressed.of_base58_check_exn
+            @@ Js.to_string user_command_js##.fromBase58
+          in
+          let to_ =
+            S.Public_key.Compressed.of_base58_check_exn
+            @@ Js.to_string user_command_js##.toBase58
+          in
+          let payload =
+            Mina_base.Signed_command.Payload.create
+              ~fee:(Currency.Fee.of_string @@ Js.to_string user_command_js##.fee)
+              ~fee_payer_pk:from
+              ~valid_until:
+                ( Option.some @@ Mina_numbers.Global_slot_since_genesis.of_string
+                @@ Js.to_string user_command_js##.validUntil )
+              ~nonce:
+                ( Mina_numbers.Global_slot_legacy.of_string
+                @@ Js.to_string user_command_js##.nonce )
+              ~memo:
+                ( Mina_base.Signed_command_memo.of_base58_check_exn
+                @@ Js.to_string user_command_js##.memo )
+              ~body:
+                (Payment
+                   { receiver_pk = to_
+                   ; amount =
+                       Currency.Amount.of_string
+                       @@ Js.to_string user_command_js##.amount
+                   } )
+          in
+          (* FIXME: change to custom salt when it will be available in snarkyjs and auro wallet *)
+          (* let signature_kind =
+               Mina_signature_kind.Other_network (Js.to_string rollup##.name)
+             in *)
+          let signature_kind = Mina_signature_kind.Testnet in
+          let user_command =
+            match
+              Mina_base.Signed_command.create_with_signature_checked
+                ~signature_kind
+                ( Mina_base.Signature.of_base58_check_exn
+                @@ Js.to_string user_command_js##.signature )
+                from payload
+            with
+            | Some x ->
+                x
+            | None ->
+                raise (Failure "apply_user_command failed: invalid signature")
+          in
+          let l : L.t = rollup##.ledger in
+          let global_slot =
+            Mina_numbers.Global_slot_since_genesis.of_int rollup##.slot
+          in
+          (* FIXME: Fix global slot in txn snark *)
+          (* let () = rollup##.slot := rollup##.slot + 1 in *)
+          let pk = rollup##.pk in
+          let source = L.merkle_root l in
+          let sparse_ledger =
+            Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
+              (Signed_command.accounts_referenced
+                 (Signed_command.forget_check user_command) )
+          in
+          let txn =
+            Mina_transaction.Transaction.Command
+              (User_command.Signed_command
+                 (Signed_command.forget_check user_command) )
+          in
+          let txn_applied =
+            match
+              Result.( >>= )
+                (L.apply_transaction_first_pass ~constraint_constants
+                   ~global_slot
+                   ~txn_state_view:
+                     (Mina_state.Protocol_state.Body.view state_body)
+                   l txn )
+                (L.apply_transaction_second_pass l)
+            with
+            | Ok txn_applied ->
+                txn_applied
+            | Error e ->
+                Error.raise e
+          in
+          let target = L.merkle_root l in
+          let init_stack = Mina_base.Pending_coinbase.Stack.empty in
+          let state_body_hash =
+            Mina_state.Protocol_state.Body.hash state_body
+          in
+          let pc : Transaction_snark.Pending_coinbase_stack_state.t =
+            (* No coinbase to add to the stack. *)
+            let stack_with_state =
+              Pending_coinbase.Stack.push_state state_body_hash global_slot
+                init_stack
+            in
+            { source = stack_with_state; target = stack_with_state }
+          in
+          let user_command_supply_increase =
+            match L.Transaction_applied.supply_increase txn_applied with
+            | Ok x ->
+                x
+            | Error e ->
+                Error.raise e
+          in
+          let sok_digest =
+            Sok_message.create ~fee:Currency.Fee.zero ~prover:pk
+            |> Sok_message.digest
+          in
+          let statement =
+            Transaction_snark.Statement.Poly.with_empty_local_state
+              ~source_first_pass_ledger:source ~target_first_pass_ledger:target
+              ~source_second_pass_ledger:target
+              ~target_second_pass_ledger:target ~connecting_ledger_left:target
+              ~connecting_ledger_right:target ~sok_digest
+              ~fee_excess:
+                (Or_error.ok_exn (Mina_transaction.Transaction.fee_excess txn))
+              ~supply_increase:user_command_supply_increase
+              ~pending_coinbase_stack_state:pc
+          in
+          object%js
+            val txHash =
+              Js.string @@ Mina_transaction.Transaction_hash.to_base58_check
+              @@ Mina_transaction.Transaction_hash.hash_command
+                   (Signed_command (Signed_command.forget_check user_command))
 
-        method proveUserCommand
-            ({ init_stack
-             ; statement
-             ; user_command_in_block
-             ; sparse_ledger
-             ; sok_digest
-             } :
-              Signed_command.With_valid_signature.t txn_snark_input ) prev
-            (callback : Transaction_snark.t -> unit) =
-          print_endline "debug 1" ;
+            val txId =
+              Js.string @@ Signed_command.to_base64
+              @@ Signed_command.forget_check user_command
+
+            val txnSnarkInputJson =
+              (* Js.string @@ Yojson.Safe.to_string
+                 @@ txn_snark_input_to_yojson *)
+              { sparse_ledger
+              ; statement
+              ; command = user_command
+              ; global_slot
+              ; init_stack
+              ; sok_digest
+              }
+          end
+
+        method proveUserCommand (txn_snark_inp_json : txn_snark_input)
+            (prev_json : Js.js_string Js.t)
+            (callback : Js.js_string Js.t -> unit) =
+          let { init_stack
+              ; statement
+              ; command
+              ; global_slot
+              ; sparse_ledger
+              ; sok_digest
+              } =
+            txn_snark_inp_json
+            (* let open Ppx_deriving_yojson_runtime.Result in
+               match
+                 txn_snark_inp_json |> Js.to_string |> Yojson.Safe.from_string
+                 |> txn_snark_input_of_yojson
+               with
+               | Ok x ->
+                   x
+               | Error e ->
+                   failwith e *)
+          in
           let handler =
             unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
           in
-          print_endline "debug 2" ;
+          let user_command_in_block =
+            { Transaction_protocol_state.Poly.transaction = command
+            ; block_data = state_body
+            ; global_slot
+            }
+          in
           let%bind next =
             T.of_user_command ~init_stack ~statement user_command_in_block
               handler
           in
-          match prev with
-          | Some prev -> (
+          match Js.to_string prev_json with
+          | "" ->
+              return
+              @@ callback
+                   ( Js.string @@ Yojson.Safe.to_string
+                   @@ Transaction_snark.to_yojson next )
+          | prev_str -> (
+              let prev =
+                let open Ppx_deriving_yojson_runtime.Result in
+                match
+                  Transaction_snark.of_yojson
+                  @@ Yojson.Safe.from_string prev_str
+                with
+                | Ok x ->
+                    x
+                | Error e ->
+                    failwith e
+              in
               let%bind merged = T.merge prev next ~sok_digest in
               match merged with
               | Ok merged' ->
-                  return @@ callback merged'
+                  return
+                  @@ callback
+                       ( Js.string @@ Yojson.Safe.to_string
+                       @@ Transaction_snark.to_yojson merged' )
               | Error e ->
                   Error.raise e )
-          | None ->
-              return @@ callback next
 
         method commit (rollup : t) (txn_snark : Transaction_snark.t option)
             (callback : Js.js_string Js.t -> unit) =
-          let sk =
-            S.Private_key.of_base58_check_exn @@ Js.to_string rollup##.sk
-          in
-          let pk =
-            S.Public_key.compress @@ S.Public_key.of_private_key_exn sk
-          in
+          let pk = rollup##.pk in
           match txn_snark with
           | None ->
               raise (Failure "nothing to commit")
