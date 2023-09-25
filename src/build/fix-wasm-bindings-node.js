@@ -10,7 +10,7 @@ src = src.replace(
 let { isMainThread, workerData } = require('worker_threads');
 
 let env = {};
-if (isMainThread) {
+if (isMainThread || workerData?.isSnarkyMainThread) {
   env.memory = new WebAssembly.Memory({
     initial: 20,
     maximum: 65536,
