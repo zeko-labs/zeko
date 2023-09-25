@@ -19,10 +19,27 @@ type user_command =
 
 val rollup :
   < compile :
-      < applyUserCommand : t -> user_command -> unit Js.meth
-      ; commit : t -> (Js.js_string Js.t -> unit) -> unit Deferred.t Js.meth
+      < applyUserCommand :
+             t
+          -> user_command
+          -> < txHash : Js.js_string Js.t Js.readonly_prop
+             ; txId : Js.js_string Js.t Js.readonly_prop
+             ; txnSnarkInputJson : Js.js_string Js.t Js.readonly_prop >
+             Js.t
+             Js.meth
+      ; proveUserCommand :
+             Js.js_string Js.t
+          -> Js.js_string Js.t
+          -> (Js.js_string Js.t -> unit)
+          -> unit Deferred.t Js.meth
+      ; commit :
+             t
+          -> Js.js_string Js.t
+          -> (Js.js_string Js.t -> unit)
+          -> unit Deferred.t Js.meth
       ; createZkapp :
              Js.js_string Js.t
+          -> Account.key
           -> < publicKey : Js.js_string Js.t Js.prop
              ; balance : Js.js_string Js.t Js.prop >
              Js.t
@@ -32,7 +49,8 @@ val rollup :
              ; rollup : t Js.readonly_prop >
              Js.t
              Js.meth
-      ; getAccount : t -> Account.key -> Step.field -> 'a option Js.meth
+      ; getAccount :
+          t -> Account.key -> Step.field -> Js.Unsafe.any Js.optdef Js.meth
       ; vk : Side_loaded_verification_key.t Js.readonly_prop >
       Js.t
       Js.meth >

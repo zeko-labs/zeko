@@ -78,4 +78,4 @@
  (instrumentation
   (backend bisect_ppx))
  (preprocess
-  (pps ppx_jane ppx_custom_printf ppx_version js_of_ocaml-ppx)))
+  (pps ppx_jane ppx_custom_printf ppx_version js_of_ocaml-ppx ppx_deriving_yojson)))
