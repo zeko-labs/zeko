@@ -110,7 +110,7 @@ export default [
     ],
   },
   {
-    name: 'Rollup',
+    name: 'RollupBindings',
     props: [
       {
         name: 'compile',

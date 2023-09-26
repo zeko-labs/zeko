@@ -304,6 +304,21 @@ module Transaction_hash = struct
     let payment = Signed_command.sign kp payload in
     (payment :> Signed_command.t)
     |> Signed_command.to_yojson |> Yojson.Safe.to_string |> Js.string
+
+  let payment_of_base64 (base64 : Js.js_string Js.t) =
+    let command = Signed_command.of_base64 @@ Js.to_string @@ base64 in
+    match command with
+    | Ok command ->
+        Signed_command.to_yojson command |> Yojson.Safe.to_string |> Js.string
+    | Error e ->
+        Error.raise e
+
+  let payment_to_base64 (command : Js.js_string Js.t) =
+    let command : Signed_command.t =
+      command |> Js.to_string |> Yojson.Safe.from_string
+      |> Signed_command.of_yojson |> ok_exn
+    in
+    Signed_command.to_base64 command |> Js.string
 end
 
 let test =
@@ -397,5 +412,9 @@ let test =
         method serializePaymentV1 = serialize_payment_v1
 
         val examplePayment = example_payment
+
+        method paymentOfBase64 = payment_of_base64
+
+        method paymentToBase64 = payment_to_base64
       end
   end
