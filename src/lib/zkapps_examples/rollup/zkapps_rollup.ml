@@ -109,13 +109,16 @@ module Rules = struct
       let token_id = exists Token_id.typ ~request:(fun () -> Token_id) in
       let prev_state = txn_snark.source.first_pass_ledger in
       let prev_state_raw = Frozen_ledger_hash0.var_to_field prev_state in
-      let next_state = txn_snark.target.second_pass_ledger in
+      (* Ignore second pass ledger, use first pass target instead *)
+      (* let next_state = txn_snark.target.second_pass_ledger in *)
+      let next_state = txn_snark.target.first_pass_ledger in
       let next_state_raw = Frozen_ledger_hash0.var_to_field next_state in
-      let () =
-        Field.Assert.equal
-          (Frozen_ledger_hash0.var_to_field txn_snark.target.first_pass_ledger)
-          (Frozen_ledger_hash0.var_to_field txn_snark.source.second_pass_ledger)
-      in
+      (* Ignore second pass ledger, figure out if we need it later *)
+      (* let () =
+           Field.Assert.equal
+             (Frozen_ledger_hash0.var_to_field txn_snark.target.first_pass_ledger)
+             (Frozen_ledger_hash0.var_to_field txn_snark.source.second_pass_ledger)
+         in *)
       let account_update =
         new Zkapps_examples.account_update ~token_id ~public_key ~vk_hash ()
       in
