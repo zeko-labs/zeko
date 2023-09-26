@@ -1,34 +1,12 @@
 import { GraphQLError } from "graphql";
-import { FieldConst, Signature } from "snarkyjs";
-import { MutationResolvers, SendZkappPayload } from "../generated/graphql";
-import { RollupContext } from "../rollup";
-import { MinaEncoding } from "../utils";
+import { FieldConst, MinaUtils, Signature } from "snarkyjs";
+import { RollupContext } from ".";
+import { MutationResolvers } from "../generated/graphql";
 
 export const mutations: MutationResolvers = {
-  sendZkapp(_, { input }, { rollup }: RollupContext): SendZkappPayload {
+  async sendPayment(_, { input, signature }, { rollup }: RollupContext) {
     try {
-      const { hash, id } = rollup.applyZkappCommand(input.zkappCommand);
-
-      return {
-        zkapp: {
-          failureReason: null,
-          hash,
-          id,
-          zkappCommand: input.zkappCommand,
-        },
-      };
-    } catch (e) {
-      console.error(e);
-      if (e instanceof Error) {
-        throw new GraphQLError(e.message);
-      }
-      throw new GraphQLError("Unknown error");
-    }
-  },
-
-  sendPayment(_, { input, signature }, { rollup }: RollupContext) {
-    try {
-      const { hash, id } = rollup.applyPayment(
+      const { hash, id } = await rollup.applyPayment(
         Signature.fromJSON({
           r: signature?.field,
           s: signature?.scalar,
@@ -36,9 +14,9 @@ export const mutations: MutationResolvers = {
         input
       );
 
-      const feePayer = rollup.getAccount(MinaEncoding.publicKeyOfBase58(input.from), FieldConst[1]);
+      const feePayer = rollup.getAccount(MinaUtils.encoding.publicKeyOfBase58(input.from), FieldConst[1]);
 
-      const receiver = rollup.getAccount(MinaEncoding.publicKeyOfBase58(input.from), FieldConst[1]);
+      const receiver = rollup.getAccount(MinaUtils.encoding.publicKeyOfBase58(input.from), FieldConst[1]);
 
       if (feePayer === null || receiver === null) {
         throw new Error("Unexpected error, account was not created");

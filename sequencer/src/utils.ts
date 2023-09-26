@@ -1,8 +1,6 @@
-import { Field, Scalar, Test } from "snarkyjs";
+import { Field, Scalar } from "snarkyjs";
 import { AuthRequired } from "snarkyjs/dist/node/bindings/mina-transaction/transaction-leaves-json";
 import { AccountAuthRequired } from "./generated/graphql";
-
-export const MinaEncoding = Test.encoding;
 
 export const convAuthRequiredToGqlType = (authRequired: AuthRequired) => {
   switch (authRequired) {
@@ -44,4 +42,7 @@ export const hexToField = (hex: string): Field => {
 };
 
 export const MINA_NUMBER_OF_DECIMALS = 9;
-export const minaToDecimal = (amount: number) => amount * 10 ** MINA_NUMBER_OF_DECIMALS;
+export const minaToDecimal = (amount: number, numberOfDecimals = MINA_NUMBER_OF_DECIMALS) =>
+  amount * 10 ** numberOfDecimals;
+export const decimalToMina = (amount: number, numberOfDecimals = MINA_NUMBER_OF_DECIMALS) =>
+  amount / 10 ** numberOfDecimals;

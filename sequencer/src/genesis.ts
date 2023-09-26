@@ -1,12 +1,11 @@
 import fs from "fs/promises";
-import { MlPublicKey } from "snarkyjs";
+import { MinaUtils, MlPublicKey } from "snarkyjs";
 import { z } from "zod";
 import config from "./config";
-import { MinaEncoding } from "./utils";
 
 export type GenesisAccount = {
   publicKey: MlPublicKey;
-  balance: number | string;
+  balance: string;
 };
 
 const genesisAccountsSchema = z.array(
@@ -23,7 +22,7 @@ export const loadAccounts = async (): Promise<GenesisAccount[]> => {
   const parsedAccounts = genesisAccountsSchema.parse(accounts);
 
   return parsedAccounts.map(({ publicKey, balance }) => ({
-    publicKey: MinaEncoding.publicKeyOfBase58(publicKey),
-    balance,
+    publicKey: MinaUtils.encoding.publicKeyOfBase58(publicKey),
+    balance: balance.toString(),
   }));
 };

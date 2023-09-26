@@ -1,147 +1,87 @@
 import { ethers } from "ethers";
-import { Field, Group, PublicKey, Signature } from "snarkyjs";
 import { abi as DALayerAbi } from "./artifacts/DataAvailability.json";
 import config from "./config";
-import { Batch, Transaction } from "./rollup";
+import logger from "./logger";
+import { Transaction } from "./rollup";
 import { DataAvailability } from "./typechain-types";
-import { CommandPostedEvent, MinaCommandStruct } from "./typechain-types/contracts/DataAvailability";
+import { CommandPostedEvent } from "./typechain-types/contracts/DataAvailability";
 
-export const provider = new ethers.providers.WebSocketProvider(config.DA_LAYER_WEBSOCKET_URL);
+export class DALayer {
+  private readonly provider = new ethers.providers.WebSocketProvider(config.DA_LAYER_WEBSOCKET_URL);
 
-export const wallet = new ethers.Wallet(config.DA_LAYER_PRIVATE_KEY, provider);
+  private readonly wallet = new ethers.Wallet(config.DA_LAYER_PRIVATE_KEY, this.provider);
 
-export const daLayerContract = new ethers.Contract(
-  config.DA_LAYER_CONTRACT_ADDRESS,
-  DALayerAbi,
-  wallet
-) as DataAvailability;
+  public readonly contract = new ethers.Contract(
+    config.DA_LAYER_CONTRACT_ADDRESS,
+    DALayerAbi,
+    this.wallet
+  ) as DataAvailability;
 
-export const fetchBatches = async (ledgerHash: string) => {
-  let currentLedgerHash = ledgerHash;
-  let previousLedgerHash;
-  let transactions;
+  private pingTimeout: NodeJS.Timeout | null = null;
+  private keepAliveInterval: NodeJS.Timer | null = null;
 
-  const reversedBatches: Batch[] = [];
-
-  while (currentLedgerHash !== ethers.constants.HashZero) {
-    [previousLedgerHash, transactions] = await daLayerContract.getBatchData(currentLedgerHash);
-
-    const batch = {
-      ledgerHash: currentLedgerHash,
-      transactions: transactions.map((tx) => ({
-        id: Buffer.from(tx.data.slice(2), "hex").toString("base64"),
-        commandType: tx.commandType,
-      })),
-    };
-
-    reversedBatches.push(batch);
-
-    currentLedgerHash = previousLedgerHash;
+  constructor() {
+    this.keepAlive();
   }
 
-  return reversedBatches.reverse();
-};
+  public stop() {
+    this.clearKeepAliveInterval();
+    this.clearPingTimeout();
+    this.provider._websocket.terminate();
+  }
 
-export const postBatch = async (batch: Batch, previousLedgerHash: string) => {
-  const proposedCommands: MinaCommandStruct[] = batch.transactions.map(({ id, commandType }) => ({
-    commandType,
-    data: Buffer.from(id, "base64"),
-  }));
-
-  const tx = await daLayerContract.proposeBatch(batch.ledgerHash, previousLedgerHash, proposedCommands);
-
-  await tx.wait();
-
-  console.log("Batch posted: ", batch.ledgerHash);
-
-  const quorum = await daLayerContract.quorum();
-
-  return new Promise<
-    {
-      publicKey: PublicKey;
-      signature: Signature;
-    }[]
-  >((resolve) => {
-    daLayerContract.on("BatchSigned", async (signedLedgerHash, _, signatureCount) => {
-      if (signatureCount < quorum || signedLedgerHash !== batch.ledgerHash) return;
-
-      const solSignatures = await daLayerContract.getBatchSignatures(batch.ledgerHash);
-
-      const signatures = solSignatures.map((sig) => {
-        const pubKeyGroup = Group.fromJSON({
-          x: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.x.slice(2), "hex"))).toString(),
-          y: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.y.slice(2), "hex"))).toString(),
-        });
-
-        if (pubKeyGroup === null) throw new Error("Invalid public key");
-
-        const publicKey = PublicKey.fromGroup(pubKeyGroup);
-
-        const signature = Signature.fromJSON({
-          r: Field.fromBytes(Array.from(Buffer.from(sig.rx.slice(2), "hex"))).toString(),
-          s: Field.fromBytes(Array.from(Buffer.from(sig.s.slice(2), "hex"))).toString(),
-        });
-
-        return {
-          publicKey,
-          signature,
-        };
-      });
-
-      resolve(signatures);
+  public async postCommand(command: Transaction) {
+    const tx = await this.contract.postCommand({
+      commandType: command.commandType,
+      data: Buffer.from(command.id, "base64"),
     });
-  });
-};
 
-export const postCommand = async (command: Transaction) => {
-  const tx = await daLayerContract.postCommand({
-    commandType: command.commandType,
-    data: Buffer.from(command.id, "base64"),
-  });
+    const receipt = await tx.wait();
 
-  const receipt = await tx.wait();
+    const event = receipt.events?.find((e) => e.event === "CommandPosted") as CommandPostedEvent | undefined;
 
-  const commandPostedEvent = receipt.events?.find(({ event }) => event === "CommandPosted") as CommandPostedEvent;
+    if (event === undefined) {
+      throw new Error("Command posting failed");
+    }
 
-  const commandIndex = commandPostedEvent.args.index;
+    const commandIndex = event.args.index.toNumber();
 
-  console.log(`Command posted with id: ${command.id.slice(0, 8)}...`);
+    logger.info(`Command posted with id: ${commandIndex}`);
 
-  const quorum = await daLayerContract.quorum();
+    return commandIndex;
+  }
 
-  return new Promise<
-    {
-      publicKey: PublicKey;
-      signature: Signature;
-    }[]
-  >((resolve) => {
-    daLayerContract.on("CommandSigned", async (index, _, signatureCount) => {
-      if (signatureCount < quorum || !commandIndex.eq(index)) return;
+  private keepAlive() {
+    this.provider._websocket.on("open", () => {
+      this.keepAliveInterval = setInterval(() => {
+        this.provider._websocket.ping();
 
-      const solSignatures = await daLayerContract.getCommandSignatures(commandIndex);
-
-      const signatures = solSignatures.map((sig) => {
-        const pubKeyGroup = Group.fromJSON({
-          x: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.x.slice(2), "hex"))).toString(),
-          y: Field.fromBytes(Array.from(Buffer.from(sig.publicKey.y.slice(2), "hex"))).toString(),
-        });
-
-        if (pubKeyGroup === null) throw new Error("Invalid public key");
-
-        const publicKey = PublicKey.fromGroup(pubKeyGroup);
-
-        const signature = Signature.fromJSON({
-          r: Field.fromBytes(Array.from(Buffer.from(sig.rx.slice(2), "hex"))).toString(),
-          s: Field.fromBytes(Array.from(Buffer.from(sig.s.slice(2), "hex"))).toString(),
-        });
-
-        return {
-          publicKey,
-          signature,
-        };
-      });
-
-      resolve(signatures);
+        this.pingTimeout = setTimeout(() => {
+          this.provider._websocket.terminate();
+        }, config.WS_EXPECTED_PONG_BACK);
+      }, config.WS_KEEP_ALIVE_INTERVAL);
     });
-  });
-};
+
+    this.provider._websocket.on("close", () => {
+      this.clearKeepAliveInterval();
+      this.clearPingTimeout();
+      this.keepAlive();
+    });
+
+    this.provider._websocket.on("pong", () => {
+      this.clearPingTimeout();
+    });
+  }
+
+  private clearPingTimeout() {
+    if (this.pingTimeout) {
+      clearInterval(this.pingTimeout);
+    }
+  }
+
+  private clearKeepAliveInterval() {
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+    }
+  }
+}
