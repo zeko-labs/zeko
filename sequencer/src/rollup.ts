@@ -83,8 +83,8 @@ export class Rollup {
   public stagedTransactions: Transaction[] = [];
   public committedTransactions: Transaction[] = [];
 
-  public lastTxnSnark: string = "";
-  public txnSnarkPromise: Promise<string> = Promise.resolve(this.lastTxnSnark);
+  public lastTxnSnark: string | undefined = undefined;
+  public txnSnarkPromise: Promise<string | undefined> = Promise.resolve(this.lastTxnSnark);
 
   private rollup: RollupInstance;
   private deployAccountUpdate: string;
@@ -102,8 +102,6 @@ export class Rollup {
 
     if (config.COMMITMENT_PERIOD !== 0) {
       setInterval(() => {
-        if (this.stagedTransactions.length === 0) return;
-
         logger.info("Committing staged transactions");
         this.commit();
       }, config.COMMITMENT_PERIOD);
@@ -125,6 +123,16 @@ export class Rollup {
   }
 
   public async commit() {
+    if (this.lastTxnSnark === undefined) {
+      logger.info("No previous snark, skipping commit");
+      return;
+    }
+
+    if (this.stagedTransactions.length === 0) {
+      logger.info("No staged transactions, skipping commit");
+      return;
+    }
+
     this.committedTransactions.push(...this.stagedTransactions);
     this.stagedTransactions = [];
 

@@ -2,17 +2,21 @@ import { Async_js, MlPublicKey, RollupBindings, RollupMethods, withThreadPool } 
 import { MessagePort, Worker, isMainThread, parentPort, workerData } from "worker_threads";
 import logger from "../logger";
 
-type MessageToParentType = "started" | "ready" | "exited" | "done" | "error";
+type MessageToParentType = "started" | "ready" | "exited" | "done";
 type MessageToWorkerType = "exit" | "work";
 
 export class ProvingWorker<
   InputT,
   OutputT,
-  MessageToParent extends {
-    type: MessageToParentType;
-    data?: OutputT;
-    error?: string;
-  },
+  MessageToParent extends
+    | {
+        type: MessageToParentType;
+        data?: OutputT;
+      }
+    | {
+        type: "error";
+        error: Error;
+      },
   MessageToWorker extends {
     type: MessageToWorkerType;
     data?: InputT;
@@ -58,9 +62,9 @@ export class ProvingWorker<
       if (message.type === "done" && message.data !== undefined) {
         logger.debug(`Worker finished job with status: ${message.type}`);
         resolve(message.data);
-      } else {
+      } else if (message.type === "error") {
         logger.debug(`Worker finished job with status: ${message}`);
-        reject(new Error(message.error));
+        reject(message.error);
       }
 
       this.processQueue();

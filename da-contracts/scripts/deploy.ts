@@ -35,7 +35,7 @@ const main = async () => {
     "0xd78C987031B0256C9EA6289185E151C25EFD0e36"
   );
 
-  console.log("DataAvailabilityProxy deployed to:", proxy.address);
+  console.log(proxy.address);
 
   await shutdownSnarkyjs();
 };
