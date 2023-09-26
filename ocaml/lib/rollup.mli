@@ -19,39 +19,39 @@ type user_command =
 
 val rollup :
   < compile :
-      < applyUserCommand :
-             t
-          -> user_command
-          -> < txHash : Js.js_string Js.t Js.readonly_prop
-             ; txId : Js.js_string Js.t Js.readonly_prop
-             ; txnSnarkInputJson : Js.js_string Js.t Js.readonly_prop >
-             Js.t
-             Js.meth
-      ; proveUserCommand :
-             Js.js_string Js.t
-          -> Js.js_string Js.t
-          -> (Js.js_string Js.t -> unit)
-          -> unit Deferred.t Js.meth
-      ; commit :
-             t
-          -> Js.js_string Js.t
-          -> (Js.js_string Js.t -> unit)
-          -> unit Deferred.t Js.meth
-      ; createZkapp :
-             Js.js_string Js.t
-          -> Account.key
-          -> < publicKey : Js.js_string Js.t Js.prop
-             ; balance : Js.js_string Js.t Js.prop >
-             Js.t
-             Js.js_array
-             Js.t
-          -> < accountUpdate : Js.js_string Js.t Js.readonly_prop
-             ; rollup : t Js.readonly_prop >
-             Js.t
-             Js.meth
-      ; getAccount :
-          t -> Account.key -> Step.field -> Js.Unsafe.any Js.optdef Js.meth
-      ; vk : Side_loaded_verification_key.t Js.readonly_prop >
-      Js.t
-      Js.meth >
+         Account.key
+      -> < applyUserCommand :
+                t
+             -> user_command
+             -> < txHash : Js.js_string Js.t Js.readonly_prop
+                ; txId : Js.js_string Js.t Js.readonly_prop
+                ; txnSnarkInputJson : Js.js_string Js.t Js.readonly_prop >
+                Js.t
+                Js.meth
+         ; proveUserCommand :
+                Js.js_string Js.t
+             -> Js.js_string Js.t
+             -> (Js.js_string Js.t -> unit)
+             -> unit Deferred.t Js.meth
+         ; commit :
+                Js.js_string Js.t
+             -> (Js.js_string Js.t -> unit)
+             -> unit Deferred.t Js.meth
+         ; createZkapp :
+                Js.js_string Js.t
+             -> < publicKey : Account.key Js.prop
+                ; balance : Js.js_string Js.t Js.prop >
+                Js.t
+                Js.js_array
+                Js.t
+             -> < accountUpdate : Js.js_string Js.t Js.readonly_prop
+                ; rollup : t Js.readonly_prop >
+                Js.t
+                Js.meth
+         ; getAccount :
+             t -> Account.key -> Step.field -> Js.Unsafe.any Js.optdef Js.meth
+         ; getRoot : t -> Js.js_string Js.t Js.meth
+         ; vk : Side_loaded_verification_key.t Js.readonly_prop >
+         Js.t
+         Js.meth >
   Js.t

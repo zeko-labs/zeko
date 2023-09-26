@@ -18,7 +18,6 @@ let ok_exn x =
 
 type t =
   < ledger : L.t Js.readonly_prop
-  ; pk : S.Public_key.Compressed.t Js.readonly_prop
   ; slot : int Js.prop
   ; name : Js.js_string Js.t Js.readonly_prop >
   Js.t
@@ -79,7 +78,7 @@ module Step = Pickles.Impls.Step
 
 let rollup =
   object%js
-    method compile =
+    method compile (pk : S.Public_key.Compressed.t) =
       let constraint_constants =
         Genesis_constants.Constraint_constants.compiled
       in
@@ -116,9 +115,9 @@ let rollup =
         Initialise a rollup with the given name.
         Returns an empty ledger, the keys for the account, and the account update.
         *)
-        method createZkapp name (pk : S.Public_key.Compressed.t)
+        method createZkapp name
             (genesis_accounts :
-              < publicKey : Js.js_string Js.t Js.prop
+              < publicKey : S.Public_key.Compressed.t Js.prop
               ; balance : Js.js_string Js.t Js.prop >
               Js.t
               Js.js_array
@@ -126,12 +125,9 @@ let rollup =
           let l = L.create ~depth:constraint_constants.ledger_depth () in
           let () =
             Array.iter (Js.to_array genesis_accounts) ~f:(fun account ->
-                let pk =
-                  S.Public_key.Compressed.of_base58_check_exn
-                  @@ Js.to_string account##.publicKey
-                in
                 let account_id =
-                  Account_id.of_public_key (S.Public_key.decompress_exn pk)
+                  Account_id.of_public_key
+                    (S.Public_key.decompress_exn account##.publicKey)
                 in
                 let balance =
                   Unsigned.UInt64.of_string @@ Js.to_string account##.balance
@@ -205,8 +201,6 @@ let rollup =
               object%js
                 val ledger = l
 
-                val pk = pk
-
                 val name = name
 
                 val mutable slot = 0
@@ -273,7 +267,7 @@ let rollup =
             { source = stack_with_state; target = stack_with_state }
           in
           let sok_digest =
-            Sok_message.create ~fee:Currency.Fee.zero ~prover:rollup##.pk
+            Sok_message.create ~fee:Currency.Fee.zero ~prover:pk
             |> Sok_message.digest
           in
 
@@ -356,10 +350,10 @@ let rollup =
               | Error e ->
                   Error.raise e )
 
-        method commit (rollup : t) txn_snark (k : Js.js_string Js.t -> unit) =
+        method commit txn_snark (k : Js.js_string Js.t -> unit) =
           let%bind acup, () =
             M.step
-              { public_key = rollup##.pk
+              { public_key = pk
               ; token_id
               ; may_use_token = Inherit_from_parent
               ; txn =
@@ -392,5 +386,9 @@ let rollup =
             to_json
           in
           To_js.option account_to_json ac
+
+        method getRoot (rollup : t) =
+          let root = L.merkle_root rollup##.ledger in
+          root |> Mina_base.Frozen_ledger_hash0.to_decimal_string |> Js.string
       end
   end
