@@ -26,10 +26,28 @@ module Make_str (A : Wire_types.Concrete) = struct
   module Digest = struct
     let length_in_bytes = Blake2.digest_size_in_bytes
 
+    module T = struct
+      let description = "Sok digest"
+
+      let version_byte = '\x69'
+    end
+
+    module Base58_check = Base58_check.Make (T)
+
     [%%versioned_binable
     module Stable = struct
       module V1 = struct
-        type t = string [@@deriving sexp, hash, compare, equal, yojson]
+        type t =
+          (string
+          [@to_yojson
+            fun x ->
+              Yojson.Safe.from_string @@ "\"" ^ Base58_check.encode x ^ "\""]
+          [@of_yojson
+            fun x ->
+              let x = Yojson.Safe.to_string x in
+              let trimmed = String.sub x 1 (String.length x - 2) in
+              Ok (Base58_check.decode_exn trimmed)] )
+        [@@deriving sexp, hash, compare, equal, yojson]
 
         let to_latest = Fn.id
 
