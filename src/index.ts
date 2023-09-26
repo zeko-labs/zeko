@@ -1,6 +1,13 @@
-export type { ProvablePure, RollupMethods, UserCommand } from './snarky.js';
-export { Ledger, Rollup, Async_js, Test as MinaUtils } from './snarky.js';
+export type {
+  MlPublicKey,
+  ProvablePure,
+  RollupInstance,
+  RollupMethods,
+  UserCommand,
+} from './snarky.js';
+export { Async_js, Ledger, RollupBindings, Test as MinaUtils } from './snarky.js';
 export { withThreadPool } from './bindings/js/wrapper.js';
+export * as Base58Encodings from './lib/base58-encodings.js';
 export { prettifyStacktracePromise } from './lib/errors.js';
 export { FieldConst } from './lib/field.js';
 export { Field, Bool, Group, Scalar } from './lib/core.js';

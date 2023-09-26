@@ -16,16 +16,19 @@ export {
   Async_js,
   Gate,
   Ledger,
+  MlPublicKey,
   Pickles,
   Provable,
   ProvablePure,
-  Rollup,
+  RollupBindings,
+  RollupInstance,
   RollupMethods,
+  Test,
   UserCommand,
 };
 
 // internal
-export { JsonGate, MlPublicKey, MlPublicKeyVar, Snarky, Test };
+export { JsonGate, MlPublicKeyVar, Snarky };
 
 /**
  * `Provable<T>` is the general circuit type interface in o1js. `Provable<T>` interface describes how a type `T` is made up of {@link Field} elements and "auxiliary" (non-provable) data.
@@ -502,6 +505,8 @@ declare const Test: {
     serializeCommon(common: string): { data: Uint8Array };
     hashPayment(payment: string): string;
     hashPaymentV1(payment: string): string;
+    paymentOfBase64(base64: string): string;
+    paymentToBase64(payment: string): string;
   };
 };
 
@@ -599,36 +604,54 @@ type UserCommand = {
   validUntil: string;
   nonce: string;
   memo: string;
-  accountCreationFee: string;
 };
 
-type RollupInstance = unknown;
+type RollupInstance = {
+  ledger: unknown;
+  slot: number;
+  name: string;
+};
 
 type RollupMethods = {
   vk: unknown;
 
   createZkapp(
     name: string,
-    genesisAccounts: { publicKey: string; balance: string }[]
+    genesisAccounts: { publicKey: MlPublicKey; balance: string }[]
   ): {
     accountUpdate: string;
     rollup: RollupInstance;
+    genesisLedgerHash: string;
   };
 
-  applyUserCommand(rollup: RollupInstance, userCommand: UserCommand): void;
-
-  commit(
+  applyUserCommand(
     rollup: RollupInstance,
-    callback: (accountUpdate: string) => void
-  ): Promise<void>;
+    userCommand: UserCommand
+  ): {
+    txId: string;
+    txHash: string;
+    txnSnarkInputJson: string;
+  };
+
+  proveUserCommand(
+    txnSnarkInputJson: string,
+    previousTxnSnarkJson: string | undefined,
+    callback: (txnSnarkJson: string) => void
+  ): void;
+
+  commit(txnSnark: string, callback: (accountUpdate: string) => void): void;
 
   getAccount(
     rollup: RollupInstance,
     pk: MlPublicKey,
     token: FieldConst
-  ): string;
+  ): JsonAccount | undefined;
+
+  getRoot(rollup: RollupInstance): string;
+
+  getLedgerHashFromSnark(txnSnark: string): string;
 };
 
-declare const Rollup: {
-  compile(): RollupMethods;
+declare const RollupBindings: {
+  compile(pk: MlPublicKey): RollupMethods;
 };
