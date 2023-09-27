@@ -1796,10 +1796,18 @@ module Make_str (A : Wire_types.Concrete) = struct
             let%bind state_body_hash =
               Mina_state.Protocol_state.Body.hash_checked state_body
             in
-            let global_slot = block_global_slot in
+            let current_global_slot = block_global_slot in
+            let%bind prev_global_slot =
+              Global_slot_since_genesis.Checked.sub current_global_slot
+                Mina_numbers.Global_slot_span.(Checked.constant one)
+            in
+            let%bind computed_pending_coinbase_stack_before =
+              Pending_coinbase.Stack.Checked.push_state state_body_hash
+                prev_global_slot pending_coinbase_stack_init
+            in
             let%bind computed_pending_coinbase_stack_after =
               Pending_coinbase.Stack.Checked.push_state state_body_hash
-                global_slot pending_coinbase_stack_init
+                current_global_slot pending_coinbase_stack_init
             in
             [%with_label_ "Check pending coinbase stack"] (fun () ->
                 let%bind correct_coinbase_target_stack =
@@ -1818,7 +1826,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                   (*for the rest, both source and target are the same*)
                   let%bind equal_source_with_state =
                     Pending_coinbase.Stack.equal_var
-                      computed_pending_coinbase_stack_after
+                      computed_pending_coinbase_stack_before
                       pending_coinbase_stack_before
                   in
                   Boolean.(equal_source ||| equal_source_with_state)
@@ -2286,14 +2294,23 @@ module Make_str (A : Wire_types.Concrete) = struct
       *)
       let%bind () =
         [%with_label_ "Compute coinbase stack"] (fun () ->
+            let%bind prev_global_slot =
+              Global_slot_since_genesis.Checked.sub current_global_slot
+                (Mina_numbers.Global_slot_span.Checked.constant
+                   Mina_numbers.Global_slot_span.one )
+            in
             let%bind state_body_hash =
               Mina_state.Protocol_state.Body.hash_checked state_body
             in
-            let%bind pending_coinbase_stack_with_state =
+            let%bind computed_pending_coinbase_stack_with_before =
               Pending_coinbase.Stack.Checked.push_state state_body_hash
-                current_global_slot pending_coinbase_stack_init
+                prev_global_slot pending_coinbase_stack_init
             in
             let%bind computed_pending_coinbase_stack_after =
+              let%bind pending_coinbase_stack_with_state =
+                Pending_coinbase.Stack.Checked.push_state state_body_hash
+                  current_global_slot pending_coinbase_stack_init
+              in
               let coinbase =
                 (Account_id.Checked.public_key receiver, payload.body.amount)
               in
@@ -2316,7 +2333,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                   in
                   let%bind equal_source_with_state =
                     Pending_coinbase.Stack.equal_var
-                      pending_coinbase_stack_with_state
+                      computed_pending_coinbase_stack_with_before
                       pending_coinbase_stack_before
                   in
                   Boolean.(equal_source ||| equal_source_with_state)
