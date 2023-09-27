@@ -231,10 +231,14 @@ let rollup =
           in
 
           let l : L.t = rollup##.ledger in
+          let prev_global_slot =
+            Mina_numbers.Global_slot_since_genesis.of_int rollup##.slot
+          in
+          let () = rollup##.slot := rollup##.slot + 1 in
           let global_slot =
             Mina_numbers.Global_slot_since_genesis.of_int rollup##.slot
           in
-          (* let () = rollup##.slot := rollup##.slot + 1 in *)
+
           let source = L.merkle_root l in
 
           let sparse_ledger =
@@ -261,11 +265,13 @@ let rollup =
           let init_stack = Mina_base.Pending_coinbase.Stack.empty in
           let pc : Transaction_snark.Pending_coinbase_stack_state.t =
             (* No coinbase to add to the stack. *)
-            let stack_with_state =
+            let stack_with_state global_slot =
               Pending_coinbase.Stack.push_state state_body_hash global_slot
                 init_stack
             in
-            { source = stack_with_state; target = stack_with_state }
+            { source = stack_with_state prev_global_slot
+            ; target = stack_with_state global_slot
+            }
           in
           let sok_digest =
             Sok_message.create ~fee:Currency.Fee.zero ~prover:pk
