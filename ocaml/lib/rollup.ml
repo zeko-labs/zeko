@@ -7,14 +7,16 @@ module L = Mina_ledger.Ledger
 module S = Signature_lib
 module Util = Util'
 
-module To_js = struct
-  let option (transform : 'a -> 'b) (x : 'a option) =
-    Js.Optdef.option (Option.map x ~f:transform)
-end
-
 let ok_exn x =
   let open Ppx_deriving_yojson_runtime.Result in
   match x with Ok x -> x | Error e -> failwith e
+
+let time label (d : 'a Deferred.t) =
+  let start = Time.now () in
+  let%bind x = d in
+  let stop = Time.now () in
+  printf "%s: %s\n%!" label (Time.Span.to_string_hum (Time.diff stop start)) ;
+  return x
 
 type t =
   < ledger : L.t Js.readonly_prop
@@ -22,49 +24,48 @@ type t =
   ; name : Js.js_string Js.t Js.readonly_prop >
   Js.t
 
-type user_command =
-  < signature : Js.js_string Js.t Js.readonly_prop
-  ; fromBase58 : Js.js_string Js.t Js.readonly_prop
-  ; toBase58 : Js.js_string Js.t Js.readonly_prop
-  ; amount : Js.js_string Js.t Js.readonly_prop
-  ; fee : Js.js_string Js.t Js.readonly_prop
-  ; validUntil : Js.js_string Js.t Js.readonly_prop
-  ; nonce : Js.js_string Js.t Js.readonly_prop
-  ; memo : Js.js_string Js.t Js.readonly_prop
-  ; accountCreationFee : Js.js_string Js.t Js.readonly_prop >
-  Js.t
+module Js_user_command = struct
+  type t =
+    < signature : Js.js_string Js.t Js.readonly_prop
+    ; fromBase58 : Js.js_string Js.t Js.readonly_prop
+    ; toBase58 : Js.js_string Js.t Js.readonly_prop
+    ; amount : Js.js_string Js.t Js.readonly_prop
+    ; fee : Js.js_string Js.t Js.readonly_prop
+    ; validUntil : Js.js_string Js.t Js.readonly_prop
+    ; nonce : Js.js_string Js.t Js.readonly_prop
+    ; memo : Js.js_string Js.t Js.readonly_prop
+    ; accountCreationFee : Js.js_string Js.t Js.readonly_prop >
+    Js.t
 
-let user_command_of_js command ~signature_kind =
-  let from =
-    S.Public_key.Compressed.of_base58_check_exn
-    @@ Js.to_string command##.fromBase58
-  in
-  let to_ =
-    S.Public_key.Compressed.of_base58_check_exn
-    @@ Js.to_string command##.toBase58
-  in
-  let payload =
-    Mina_base.Signed_command.Payload.create
-      ~fee:(Currency.Fee.of_string @@ Js.to_string command##.fee)
-      ~fee_payer_pk:from
-      ~valid_until:
-        ( Option.some @@ Mina_numbers.Global_slot_since_genesis.of_string
-        @@ Js.to_string command##.validUntil )
-      ~nonce:
-        ( Mina_numbers.Global_slot_legacy.of_string
-        @@ Js.to_string command##.nonce )
-      ~memo:
-        ( Mina_base.Signed_command_memo.of_base58_check_exn
-        @@ Js.to_string command##.memo )
-      ~body:
-        (Payment
-           { receiver_pk = to_
-           ; amount = Currency.Amount.of_string @@ Js.to_string command##.amount
-           } )
-  in
-  Mina_base.Signed_command.create_with_signature_checked ~signature_kind
-    (Mina_base.Signature.of_base58_check_exn @@ Js.to_string command##.signature)
-    from payload
+  let to_user_command ?(signature_kind = Mina_signature_kind.Testnet) (t : t) =
+    let from =
+      S.Public_key.Compressed.of_base58_check_exn @@ Js.to_string t##.fromBase58
+    in
+    let to_ =
+      S.Public_key.Compressed.of_base58_check_exn @@ Js.to_string t##.toBase58
+    in
+    let payload =
+      Mina_base.Signed_command.Payload.create
+        ~fee:(Currency.Fee.of_string @@ Js.to_string t##.fee)
+        ~fee_payer_pk:from
+        ~valid_until:
+          ( Option.some @@ Mina_numbers.Global_slot_since_genesis.of_string
+          @@ Js.to_string t##.validUntil )
+        ~nonce:
+          (Mina_numbers.Global_slot_legacy.of_string @@ Js.to_string t##.nonce)
+        ~memo:
+          ( Mina_base.Signed_command_memo.of_base58_check_exn
+          @@ Js.to_string t##.memo )
+        ~body:
+          (Payment
+             { receiver_pk = to_
+             ; amount = Currency.Amount.of_string @@ Js.to_string t##.amount
+             } )
+    in
+    Mina_base.Signed_command.create_with_signature_checked ~signature_kind
+      (Mina_base.Signature.of_base58_check_exn @@ Js.to_string t##.signature)
+      from payload
+end
 
 type txn_snark_input =
   { sparse_ledger : Mina_ledger.Sparse_ledger.t
@@ -210,14 +211,14 @@ let rollup =
         (*
         Applies a user command to a ledger immediately with the specified public key.
         *)
-        method applyUserCommand (rollup : t) (user_command : user_command) =
+        method applyUserCommand (rollup : t) (user_command : Js_user_command.t)
+            =
           (* FIXME: change to custom salt when it will be available in snarkyjs and auro wallet *)
           (* let signature_kind =
                Mina_signature_kind.Other_network (Js.to_string rollup##.name)
              in *)
-          let signature_kind = Mina_signature_kind.Testnet in
           let user_command =
-            match user_command_of_js user_command ~signature_kind with
+            match Js_user_command.to_user_command user_command with
             | Some x ->
                 x
             | None ->
@@ -305,7 +306,8 @@ let rollup =
                    }
           end
 
-        method proveUserCommand txn_snark_inp prev
+        method proveUserCommand (txn_snark_inp : Js.js_string Js.t)
+            (prev : Js.js_string Js.t Js.optdef)
             (callback : Js.js_string Js.t -> unit) =
           let { command; global_slot; sparse_ledger; statement } =
             ok_exn @@ txn_snark_input_of_yojson @@ Yojson.Safe.from_string
@@ -321,25 +323,26 @@ let rollup =
             ; global_slot
             }
           in
-
           let%bind next =
-            T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
-              ~statement user_command_in_block handler
+            time "Transaction_snark.of_user_command"
+              (T.of_user_command
+                 ~init_stack:Mina_base.Pending_coinbase.Stack.empty ~statement
+                 user_command_in_block handler )
           in
-
-          match Js.to_string prev with
-          | "" ->
+          match Js.Optdef.to_option prev with
+          | None ->
               return
               @@ callback
                    ( Js.string @@ Yojson.Safe.to_string
                    @@ Transaction_snark.to_yojson next )
-          | prev -> (
+          | Some prev -> (
               let prev =
-                ok_exn @@ Transaction_snark.of_yojson
-                @@ Yojson.Safe.from_string prev
+                ok_exn @@ Transaction_snark.of_yojson @@ Yojson.Safe.from_string
+                @@ Js.to_string prev
               in
               let%bind merged =
-                T.merge prev next ~sok_digest:statement.sok_digest
+                time "Transaction_snark.merge"
+                  (T.merge prev next ~sok_digest:statement.sok_digest)
               in
               match merged with
               | Ok merged' ->
@@ -352,15 +355,16 @@ let rollup =
 
         method commit txn_snark (k : Js.js_string Js.t -> unit) =
           let%bind acup, () =
-            M.step
-              { public_key = pk
-              ; token_id
-              ; may_use_token = Inherit_from_parent
-              ; txn =
-                  ok_exn @@ Transaction_snark.of_yojson
-                  @@ Yojson.Safe.from_string @@ Js.to_string txn_snark
-              }
-              ()
+            time "Rollup_zkapp.step"
+              (M.step
+                 { public_key = pk
+                 ; token_id
+                 ; may_use_token = Inherit_from_parent
+                 ; txn =
+                     ok_exn @@ Transaction_snark.of_yojson
+                     @@ Yojson.Safe.from_string @@ Js.to_string txn_snark
+                 }
+                 () )
           in
           return
           @@ k
@@ -385,7 +389,7 @@ let rollup =
             in
             to_json
           in
-          To_js.option account_to_json ac
+          Js.Optdef.option (Option.map ac ~f:account_to_json)
 
         method getRoot (rollup : t) =
           let root = L.merkle_root rollup##.ledger in
