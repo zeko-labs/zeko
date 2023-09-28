@@ -6,6 +6,7 @@ open Async_kernel
 module L = Mina_ledger.Ledger
 module S = Signature_lib
 module Util = Util'
+module Step = Pickles.Impls.Step
 
 let ok_exn x =
   let open Ppx_deriving_yojson_runtime.Result in
@@ -75,8 +76,6 @@ type txn_snark_input =
   }
 [@@deriving yojson]
 
-module Step = Pickles.Impls.Step
-
 let rollup =
   object%js
     method compile (pk : S.Public_key.Compressed.t) =
@@ -138,6 +137,8 @@ let rollup =
                 in
                 L.create_new_account_exn l account_id account )
           in
+          let genesis_ledger_hash = L.merkle_root l in
+
           let acup : Account_update.t =
             let body =
               { Account_update.Body.dummy with
@@ -206,6 +207,11 @@ let rollup =
 
                 val mutable slot = 0
               end
+
+            val genesisLedgerHash : Js.js_string Js.t =
+              Js.string
+              @@ Mina_base.Frozen_ledger_hash0.to_decimal_string
+                   genesis_ledger_hash
           end
 
         (*
@@ -399,6 +405,15 @@ let rollup =
 
         method getRoot (rollup : t) =
           let root = L.merkle_root rollup##.ledger in
+          root |> Mina_base.Frozen_ledger_hash0.to_decimal_string |> Js.string
+
+        method getLedgerHashFromSnark (txn_snark : Js.js_string Js.t) =
+          let txn_snark =
+            ok_exn @@ Transaction_snark.of_yojson @@ Yojson.Safe.from_string
+            @@ Js.to_string txn_snark
+          in
+          let statement = Transaction_snark.statement txn_snark in
+          let root = statement.target.first_pass_ledger in
           root |> Mina_base.Frozen_ledger_hash0.to_decimal_string |> Js.string
       end
   end

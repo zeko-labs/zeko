@@ -59,12 +59,15 @@ val rollup :
                 Js.js_array
                 Js.t
              -> < accountUpdate : Js.js_string Js.t Js.readonly_prop
-                ; rollup : t Js.readonly_prop >
+                ; rollup : t Js.readonly_prop
+                ; genesisLedgerHash : Js.js_string Js.t Js.readonly_prop >
                 Js.t
                 Js.meth
          ; getAccount :
              t -> Account.key -> Step.field -> Js.Unsafe.any Js.optdef Js.meth
          ; getRoot : t -> Js.js_string Js.t Js.meth
+         ; getLedgerHashFromSnark :
+             Js.js_string Js.t -> Js.js_string Js.t Js.meth
          ; vk : Side_loaded_verification_key.t Js.readonly_prop >
          Js.t
          Js.meth >
