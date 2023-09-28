@@ -1,3 +1,4 @@
+import { ethers } from "ethers";
 import { Field, Scalar } from "snarkyjs";
 import { AuthRequired } from "snarkyjs/dist/node/bindings/mina-transaction/transaction-leaves-json";
 import { AccountAuthRequired } from "./generated/graphql";
@@ -39,6 +40,10 @@ export const hexToField = (hex: string): Field => {
       .join("") ?? "";
 
   return Field(BigInt(`0x${littleEndianHex}`));
+};
+
+export const bigIntStrToHex = (bigIntStr: string) => {
+  return ethers.utils.hexZeroPad(ethers.BigNumber.from(bigIntStr).toHexString(), 32);
 };
 
 export const MINA_NUMBER_OF_DECIMALS = 9;

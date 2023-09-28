@@ -2,7 +2,7 @@ import { ethers } from "ethers";
 import { abi as DALayerAbi } from "./artifacts/DataAvailability.json";
 import config from "./config";
 import logger from "./logger";
-import { Transaction } from "./rollup";
+import { StoredTransaction, Transaction } from "./rollup";
 import { DataAvailability } from "./typechain-types";
 import { CommandPostedEvent } from "./typechain-types/contracts/DataAvailability";
 
@@ -49,6 +49,30 @@ export class DALayer {
     logger.info(`Command posted with id: ${commandIndex}`);
 
     return commandIndex;
+  }
+
+  public async postBatch(batchId: string, previousBatchId: string, commandIndexes: number[]) {
+    const tx = await this.contract.postBatch(batchId, previousBatchId, commandIndexes);
+    await tx.wait();
+  }
+
+  public async getBatchesTillGenesis(batchId: string): Promise<number[][]> {
+    if (batchId === ethers.constants.HashZero) {
+      return [];
+    }
+
+    const [previousBatchId, commands] = await this.contract.getBatchData(batchId);
+    return [...(await this.getBatchesTillGenesis(previousBatchId)), commands.map((x) => x.toNumber())];
+  }
+
+  public async getCommand(commandIndex: number): Promise<StoredTransaction> {
+    const command = await this.contract.getCommandData(commandIndex);
+
+    return {
+      daIndex: commandIndex,
+      id: Buffer.from(command.data.slice(2), "hex").toString("base64"),
+      commandType: command.commandType,
+    };
   }
 
   private keepAlive() {

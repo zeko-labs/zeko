@@ -1,3 +1,4 @@
+import { ethers } from "ethers";
 import {
   AccountUpdate,
   Async_js,
@@ -23,7 +24,7 @@ import { RollupContext } from "./gql";
 import logger from "./logger";
 import { commandProver } from "./proving/command";
 import { commitProver } from "./proving/commit";
-import { convAuthRequiredToGqlType } from "./utils";
+import { bigIntStrToHex, convAuthRequiredToGqlType, minaToDecimal } from "./utils";
 
 export const createRollupContext = async (
   genesisAccounts: GenesisAccount[],
@@ -79,9 +80,16 @@ export type Transaction = {
   commandType: CommandType;
 };
 
+export type StoredTransaction = {
+  daIndex: number;
+} & Transaction;
+
 export class Rollup {
-  public stagedTransactions: Transaction[] = [];
-  public committedTransactions: Transaction[] = [];
+  public stagedTransactions: StoredTransaction[] = [];
+  public committedTransactions: StoredTransaction[] = [];
+
+  public lastCommittedBatchId: string = ethers.constants.HashZero;
+  private isCommitting: boolean = false;
 
   public lastTxnSnark: string | undefined = undefined;
   public txnSnarkPromise: Promise<string | undefined> = Promise.resolve(this.lastTxnSnark);
@@ -123,6 +131,9 @@ export class Rollup {
   }
 
   public async commit() {
+    if (this.isCommitting) return;
+    this.isCommitting = true;
+
     if (this.lastTxnSnark === undefined) {
       logger.info("No previous snark, skipping commit");
       return;
@@ -133,8 +144,13 @@ export class Rollup {
       return;
     }
 
-    this.committedTransactions.push(...this.stagedTransactions);
-    this.stagedTransactions = [];
+    const batchId = bigIntStrToHex(this.bindings.getLedgerHashFromSnark(this.lastTxnSnark));
+
+    await this.daLayer.postBatch(
+      batchId,
+      this.lastCommittedBatchId,
+      this.stagedTransactions.map((tx) => tx.daIndex)
+    );
 
     const stepCallForest = await commitProver.enqueue({ txnSnark: this.lastTxnSnark });
 
@@ -147,6 +163,37 @@ export class Rollup {
     stepTx.transaction.accountUpdates.push(...stepAccountUpdates);
 
     await stepTx.sign([this.signer, this.zkappKey]).send();
+
+    this.committedTransactions.push(...this.stagedTransactions);
+    this.stagedTransactions = [];
+    this.lastCommittedBatchId = batchId;
+    this.isCommitting = false;
+  }
+
+  public async bootstrap(batchId: string) {
+    const batchOrderings = await this.daLayer.getBatchesTillGenesis(batchId);
+
+    const commands = await Promise.all(
+      batchOrderings.flat().map(async (commandDaIndex) => this.daLayer.getCommand(commandDaIndex))
+    );
+
+    commands.forEach((command) => {
+      const { payload, signer, signature } = JSON.parse(MinaUtils.transactionHash.paymentOfBase64(command.id));
+
+      this.bindings.applyUserCommand(this.rollup, {
+        signature: signature,
+        fromBase58: signer,
+        toBase58: payload.body.at(1).receiver_pk,
+        amount: payload.body.at(1).amount,
+        fee: minaToDecimal(payload.common.fee).toString(),
+        validUntil: payload.common.valid_until.at(1),
+        nonce: payload.common.nonce,
+        memo: payload.common.memo,
+      });
+    });
+
+    this.lastCommittedBatchId = batchId;
+    this.committedTransactions = commands;
   }
 
   public getRoot() {
@@ -240,9 +287,7 @@ export class Rollup {
       commandType: CommandType.SignedCommand,
     };
 
-    this.stagedTransactions.push(tx);
-
-    await this.daLayer.postCommand(tx);
+    const daIndex = await this.daLayer.postCommand(tx);
 
     const prevSnarkPromise = this.txnSnarkPromise;
     this.txnSnarkPromise = prevSnarkPromise.then((prevSnarkJson) => {
@@ -250,6 +295,7 @@ export class Rollup {
     });
 
     this.txnSnarkPromise.then((txnSnarkJson) => {
+      this.stagedTransactions.push({ ...tx, daIndex });
       this.lastTxnSnark = txnSnarkJson;
     });
 

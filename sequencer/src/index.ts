@@ -13,6 +13,7 @@ const run = async () => {
     resolvers,
   });
 
+  // TODO: decouple l1 interaction and add live network support
   const Local = Mina.LocalBlockchain({
     proofsEnabled: true,
   });
