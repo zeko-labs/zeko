@@ -5,23 +5,22 @@ import {hasher, signer, NetworkId} from "./MinaPrecompiles.sol";
 import {MinaSchnorrSignature, MinaPublicKey, HashedMinaPublicKey, RollupBatch, MinaCommand} from "./Types.sol";
 import {MinaMultisig} from "./MinaMultisig.sol";
 import {FieldBytes} from "./FieldBytes.sol";
+import {Endianness} from "./Endianness.sol";
 
 contract DataAvailability is MinaMultisig {
     using FieldBytes for bytes;
-
-    // TODO: for testing, this should be fetched from L1 contract
-    bytes32 public lastProposedBatch;
-
-    event BatchProposed(bytes32 indexed ledgerHash);
-    event BatchSigned(
-        bytes32 indexed ledgerHash,
-        HashedMinaPublicKey indexed publicKey,
-        uint256 signatureCount
-    );
+    using Endianness for bytes32;
 
     event CommandPosted(uint256 indexed index, MinaCommand command);
     event CommandSigned(
         uint256 indexed index,
+        HashedMinaPublicKey indexed publicKey,
+        uint256 signatureCount
+    );
+
+    event BatchPosted(bytes32 indexed id);
+    event BatchSigned(
+        bytes32 indexed id,
         HashedMinaPublicKey indexed publicKey,
         uint256 signatureCount
     );
@@ -74,43 +73,47 @@ contract DataAvailability is MinaMultisig {
         );
     }
 
-    function proposeBatch(
-        bytes32 ledgerHash,
-        bytes32 previousLedgerHash,
-        MinaCommand[] memory commands
+    function postBatch(
+        bytes32 id,
+        bytes32 previousId,
+        uint256[] memory commands
     ) external onlySequencer {
         require(commands.length > 0, "Fields cannot be empty");
-        require(ledgerHash != previousLedgerHash, "Batch cannot be equal to previous batch");
+        require(id != previousId, "Batch cannot be equal to previous batch");
         require(
-            batches[previousLedgerHash].commands.length > 0 || previousLedgerHash == bytes32(0),
+            batches[previousId].commands.length > 0 || previousId == bytes32(0),
             "Previous batch does not exist"
         );
 
-        RollupBatch storage batch = batches[ledgerHash];
+        RollupBatch storage batch = batches[id];
 
         require(batch.commands.length == 0, "Batch already exists");
 
-        batch.previousLedgerHash = previousLedgerHash;
+        batch.previousId = previousId;
 
         for (uint256 i = 0; i < commands.length; i++) {
             batch.commands.push(commands[i]);
         }
 
-        emit BatchProposed(ledgerHash);
-        lastProposedBatch = ledgerHash;
+        emit BatchPosted(id);
     }
 
     function addBatchSignature(
-        bytes32 ledgerHash,
-        bytes32[] calldata sigData,
+        bytes32 id,
         MinaSchnorrSignature calldata signature
     ) external validatorExists(hashPublicKey(signature.publicKey)) {
-        RollupBatch storage batch = batches[ledgerHash];
+        RollupBatch storage batch = batches[id];
 
         require(
             !batch.validatorSigned[hashPublicKey(signature.publicKey)],
             "Validator already signed"
         );
+
+        bytes32[] memory sigData = new bytes32[](batch.commands.length);
+
+        for (uint256 i = 0; i < batch.commands.length; i++) {
+            sigData[i] = (bytes32(batch.commands[i])).swapEndianness();
+        }
 
         bool verified = signer.verify(
             NetworkId.TESTNET,
@@ -126,19 +129,15 @@ contract DataAvailability is MinaMultisig {
         batch.signatures.push(signature);
         batch.validatorSigned[hashPublicKey(signature.publicKey)] = true;
 
-        emit BatchSigned(ledgerHash, hashPublicKey(signature.publicKey), batch.signatures.length);
+        emit BatchSigned(id, hashPublicKey(signature.publicKey), batch.signatures.length);
     }
 
-    function getBatchSignatures(
-        bytes32 ledgerHash
-    ) external view returns (MinaSchnorrSignature[] memory) {
-        return batches[ledgerHash].signatures;
+    function getBatchSignatures(bytes32 id) external view returns (MinaSchnorrSignature[] memory) {
+        return batches[id].signatures;
     }
 
-    function getBatchData(
-        bytes32 ledgerHash
-    ) external view returns (bytes32, MinaCommand[] memory) {
-        return (batches[ledgerHash].previousLedgerHash, batches[ledgerHash].commands);
+    function getBatchData(bytes32 id) external view returns (bytes32, uint256[] memory) {
+        return (batches[id].previousId, batches[id].commands);
     }
 
     function getCommandSignatures(

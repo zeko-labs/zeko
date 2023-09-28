@@ -2,7 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { Field, PrivateKey, Signature, isReady as isSnarkyjsReady } from "snarkyjs";
 import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailability";
-import { bytesToFields, fieldToHex, hashPublicKey, signatureToStruct } from "../utils/mina";
+import { fieldToHex, hashPublicKey, signatureToStruct } from "../utils/mina";
 import { deployDataAvailabilityContract } from "./fixtures";
 
 function randomInt(min: number, max: number) {
@@ -24,46 +24,27 @@ describe("Batches DataAvailability", () => {
       validators.map((validator) => validator.toPublicKey())
     );
 
-    const ledgerHash = fieldToHex(Field.random());
-    const previousLedgerHash = fieldToHex(Field(0));
+    const batchId = fieldToHex(Field.random());
+    const previousId = fieldToHex(Field(0));
 
     const numberOfUserCommands = randomInt(5, 10);
 
-    const userCommands = Array.from({ length: numberOfUserCommands }, () => ({
-      data: ethers.utils.randomBytes(randomInt(50, 100)),
-      commandType: randomInt(0, 1),
-    }));
+    const userCommands = Array.from({ length: numberOfUserCommands }, () => randomInt(0, 1000));
 
-    const proposalTx = await dataAvailabilityContract.proposeBatch(
-      ledgerHash,
-      previousLedgerHash,
-      userCommands
-    );
+    const proposalTx = await dataAvailabilityContract.postBatch(batchId, previousId, userCommands);
     const proposalReceipt = await proposalTx.wait();
 
-    const batchFields = bytesToFields([
-      ...Buffer.from(ledgerHash.slice(2), "hex"),
-      ...Buffer.from(previousLedgerHash.slice(2), "hex"),
-      ...userCommands
-        .map((command) => Buffer.concat([Buffer.from([command.commandType]), command.data]))
-        .map((buffer) => Array.from(buffer))
-        .flat(),
-    ]);
+    const sigData = userCommands.map(Field);
 
     expect(
-      proposalReceipt.events?.find(({ event }) => event === "BatchProposed")?.args?.ledgerHash
-    ).to.equal(ledgerHash);
+      proposalReceipt.events?.find(({ event }) => event === "BatchPosted")?.args?.id
+    ).to.equal(batchId);
 
-    const [fetchedPreviousLedgerHash, fetchedUserCommands] =
-      await dataAvailabilityContract.getBatchData(ledgerHash);
+    const [fetchedPreviousBatchId, fetchedUserCommands] =
+      await dataAvailabilityContract.getBatchData(batchId);
 
-    expect(fetchedPreviousLedgerHash).to.equal(previousLedgerHash);
-    expect(
-      fetchedUserCommands.map(({ commandType, data }) => ({
-        commandType,
-        data: Buffer.from(data.slice(2), "hex"),
-      }))
-    ).to.deep.equal(userCommands);
+    expect(fetchedPreviousBatchId).to.equal(previousId);
+    expect(fetchedUserCommands.map((x) => x.toNumber())).to.deep.equal(userCommands);
 
     const expectedSignatures: MinaSchnorrSignatureStruct[] = [];
 
@@ -71,17 +52,13 @@ describe("Batches DataAvailability", () => {
       const pubKey = validator.toPublicKey();
       const hashedPubKey = hashPublicKey(pubKey);
 
-      const signature = Signature.create(validator, batchFields);
+      const signature = Signature.create(validator, sigData);
 
       const sigStruct = signatureToStruct(signature, pubKey);
 
       expectedSignatures.push(sigStruct);
 
-      const signatureTx = await dataAvailabilityContract.addBatchSignature(
-        ledgerHash,
-        batchFields.map(fieldToHex),
-        sigStruct
-      );
+      const signatureTx = await dataAvailabilityContract.addBatchSignature(batchId, sigStruct);
       const signatureReceipt = await signatureTx.wait();
 
       const batchSignedEvent = signatureReceipt.events?.find(
@@ -92,12 +69,12 @@ describe("Batches DataAvailability", () => {
 
       if (batchSignedEvent === undefined) throw "Unreachable";
 
-      expect(batchSignedEvent.args?.ledgerHash).to.equal(ledgerHash);
+      expect(batchSignedEvent.args?.id).to.equal(batchId);
       expect(batchSignedEvent.args?.publicKey).to.equal(hashedPubKey);
       expect(batchSignedEvent.args?.signatureCount).to.equal(expectedSignatures.length);
     }
 
-    const batchSignatures = await dataAvailabilityContract.getBatchSignatures(ledgerHash);
+    const batchSignatures = await dataAvailabilityContract.getBatchSignatures(batchId);
 
     expect(
       batchSignatures.map(({ publicKey, rx, s }) => ({
@@ -120,18 +97,15 @@ describe("Batches DataAvailability", () => {
       ethers.Wallet.createRandom().address
     );
 
-    const ledgerHash = fieldToHex(Field.random());
-    const previousLedgerHash = fieldToHex(Field(0));
+    const batchId = fieldToHex(Field.random());
+    const previousId = fieldToHex(Field(0));
 
     const numberOfUserCommands = randomInt(5, 10);
 
-    const userCommands = Array.from({ length: numberOfUserCommands }, () => ({
-      data: ethers.utils.randomBytes(randomInt(50, 100)),
-      commandType: randomInt(0, 1),
-    }));
+    const userCommands = Array.from({ length: numberOfUserCommands }, () => randomInt(0, 1000));
 
     await expect(
-      dataAvailabilityContract.proposeBatch(ledgerHash, previousLedgerHash, userCommands)
+      dataAvailabilityContract.postBatch(batchId, previousId, userCommands)
     ).to.be.revertedWith("Only sequencer can call this function");
   });
 });
