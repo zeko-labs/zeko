@@ -9,9 +9,12 @@ import type {
   WasmFpLookupCommitments,
   WasmFpLookupSelectors,
   WasmFpLookupVerifierIndex,
+  WasmFpOracles,
   WasmFpPlonkVerificationEvals,
   WasmFpPlonkVerifierIndex,
   WasmFpPolyComm,
+  WasmFpProverProof,
+  WasmFpRandomOracles,
   WasmFpShifts,
   WasmFpSrs,
   WasmFqDomain,
@@ -19,14 +22,19 @@ import type {
   WasmFqLookupCommitments,
   WasmFqLookupSelectors,
   WasmFqLookupVerifierIndex,
+  WasmFqOracles,
   WasmFqPlonkVerificationEvals,
   WasmFqPlonkVerifierIndex,
   WasmFqPolyComm,
+  WasmFqProverProof,
+  WasmFqRandomOracles,
   WasmFqShifts,
   WasmFqSrs,
   WasmGPallas,
   WasmGVesta,
   LookupInfo as WasmLookupInfo,
+  WasmVecVecFp,
+  WasmVecVecFq,
 } from '../../compiled/node_bindings/plonk_wasm.cjs';
 import type * as wasmNamespace from '../../compiled/node_bindings/plonk_wasm.cjs';
 import { bigIntToBytes, bytesToBigInt } from '../bigint-helpers.js';
@@ -85,6 +93,29 @@ type VerifierIndex = [
   lookup_index: MlOption<Lookup<PolyComm>>
 ];
 
+type ScalarChallenge = [_: 0, inner: Field];
+type RandomOracles = [
+  _: 0,
+  joint_combiner: MlOption<[0, ScalarChallenge, Field]>,
+  beta: Field,
+  gamma: Field,
+  alpha_chal: ScalarChallenge,
+  alpha: Field,
+  zeta: Field,
+  v: Field,
+  u: Field,
+  zeta_chal: ScalarChallenge,
+  v_chal: ScalarChallenge,
+  u_chal: ScalarChallenge
+];
+type Oracles = [
+  _: 0,
+  o: RandomOracles,
+  p_eval: [0, Field, Field],
+  opening_prechallenges: MlArray<Field>,
+  digest_before_evaluations: Field
+];
+
 // wasm types
 
 type wasm = typeof wasmNamespace;
@@ -104,6 +135,10 @@ type WasmLookupVerifierIndex =
   | WasmFqLookupVerifierIndex;
 type WasmLookupSelector = WasmFpLookupSelectors | WasmFqLookupSelectors;
 type WasmLookupCommitments = WasmFpLookupCommitments | WasmFqLookupCommitments;
+type WasmRandomOracles = WasmFpRandomOracles | WasmFqRandomOracles;
+type WasmOracles = WasmFpOracles | WasmFqOracles;
+type WasmVecVec = WasmVecVecFp | WasmVecVecFq;
+type WasmProverProof = WasmFpProverProof | WasmFqProverProof;
 
 // wasm class types
 
@@ -124,6 +159,10 @@ type WasmClasses = {
     | typeof WasmFpLookupVerifierIndex
     | typeof WasmFqLookupVerifierIndex;
   LookupSelector: typeof WasmFpLookupSelectors | typeof WasmFqLookupSelectors;
+  RandomOracles: typeof WasmFpRandomOracles | typeof WasmFqRandomOracles;
+  Oracles: typeof WasmFpOracles | typeof WasmFqOracles;
+  VecVec: typeof WasmVecVecFp | typeof WasmVecVecFq;
+  ProverProof: typeof WasmFpProverProof | typeof WasmFqProverProof;
 };
 
 // TODO: Hardcoding this is a little brittle
@@ -146,6 +185,8 @@ function createRustConversion(wasm: wasm) {
     VerifierIndex,
     LookupVerifierIndex,
     LookupSelector,
+    RandomOracles,
+    Oracles,
   }: WasmClasses) {
     let self = {
       vectorToRust: fieldsToRustFlat,
@@ -163,7 +204,7 @@ function createRustConversion(wasm: wasm) {
       },
       pointFromRust: affineFromRust,
 
-      pointsToRust([, ...points]: MlArray<OrInfinity>) {
+      pointsToRust([, ...points]: MlArray<OrInfinity>): Uint32Array {
         return mapToUint32Array(points, (point) => {
           let rustValue = self.pointToRust(point);
           // Don't free when GC runs; rust will free on its end.
@@ -171,7 +212,7 @@ function createRustConversion(wasm: wasm) {
           return unwrap(rustValue);
         });
       },
-      pointsFromRust(points: Uint32Array) {
+      pointsFromRust(points: Uint32Array): MlArray<OrInfinity> {
         let arr = mapFromUintArray(points, (ptr) => {
           return affineFromRust(wrap(ptr, CommitmentCurve));
         });
@@ -248,6 +289,30 @@ function createRustConversion(wasm: wasm) {
         ];
         vk.free();
         return mlVk;
+      },
+
+      oraclesToRust(oracles: Oracles): WasmOracles {
+        let [, o, pEval, openingPrechallenges, digestBeforeEvaluations] =
+          oracles;
+        return new Oracles(
+          randomOraclesToRust(o),
+          fieldToRust(pEval[1]),
+          fieldToRust(pEval[2]),
+          fieldsToRustFlat(openingPrechallenges),
+          fieldToRust(digestBeforeEvaluations)
+        );
+      },
+      oraclesFromRust(oracles: WasmOracles): Oracles {
+        let mlOracles: Oracles = [
+          0,
+          randomOraclesFromRust(oracles.o),
+          [0, fieldFromRust(oracles.p_eval0), fieldFromRust(oracles.p_eval1)],
+          fieldsFromRustFlat(oracles.opening_prechallenges),
+          fieldFromRust(oracles.digest_before_evaluations),
+        ];
+        // TODO: do we not want to free?
+        // oracles.free();
+        return mlOracles;
       },
     };
 
@@ -402,6 +467,65 @@ function createRustConversion(wasm: wasm) {
       return mlInfo;
     }
 
+    function randomOraclesToRust(ro: RandomOracles): WasmRandomOracles {
+      let jointCombinerMl = MlOption.from(ro[1]);
+      let jointCombinerChal = maybeFieldToRust(jointCombinerMl?.[1][1]);
+      let jointCombiner = maybeFieldToRust(jointCombinerMl?.[2]);
+      let beta = fieldToRust(ro[2]);
+      let gamma = fieldToRust(ro[3]);
+      let alphaChal = fieldToRust(ro[4][1]);
+      let alpha = fieldToRust(ro[5]);
+      let zeta = fieldToRust(ro[6]);
+      let v = fieldToRust(ro[7]);
+      let u = fieldToRust(ro[8]);
+      let zetaChal = fieldToRust(ro[9][1]);
+      let vChal = fieldToRust(ro[10][1]);
+      let uChal = fieldToRust(ro[11][1]);
+      return new RandomOracles(
+        jointCombinerChal,
+        jointCombiner,
+        beta,
+        gamma,
+        alphaChal,
+        alpha,
+        zeta,
+        v,
+        u,
+        zetaChal,
+        vChal,
+        uChal
+      );
+    }
+    function randomOraclesFromRust(ro: WasmRandomOracles): RandomOracles {
+      let jointCombinerChal = ro.joint_combiner_chal;
+      let jointCombiner = ro.joint_combiner;
+      let jointCombinerOption = MlOption<[0, ScalarChallenge, Field]>(
+        jointCombinerChal &&
+          jointCombiner && [
+            0,
+            [0, fieldFromRust(jointCombinerChal)],
+            fieldFromRust(jointCombiner),
+          ]
+      );
+      let mlRo: RandomOracles = [
+        0,
+        jointCombinerOption,
+        fieldFromRust(ro.beta),
+        fieldFromRust(ro.gamma),
+        [0, fieldFromRust(ro.alpha_chal)],
+        fieldFromRust(ro.alpha),
+        fieldFromRust(ro.zeta),
+        fieldFromRust(ro.v),
+        fieldFromRust(ro.u),
+        [0, fieldFromRust(ro.zeta_chal)],
+        [0, fieldFromRust(ro.v_chal)],
+        [0, fieldFromRust(ro.u_chal)],
+      ];
+      // TODO: do we not want to free?
+      // ro.free();
+      return mlRo;
+    }
+
     return self;
   }
 
@@ -416,6 +540,10 @@ function createRustConversion(wasm: wasm) {
     VerifierIndex: wasm.WasmFpPlonkVerifierIndex,
     LookupVerifierIndex: wasm.WasmFpLookupVerifierIndex,
     LookupSelector: wasm.WasmFpLookupSelectors,
+    RandomOracles: wasm.WasmFpRandomOracles,
+    Oracles: wasm.WasmFpOracles,
+    VecVec: wasm.WasmVecVecFp,
+    ProverProof: wasm.WasmFpProverProof,
   });
   const fq = perField({
     CommitmentCurve: wasm.WasmGPallas,
@@ -428,6 +556,10 @@ function createRustConversion(wasm: wasm) {
     VerifierIndex: wasm.WasmFqPlonkVerifierIndex,
     LookupVerifierIndex: wasm.WasmFqLookupVerifierIndex,
     LookupSelector: wasm.WasmFqLookupSelectors,
+    RandomOracles: wasm.WasmFqRandomOracles,
+    Oracles: wasm.WasmFqOracles,
+    VecVec: wasm.WasmVecVecFq,
+    ProverProof: wasm.WasmFqProverProof,
   });
 
   return {
@@ -466,16 +598,20 @@ function fieldsToRustFlat([, ...fields]: MlArray<Field>): Uint8Array {
 }
 
 function fieldsFromRustFlat(fieldBytes: Uint8Array): MlArray<Field> {
-  var n = fieldBytes.length / fieldSizeBytes;
+  let n = fieldBytes.length / fieldSizeBytes;
   if (!Number.isInteger(n)) {
     throw Error('fieldsFromRustFlat: invalid bytes');
   }
-  var fields: Field[] = Array(n);
+  let fields: Field[] = Array(n);
   for (let i = 0, offset = 0; i < n; i++, offset += fieldSizeBytes) {
     let fieldView = new Uint8Array(fieldBytes.buffer, offset, fieldSizeBytes);
     fields[i] = fieldFromRust(fieldView);
   }
   return [0, ...fields];
+}
+
+function maybeFieldToRust(x?: Field): Uint8Array | undefined {
+  return x && fieldToRust(x);
 }
 
 // affine
@@ -496,7 +632,7 @@ function affineToRust<A extends WasmAffine>(
   pt: OrInfinity,
   makeAffine: () => A
 ) {
-  var res = makeAffine();
+  let res = makeAffine();
   if (pt === Infinity) {
     res.infinity = true;
   } else {
