@@ -967,7 +967,7 @@ var caml_pasta_fp_plonk_gate_vector_add = function (v, x) {
 // Provides: caml_pasta_fp_plonk_gate_vector_get
 // Requires: plonk_wasm, tsRustConversion
 var caml_pasta_fp_plonk_gate_vector_get = function (v, i) {
-  return tsRustConversion.gateFromRust(
+  return tsRustConversion.fp.gateFromRust(
     plonk_wasm.caml_pasta_fp_plonk_gate_vector_get(v, i)
   );
 };
@@ -1035,7 +1035,7 @@ var caml_pasta_fq_plonk_gate_vector_add = function (v, x) {
 // Provides: caml_pasta_fq_plonk_gate_vector_get
 // Requires: plonk_wasm, tsRustConversion
 var caml_pasta_fq_plonk_gate_vector_get = function (v, i) {
-  return tsRustConversion.gateFromRust(
+  return tsRustConversion.fq.gateFromRust(
     plonk_wasm.caml_pasta_fq_plonk_gate_vector_get(v, i)
   );
 };
