@@ -2,17 +2,19 @@
  * Implementation of Kimchi_bindings.Protocol.Gates
  */
 import { MlArray, MlBool, MlOption, MlTuple } from '../../../lib/ml/base.js';
-import { mapTuple } from './util.js';
+import { MlTupleN, mapTuple } from './util.js';
 import type {
   WasmFpDomain,
   WasmFpGate,
   WasmFpLookupCommitments,
   WasmFpLookupSelectors,
   WasmFpLookupVerifierIndex,
+  WasmFpOpeningProof,
   WasmFpOracles,
   WasmFpPlonkVerificationEvals,
   WasmFpPlonkVerifierIndex,
   WasmFpPolyComm,
+  WasmFpProverCommitments,
   WasmFpProverProof,
   WasmFpRandomOracles,
   WasmFpShifts,
@@ -22,10 +24,12 @@ import type {
   WasmFqLookupCommitments,
   WasmFqLookupSelectors,
   WasmFqLookupVerifierIndex,
+  WasmFqOpeningProof,
   WasmFqOracles,
   WasmFqPlonkVerificationEvals,
   WasmFqPlonkVerifierIndex,
   WasmFqPolyComm,
+  WasmFqProverCommitments,
   WasmFqProverProof,
   WasmFqRandomOracles,
   WasmFqShifts,
@@ -116,6 +120,63 @@ type Oracles = [
   digest_before_evaluations: Field
 ];
 
+type LookupCommitments = [
+  _: 0,
+  sorted: MlArray<PolyComm>,
+  aggreg: PolyComm,
+  runtime: MlOption<PolyComm>
+];
+type ProverCommitments = [
+  _: 0,
+  w_comm: MlTupleN<PolyComm, 15>,
+  z_comm: PolyComm,
+  t_comm: PolyComm,
+  lookup: MlOption<LookupCommitments>
+];
+type OpeningProof = [
+  _: 0,
+  lr: MlArray<[0, OrInfinity, OrInfinity]>,
+  delta: OrInfinity,
+  z1: Field,
+  z2: Field,
+  sg: OrInfinity
+];
+type PointEvaluations<Field> = [
+  _: 0,
+  zeta: MlArray<Field>,
+  zeta_omega: MlArray<Field>
+];
+type LookupEvaluations<Field> = [
+  _: 0,
+  sorted: MlArray<PointEvaluations<Field>>,
+  aggreg: PointEvaluations<Field>,
+  table: PointEvaluations<Field>,
+  runtime: MlOption<PointEvaluations<Field>>
+];
+type nColumns = 15;
+type nPermutsMinus1 = 6;
+type ProofEvaluations<Field> = [
+  _: 0,
+  w: MlTupleN<PointEvaluations<Field>, nColumns>,
+  z: PointEvaluations<Field>,
+  s: MlTupleN<PointEvaluations<Field>, nPermutsMinus1>,
+  coefficients: MlTupleN<PointEvaluations<Field>, nColumns>,
+  lookup: MlOption<LookupEvaluations<Field>>,
+  generic_selector: PointEvaluations<Field>,
+  poseidon_selector: PointEvaluations<Field>
+];
+type RecursionChallenge = [_: 0, chals: MlArray<Field>, comm: PolyComm];
+
+type ProverProof = [
+  _: 0,
+  commitments: ProverCommitments,
+  proof: OpeningProof,
+  evals: ProofEvaluations<Field>,
+  ft_eval1: Field,
+  public_: MlArray<Field>,
+  prev_challenges: MlArray<RecursionChallenge>
+];
+
 // wasm types
 
 type wasm = typeof wasmNamespace;
@@ -137,6 +198,8 @@ type WasmLookupSelector = WasmFpLookupSelectors | WasmFqLookupSelectors;
 type WasmLookupCommitments = WasmFpLookupCommitments | WasmFqLookupCommitments;
 type WasmRandomOracles = WasmFpRandomOracles | WasmFqRandomOracles;
 type WasmOracles = WasmFpOracles | WasmFqOracles;
+type WasmProverCommitments = WasmFpProverCommitments | WasmFqProverCommitments;
+type WasmOpeningProof = WasmFpOpeningProof | WasmFqOpeningProof;
 type WasmVecVec = WasmVecVecFp | WasmVecVecFq;
 type WasmProverProof = WasmFpProverProof | WasmFqProverProof;
 
@@ -155,12 +218,19 @@ type WasmClasses = {
   VerifierIndex:
     | typeof WasmFpPlonkVerifierIndex
     | typeof WasmFqPlonkVerifierIndex;
+  LookupCommitments:
+    | typeof WasmFpLookupCommitments
+    | typeof WasmFqLookupCommitments;
   LookupVerifierIndex:
     | typeof WasmFpLookupVerifierIndex
     | typeof WasmFqLookupVerifierIndex;
   LookupSelector: typeof WasmFpLookupSelectors | typeof WasmFqLookupSelectors;
   RandomOracles: typeof WasmFpRandomOracles | typeof WasmFqRandomOracles;
   Oracles: typeof WasmFpOracles | typeof WasmFqOracles;
+  ProverCommitments:
+    | typeof WasmFpProverCommitments
+    | typeof WasmFqProverCommitments;
+  OpeningProof: typeof WasmFpOpeningProof | typeof WasmFqOpeningProof;
   VecVec: typeof WasmVecVecFp | typeof WasmVecVecFq;
   ProverProof: typeof WasmFpProverProof | typeof WasmFqProverProof;
 };
@@ -183,10 +253,15 @@ function createRustConversion(wasm: wasm) {
     VerificationEvals,
     Shifts,
     VerifierIndex,
+    LookupCommitments,
     LookupVerifierIndex,
     LookupSelector,
     RandomOracles,
     Oracles,
+    ProverCommitments,
+    OpeningProof,
+    VecVec,
+    ProverProof,
   }: WasmClasses) {
     let self = {
       vectorToRust: fieldsToRustFlat,
@@ -205,17 +280,14 @@ function createRustConversion(wasm: wasm) {
       pointFromRust: affineFromRust,
 
       pointsToRust([, ...points]: MlArray<OrInfinity>): Uint32Array {
-        return mapToUint32Array(points, (point) => {
-          let rustValue = self.pointToRust(point);
-          // Don't free when GC runs; rust will free on its end.
-          registry.unregister(rustValue);
-          return unwrap(rustValue);
-        });
+        return mapToUint32Array(points, (point) =>
+          unwrap(self.pointToRust(point))
+        );
       },
       pointsFromRust(points: Uint32Array): MlArray<OrInfinity> {
-        let arr = mapFromUintArray(points, (ptr) => {
-          return affineFromRust(wrap(ptr, CommitmentCurve));
-        });
+        let arr = mapFromUintArray(points, (ptr) =>
+          affineFromRust(wrap(ptr, CommitmentCurve))
+        );
         return [0, ...arr];
       },
 
@@ -282,7 +354,7 @@ function createRustConversion(wasm: wasm) {
           vk.max_poly_size,
           vk.public_,
           vk.prev_challenges,
-          vk.srs,
+          freeOnFinalize(vk.srs),
           verificationEvalsFromRust(vk.evals),
           self.shiftsFromRust(vk.shifts),
           MlOption.mapTo(vk.lookup_index, lookupVerifierIndexFromRust),
@@ -313,6 +385,61 @@ function createRustConversion(wasm: wasm) {
         // TODO: do we not want to free?
         // oracles.free();
         return mlOracles;
+      },
+
+      proofToRust(proof: ProverProof): WasmProverProof {
+        let commitments = commitmentsToRust(proof[1]);
+        let openingProof = openingProofToRust(proof[2]);
+        // TODO typed as `any` in wasm-bindgen, this is the correct type
+        let evals: ProofEvaluations<Uint8Array> = proof[3];
+        let ftEval1 = fieldToRust(proof[4]);
+        let public_ = fieldsToRustFlat(proof[5]);
+        let [, ...prevChallenges] = proof[6];
+        let n = prevChallenges.length;
+        let prevChallengeScalars = new VecVec(n);
+        let prevChallengeCommsMl: MlArray<PolyComm> = [0];
+        for (let [, scalars, comms] of prevChallenges) {
+          prevChallengeScalars.push(fieldsToRustFlat(scalars));
+          prevChallengeCommsMl.push(comms);
+        }
+        let prevChallengeComms = self.polyCommsToRust(prevChallengeCommsMl);
+        return new ProverProof(
+          commitments,
+          openingProof,
+          evals,
+          ftEval1,
+          public_,
+          prevChallengeScalars,
+          prevChallengeComms
+        );
+      },
+      proofFromRust(proof: WasmProverProof): ProverProof {
+        let commitments = commitmentsFromRust(proof.commitments);
+        let openingProof = openingProofFromRust(proof.proof);
+        // TODO typed as `any` in wasm-bindgen, this is the correct type
+        let evals: ProofEvaluations<Uint8Array> = proof.evals;
+        let ftEval1 = fieldFromRust(proof.ft_eval1);
+        let public_ = fieldsFromRustFlat(proof.public_);
+        let prevChallengeScalars = proof.prev_challenges_scalars;
+        let [, ...prevChallengeComms] = self.polyCommsFromRust(
+          proof.prev_challenges_comms
+        );
+        let prevChallenges = prevChallengeComms.map<RecursionChallenge>(
+          (comms, i) => {
+            let scalars = fieldsFromRustFlat(prevChallengeScalars.get(i));
+            return [0, scalars, comms];
+          }
+        );
+        proof.free();
+        return [
+          0,
+          commitments,
+          openingProof,
+          evals,
+          ftEval1,
+          public_,
+          [0, ...prevChallenges],
+        ];
       },
     };
 
@@ -526,6 +653,80 @@ function createRustConversion(wasm: wasm) {
       return mlRo;
     }
 
+    function commitmentsToRust(
+      commitments: ProverCommitments
+    ): WasmProverCommitments {
+      let wComm = self.polyCommsToRust(commitments[1]);
+      let zComm = self.polyCommToRust(commitments[2]);
+      let tComm = self.polyCommToRust(commitments[3]);
+      let lookup = MlOption.mapFrom(commitments[4], lookupCommitmentsToRust);
+      return new ProverCommitments(wComm, zComm, tComm, lookup);
+    }
+    function commitmentsFromRust(
+      commitments: WasmProverCommitments
+    ): ProverCommitments {
+      let wComm = self.polyCommsFromRust(commitments.w_comm);
+      let zComm = self.polyCommFromRust(commitments.z_comm);
+      let tComm = self.polyCommFromRust(commitments.t_comm);
+      let lookup = MlOption.mapTo(
+        commitments.lookup,
+        lookupCommitmentsFromRust
+      );
+      commitments.free();
+      return [0, wComm as MlTupleN<PolyComm, 15>, zComm, tComm, lookup];
+    }
+
+    function lookupCommitmentsToRust(
+      lookup: LookupCommitments
+    ): WasmLookupCommitments {
+      let sorted = self.polyCommsToRust(lookup[1]);
+      let aggreg = self.polyCommToRust(lookup[2]);
+      let runtime = MlOption.mapFrom(lookup[3], self.polyCommToRust);
+      return new LookupCommitments(sorted, aggreg, runtime);
+    }
+    function lookupCommitmentsFromRust(
+      lookup: WasmLookupCommitments
+    ): LookupCommitments {
+      let sorted = self.polyCommsFromRust(lookup.sorted);
+      let aggreg = self.polyCommFromRust(lookup.aggreg);
+      let runtime = MlOption.mapTo(lookup.runtime, self.polyCommFromRust);
+      lookup.free();
+      return [0, sorted, aggreg, runtime];
+    }
+
+    function openingProofToRust(proof: OpeningProof): WasmOpeningProof {
+      let [_, [, ...lr], delta, z1, z2, sg] = proof;
+      // We pass l and r as separate vectors over the FFI
+      let l: MlArray<OrInfinity> = [0];
+      let r: MlArray<OrInfinity> = [0];
+      for (let [, li, ri] of lr) {
+        l.push(li);
+        r.push(ri);
+      }
+      return new OpeningProof(
+        self.pointsToRust(l),
+        self.pointsToRust(r),
+        self.pointToRust(delta),
+        fieldToRust(z1),
+        fieldToRust(z2),
+        self.pointToRust(sg)
+      );
+    }
+    function openingProofFromRust(proof: WasmOpeningProof): OpeningProof {
+      let [, ...l] = self.pointsFromRust(proof.lr_0);
+      let [, ...r] = self.pointsFromRust(proof.lr_1);
+      let n = l.length;
+      if (n !== r.length)
+        throw Error('openingProofFromRust: l and r length mismatch.');
+      let lr = l.map<[0, OrInfinity, OrInfinity]>((li, i) => [0, li, r[i]]);
+      let delta = self.pointFromRust(proof.delta);
+      let z1 = fieldFromRust(proof.z1);
+      let z2 = fieldFromRust(proof.z2);
+      let sg = self.pointFromRust(proof.sg);
+      proof.free();
+      return [0, [0, ...lr], delta, z1, z2, sg];
+    }
+
     return self;
   }
 
@@ -538,10 +739,13 @@ function createRustConversion(wasm: wasm) {
     VerificationEvals: wasm.WasmFpPlonkVerificationEvals,
     Shifts: wasm.WasmFpShifts,
     VerifierIndex: wasm.WasmFpPlonkVerifierIndex,
+    LookupCommitments: wasm.WasmFpLookupCommitments,
     LookupVerifierIndex: wasm.WasmFpLookupVerifierIndex,
     LookupSelector: wasm.WasmFpLookupSelectors,
     RandomOracles: wasm.WasmFpRandomOracles,
     Oracles: wasm.WasmFpOracles,
+    ProverCommitments: wasm.WasmFpProverCommitments,
+    OpeningProof: wasm.WasmFpOpeningProof,
     VecVec: wasm.WasmVecVecFp,
     ProverProof: wasm.WasmFpProverProof,
   });
@@ -554,10 +758,13 @@ function createRustConversion(wasm: wasm) {
     VerificationEvals: wasm.WasmFqPlonkVerificationEvals,
     Shifts: wasm.WasmFqShifts,
     VerifierIndex: wasm.WasmFqPlonkVerifierIndex,
+    LookupCommitments: wasm.WasmFqLookupCommitments,
     LookupVerifierIndex: wasm.WasmFqLookupVerifierIndex,
     LookupSelector: wasm.WasmFqLookupSelectors,
     RandomOracles: wasm.WasmFqRandomOracles,
     Oracles: wasm.WasmFqOracles,
+    ProverCommitments: wasm.WasmFqProverCommitments,
+    OpeningProof: wasm.WasmFqOpeningProof,
     VecVec: wasm.WasmVecVecFq,
     ProverProof: wasm.WasmFqProverProof,
   });
@@ -568,6 +775,12 @@ function createRustConversion(wasm: wasm) {
     fieldsFromRustFlat,
     fp,
     fq,
+    mapMlArrayToRustVector<TMl, TRust extends {}>(
+      [, ...array]: MlArray<TMl>,
+      map: (x: TMl) => TRust
+    ): Uint32Array {
+      return mapToUint32Array(array, (x) => unwrap(map(x)));
+    },
     gateFromRust(wasmGate: WasmFpGate | WasmFqGate) {
       // note: this was never used and the old implementation was wrong
       // (accessed non-existent fields on wasmGate)
@@ -664,6 +877,25 @@ function unwrap<T extends {}>(obj: T): number {
 const registry = new FinalizationRegistry((ptr: Freeable) => {
   ptr.free();
 });
+function freeOnFinalize<T extends Freeable>(instance: T) {
+  // This is an unfortunate hack: we're creating a second instance of the
+  // class to be able to call free on it. We can't pass the value itself,
+  // since the registry holds a strong reference to the representative value.
+  //
+  // However, the class is only really a wrapper around a pointer, with a
+  // reference to the class' prototype as its __prototype__.
+  //
+  // It might seem cleaner to call the destructor here on the pointer
+  // directly, but unfortunately the destructor name is some mangled internal
+  // string generated by wasm_bindgen. For now, this is the best,
+  // least-brittle way to free once the original class instance gets collected.
+  let instanceRepresentative = wrap<T>(
+    (instance as any).ptr,
+    (instance as any).constructor
+  );
+  registry.register(instance, instanceRepresentative, instance);
+  return instance;
+}
 
 function mapFromUintArray<T>(
   array: Uint32Array | Uint8Array,
