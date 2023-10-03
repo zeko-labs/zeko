@@ -95,17 +95,18 @@ function createFieldBindings(Field: FiniteField) {
     random(): Field {
       return [0, Field.random()];
     },
-    // TODO
     rng(i: number): Field {
-      console.warn('rng is not implemented');
-      return [0, Field.random()];
+      // not used in js
+      throw Error('rng: not implemented');
     },
     to_bigint([, x]: Field): Bigint256 {
+      // copying to a new array to break mutable reference
       return [0, x];
     },
     of_bigint([, x]: Bigint256): Field {
       if (x >= Field.modulus)
         throw Error('of_bigint: input exceeds field size');
+      // copying to a new array to break mutable reference
       return [0, x];
     },
     two_adic_root_of_unity(): Field {
