@@ -22,7 +22,7 @@ import {
   VerificationEvals,
   PolyComm,
 } from './kimchi-types.js';
-import { fieldFromRust, fieldToRust } from './conversion-base-old.js';
+import { fieldFromRust, fieldToRust } from './conversion-base.js';
 import {
   ConversionCore,
   ConversionCores,

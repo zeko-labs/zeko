@@ -27,7 +27,8 @@ const FieldVectorBindings = {
         `FieldVector.get(): Index out of bounds, got ${i}/${v.length - 1}`
       );
     }
-    return value;
+    // copying to a new array to break mutable reference
+    return [...value];
   },
   set(v: FieldVector, i: number, x: Field): void {
     v[i + 1] = x;
