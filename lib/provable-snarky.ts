@@ -82,7 +82,7 @@ function provable<A>(
     if (Array.isArray(typeObj))
       return typeObj.map((t, i) => toFields(t, obj[i])).flat();
     if ('toFields' in typeObj) return typeObj.toFields(obj);
-    return (isToplevel ? objectKeys : Object.keys(typeObj).sort())
+    return (isToplevel ? objectKeys : Object.keys(typeObj))
       .map((k) => toFields(typeObj[k], obj[k]))
       .flat();
   }
@@ -95,7 +95,7 @@ function provable<A>(
     if (Array.isArray(typeObj))
       return typeObj.map((t, i) => toAuxiliary(t, obj?.[i]));
     if ('toAuxiliary' in typeObj) return typeObj.toAuxiliary(obj);
-    return (isToplevel ? objectKeys : Object.keys(typeObj).sort()).map((k) =>
+    return (isToplevel ? objectKeys : Object.keys(typeObj)).map((k) =>
       toAuxiliary(typeObj[k], obj?.[k])
     );
   }
@@ -110,7 +110,7 @@ function provable<A>(
     if ('toFields' in typeObj) {
       return { fields: typeObj.toFields(obj) };
     }
-    return (isToplevel ? objectKeys : Object.keys(typeObj).sort())
+    return (isToplevel ? objectKeys : Object.keys(typeObj))
       .map((k) => toInput(typeObj[k], obj[k]))
       .reduce(HashInput.append, HashInput.empty);
   }
@@ -124,7 +124,7 @@ function provable<A>(
     if (Array.isArray(typeObj)) return typeObj.map((t, i) => toJSON(t, obj[i]));
     if ('toJSON' in typeObj) return typeObj.toJSON(obj);
     return Object.fromEntries(
-      (isToplevel ? objectKeys : Object.keys(typeObj).sort()).map((k) => [
+      (isToplevel ? objectKeys : Object.keys(typeObj)).map((k) => [
         k,
         toJSON(typeObj[k], obj[k]),
       ])
@@ -160,7 +160,7 @@ function provable<A>(
       return array;
     }
     if ('fromFields' in typeObj) return typeObj.fromFields(fields, aux);
-    let keys = isToplevel ? objectKeys : Object.keys(typeObj).sort();
+    let keys = isToplevel ? objectKeys : Object.keys(typeObj);
     let values = fromFields(
       keys.map((k) => typeObj[k]),
       fields,
@@ -177,7 +177,7 @@ function provable<A>(
     if (Array.isArray(typeObj))
       return typeObj.map((t, i) => fromJSON(t, json[i]));
     if ('fromJSON' in typeObj) return typeObj.fromJSON(json);
-    let keys = isToplevel ? objectKeys : Object.keys(typeObj).sort();
+    let keys = isToplevel ? objectKeys : Object.keys(typeObj);
     let values = fromJSON(
       keys.map((k) => typeObj[k]),
       keys.map((k) => json[k])
@@ -189,7 +189,7 @@ function provable<A>(
     if (Array.isArray(typeObj))
       return typeObj.forEach((t, i) => check(t, obj[i]));
     if ('check' in typeObj) return typeObj.check(obj);
-    return (isToplevel ? objectKeys : Object.keys(typeObj).sort()).forEach(
+    return (isToplevel ? objectKeys : Object.keys(typeObj)).forEach(
       (k) => check(typeObj[k], obj[k])
     );
   }
