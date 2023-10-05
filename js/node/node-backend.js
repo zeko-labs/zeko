@@ -142,6 +142,7 @@ function getEfficientNumWorkers() {
       'Apple M1 Max': 3,
       'Apple M1 Ultra': 7,
       'Apple M2': 2,
+      'Apple M2 Pro': 2,
     }[cpuModel] || numCpus - 1;
 
   return numWorkers;
