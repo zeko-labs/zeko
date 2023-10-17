@@ -18,10 +18,12 @@ const schema = z.object({
   DA_LAYER_PRIVATE_KEY: z.string().default("0x35f9400884bdd60fdd1a769ebf39fa1c5b148072e68a5b2c8bc9ac2227c192b2"),
   DA_LAYER_CONTRACT_ADDRESS: z.string().default("0xD28E88C8C016f97f4087bC48E947d5EB6226C87f"),
   GENESIS_ACCOUNTS_PATH: z.string().default("genesis-accounts.json"),
-  DEPLOY_ZKAPP: processBool(z.boolean().default(true)),
   COMMITMENT_PERIOD: processInt(z.number().default(120_000)),
   WS_KEEP_ALIVE_INTERVAL: processInt(z.number().default(7_500)),
   WS_EXPECTED_PONG_BACK: processInt(z.number().default(15_000)),
+  MINA_SIGNER_PRIVATE_KEY: z.string().default(""),
+  MINA_ZKAPP_PRIVATE_KEY: z.string().default(""),
+  MINA_NODE_URL: z.string().default(""),
 });
 
 export default schema.parse(process.env);

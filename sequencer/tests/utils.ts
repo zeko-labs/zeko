@@ -1,5 +1,5 @@
 import MinaSigner from "mina-signer";
-import { PrivateKey, PublicKey } from "snarkyjs";
+import { PrivateKey, PublicKey } from "o1js";
 
 const signer = new MinaSigner({ network: "testnet" });
 

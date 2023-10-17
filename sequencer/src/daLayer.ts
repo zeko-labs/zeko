@@ -54,6 +54,8 @@ export class DALayer {
   public async postBatch(batchId: string, previousBatchId: string, commandIndexes: number[]) {
     const tx = await this.contract.postBatch(batchId, previousBatchId, commandIndexes);
     await tx.wait();
+
+    logger.info(`Batch posted with id: ${batchId}`);
   }
 
   public async getBatchesTillGenesis(batchId: string): Promise<number[][]> {

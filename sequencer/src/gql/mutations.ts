@@ -1,5 +1,5 @@
 import { GraphQLError } from "graphql";
-import { FieldConst, MinaUtils, Signature } from "snarkyjs";
+import { FieldConst, MinaUtils, Signature } from "o1js";
 import { RollupContext } from ".";
 import { MutationResolvers } from "../generated/graphql";
 

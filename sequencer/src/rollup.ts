@@ -8,14 +8,14 @@ import {
   Mina,
   MinaUtils,
   MlPublicKey,
-  PrivateKey,
   RollupBindings,
   RollupInstance,
   RollupMethods,
   Signature,
   Types,
   withThreadPool,
-} from "snarkyjs";
+} from "o1js";
+import { signerKey, zkappKey } from "./L1";
 import config from "./config";
 import { DALayer } from "./daLayer";
 import { Account, SendPaymentInput } from "./generated/graphql";
@@ -26,11 +26,7 @@ import { commandProver } from "./proving/command";
 import { commitProver } from "./proving/commit";
 import { bigIntStrToHex, convAuthRequiredToGqlType, minaToDecimal } from "./utils";
 
-export const createRollupContext = async (
-  genesisAccounts: GenesisAccount[],
-  signer: PrivateKey,
-  zkappKey: PrivateKey
-): Promise<RollupContext> => {
+export const createRollupContext = async (genesisAccounts: GenesisAccount[]): Promise<RollupContext> => {
   Async_js.init();
 
   let mainThreadPoolStop: (() => void) | undefined = undefined;
@@ -53,10 +49,10 @@ export const createRollupContext = async (
 
   const daLayer = new DALayer();
 
-  const rollup = new Rollup(zkappKey, signer, daLayer, bindings, genesisAccounts);
+  const rollup = new Rollup(daLayer, bindings, genesisAccounts);
 
-  // logger.info("Bootstrapping");
-  // await rollupState.bootstrap(await fetchCurrentLedgerHash());
+  await rollup.deploy();
+  await rollup.bootstrap();
 
   return {
     rollup,
@@ -96,17 +92,17 @@ export class Rollup {
 
   private rollup: RollupInstance;
   private deployAccountUpdate: string;
+  private genesisLedgerHash: string;
 
-  constructor(
-    public zkappKey: PrivateKey,
-    public signer: PrivateKey,
-    public daLayer: DALayer,
-    public bindings: RollupMethods,
-    genesisAccounts: GenesisAccount[]
-  ) {
-    const { rollup, accountUpdate: deployAccountUpdate } = bindings.createZkapp("rollup", genesisAccounts);
+  constructor(public daLayer: DALayer, public bindings: RollupMethods, genesisAccounts: GenesisAccount[]) {
+    const {
+      rollup,
+      accountUpdate: deployAccountUpdate,
+      genesisLedgerHash,
+    } = bindings.createZkapp("rollup", genesisAccounts);
     this.rollup = rollup;
     this.deployAccountUpdate = deployAccountUpdate;
+    this.genesisLedgerHash = genesisLedgerHash;
 
     if (config.COMMITMENT_PERIOD !== 0) {
       setInterval(() => {
@@ -117,8 +113,15 @@ export class Rollup {
   }
 
   public async deploy() {
-    const deployTx = await Mina.transaction(this.signer.toPublicKey(), () => {
-      AccountUpdate.fundNewAccount(this.signer.toPublicKey());
+    if (Mina.hasAccount(zkappKey.toPublicKey())) {
+      logger.info("zkapp already deployed, skipping");
+      return;
+    }
+
+    logger.info("Deploying zkapp");
+
+    const deployTx = await Mina.transaction({ sender: signerKey.toPublicKey(), fee: 0.1e9 }, () => {
+      AccountUpdate.fundNewAccount(signerKey.toPublicKey());
     });
 
     const snarkyjsDeployAccountUpdate = AccountUpdate.fromJSON(JSON.parse(this.deployAccountUpdate));
@@ -127,7 +130,9 @@ export class Rollup {
     deployTx.transaction.accountUpdates.push(snarkyjsDeployAccountUpdate);
 
     await deployTx.prove();
-    await deployTx.sign([this.signer, this.zkappKey]).send();
+    const txId = await deployTx.sign([signerKey, zkappKey]).send();
+
+    await txId.wait();
   }
 
   public async commit() {
@@ -154,7 +159,7 @@ export class Rollup {
 
     const stepCallForest = await commitProver.enqueue({ txnSnark: this.lastTxnSnark });
 
-    const stepTx = await Mina.transaction(this.signer.toPublicKey(), () => {});
+    const stepTx = await Mina.transaction({ sender: signerKey.toPublicKey(), fee: 0.1e9 }, () => {});
 
     const stepAccountUpdates = (JSON.parse(stepCallForest) as Types.Json.AccountUpdate[]).map((au) =>
       AccountUpdate.fromJSON(au)
@@ -162,7 +167,9 @@ export class Rollup {
 
     stepTx.transaction.accountUpdates.push(...stepAccountUpdates);
 
-    await stepTx.sign([this.signer, this.zkappKey]).send();
+    const txId = await stepTx.sign([signerKey, zkappKey]).send();
+
+    await txId.wait();
 
     this.committedTransactions.push(...this.stagedTransactions);
     this.stagedTransactions = [];
@@ -170,7 +177,22 @@ export class Rollup {
     this.isCommitting = false;
   }
 
-  public async bootstrap(batchId: string) {
+  public async bootstrap() {
+    const committedLedgerHash = Mina.getAccount(zkappKey.toPublicKey()).zkapp?.appState.at(0);
+
+    if (committedLedgerHash === undefined) {
+      throw new Error("zkapp not deployed");
+    }
+
+    if (committedLedgerHash.toString() === this.genesisLedgerHash) {
+      logger.info("nothing to boostrap, skipping");
+      return;
+    }
+
+    logger.info("bootstrapping");
+
+    const batchId = bigIntStrToHex(committedLedgerHash.toString());
+
     const batchOrderings = await this.daLayer.getBatchesTillGenesis(batchId);
 
     const commands = await Promise.all(
@@ -186,7 +208,7 @@ export class Rollup {
         toBase58: payload.body.at(1).receiver_pk,
         amount: payload.body.at(1).amount,
         fee: minaToDecimal(payload.common.fee).toString(),
-        validUntil: payload.common.valid_until.at(1),
+        validUntil: payload.common.valid_until,
         nonce: payload.common.nonce,
         memo: payload.common.memo,
       });

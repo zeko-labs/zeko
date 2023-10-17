@@ -1,5 +1,5 @@
 import fs from "fs/promises";
-import { MinaUtils, MlPublicKey } from "snarkyjs";
+import { MinaUtils, MlPublicKey } from "o1js";
 import { z } from "zod";
 import config from "./config";
 

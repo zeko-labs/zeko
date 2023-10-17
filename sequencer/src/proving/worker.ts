@@ -1,4 +1,4 @@
-import { Async_js, MlPublicKey, RollupBindings, RollupMethods, withThreadPool } from "snarkyjs";
+import { Async_js, MlPublicKey, RollupBindings, RollupMethods, withThreadPool } from "o1js";
 import { MessagePort, Worker, isMainThread, parentPort, workerData } from "worker_threads";
 import logger from "../logger";
 
@@ -63,7 +63,7 @@ export class ProvingWorker<
         logger.debug(`Worker finished job with status: ${message.type}`);
         resolve(message.data);
       } else if (message.type === "error") {
-        logger.debug(`Worker finished job with status: ${message}`);
+        logger.debug(`Worker finished job with error: ${JSON.stringify(message)}`);
         reject(message.error);
       }
 
@@ -133,6 +133,7 @@ export class ProvingWorker<
               parentPort!.postMessage({ type: "done", data: result } as MessageToParent);
             }
           } catch (err) {
+            logger.error(err);
             parentPort!.postMessage({ type: "error", error: err } as MessageToParent);
           }
 

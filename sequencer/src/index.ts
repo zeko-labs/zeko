@@ -1,6 +1,5 @@
 import { ApolloServer } from "@apollo/server";
 import { startStandaloneServer } from "@apollo/server/standalone";
-import { Mina, PrivateKey } from "snarkyjs";
 import config from "./config";
 import { loadAccounts } from "./genesis";
 import { RollupContext, loadSchema, resolvers } from "./gql";
@@ -13,21 +12,7 @@ const run = async () => {
     resolvers,
   });
 
-  // TODO: decouple l1 interaction and add live network support
-  const Local = Mina.LocalBlockchain({
-    proofsEnabled: true,
-  });
-  Mina.setActiveInstance(Local);
-
-  const context = await createRollupContext(
-    await loadAccounts(),
-    Local.testAccounts[0].privateKey,
-    PrivateKey.random()
-  );
-
-  if (config.DEPLOY_ZKAPP) {
-    await context.rollup.deploy();
-  }
+  const context = await createRollupContext(await loadAccounts());
 
   const { url } = await startStandaloneServer(server, {
     listen: { port: config.PORT },

@@ -1,7 +1,8 @@
 import { ApolloServer } from "@apollo/server";
 import assert from "assert";
 import { ethers } from "ethers";
-import { Field, Mina, MinaUtils, PrivateKey, PublicKey, Signature } from "snarkyjs";
+import { Field, Mina, MinaUtils, PrivateKey, PublicKey, Signature } from "o1js";
+import { signerKey, zkappKey } from "../src/L1";
 import { Account, Maybe, Mutation } from "../src/generated/graphql";
 import { RollupContext, loadSchema, resolvers } from "../src/gql";
 import { CommandType, Rollup, createRollupContext } from "../src/rollup";
@@ -15,7 +16,7 @@ describe("Payment", () => {
 
   const acc1 = ((sk) => ({ sk, pk: sk.toPublicKey() }))(PrivateKey.random());
   const acc2 = ((sk) => ({ sk, pk: sk.toPublicKey() }))(PrivateKey.random());
-  const zkapp = ((sk) => ({ sk, pk: sk.toPublicKey() }))(PrivateKey.random());
+  let zkapp: { sk: PrivateKey; pk: PublicKey };
   let signer: { sk: PrivateKey; pk: PublicKey };
 
   const payment1 = generateCommand(acc1.sk, acc2.pk, minaToDecimal(10), 0);
@@ -25,27 +26,22 @@ describe("Payment", () => {
   let genesisLedgerHash: Field;
 
   beforeAll(async () => {
-    const Local = Mina.LocalBlockchain({
-      proofsEnabled: true,
-      enforceTransactionLimits: true,
-    });
-    Mina.setActiveInstance(Local);
-
-    signer = {
-      sk: Local.testAccounts[0].privateKey,
-      pk: Local.testAccounts[0].publicKey,
+    zkapp = {
+      sk: zkappKey,
+      pk: zkappKey.toPublicKey(),
     };
 
-    context = await createRollupContext(
-      [
-        {
-          balance: minaToDecimal(1_000).toString(),
-          publicKey: MinaUtils.encoding.publicKeyOfBase58(acc1.pk.toBase58()),
-        },
-      ],
-      signer.sk,
-      zkapp.sk
-    );
+    signer = {
+      sk: signerKey,
+      pk: signerKey.toPublicKey(),
+    };
+
+    context = await createRollupContext([
+      {
+        balance: minaToDecimal(1_000).toString(),
+        publicKey: MinaUtils.encoding.publicKeyOfBase58(acc1.pk.toBase58()),
+      },
+    ]);
 
     server = new ApolloServer<RollupContext>({
       typeDefs: await loadSchema("schema.graphql"),
@@ -57,9 +53,7 @@ describe("Payment", () => {
     await context.teardown();
   }, 100_000);
 
-  it("deploys the zkapp", async () => {
-    await context.rollup.deploy();
-
+  it("should have deployed the zkapp", async () => {
     const zkappAcc = Mina.getAccount(zkapp.pk);
 
     const committedLedgerHash = zkappAcc.zkapp?.appState.at(0);
@@ -310,7 +304,7 @@ describe("Payment", () => {
 
   it("should bootstrap new rollup context", async () => {
     newContext = {
-      rollup: new Rollup(zkapp.sk, signer.sk, context.rollup.daLayer, context.rollup.bindings, [
+      rollup: new Rollup(context.rollup.daLayer, context.rollup.bindings, [
         {
           balance: minaToDecimal(1_000).toString(),
           publicKey: MinaUtils.encoding.publicKeyOfBase58(acc1.pk.toBase58()),
@@ -319,7 +313,7 @@ describe("Payment", () => {
       teardown: async () => {},
     };
 
-    await newContext.rollup.bootstrap(context.rollup.lastCommittedBatchId);
+    await newContext.rollup.bootstrap();
 
     expect(newContext.rollup.lastCommittedBatchId).toBe(context.rollup.lastCommittedBatchId);
 

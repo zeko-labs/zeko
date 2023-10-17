@@ -1,6 +1,6 @@
 import { ethers } from "ethers";
-import { Field, Scalar } from "snarkyjs";
-import { AuthRequired } from "snarkyjs/dist/node/bindings/mina-transaction/transaction-leaves-json";
+import { Field, Scalar } from "o1js";
+import { AuthRequired } from "o1js/dist/node/bindings/mina-transaction/transaction-leaves-json";
 import { AccountAuthRequired } from "./generated/graphql";
 
 export const convAuthRequiredToGqlType = (authRequired: AuthRequired) => {

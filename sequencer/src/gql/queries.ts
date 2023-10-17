@@ -1,4 +1,4 @@
-import { FieldConst, MinaUtils } from "snarkyjs";
+import { FieldConst, MinaUtils } from "o1js";
 import { RollupContext } from ".";
 import { Account, DaemonStatus, Peer, QueryResolvers, SyncStatus, TransactionStatus } from "../generated/graphql";
 
