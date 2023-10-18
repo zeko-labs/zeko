@@ -87,8 +87,8 @@ export class Rollup {
   public lastCommittedBatchId: string = ethers.constants.HashZero;
   private isCommitting: boolean = false;
 
-  public lastTxnSnark: string | undefined = undefined;
-  public txnSnarkPromise: Promise<string | undefined> = Promise.resolve(this.lastTxnSnark);
+  public lastTxnSnarkPromise: Promise<string | undefined> = Promise.resolve(undefined);
+  public currentTxnSnarkPromise: Promise<string | undefined> = Promise.resolve(undefined);
 
   private rollup: RollupInstance;
   private deployAccountUpdate: string;
@@ -112,6 +112,14 @@ export class Rollup {
     }
   }
 
+  public getCommittedLedgerHash() {
+    try {
+      return Mina.getAccount(zkappKey.toPublicKey()).zkapp?.appState.at(0);
+    } catch (e) {
+      return undefined;
+    }
+  }
+
   public async deploy() {
     if (Mina.hasAccount(zkappKey.toPublicKey())) {
       logger.info("zkapp already deployed, skipping");
@@ -132,15 +140,14 @@ export class Rollup {
     await deployTx.prove();
     const txId = await deployTx.sign([signerKey, zkappKey]).send();
 
+    logger.info("Deploy tx hash:", txId.hash(), "Success:", txId.isSuccess);
+
     await txId.wait();
   }
 
   public async commit() {
-    if (this.isCommitting) return;
-    this.isCommitting = true;
-
-    if (this.lastTxnSnark === undefined) {
-      logger.info("No previous snark, skipping commit");
+    if (this.isCommitting) {
+      logger.info("Already committing, skipping commit");
       return;
     }
 
@@ -149,15 +156,27 @@ export class Rollup {
       return;
     }
 
-    const batchId = bigIntStrToHex(this.bindings.getLedgerHashFromSnark(this.lastTxnSnark));
+    const transactionsToCommit = this.stagedTransactions.slice();
+
+    this.isCommitting = true;
+    this.committedTransactions.push(...transactionsToCommit);
+    this.stagedTransactions = [];
+
+    const txnSnarkToCommit = await this.currentTxnSnarkPromise;
+
+    if (txnSnarkToCommit === undefined) {
+      throw new Error("No snark to commit");
+    }
+
+    const batchId = bigIntStrToHex(this.bindings.getLedgerHashFromSnark(txnSnarkToCommit));
 
     await this.daLayer.postBatch(
       batchId,
       this.lastCommittedBatchId,
-      this.stagedTransactions.map((tx) => tx.daIndex)
+      transactionsToCommit.map((tx) => tx.daIndex)
     );
 
-    const stepCallForest = await commitProver.enqueue({ txnSnark: this.lastTxnSnark });
+    const stepCallForest = await commitProver.enqueue({ txnSnark: txnSnarkToCommit });
 
     const stepTx = await Mina.transaction({ sender: signerKey.toPublicKey(), fee: 0.1e9 }, () => {});
 
@@ -169,16 +188,18 @@ export class Rollup {
 
     const txId = await stepTx.sign([signerKey, zkappKey]).send();
 
+    logger.info("Commit tx hash:", txId.hash(), "Success:", txId.isSuccess);
+
     await txId.wait();
 
-    this.committedTransactions.push(...this.stagedTransactions);
-    this.stagedTransactions = [];
     this.lastCommittedBatchId = batchId;
     this.isCommitting = false;
+
+    logger.info("Committed");
   }
 
   public async bootstrap() {
-    const committedLedgerHash = Mina.getAccount(zkappKey.toPublicKey()).zkapp?.appState.at(0);
+    const committedLedgerHash = this.getCommittedLedgerHash();
 
     if (committedLedgerHash === undefined) {
       throw new Error("zkapp not deployed");
@@ -216,6 +237,8 @@ export class Rollup {
 
     this.lastCommittedBatchId = batchId;
     this.committedTransactions = commands;
+
+    logger.info("bootstrapped to", this.bindings.getRoot(this.rollup).toString());
   }
 
   public getRoot() {
@@ -311,14 +334,16 @@ export class Rollup {
 
     const daIndex = await this.daLayer.postCommand(tx);
 
-    const prevSnarkPromise = this.txnSnarkPromise;
-    this.txnSnarkPromise = prevSnarkPromise.then((prevSnarkJson) => {
-      return commandProver.enqueue({ snarkInp: txnSnarkInputJson, prevSnark: prevSnarkJson });
-    });
-
-    this.txnSnarkPromise.then((txnSnarkJson) => {
+    const prevSnarkPromise = this.lastTxnSnarkPromise;
+    this.lastTxnSnarkPromise = prevSnarkPromise.then((prevSnarkJson) => {
       this.stagedTransactions.push({ ...tx, daIndex });
-      this.lastTxnSnark = txnSnarkJson;
+
+      this.currentTxnSnarkPromise = commandProver.enqueue({
+        snarkInp: txnSnarkInputJson,
+        prevSnark: this.stagedTransactions.length !== 1 ? prevSnarkJson : undefined,
+      });
+
+      return this.currentTxnSnarkPromise;
     });
 
     return { hash: txHash, id: txId };

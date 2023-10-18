@@ -2,7 +2,7 @@ import { ApolloServer } from "@apollo/server";
 import assert from "assert";
 import { ethers } from "ethers";
 import { Field, Mina, MinaUtils, PrivateKey, PublicKey, Signature } from "o1js";
-import { signerKey, zkappKey } from "../src/L1";
+import { zkappKey } from "../src/L1";
 import { Account, Maybe, Mutation } from "../src/generated/graphql";
 import { RollupContext, loadSchema, resolvers } from "../src/gql";
 import { CommandType, Rollup, createRollupContext } from "../src/rollup";
@@ -17,11 +17,12 @@ describe("Payment", () => {
   const acc1 = ((sk) => ({ sk, pk: sk.toPublicKey() }))(PrivateKey.random());
   const acc2 = ((sk) => ({ sk, pk: sk.toPublicKey() }))(PrivateKey.random());
   let zkapp: { sk: PrivateKey; pk: PublicKey };
-  let signer: { sk: PrivateKey; pk: PublicKey };
 
   const payment1 = generateCommand(acc1.sk, acc2.pk, minaToDecimal(10), 0);
   const payment2 = generateCommand(acc1.sk, acc2.pk, minaToDecimal(20), 1);
   const payment3 = generateCommand(acc2.sk, acc1.pk, minaToDecimal(15), 0);
+  const payment4 = generateCommand(acc1.sk, acc2.pk, minaToDecimal(30), 2);
+  const payment5 = generateCommand(acc1.sk, acc2.pk, minaToDecimal(45), 3);
 
   let genesisLedgerHash: Field;
 
@@ -29,11 +30,6 @@ describe("Payment", () => {
     zkapp = {
       sk: zkappKey,
       pk: zkappKey.toPublicKey(),
-    };
-
-    signer = {
-      sk: signerKey,
-      pk: signerKey.toPublicKey(),
     };
 
     context = await createRollupContext([
@@ -270,9 +266,8 @@ describe("Payment", () => {
   });
 
   it("should commit the state to L1", async () => {
-    await context.rollup.txnSnarkPromise;
+    await context.rollup.lastTxnSnarkPromise;
 
-    expect(context.rollup.lastTxnSnark).not.toBe("");
     expect(context.rollup.stagedTransactions.length).toBe(2);
     expect(context.rollup.committedTransactions.length).toBe(0);
 
@@ -427,9 +422,8 @@ describe("Payment", () => {
   });
 
   it("should commit the second batch to L1", async () => {
-    await newContext.rollup.txnSnarkPromise;
+    await newContext.rollup.lastTxnSnarkPromise;
 
-    expect(newContext.rollup.lastTxnSnark).not.toBe("");
     expect(newContext.rollup.stagedTransactions.length).toBe(1);
     expect(newContext.rollup.committedTransactions.length).toBe(2);
 
@@ -458,4 +452,114 @@ describe("Payment", () => {
     expect(storedPreviousBatchId).toBe(context.rollup.lastCommittedBatchId);
     expect(ordering.map((x) => x.toNumber())).toEqual([2]);
   });
+
+  it("should apply fourth payment to the new rollup context", async () => {
+    const { body } = await server.executeOperation<Pick<Mutation, "sendPayment">>(
+      {
+        query: `
+          mutation {
+            sendPayment(
+              signature: {
+                field: "${payment4.signature.field}",
+                scalar: "${payment4.signature.scalar}",
+              },
+              input: {
+                nonce: "${payment4.data.nonce.toString()}",
+                memo: "${payment4.data.memo ?? ""}",
+                validUntil: "${payment4.data.validUntil?.toString()}",
+                fee: "${payment4.data.fee.toString()}",
+                amount: "${payment4.data.amount.toString()}",
+                to: "${acc2.pk.toBase58()}",
+                from: "${acc1.pk.toBase58()}",
+              }
+            ) {
+              payment {
+                nonce
+              }
+            }
+          }
+        `,
+      },
+      { contextValue: newContext }
+    );
+
+    assert(body.kind === "single");
+
+    expect(body.singleResult.data?.sendPayment).toMatchObject({
+      payment: { nonce: 2 },
+    });
+  });
+
+  it("should wait for the fifth payment before commit", async () => {
+    await newContext.rollup.lastTxnSnarkPromise;
+
+    await server.executeOperation<Pick<Mutation, "sendPayment">>(
+      {
+        query: `
+            mutation {
+              sendPayment(
+                signature: {
+                  field: "${payment5.signature.field}",
+                  scalar: "${payment5.signature.scalar}",
+                },
+                input: {
+                  nonce: "${payment5.data.nonce.toString()}",
+                  memo: "${payment5.data.memo ?? ""}",
+                  validUntil: "${payment5.data.validUntil?.toString()}",
+                  fee: "${payment5.data.fee.toString()}",
+                  amount: "${payment5.data.amount.toString()}",
+                  to: "${acc2.pk.toBase58()}",
+                  from: "${acc1.pk.toBase58()}",
+                }
+              ) {
+                payment {
+                  nonce
+                }
+              }
+            }
+          `,
+      },
+      { contextValue: newContext }
+    );
+
+    await newContext.rollup.commit();
+
+    expect(newContext.rollup.stagedTransactions.length).toBe(0);
+    expect(newContext.rollup.committedTransactions.length).toBe(5);
+
+    const zkappAcc = Mina.getAccount(zkapp.pk);
+
+    const committedLedgerHash = zkappAcc.zkapp?.appState.at(0);
+
+    expect(committedLedgerHash).toBeDefined();
+    assert(committedLedgerHash !== undefined, "zkapp not deployed");
+
+    const realLedgerHash = newContext.rollup.getRoot();
+
+    expect(committedLedgerHash.equals(realLedgerHash).toBoolean()).toBe(true);
+  }, 500_000);
+
+  // it("should commit the third batch to L1", async () => {
+  //   await newContext.rollup.txnSnarkPromise;
+
+  //   expect(newContext.rollup.lastTxnSnark).not.toBe("");
+  //   expect(newContext.rollup.stagedTransactions.length).toBe(1);
+  //   expect(newContext.rollup.committedTransactions.length).toBe(3);
+
+  //   await newContext.rollup.commit();
+
+  //   expect(newContext.rollup.stagedTransactions.length).toBe(0);
+  //   expect(newContext.rollup.committedTransactions.length).toBe(4);
+
+  //   const zkappAcc = Mina.getAccount(zkapp.pk);
+
+  //   const committedLedgerHash = zkappAcc.zkapp?.appState.at(0);
+
+  //   expect(committedLedgerHash).toBeDefined();
+  //   assert(committedLedgerHash !== undefined, "zkapp not deployed");
+
+  //   const realLedgerHash = newContext.rollup.getRoot();
+
+  //   expect(committedLedgerHash.equals(realLedgerHash).toBoolean()).toBe(true);
+  // }, 500_000);
 });

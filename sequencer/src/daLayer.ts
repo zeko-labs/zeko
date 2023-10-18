@@ -6,6 +6,22 @@ import { StoredTransaction, Transaction } from "./rollup";
 import { DataAvailability } from "./typechain-types";
 import { CommandPostedEvent } from "./typechain-types/contracts/DataAvailability";
 
+const doesErrorReasonContain = (e: unknown, message: string) => {
+  if (!(e instanceof Error)) return false;
+
+  if ("reason" in e && typeof e.reason === "string" && e.reason.includes(message)) return true;
+  if (
+    "error" in e &&
+    e.error instanceof Error &&
+    "reason" in e.error &&
+    typeof e.error.reason === "string" &&
+    e.error.reason.includes(message)
+  )
+    return true;
+
+  return false;
+};
+
 export class DALayer {
   private readonly provider = new ethers.providers.WebSocketProvider(config.DA_LAYER_WEBSOCKET_URL);
 
@@ -52,8 +68,17 @@ export class DALayer {
   }
 
   public async postBatch(batchId: string, previousBatchId: string, commandIndexes: number[]) {
-    const tx = await this.contract.postBatch(batchId, previousBatchId, commandIndexes);
-    await tx.wait();
+    try {
+      const tx = await this.contract.postBatch(batchId, previousBatchId, commandIndexes);
+      await tx.wait();
+    } catch (e) {
+      if (doesErrorReasonContain(e, "Batch already exists")) {
+        logger.info(`Batch already posted with id: ${batchId}`);
+        return;
+      }
+
+      throw e;
+    }
 
     logger.info(`Batch posted with id: ${batchId}`);
   }
