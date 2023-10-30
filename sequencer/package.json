@@ -8,7 +8,8 @@
     "dev": "ts-node-dev src/index.ts",
     "test": "./tests/run.sh",
     "codegen": "graphql-codegen --config codegen.ts",
-    "bun": "bun src/index.ts"
+    "bun": "bun src/index.ts",
+    "docker": "cd .. && make sequencer-docker && cd -"
   },
   "dependencies": {
     "@apollo/server": "^4.7.2",

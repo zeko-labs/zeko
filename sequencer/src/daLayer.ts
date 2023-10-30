@@ -34,7 +34,7 @@ export class DALayer {
   ) as DataAvailability;
 
   private pingTimeout: NodeJS.Timeout | null = null;
-  private keepAliveInterval: NodeJS.Timer | null = null;
+  private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.keepAlive();
