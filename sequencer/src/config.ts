@@ -24,6 +24,7 @@ const schema = z.object({
   MINA_SIGNER_PRIVATE_KEY: z.string().default(""),
   MINA_ZKAPP_PRIVATE_KEY: z.string().default(""),
   MINA_NODE_URL: z.string().default(""),
+  MAX_MEMPOOL_SIZE: processInt(z.number().default(5)),
 });
 
 export default schema.parse(process.env);

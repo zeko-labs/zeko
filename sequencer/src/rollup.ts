@@ -81,6 +81,7 @@ export type StoredTransaction = {
 } & Transaction;
 
 export class Rollup {
+  public mempoolSize: number = 0;
   public stagedTransactions: StoredTransaction[] = [];
   public committedTransactions: StoredTransaction[] = [];
 
@@ -314,6 +315,12 @@ export class Rollup {
     signature: Signature,
     userCommand: SendPaymentInput
   ): Promise<{ hash: string; id: string }> {
+    if (this.mempoolSize >= config.MAX_MEMPOOL_SIZE) {
+      throw new Error("Mempool is full");
+    }
+
+    this.mempoolSize++;
+
     const { from, to, amount, fee, validUntil, nonce, memo } = userCommand;
 
     const { txId, txHash, txnSnarkInputJson } = this.bindings.applyUserCommand(this.rollup, {
@@ -337,6 +344,8 @@ export class Rollup {
     const prevSnarkPromise = this.lastTxnSnarkPromise;
     this.lastTxnSnarkPromise = prevSnarkPromise.then((prevSnarkJson) => {
       this.stagedTransactions.push({ ...tx, daIndex });
+
+      this.mempoolSize--;
 
       this.currentTxnSnarkPromise = commandProver.enqueue({
         snarkInp: txnSnarkInputJson,
