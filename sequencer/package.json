@@ -12,10 +12,14 @@
     "docker": "cd .. && make sequencer-docker && cd -"
   },
   "dependencies": {
+    "@apollo/client": "^3.8.6",
     "@apollo/server": "^4.7.2",
     "ethers": "5.7.2",
-    "graphql": "^16.6.0",
+    "graphql": "^16.8.1",
+    "graphql-ws": "^5.14.2",
     "o1js": "file:../../mina-rollup/src/lib/snarkyjs",
+    "subscriptions-transport-ws": "^0.11.0",
+    "ws": "^8.14.2",
     "zod": "^3.21.4"
   },
   "devDependencies": {
@@ -25,6 +29,7 @@
     "@graphql-codegen/typescript-resolvers": "4.0.0",
     "@types/jest": "^29.5.3",
     "@types/node": "^20.2.5",
+    "@types/ws": "^8.5.8",
     "mina-signer": "^2.1.0",
     "ts-jest": "^29.1.1",
     "ts-node": "^10.9.1",

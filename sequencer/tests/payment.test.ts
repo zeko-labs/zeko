@@ -23,6 +23,7 @@ describe("Payment", () => {
   const payment3 = generateCommand(acc2.sk, acc1.pk, minaToDecimal(15), 0);
   const payment4 = generateCommand(acc1.sk, acc2.pk, minaToDecimal(30), 2);
   const payment5 = generateCommand(acc1.sk, acc2.pk, minaToDecimal(45), 3);
+  const payment6 = generateCommand(acc1.sk, acc2.pk, minaToDecimal(5), 4);
 
   let genesisLedgerHash: Field;
 
@@ -539,27 +540,44 @@ describe("Payment", () => {
     expect(committedLedgerHash.equals(realLedgerHash).toBoolean()).toBe(true);
   }, 500_000);
 
-  // it("should commit the third batch to L1", async () => {
-  //   await newContext.rollup.txnSnarkPromise;
+  it("should throw away work on reorganize", async () => {
+    const zkappAcc = Mina.getAccount(zkapp.pk);
+    const oldCommittedLedgerHash = zkappAcc.zkapp?.appState.at(0);
 
-  //   expect(newContext.rollup.lastTxnSnark).not.toBe("");
-  //   expect(newContext.rollup.stagedTransactions.length).toBe(1);
-  //   expect(newContext.rollup.committedTransactions.length).toBe(3);
+    assert(oldCommittedLedgerHash !== undefined, "zkapp not deployed");
 
-  //   await newContext.rollup.commit();
+    // start work by sending a payment
+    await server.executeOperation<Pick<Mutation, "sendPayment">>(
+      {
+        query: `
+            mutation {
+              sendPayment(
+                signature: {
+                  field: "${payment6.signature.field}",
+                  scalar: "${payment6.signature.scalar}",
+                },
+                input: {
+                  nonce: "${payment6.data.nonce.toString()}",
+                  memo: "${payment6.data.memo ?? ""}",
+                  validUntil: "${payment6.data.validUntil?.toString()}",
+                  fee: "${payment6.data.fee.toString()}",
+                  amount: "${payment6.data.amount.toString()}",
+                  to: "${acc2.pk.toBase58()}",
+                  from: "${acc1.pk.toBase58()}",
+                }
+              ) {
+                payment {
+                  nonce
+                }
+              }
+            }
+          `,
+      },
+      { contextValue: newContext }
+    );
 
-  //   expect(newContext.rollup.stagedTransactions.length).toBe(0);
-  //   expect(newContext.rollup.committedTransactions.length).toBe(4);
+    await newContext.rollup.reorganize();
 
-  //   const zkappAcc = Mina.getAccount(zkapp.pk);
-
-  //   const committedLedgerHash = zkappAcc.zkapp?.appState.at(0);
-
-  //   expect(committedLedgerHash).toBeDefined();
-  //   assert(committedLedgerHash !== undefined, "zkapp not deployed");
-
-  //   const realLedgerHash = newContext.rollup.getRoot();
-
-  //   expect(committedLedgerHash.equals(realLedgerHash).toBoolean()).toBe(true);
-  // }, 500_000);
+    expect(oldCommittedLedgerHash.equals(newContext.rollup.getRoot()).toBoolean()).toBe(true);
+  }, 500_000);
 });

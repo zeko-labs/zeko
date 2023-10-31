@@ -15,7 +15,7 @@ import {
   Types,
   withThreadPool,
 } from "o1js";
-import { signerKey, zkappKey } from "./L1";
+import { onChainReorder, signerKey, zkappKey } from "./L1";
 import config from "./config";
 import { DALayer } from "./daLayer";
 import { Account, SendPaymentInput } from "./generated/graphql";
@@ -81,9 +81,11 @@ export type StoredTransaction = {
 } & Transaction;
 
 export class Rollup {
-  public mempoolSize: number = 0;
   public stagedTransactions: StoredTransaction[] = [];
   public committedTransactions: StoredTransaction[] = [];
+
+  private mempoolSize: number = 0;
+  private reorganizing: boolean = false;
 
   public lastCommittedBatchId: string = ethers.constants.HashZero;
   private isCommitting: boolean = false;
@@ -95,7 +97,7 @@ export class Rollup {
   private deployAccountUpdate: string;
   private genesisLedgerHash: string;
 
-  constructor(public daLayer: DALayer, public bindings: RollupMethods, genesisAccounts: GenesisAccount[]) {
+  constructor(public daLayer: DALayer, public bindings: RollupMethods, private genesisAccounts: GenesisAccount[]) {
     const {
       rollup,
       accountUpdate: deployAccountUpdate,
@@ -111,6 +113,38 @@ export class Rollup {
         this.commit();
       }, config.COMMITMENT_PERIOD);
     }
+
+    onChainReorder(this.reorganize.bind(this));
+  }
+
+  public async reorganize() {
+    logger.info("reorganizing");
+
+    this.reorganizing = true;
+
+    await this.lastTxnSnarkPromise;
+
+    this.mempoolSize = 0;
+    this.stagedTransactions = [];
+    this.committedTransactions = [];
+    this.lastCommittedBatchId = ethers.constants.HashZero;
+    this.isCommitting = false;
+    this.lastTxnSnarkPromise = Promise.resolve(undefined);
+    this.currentTxnSnarkPromise = Promise.resolve(undefined);
+
+    const {
+      rollup,
+      accountUpdate: deployAccountUpdate,
+      genesisLedgerHash,
+    } = this.bindings.createZkapp("rollup", this.genesisAccounts);
+
+    this.rollup = rollup;
+    this.deployAccountUpdate = deployAccountUpdate;
+    this.genesisLedgerHash = genesisLedgerHash;
+
+    await this.bootstrap();
+
+    this.reorganizing = false;
   }
 
   public getCommittedLedgerHash() {
@@ -147,6 +181,11 @@ export class Rollup {
   }
 
   public async commit() {
+    if (this.reorganizing) {
+      logger.info("Reorganizing, skipping commit");
+      return;
+    }
+
     if (this.isCommitting) {
       logger.info("Already committing, skipping commit");
       return;
@@ -292,6 +331,7 @@ export class Rollup {
       zkappState: acc.zkapp?.appState,
       zkappUri: acc.zkapp?.zkappUri,
       actionState: acc.zkapp?.actionState,
+      provedState: acc.zkapp?.provedState,
 
       // we don't support delegation
       delegate: null,
@@ -302,7 +342,6 @@ export class Rollup {
       votingFor: null,
 
       // TODO
-      provedState: false,
       index: null,
       leafHash: null,
       locked: false,
@@ -317,6 +356,11 @@ export class Rollup {
   ): Promise<{ hash: string; id: string }> {
     if (this.mempoolSize >= config.MAX_MEMPOOL_SIZE) {
       throw new Error("Mempool is full");
+    }
+
+    if (this.reorganizing) {
+      logger.info("Reorganizing, skipping commit");
+      throw new Error("Reorganizing");
     }
 
     this.mempoolSize++;
@@ -343,6 +387,10 @@ export class Rollup {
 
     const prevSnarkPromise = this.lastTxnSnarkPromise;
     this.lastTxnSnarkPromise = prevSnarkPromise.then((prevSnarkJson) => {
+      if (this.reorganizing) {
+        return undefined;
+      }
+
       this.stagedTransactions.push({ ...tx, daIndex });
 
       this.mempoolSize--;
