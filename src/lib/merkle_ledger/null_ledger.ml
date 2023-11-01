@@ -39,7 +39,10 @@ end = struct
   module Addr = Location.Addr
 
   let create ~depth () =
-    { uuid = Uuid.create_random (Random.State.make_self_init ~allow_in_tests:true ()); depth }
+    { uuid =
+        Uuid.create_random (Random.State.make_self_init ~allow_in_tests:true ())
+    ; depth
+    }
 
   let remove_accounts_exn _t keys =
     if List.is_empty keys then ()

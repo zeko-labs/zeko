@@ -55,7 +55,8 @@ module Make (Inputs : Inputs_intf.S) = struct
   type unattached = t [@@deriving sexp]
 
   let create ~depth () =
-    { uuid = Uuid.create_random (Random.State.make_self_init ~allow_in_tests:true ())
+    { uuid =
+        Uuid.create_random (Random.State.make_self_init ~allow_in_tests:true ())
     ; parent = Error __LOC__
     ; detached_parent_signal = Ivar.create ()
     ; account_tbl = Location_binable.Table.create ()
@@ -394,7 +395,9 @@ module Make (Inputs : Inputs_intf.S) = struct
 
     (* copy tables in t; use same parent *)
     let copy t =
-      { uuid = Uuid.create_random (Random.State.make_self_init ~allow_in_tests:true ())
+      { uuid =
+          Uuid.create_random
+            (Random.State.make_self_init ~allow_in_tests:true ())
       ; parent = Ok (get_parent t)
       ; detached_parent_signal = Ivar.create ()
       ; account_tbl = Location_binable.Table.copy t.account_tbl
