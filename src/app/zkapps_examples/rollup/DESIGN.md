@@ -80,3 +80,22 @@ guarded by anything, but before using a rollup, you can check the state of the r
 or otherwise check its history, to verify for yourself that it is legitimate.
 If it's been made illegitimately, you can choose not to use it.
 Although we could still enforce proper initialisation in the future if we wanted to.
+
+## Implementation
+
+There are three circuits, one for the nested account, one for the L1 account, and one for merging transaction snarks.
+Why another circuit for merging transaction snarks? We ignore first/second-pass logic, since it is not relevant for our
+purposes.
+
+The logic for transfers is almost equivalent for the two accounts.
+The action state for one account is synchronised to state field 0 of the other account.
+State field 1 is the hash of the merkle list of actions processed.
+A transfer from L1 to L2 is done by appending an action, adding the necessary amount to the outer account,
+then when "sequencing", we synchronise the fields.
+For each such sequencing, there can be exactly one "synchronisation" account update for the nested account,
+since the account nonce must be incremented (enforced by the circuit), and that is checked in the outer account's
+circuit.
+
+At the same time as doing the synchronisation, some amount of payments is done.
+For the nested account update, this is likely to be as many as there are to process,
+but for the outer one, this is likely to be less, meaning a queue forms.
