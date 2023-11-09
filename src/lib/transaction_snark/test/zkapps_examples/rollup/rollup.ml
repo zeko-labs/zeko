@@ -227,9 +227,10 @@ let%test_module "Rollup test" =
     let mint_to_keys = gen_keys ()
 
     module Account_updates = struct
-      let deploy, account_update = Zkapps_rollup.Deploy.deploy pk M.vk M.Inner.vk
+      let deploy, account_update =
+        Zkapps_rollup.Deploy.deploy pk M.vk M.Inner.vk
 
-(* Add step *)
+      (* Add step *)
     end
 
     let signers = [| (pk, sk); mint_to_keys |]
@@ -258,7 +259,7 @@ let%test_module "Rollup test" =
       let stmt = Transaction_snark.statement txn in
       let account =
         []
-                        (*
+        (*
         |> Zkapp_command.Call_forest.cons_tree (Account_updates.step txn)
         |> Zkapp_command.Call_forest.cons
              (Account_updates.deploy
