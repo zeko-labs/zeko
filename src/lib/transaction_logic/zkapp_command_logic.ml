@@ -1136,6 +1136,10 @@ module Make (Inputs : Inputs_intf) = struct
       ; will_succeed
       }
     in
+    (* ZEKO NOTE: For Zeko we don't allow taking fees from failed transactions *)
+    let local_state =
+      Local_state.add_check local_state Cancelled will_succeed
+    in
     let ( (account_update, remaining, call_stack)
         , account_update_forest
         , local_state
@@ -1309,10 +1313,13 @@ module Make (Inputs : Inputs_intf) = struct
         Inputs.Bool.(
           Inputs.Account_update.increment_nonce account_update ||| not is_start')
     in
-    let local_state =
-      Local_state.add_check local_state Fee_payer_must_be_signed
-        Inputs.Bool.(signature_verifies ||| not is_start')
-    in
+    (* ZEKO NOTE: We disable this *)
+    (*
+         let local_state =
+           Local_state.add_check local_state Fee_payer_must_be_signed
+             Inputs.Bool.(signature_verifies ||| not is_start')
+         in
+    *)
     let local_state =
       let precondition_has_constant_nonce =
         Inputs.Account_update.Account_precondition.nonce account_update
