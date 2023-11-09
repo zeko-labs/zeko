@@ -1,0 +1,40 @@
+(executable
+ (name sequencer)
+ (libraries
+  zkapps_rollup
+  ;; mina ;;
+  mina_base
+  mina_base.import
+  mina_ledger
+  mina_transaction
+  mina_transaction_logic
+  mina_state
+  mina_wire_types
+  mina_numbers
+  pickles
+  transaction_snark
+  transaction_protocol_state
+  genesis_constants
+  genesis_ledger
+  consensus
+  staged_ledger_diff
+  with_hash
+  currency
+  signature_lib
+  sgn
+  ;; opam libraries ;;
+  async_kernel
+  core_kernel
+  base
+  base.caml
+  yojson
+  ppx_deriving_yojson.runtime)
+ (foreign_stubs (language c) (names cstub))
+ (flags :standard -linkall)
+ (modes (native shared_object))
+ (preprocess (pps ppx_jane)))
+
+(rule
+ (deps sequencer.so)
+ (target sequencer.dylib)
+ (action (copy sequencer.so sequencer.dylib)))

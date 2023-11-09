@@ -4,6 +4,7 @@
    ;; opam libraries
    base
    core_kernel
+   async_kernel
    ;; local libraries
   allocation_functor
   base58_check

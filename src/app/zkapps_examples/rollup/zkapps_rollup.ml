@@ -17,6 +17,7 @@ open struct
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
   module L = Mina_ledger.Ledger
+  module T = Transaction_snark.Statement.With_sok
 
   (* let (!) = run_checked *)
 
@@ -289,13 +290,14 @@ module Wrapper_rules = struct
     module Checked = struct
       type t = var
     end
+
+    let of_txn_snark_statement (txn_snark : T.t) : t =
+      { source_ledger = txn_snark.source.first_pass_ledger
+      ; target_ledger = txn_snark.target.second_pass_ledger
+      }
   end
 
   module Wrap = struct
-    open struct
-      module T = Transaction_snark.Statement.With_sok
-    end
-
     include struct
       open Snarky_backendless.Request
 
@@ -421,6 +423,12 @@ end
 
 open struct
   module S = Wrapper_rules.S
+end
+
+module Wrapped_Transaction_snark = struct
+  type t =
+    { statement : S.t; proof : Pickles.Proof.Proofs_verified_2.Stable.V2.t }
+  [@@deriving fields]
 end
 
 module TR = struct
@@ -985,9 +993,13 @@ struct
     module Proof = (val p)
   end
 
+  open Async_kernel
+  open Wrapped_Transaction_snark
+
   module Wrapper = struct
     let tag, cache_handle, p, Pickles.Provers.[ wrap_; merge_ ] =
-      Pickles.compile () ~cache:Cache_dir.cache ~public_input:(Input S.typ)
+      Pickles.compile () ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+        ~cache:Cache_dir.cache ~public_input:(Input S.typ)
         ~auxiliary_typ:Typ.unit
         ~branches:(module Nat.N2)
         ~max_proofs_verified:(module Nat.N2)
@@ -1000,10 +1012,33 @@ struct
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-    let wrap stmt prf = wrap_ ~handler:(Wrapper_rules.Wrap.handler stmt prf)
+    let wrap (txn_snark : Transaction_snark.t) :
+        Wrapped_Transaction_snark.t Deferred.t =
+      let statement = Transaction_snark.statement_with_sok txn_snark in
+      let proof = Transaction_snark.proof txn_snark in
+      let wrapped_statement = S.of_txn_snark_statement statement in
+      let%bind (), (), wrapped_proof =
+        wrap_
+          ~handler:(Wrapper_rules.Wrap.handler statement proof)
+          wrapped_statement
+      in
+      return { statement = wrapped_statement; proof = wrapped_proof }
 
-    let merge s1 s2 p1 p2 =
-      merge_ ~handler:(Wrapper_rules.Merge.handler s1 s2 p1 p2)
+    let merge (p1 : Wrapped_Transaction_snark.t)
+        (p2 : Wrapped_Transaction_snark.t) =
+      let wrapped_statement : S.t =
+        { source_ledger = p1.statement.source_ledger
+        ; target_ledger = p2.statement.target_ledger
+        }
+      in
+      let%bind (), (), wrapped_proof =
+        merge_
+          ~handler:
+            (Wrapper_rules.Merge.handler p1.statement p2.statement p1.proof
+               p2.proof )
+          wrapped_statement
+      in
+      return { statement = wrapped_statement; proof = wrapped_proof }
 
     module Proof = (val p)
   end
