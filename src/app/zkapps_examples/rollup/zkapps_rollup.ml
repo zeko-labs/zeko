@@ -343,12 +343,14 @@ module Wrapper_rules = struct
       @@ Frozen_ledger_hash.assert_equal istmt.source.second_pass_ledger
            istmt.connecting_ledger_left ;
       (* Blockchain snark checks this too, probably needed here too for correctness *)
-      run_checked
-      @@ Fee_excess.assert_equal_checked
-           Fee_excess.(var_of_t zero)
-           istmt.fee_excess ;
-      ( run_checked
-      @@ CAS.(Checked.assert_equal (constant typ zero) istmt.supply_increase) ) ;
+      (* No, `fee_excess` can't be zero after tx because it's equal to the fee.
+         In block snark it makes sense because `fee_excess` should be already given to the block creator *)
+      (* run_checked
+            @@ Fee_excess.assert_equal_checked
+                 Fee_excess.(var_of_t zero)
+                 istmt.fee_excess ;
+         ( run_checked
+            @@ CAS.(Checked.assert_equal (constant typ zero) istmt.supply_increase) ) ; *)
       { previous_proof_statements =
           [ { public_input = istmt
             ; proof_must_verify = Boolean.true_
@@ -627,7 +629,7 @@ module Inner_rules = struct
       in
       let trs =
         exists (Typ.list ~length:processing_transfers_length TR.typ)
-          ~request:(fun () -> Processing_transfers)
+          ~request:(fun () -> Processing_transfers )
       in
       let calls = Zkapp_call_forest.Checked.empty () in
       (* NOTE: processed_transfers' must be a prefix of all_transfers, checked using action_prf. *)
@@ -690,11 +692,12 @@ module Inner_rules = struct
       let public_output, auxiliary_output = make_outputs account_update calls in
       { previous_proof_statements =
           [ { public_input =
-                ({ source0 = processed_transfers'
-                 ; target0 = all_transfers
-                 ; source1 = processed_transfers'
-                 ; target1 = all_transfers
-                 } : Action_state_extension_rule.Stmt.var)
+                ( { source0 = processed_transfers'
+                  ; target0 = all_transfers
+                  ; source1 = processed_transfers'
+                  ; target1 = all_transfers
+                  }
+                  : Action_state_extension_rule.Stmt.var )
             ; proof_must_verify = Boolean.true_
             ; proof = action_prf
             }
@@ -866,7 +869,7 @@ module Rules = struct
       in
       let trs =
         exists (Typ.list ~length:processing_transfers_length TR.typ)
-          ~request:(fun () -> Processing_transfers)
+          ~request:(fun () -> Processing_transfers )
       in
       let calls = Zkapp_call_forest.Checked.empty () in
       (* NOTE: processed_transfers' must be a prefix of all_transfers, checked also using action_prf. *)
@@ -933,11 +936,12 @@ module Rules = struct
             ; proof = prf
             }
           ; { public_input =
-                ({ source0 = old_outer_action_state_in_inner
-                 ; target0 = outer_action_state_in_inner
-                 ; source1 = processed_transfers'
-                 ; target1 = all_transfers
-                 } : Action_state_extension_rule.Stmt.var)
+                ( { source0 = old_outer_action_state_in_inner
+                  ; target0 = outer_action_state_in_inner
+                  ; source1 = processed_transfers'
+                  ; target1 = all_transfers
+                  }
+                  : Action_state_extension_rule.Stmt.var )
             ; proof_must_verify = Boolean.true_
             ; proof = action_prf
             }
@@ -959,6 +963,15 @@ module Make (T : sig
   val tag : Transaction_snark.tag
 end) =
 struct
+  open Async_kernel
+
+  let time lab f =
+    let start = Time.now () in
+    let x = f () in
+    let stop = Time.now () in
+    printf "%s: %s\n%!" lab (Time.Span.to_string_hum (Time.diff stop start)) ;
+    x
+
   module Action_state_extension = struct
     open Action_state_extension_rule
 
@@ -966,16 +979,23 @@ struct
         , cache_handle
         , p
         , Pickles.Provers.[ base_; step_both_; step0_; step1_ ] ) =
-      Pickles.compile () ~cache:Cache_dir.cache ~public_input:(Output Stmt.typ)
-        ~auxiliary_typ:Typ.unit
-        ~branches:(module Nat.N2)
-        ~max_proofs_verified:(module Nat.N1)
-        ~name:"action state extension"
-        ~constraint_constants:
-          (Genesis_constants.Constraint_constants.to_snark_keys_header
-             constraint_constants )
-        ~choices:(fun ~self ->
-          [ Base.rule; StepBoth.rule self; Step0.rule self; Step1.rule self ] )
+      time "Action_state_extension.compile" (fun () ->
+          Pickles.compile ()
+            ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+            ~cache:Cache_dir.cache ~public_input:(Output Stmt.typ)
+            ~auxiliary_typ:Typ.unit
+            ~branches:(module Nat.N4)
+            ~max_proofs_verified:(module Nat.N1)
+            ~name:"action state extension"
+            ~constraint_constants:
+              (Genesis_constants.Constraint_constants.to_snark_keys_header
+                 constraint_constants )
+            ~choices:(fun ~self ->
+              [ Base.rule
+              ; StepBoth.rule self
+              ; Step0.rule self
+              ; Step1.rule self
+              ] ) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
@@ -993,22 +1013,21 @@ struct
     module Proof = (val p)
   end
 
-  open Async_kernel
-  open Wrapped_Transaction_snark
-
   module Wrapper = struct
     let tag, cache_handle, p, Pickles.Provers.[ wrap_; merge_ ] =
-      Pickles.compile () ~override_wrap_domain:Pickles_base.Proofs_verified.N1
-        ~cache:Cache_dir.cache ~public_input:(Input S.typ)
-        ~auxiliary_typ:Typ.unit
-        ~branches:(module Nat.N2)
-        ~max_proofs_verified:(module Nat.N2)
-        ~name:"zeko wrapper"
-        ~constraint_constants:
-          (Genesis_constants.Constraint_constants.to_snark_keys_header
-             constraint_constants )
-        ~choices:(fun ~self ->
-          [ Wrapper_rules.Wrap.rule T.tag; Wrapper_rules.Merge.rule self ] )
+      time "Wrapper.compile" (fun () ->
+          Pickles.compile ()
+            ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+            ~cache:Cache_dir.cache ~public_input:(Input S.typ)
+            ~auxiliary_typ:Typ.unit
+            ~branches:(module Nat.N2)
+            ~max_proofs_verified:(module Nat.N2)
+            ~name:"zeko wrapper"
+            ~constraint_constants:
+              (Genesis_constants.Constraint_constants.to_snark_keys_header
+                 constraint_constants )
+            ~choices:(fun ~self ->
+              [ Wrapper_rules.Wrap.rule T.tag; Wrapper_rules.Merge.rule self ] ) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
@@ -1022,6 +1041,7 @@ struct
           ~handler:(Wrapper_rules.Wrap.handler statement proof)
           wrapped_statement
       in
+      let open Wrapped_Transaction_snark in
       return { statement = wrapped_statement; proof = wrapped_proof }
 
     let merge (p1 : Wrapped_Transaction_snark.t)
@@ -1038,6 +1058,7 @@ struct
                p2.proof )
           wrapped_statement
       in
+      let open Wrapped_Transaction_snark in
       return { statement = wrapped_statement; proof = wrapped_proof }
 
     module Proof = (val p)
@@ -1045,19 +1066,20 @@ struct
 
   module Inner = struct
     let tag, cache_handle, p, Pickles.Provers.[ step_; action_ ] =
-      Pickles.compile () ~cache:Cache_dir.cache
-        ~public_input:(Output Zkapp_statement.typ)
-        ~auxiliary_typ:Typ.(Prover_value.typ ())
-        ~branches:(module Nat.N2)
-        ~max_proofs_verified:(module Nat.N0)
-        ~name:"rollup inner account"
-        ~constraint_constants:
-          (Genesis_constants.Constraint_constants.to_snark_keys_header
-             constraint_constants )
-        ~choices:(fun ~self:_ ->
-          [ Inner_rules.Step.rule Action_state_extension.tag
-          ; Transfer_action_rule.rule
-          ] )
+      time "Inner.compile" (fun () ->
+          Pickles.compile () ~cache:Cache_dir.cache
+            ~public_input:(Output Zkapp_statement.typ)
+            ~auxiliary_typ:Typ.(Prover_value.typ ())
+            ~branches:(module Nat.N2)
+            ~max_proofs_verified:(module Nat.N1)
+            ~name:"rollup inner account"
+            ~constraint_constants:
+              (Genesis_constants.Constraint_constants.to_snark_keys_header
+                 constraint_constants )
+            ~choices:(fun ~self:_ ->
+              [ Inner_rules.Step.rule Action_state_extension.tag
+              ; Transfer_action_rule.rule
+              ] ) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
@@ -1071,19 +1093,20 @@ struct
   end
 
   let tag, cache_handle, p, Pickles.Provers.[ step_; action_ ] =
-    Pickles.compile () ~cache:Cache_dir.cache
-      ~public_input:(Output Zkapp_statement.typ)
-      ~auxiliary_typ:Typ.(Prover_value.typ ())
-      ~branches:(module Nat.N2)
-      ~max_proofs_verified:(module Nat.N1)
-      ~name:"rollup"
-      ~constraint_constants:
-        (Genesis_constants.Constraint_constants.to_snark_keys_header
-           constraint_constants )
-      ~choices:(fun ~self:_ ->
-        [ Rules.Step.rule Wrapper.tag Action_state_extension.tag
-        ; Transfer_action_rule.rule
-        ] )
+    time "Zkapp.compile" (fun () ->
+        Pickles.compile () ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+          ~cache:Cache_dir.cache ~public_input:(Output Zkapp_statement.typ)
+          ~auxiliary_typ:Typ.(Prover_value.typ ())
+          ~branches:(module Nat.N2)
+          ~max_proofs_verified:(module Nat.N2)
+          ~name:"rollup"
+          ~constraint_constants:
+            (Genesis_constants.Constraint_constants.to_snark_keys_header
+               constraint_constants )
+          ~choices:(fun ~self:_ ->
+            [ Rules.Step.rule Wrapper.tag Action_state_extension.tag
+            ; Transfer_action_rule.rule
+            ] ) )
 
   let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
