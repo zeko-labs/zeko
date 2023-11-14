@@ -1,6 +1,7 @@
 open Core_kernel
-open Mina_base
+open Async
 open Async_kernel
+open Mina_base
 module L = Mina_ledger.Ledger
 
 let time label (d : 'a Deferred.t) =
@@ -10,7 +11,10 @@ let time label (d : 'a Deferred.t) =
   printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-module Sequencer = struct
+module Make (Args : sig
+  val max_pool_size : int
+end) =
+struct
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
   let genesis_constants = Genesis_constants.compiled
@@ -40,27 +44,70 @@ module Sequencer = struct
     let tag = T.tag
   end)
 
+  module Snark_queue = struct
+    let q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
+
+    let last = ref None
+
+    let queue_size () = Throttle.num_jobs_waiting_to_start q
+
+    let prove_signed_command ~sparse_ledger ~user_command_in_block ~statement =
+      let handler =
+        unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
+      in
+      let%bind txn_snark =
+        time "Transaction_snark.of_user_command"
+          (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
+             ~statement user_command_in_block handler )
+      in
+      let%bind wrapped = time "Wrapper.wrap" (M.Wrapper.wrap txn_snark) in
+      match !last with
+      | None ->
+          last := Some wrapped ;
+          return ()
+      | Some last' ->
+          let%bind merged =
+            time "Wrapper.merge" (M.Wrapper.merge last' wrapped)
+          in
+          last := Some merged ;
+          return ()
+
+    let enqueue ~sparse_ledger ~user_command_in_block ~statement =
+      Throttle.enqueue q (fun () ->
+          prove_signed_command ~sparse_ledger ~user_command_in_block ~statement )
+  end
+
   let l = L.create ~depth:constraint_constants.ledger_depth ()
 
   let slot = ref 0
 
-  let prove_signed_command ~sparse_ledger ~user_command_in_block ~statement =
-    let handler = unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger in
+  let keypair = Signature_lib.Keypair.create ()
 
-    let%bind next =
-      time "Transaction_snark.of_user_command"
-        (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
-           ~statement user_command_in_block handler )
+  let add_account public_key balance =
+    let account_id = Account_id.of_public_key public_key in
+    let account =
+      Account.create account_id (Currency.Balance.of_uint64 balance)
     in
-    let%bind _wrapped = time "Wrapper.wrap" (M.Wrapper.wrap next) in
-    return ()
+    L.create_new_account_exn l account_id account
 
-  let apply_signed_command
-      (signed_command : Signed_command.With_valid_signature.t) =
+  let apply_signed_command (signed_command : Signed_command.t) =
+    let () =
+      match Snark_queue.queue_size () with
+      | x when x >= Args.max_pool_size ->
+          failwith "Maximum pool size reached, try later"
+      | _ ->
+          ()
+    in
+    let with_valid_signature =
+      match Signed_command.check_only_for_signature signed_command with
+      | Some x ->
+          x
+      | None ->
+          failwith "Signature check failed"
+    in
     let txn =
       Mina_transaction.Transaction.Command
-        (User_command.Signed_command
-           (Signed_command.forget_check signed_command) )
+        (User_command.Signed_command signed_command)
     in
     let prev_global_slot =
       Mina_numbers.Global_slot_since_genesis.of_int !slot
@@ -72,8 +119,7 @@ module Sequencer = struct
     let source_ledger_hash = L.merkle_root l in
     let sparse_ledger =
       Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
-        ( Signed_command.accounts_referenced
-        @@ Signed_command.forget_check signed_command )
+        (Signed_command.accounts_referenced signed_command)
     in
 
     let txn_applied =
@@ -81,9 +127,7 @@ module Sequencer = struct
         (L.apply_transaction_first_pass ~constraint_constants
            ~global_slot:curr_global_slot
            ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-           l
-           (Command (Signed_command (Signed_command.forget_check signed_command))
-           ) )
+           l (Command (Signed_command signed_command)) )
         (L.apply_transaction_second_pass l)
       |> Or_error.ok_exn
     in
@@ -103,12 +147,11 @@ module Sequencer = struct
     let sok_digest =
       Sok_message.digest
       @@ Sok_message.create ~fee:Currency.Fee.zero
-           ~prover:
-             Signature_lib.(Public_key.compress (Keypair.create ()).public_key)
+           ~prover:(Signature_lib.Public_key.compress keypair.public_key)
     in
 
     let user_command_in_block =
-      { Transaction_protocol_state.Poly.transaction = signed_command
+      { Transaction_protocol_state.Poly.transaction = with_valid_signature
       ; block_data = state_body
       ; global_slot = curr_global_slot
       }
@@ -127,20 +170,10 @@ module Sequencer = struct
           (L.Transaction_applied.supply_increase txn_applied |> Or_error.ok_exn)
         ~pending_coinbase_stack_state:pc
     in
+    don't_wait_for
+    @@ Snark_queue.enqueue ~sparse_ledger ~user_command_in_block ~statement ;
 
-    Async_kernel.don't_wait_for
-    @@ prove_signed_command ~sparse_ledger ~user_command_in_block ~statement
+    ( Mina_transaction.Transaction_hash.hash_command
+        (Signed_command signed_command)
+    , Signed_command.to_base64 signed_command )
 end
-
-let ok_exn x =
-  let open Ppx_deriving_yojson_runtime.Result in
-  match x with Ok x -> x | Error e -> failwith e
-
-let () =
-  Callback.register "applySignedCommand" (fun (signed_command : string) ->
-      let signed_command =
-        Signed_command.With_valid_signature.of_yojson
-        @@ Yojson.Safe.from_string signed_command
-        |> ok_exn
-      in
-      Sequencer.apply_signed_command signed_command )

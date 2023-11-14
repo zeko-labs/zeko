@@ -1,5 +1,5 @@
 (executable
- (name sequencer)
+ (name server)
  (libraries
   zkapps_rollup
   ;; mina ;;
@@ -22,19 +22,21 @@
   currency
   signature_lib
   sgn
+  data_hash_lib
   ;; opam libraries ;;
-  async_kernel
+  dispatch
+  cohttp
+  cohttp-async
+  integers
+  core
   core_kernel
+  async_kernel
+  async
+  async_unix
+  core_unix.command_unix
   base
   base.caml
   yojson
   ppx_deriving_yojson.runtime)
- (foreign_stubs (language c) (names cstub))
- (flags :standard -linkall)
- (modes (native shared_object))
- (preprocess (pps ppx_jane)))
-
-(rule
- (deps sequencer.so)
- (target sequencer.dylib)
- (action (copy sequencer.so sequencer.dylib)))
+  (preprocess (pps ppx_jane))
+  (modules server zeko_sequencer))
