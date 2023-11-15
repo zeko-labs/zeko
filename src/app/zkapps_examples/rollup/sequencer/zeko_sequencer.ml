@@ -83,12 +83,21 @@ struct
 
   let keypair = Signature_lib.Keypair.create ()
 
-  let add_account public_key balance =
-    let account_id = Account_id.of_public_key public_key in
+  let add_account ?(token_id = Token_id.default) public_key balance =
+    let account_id = Account_id.create public_key token_id in
     let account =
       Account.create account_id (Currency.Balance.of_uint64 balance)
     in
     L.create_new_account_exn l account_id account
+
+  let get_account ?(token_id = Token_id.default) public_key =
+    let module Let_syntax = Option in
+    let account_id = Account_id.create public_key token_id in
+
+    let%bind location = L.location_of_account l account_id in
+    L.get l location
+
+  let get_root () = L.merkle_root l
 
   let apply_signed_command (signed_command : Signed_command.t) =
     let () =
@@ -170,6 +179,7 @@ struct
           (L.Transaction_applied.supply_increase txn_applied |> Or_error.ok_exn)
         ~pending_coinbase_stack_state:pc
     in
+
     don't_wait_for
     @@ Snark_queue.enqueue ~sparse_ledger ~user_command_in_block ~statement ;
 
