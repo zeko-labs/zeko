@@ -46,6 +46,13 @@ struct
     let tag = T.tag
   end)
 
+  let keypair = Signature_lib.Keypair.create ()
+
+  let sok_digest =
+    Sok_message.digest
+    @@ Sok_message.create ~fee:Currency.Fee.zero
+         ~prover:(Signature_lib.Public_key.compress keypair.public_key)
+
   module Snark_queue = struct
     let q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
 
@@ -57,29 +64,59 @@ struct
 
     let queue_size () = Throttle.num_jobs_waiting_to_start q
 
-    let prove_command ~sparse_ledger ~user_command_in_block ~statement =
+    let wrap_and_merge txn_snark command =
+      let%bind wrapped = time "Wrapper.wrap" (M.Wrapper.wrap txn_snark) in
+      let%bind final_snark =
+        match !last with
+        | Some last' ->
+            time "Wrapper.merge" (M.Wrapper.merge last' wrapped)
+        | None ->
+            return wrapped
+      in
+      last := Some final_snark ;
+      staged_commands := command :: !staged_commands ;
+      return ()
+
+    let prove_signed_command ~sparse_ledger ~user_command_in_block ~statement =
       Throttle.enqueue q (fun () ->
           let handler =
             unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
           in
           let%bind txn_snark =
-            time "Transaction_snark.of_user_command"
+            time "Transaction_snark.of_signed_command"
               (T.of_user_command
                  ~init_stack:Mina_base.Pending_coinbase.Stack.empty ~statement
                  user_command_in_block handler )
           in
-          let%bind wrapped = time "Wrapper.wrap" (M.Wrapper.wrap txn_snark) in
-          let%bind final_snark =
-            match !last with
-            | Some last' ->
-                time "Wrapper.merge" (M.Wrapper.merge last' wrapped)
-            | None ->
-                return wrapped
+          wrap_and_merge txn_snark
+            (User_command.Signed_command user_command_in_block.transaction) )
+
+    let prove_zkapp_command ~witnesses ~zkapp_command =
+      Throttle.enqueue q (fun () ->
+          let%bind txn_snark =
+            match witnesses with
+            | [] ->
+                failwith "No witnesses"
+            | (witness, spec, statement) :: rest ->
+                let%bind p1 =
+                  time "Transaction_snark.of_zkapp_command_segment"
+                    (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
+                in
+                Deferred.List.fold ~init:p1 rest
+                  ~f:(fun acc (witness, spec, statement) ->
+                    let%bind prev = return acc in
+                    let%bind curr =
+                      time "Transaction_snark.of_zkapp_command_segment"
+                        (T.of_zkapp_command_segment_exn ~statement ~witness
+                           ~spec )
+                    in
+                    let%bind merged =
+                      time "Transaction_snark.merge"
+                        (T.merge curr prev ~sok_digest)
+                    in
+                    return (Or_error.ok_exn merged) )
           in
-          last := Some final_snark ;
-          staged_commands :=
-            user_command_in_block.transaction :: !staged_commands ;
-          return () )
+          wrap_and_merge txn_snark (User_command.Zkapp_command zkapp_command) )
 
     let commit () =
       Throttle.enqueue q (fun () ->
@@ -93,14 +130,13 @@ struct
               committed_commands :=
                 List.append !staged_commands !committed_commands ;
               staged_commands := [] ;
+              last := None ;
               return () )
   end
 
   let l = L.create ~depth:constraint_constants.ledger_depth ()
 
   let slot = ref 0
-
-  let keypair = Signature_lib.Keypair.create ()
 
   let run_committer () =
     every (Time_ns.Span.of_sec Args.committment_period_sec) (fun () ->
@@ -176,12 +212,6 @@ struct
       ; target = stack_with_state curr_global_slot
       }
     in
-    let sok_digest =
-      Sok_message.digest
-      @@ Sok_message.create ~fee:Currency.Fee.zero
-           ~prover:(Signature_lib.Public_key.compress keypair.public_key)
-    in
-
     let user_command_in_block =
       { Transaction_protocol_state.Poly.transaction = with_valid_signature
       ; block_data = state_body
@@ -204,10 +234,101 @@ struct
     in
 
     don't_wait_for
-    @@ Snark_queue.prove_command ~sparse_ledger ~user_command_in_block
+    @@ Snark_queue.prove_signed_command ~sparse_ledger ~user_command_in_block
          ~statement ;
 
     ( Mina_transaction.Transaction_hash.hash_command
         (Signed_command signed_command)
     , Signed_command.to_base64 signed_command )
+
+  let apply_zkapp_command (zkapp_command : Zkapp_command.t) =
+    print_endline @@ Currency.Fee.to_string
+    @@ constraint_constants.account_creation_fee ;
+
+    let () =
+      match Snark_queue.queue_size () with
+      | x when x >= Args.max_pool_size ->
+          failwith "Maximum pool size reached, try later"
+      | _ ->
+          ()
+    in
+    let prev_global_slot =
+      Mina_numbers.Global_slot_since_genesis.of_int !slot
+    in
+    slot := !slot + 1 ;
+    let curr_global_slot =
+      Mina_numbers.Global_slot_since_genesis.of_int !slot
+    in
+    let first_pass_ledger, second_pass_ledger, _ =
+      match
+        let open Result.Let_syntax in
+        let first_pass_ledger =
+          Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
+            (Zkapp_command.accounts_referenced zkapp_command)
+        in
+        let%bind partialy_applied_txn =
+          L.apply_transaction_first_pass ~constraint_constants
+            ~global_slot:curr_global_slot
+            ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
+            l (Command (Zkapp_command zkapp_command))
+        in
+        let second_pass_ledger =
+          Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
+            (Zkapp_command.accounts_referenced zkapp_command)
+        in
+        let%bind txn_applied =
+          L.apply_transaction_second_pass l partialy_applied_txn
+        in
+        return (first_pass_ledger, second_pass_ledger, txn_applied)
+      with
+      | Ok x ->
+          x
+      | Error e ->
+          (* this isn't correct, if only second pass fails the first pass keeps applied *)
+          failwith @@ Error.to_string_hum e
+    in
+
+    print_endline @@ Frozen_ledger_hash.to_decimal_string
+    @@ Sparse_ledger_base.merkle_root first_pass_ledger ;
+    print_endline @@ Frozen_ledger_hash.to_decimal_string
+    @@ Sparse_ledger_base.merkle_root second_pass_ledger ;
+
+    let final_ledger =
+      Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
+        (Zkapp_command.accounts_referenced zkapp_command)
+    in
+    print_endline @@ Frozen_ledger_hash.to_decimal_string
+    @@ Sparse_ledger_base.merkle_root final_ledger ;
+
+    let pc : Transaction_snark.Pending_coinbase_stack_state.t =
+      (* No coinbase to add to the stack. *)
+      let stack_with_state global_slot =
+        Pending_coinbase.Stack.push_state
+          (Mina_state.Protocol_state.Body.hash state_body)
+          global_slot Pending_coinbase.Stack.empty
+      in
+      { source = stack_with_state prev_global_slot
+      ; target = stack_with_state curr_global_slot
+      }
+    in
+    let witnesses =
+      Transaction_snark.zkapp_command_witnesses_exn ~constraint_constants
+        ~global_slot:curr_global_slot ~state_body
+        ~fee_excess:
+          ( Currency.Amount.Signed.of_unsigned
+          @@ Currency.Amount.of_fee (Zkapp_command.fee zkapp_command) )
+        [ ( `Pending_coinbase_init_stack Pending_coinbase.Stack.empty
+          , `Pending_coinbase_of_statement pc
+          , `Sparse_ledger first_pass_ledger
+          , `Sparse_ledger second_pass_ledger
+          , `Connecting_ledger_hash
+              (Sparse_ledger_base.merkle_root second_pass_ledger)
+          , zkapp_command )
+        ]
+    in
+    don't_wait_for @@ Snark_queue.prove_zkapp_command ~witnesses ~zkapp_command ;
+
+    ( Mina_transaction.Transaction_hash.hash_command
+        (Zkapp_command zkapp_command)
+    , Zkapp_command.to_base64 zkapp_command )
 end

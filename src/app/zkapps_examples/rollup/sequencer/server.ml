@@ -45,6 +45,24 @@ module Handlers = struct
     with e ->
       Server.respond_string ~status:`Bad_request (Exn.to_string_mach e)
 
+  let apply_zkapp_command : handler_t =
+   fun _keys _rest _request body ->
+    let%bind body = Body.to_string body in
+    try
+      let zkapp_command =
+        Zkapp_command.of_json @@ Yojson.Safe.from_string @@ body
+      in
+
+      let hash, id = S.apply_zkapp_command zkapp_command in
+      let hash = Mina_transaction.Transaction_hash.to_base58_check hash in
+      let json = `Assoc [ ("id", `String id); ("hash", `String hash) ] in
+
+      Server.respond_string
+        ~headers:(Header.init_with "Content-Type" "application/json")
+        (Yojson.to_string json)
+    with e ->
+      Server.respond_string ~status:`Bad_request (Exn.to_string_mach e)
+
   let get_account : handler_t =
    fun keys _rest _request _body ->
     let pk =
@@ -82,6 +100,7 @@ end
 
 let routes : (string * (Cohttp.Code.meth * handler_t) list) list =
   [ ("/apply_signed_command", [ (`POST, Handlers.apply_signed_command) ])
+  ; ("/apply_zkapp_command", [ (`POST, Handlers.apply_zkapp_command) ])
   ; ("/get_account/:pk/:token_id", [ (`GET, Handlers.get_account) ])
   ; ("/get_account/:pk", [ (`GET, Handlers.get_account) ])
   ; ("/get_root", [ (`GET, Handlers.get_root) ])
