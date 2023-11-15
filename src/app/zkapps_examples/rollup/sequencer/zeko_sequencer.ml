@@ -150,10 +150,8 @@ struct
     L.create_new_account_exn l account_id account
 
   let get_account ?(token_id = Token_id.default) public_key =
-    let module Let_syntax = Option in
     let account_id = Account_id.create public_key token_id in
-
-    let%bind location = L.location_of_account l account_id in
+    let%bind.Option location = L.location_of_account l account_id in
     L.get l location
 
   let get_root () = L.merkle_root l
@@ -242,9 +240,6 @@ struct
     , Signed_command.to_base64 signed_command )
 
   let apply_zkapp_command (zkapp_command : Zkapp_command.t) =
-    print_endline @@ Currency.Fee.to_string
-    @@ constraint_constants.account_creation_fee ;
-
     let () =
       match Snark_queue.queue_size () with
       | x when x >= Args.max_pool_size ->
@@ -261,12 +256,11 @@ struct
     in
     let first_pass_ledger, second_pass_ledger, _ =
       match
-        let open Result.Let_syntax in
         let first_pass_ledger =
           Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
             (Zkapp_command.accounts_referenced zkapp_command)
         in
-        let%bind partialy_applied_txn =
+        let%bind.Result partialy_applied_txn =
           L.apply_transaction_first_pass ~constraint_constants
             ~global_slot:curr_global_slot
             ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
@@ -276,10 +270,10 @@ struct
           Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
             (Zkapp_command.accounts_referenced zkapp_command)
         in
-        let%bind txn_applied =
+        let%bind.Result txn_applied =
           L.apply_transaction_second_pass l partialy_applied_txn
         in
-        return (first_pass_ledger, second_pass_ledger, txn_applied)
+        Result.return (first_pass_ledger, second_pass_ledger, txn_applied)
       with
       | Ok x ->
           x
@@ -287,18 +281,6 @@ struct
           (* this isn't correct, if only second pass fails the first pass keeps applied *)
           failwith @@ Error.to_string_hum e
     in
-
-    print_endline @@ Frozen_ledger_hash.to_decimal_string
-    @@ Sparse_ledger_base.merkle_root first_pass_ledger ;
-    print_endline @@ Frozen_ledger_hash.to_decimal_string
-    @@ Sparse_ledger_base.merkle_root second_pass_ledger ;
-
-    let final_ledger =
-      Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
-        (Zkapp_command.accounts_referenced zkapp_command)
-    in
-    print_endline @@ Frozen_ledger_hash.to_decimal_string
-    @@ Sparse_ledger_base.merkle_root final_ledger ;
 
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
       (* No coinbase to add to the stack. *)
