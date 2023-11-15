@@ -13,6 +13,8 @@ let time label (d : 'a Deferred.t) =
 
 module Make (Args : sig
   val max_pool_size : int
+
+  val committment_period_sec : float
 end) =
 struct
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
@@ -49,32 +51,49 @@ struct
 
     let last = ref None
 
+    let staged_commands = ref []
+
+    let committed_commands = ref []
+
     let queue_size () = Throttle.num_jobs_waiting_to_start q
 
-    let prove_signed_command ~sparse_ledger ~user_command_in_block ~statement =
-      let handler =
-        unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
-      in
-      let%bind txn_snark =
-        time "Transaction_snark.of_user_command"
-          (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
-             ~statement user_command_in_block handler )
-      in
-      let%bind wrapped = time "Wrapper.wrap" (M.Wrapper.wrap txn_snark) in
-      match !last with
-      | None ->
-          last := Some wrapped ;
-          return ()
-      | Some last' ->
-          let%bind merged =
-            time "Wrapper.merge" (M.Wrapper.merge last' wrapped)
-          in
-          last := Some merged ;
-          return ()
-
-    let enqueue ~sparse_ledger ~user_command_in_block ~statement =
+    let prove_command ~sparse_ledger ~user_command_in_block ~statement =
       Throttle.enqueue q (fun () ->
-          prove_signed_command ~sparse_ledger ~user_command_in_block ~statement )
+          let handler =
+            unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
+          in
+          let%bind txn_snark =
+            time "Transaction_snark.of_user_command"
+              (T.of_user_command
+                 ~init_stack:Mina_base.Pending_coinbase.Stack.empty ~statement
+                 user_command_in_block handler )
+          in
+          let%bind wrapped = time "Wrapper.wrap" (M.Wrapper.wrap txn_snark) in
+          let%bind final_snark =
+            match !last with
+            | Some last' ->
+                time "Wrapper.merge" (M.Wrapper.merge last' wrapped)
+            | None ->
+                return wrapped
+          in
+          last := Some final_snark ;
+          staged_commands :=
+            user_command_in_block.transaction :: !staged_commands ;
+          return () )
+
+    let commit () =
+      Throttle.enqueue q (fun () ->
+          match List.is_empty !staged_commands with
+          | true ->
+              print_endline "Nothing to commit" ;
+              return ()
+          | false ->
+              print_endline "Committing..." ;
+              (* Add proving here *)
+              committed_commands :=
+                List.append !staged_commands !committed_commands ;
+              staged_commands := [] ;
+              return () )
   end
 
   let l = L.create ~depth:constraint_constants.ledger_depth ()
@@ -82,6 +101,10 @@ struct
   let slot = ref 0
 
   let keypair = Signature_lib.Keypair.create ()
+
+  let run_committer () =
+    every (Time_ns.Span.of_sec Args.committment_period_sec) (fun () ->
+        don't_wait_for @@ Snark_queue.commit () )
 
   let add_account ?(token_id = Token_id.default) public_key balance =
     let account_id = Account_id.create public_key token_id in
@@ -181,7 +204,8 @@ struct
     in
 
     don't_wait_for
-    @@ Snark_queue.enqueue ~sparse_ledger ~user_command_in_block ~statement ;
+    @@ Snark_queue.prove_command ~sparse_ledger ~user_command_in_block
+         ~statement ;
 
     ( Mina_transaction.Transaction_hash.hash_command
         (Signed_command signed_command)

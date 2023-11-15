@@ -11,6 +11,8 @@ let port = 8080
 
 module S = Zeko_sequencer.Make (struct
   let max_pool_size = 10
+
+  let committment_period_sec = 120.
 end)
 
 type handler_t =
@@ -111,7 +113,8 @@ let () =
        "B62qkAdonbeqcuVwQJtHbcqMbb4fbuFHJpqvNCfCBt194xSQ1o3i5rt" )
     (Unsigned.UInt64.of_int64 1_000_000_000_000L) ;
 
-  print_endline ("Sequencer listening on port " ^ Int.to_string port) ;
+  S.run_committer () ;
+
   let open Async_kernel in
   let () =
     Cohttp_async.Server.create
@@ -124,4 +127,5 @@ let () =
       (fun ~body _ req -> path_handler req body)
     |> Deferred.ignore_m |> don't_wait_for
   in
+  print_endline ("Sequencer listening on port " ^ Int.to_string port) ;
   never_returns (Async.Scheduler.go ())
