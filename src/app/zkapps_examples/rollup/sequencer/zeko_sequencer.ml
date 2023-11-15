@@ -11,12 +11,13 @@ let time label (d : 'a Deferred.t) =
   printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-module Make (Args : sig
+module type Args_t = sig
   val max_pool_size : int
 
   val committment_period_sec : float
-end) =
-struct
+end
+
+module Make (Args : Args_t) = struct
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
   let genesis_constants = Genesis_constants.compiled

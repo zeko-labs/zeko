@@ -7,23 +7,17 @@ module Server = Cohttp_async.Server
 module Request = Cohttp_async.Request
 module Header = Cohttp.Header
 
-let port = 8080
+module Handlers (Args : Zeko_sequencer.Args_t) = struct
+  module S = Zeko_sequencer.Make (Args)
 
-module S = Zeko_sequencer.Make (struct
-  let max_pool_size = 10
+  type t =
+       (string * string) list
+    -> string option
+    -> Request.t
+    -> Body.t
+    -> Server.response Deferred.t
 
-  let committment_period_sec = 120.
-end)
-
-type handler_t =
-     (string * string) list
-  -> string option
-  -> Request.t
-  -> Body.t
-  -> Server.response Deferred.t
-
-module Handlers = struct
-  let apply_signed_command : handler_t =
+  let apply_signed_command : t =
    fun _keys _rest _request body ->
     let%bind body = Body.to_string body in
     try
@@ -45,7 +39,7 @@ module Handlers = struct
     with e ->
       Server.respond_string ~status:`Bad_request (Exn.to_string_mach e)
 
-  let apply_zkapp_command : handler_t =
+  let apply_zkapp_command : t =
    fun _keys _rest _request body ->
     let%bind body = Body.to_string body in
     try
@@ -63,7 +57,7 @@ module Handlers = struct
     with e ->
       Server.respond_string ~status:`Bad_request (Exn.to_string_mach e)
 
-  let get_account : handler_t =
+  let get_account : t =
    fun keys _rest _request _body ->
     let pk =
       Signature_lib.Public_key.Compressed.of_base58_check_exn
@@ -87,7 +81,7 @@ module Handlers = struct
     | None ->
         Server.respond_string ~status:`Not_found "Account not found"
 
-  let get_root : handler_t =
+  let get_root : t =
    fun _keys _rest _request _body ->
     let root =
       Mina_base.Frozen_ledger_hash0.to_decimal_string (S.get_root ())
@@ -96,43 +90,48 @@ module Handlers = struct
     Server.respond_string
       ~headers:(Header.init_with "Content-Type" "application/json")
       (Yojson.to_string json)
+
+  let routes : (string * (Cohttp.Code.meth * t) list) list =
+    [ ("/apply_signed_command", [ (`POST, apply_signed_command) ])
+    ; ("/apply_zkapp_command", [ (`POST, apply_zkapp_command) ])
+    ; ("/get_account/:pk/:token_id", [ (`GET, get_account) ])
+    ; ("/get_account/:pk", [ (`GET, get_account) ])
+    ; ("/get_root", [ (`GET, get_root) ])
+    ]
+
+  let method_handler handlers keys rest request body =
+    match Stdlib.List.assoc_opt (Request.meth request) handlers with
+    | Some handler ->
+        handler keys rest request body
+    | None ->
+        Server.respond `Method_not_allowed
+
+  let path_handler request body =
+    let routes =
+      Dispatch.DSL.create
+        (List.map routes ~f:(fun (path, handlers) ->
+             (path, method_handler handlers) ) )
+    in
+    let path = Request.resource request in
+    match Dispatch.dispatch routes path with
+    | Some handler ->
+        handler request body
+    | None ->
+        Server.respond `Not_found
 end
 
-let routes : (string * (Cohttp.Code.meth * handler_t) list) list =
-  [ ("/apply_signed_command", [ (`POST, Handlers.apply_signed_command) ])
-  ; ("/apply_zkapp_command", [ (`POST, Handlers.apply_zkapp_command) ])
-  ; ("/get_account/:pk/:token_id", [ (`GET, Handlers.get_account) ])
-  ; ("/get_account/:pk", [ (`GET, Handlers.get_account) ])
-  ; ("/get_root", [ (`GET, Handlers.get_root) ])
-  ]
+let run port max_pool_size commitment_period () =
+  let module Handlers = Handlers (struct
+    let max_pool_size = max_pool_size
 
-let method_handler handlers keys rest request body =
-  match Stdlib.List.assoc_opt (Request.meth request) handlers with
-  | Some handler ->
-      handler keys rest request body
-  | None ->
-      Server.respond `Method_not_allowed
-
-let path_handler request body =
-  let routes =
-    Dispatch.DSL.create
-      (List.map routes ~f:(fun (path, handlers) ->
-           (path, method_handler handlers) ) )
-  in
-  let path = Request.resource request in
-  match Dispatch.dispatch routes path with
-  | Some handler ->
-      handler request body
-  | None ->
-      Server.respond `Not_found
-
-let () =
-  S.add_account
+    let committment_period_sec = commitment_period
+  end) in
+  Handlers.S.add_account
     (Signature_lib.Public_key.Compressed.of_base58_check_exn
        "B62qkAdonbeqcuVwQJtHbcqMbb4fbuFHJpqvNCfCBt194xSQ1o3i5rt" )
     (Unsigned.UInt64.of_int64 1_000_000_000_000L) ;
 
-  S.run_committer () ;
+  Handlers.S.run_committer () ;
 
   let open Async_kernel in
   let () =
@@ -143,8 +142,24 @@ let () =
             print_endline "Unhandled exception" ;
             print_endline (Exn.to_string exn) ) )
       (Async.Tcp.Where_to_listen.of_port port)
-      (fun ~body _ req -> path_handler req body)
+      (fun ~body _ req -> Handlers.path_handler req body)
     |> Deferred.ignore_m |> don't_wait_for
   in
   print_endline ("Sequencer listening on port " ^ Int.to_string port) ;
   never_returns (Async.Scheduler.go ())
+
+let () =
+  Command.basic ~summary:"Zeko sequencer"
+    (let%map_open.Command port =
+       flag "-p" (optional_with_default 8080 int) ~doc:"int Port to listen on"
+     and commitment_period =
+       flag "--committment-period"
+         (optional_with_default 120. float)
+         ~doc:"float Commitment period in seconds"
+     and max_pool_size =
+       flag "--max-pool-size"
+         (optional_with_default 10 int)
+         ~doc:"int Maximum transaction pool size"
+     in
+     run port max_pool_size commitment_period )
+  |> Command_unix.run
