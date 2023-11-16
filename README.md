@@ -2,6 +2,12 @@
   <img src="https://github.com/MinaProtocol/docs/blob/main/public/static/img/svg/mina-wordmark-redviolet.svg?raw=true&sanitize=true" width="350" alt="Mina logo">
 </a>
 
+# Zeko
+
+[Zeko](https://twitter.com/ZekoLabs) is a fully isomorphic L2 for the Mina protocol ecosystem. Same client-side ZK private compute layer, and compatible with Mina infra and tooling, but super fast.
+
+This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina). The zeko related code is in the [src/app/zkapps_examples/rollup](src/app/zkapps_examples/rollup) directory.
+
 # Mina
 
 Mina is the first cryptocurrency with a lightweight, constant-sized blockchain. This is the main source code repository for the Mina project and contains code for the OCaml protocol implementation, the [Mina Protocol website](https://minaprotocol.com), and wallet. Enjoy!
