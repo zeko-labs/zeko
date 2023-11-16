@@ -6,7 +6,7 @@
 
 [Zeko](https://twitter.com/ZekoLabs) is a fully isomorphic L2 for the Mina protocol ecosystem. Same client-side ZK private compute layer, and compatible with Mina infra and tooling, but super fast.
 
-This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina). The zeko related code is in the [src/app/zkapps_examples/rollup](src/app/zkapps_examples/rollup) directory.
+This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina). The zeko related code is in the [zeko](src/app/zkapps_examples/rollup) directory.
 
 # Mina
 
@@ -16,7 +16,7 @@ Mina is the first cryptocurrency with a lightweight, constant-sized blockchain. 
 
 Mina is still under active development and APIs are evolving. If you build on the APIs, be aware that breaking changes can occur.
 
-The Mina implementation of the Rosetta API offers a more stable and useful interface for retrieving the blockchain's state. Rosetta is run as a separate process and it relies on an archive being connected to a node. The source code for the archive and Rosetta implementation are in [src/app/archive](https://github.com/MinaProtocol/mina/tree/develop/src/app/archive) and [src/app/rosetta](https://github.com/MinaProtocol/mina/tree/develop/src/app/rosetta). Be sure to follow updates in the project if these resources are relocated. 
+The Mina implementation of the Rosetta API offers a more stable and useful interface for retrieving the blockchain's state. Rosetta is run as a separate process and it relies on an archive being connected to a node. The source code for the archive and Rosetta implementation are in [src/app/archive](https://github.com/MinaProtocol/mina/tree/develop/src/app/archive) and [src/app/rosetta](https://github.com/MinaProtocol/mina/tree/develop/src/app/rosetta). Be sure to follow updates in the project if these resources are relocated.
 
 ## What is Mina?
 
