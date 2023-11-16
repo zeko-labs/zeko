@@ -1,5 +1,5 @@
 (executable
- (name gql)
+ (name run)
  (libraries
   zkapps_rollup
   ;; mina ;;
@@ -59,4 +59,4 @@
   yojson
   ppx_deriving_yojson.runtime)
   (preprocess (pps ppx_jane ppx_mina ppx_version ppx_deriving_yojson ppx_deriving.make))
-  (modules zeko_sequencer gql))
+  (modules run zeko_sequencer gql))
