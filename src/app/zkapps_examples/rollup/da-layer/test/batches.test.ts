@@ -1,8 +1,8 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { Field, PrivateKey, Signature, isReady as isSnarkyjsReady } from "snarkyjs";
+import { Field, PrivateKey, Signature } from "o1js";
 import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailability";
-import { fieldToHex, hashPublicKey, signatureToStruct } from "../utils/mina";
+import { fieldToHex, hashPublicKey, hexToField, signatureToStruct } from "../utils/mina";
 import { deployDataAvailabilityContract } from "./fixtures";
 
 function randomInt(min: number, max: number) {
@@ -13,10 +13,6 @@ function randomInt(min: number, max: number) {
 }
 
 describe("Batches DataAvailability", () => {
-  before(async () => {
-    await isSnarkyjsReady;
-  });
-
   it("should propose and sign batch", async () => {
     const validators = Array.from({ length: 5 }, () => PrivateKey.random());
 
@@ -24,17 +20,21 @@ describe("Batches DataAvailability", () => {
       validators.map((validator) => validator.toPublicKey())
     );
 
-    const batchId = fieldToHex(Field.random());
+    const batchIdField = Field.random();
+    const batchId = fieldToHex(batchIdField);
     const previousId = fieldToHex(Field(0));
+
+    expect(hexToField(batchId)).to.deep.equal(batchIdField);
 
     const numberOfUserCommands = randomInt(5, 10);
 
-    const userCommands = Array.from({ length: numberOfUserCommands }, () => randomInt(0, 1000));
+    const userCommands = Array.from({ length: numberOfUserCommands }, () => ({
+      data: ethers.utils.randomBytes(randomInt(50, 100)),
+      commandType: randomInt(0, 1),
+    }));
 
     const proposalTx = await dataAvailabilityContract.postBatch(batchId, previousId, userCommands);
     const proposalReceipt = await proposalTx.wait();
-
-    const sigData = userCommands.map(Field);
 
     expect(
       proposalReceipt.events?.find(({ event }) => event === "BatchPosted")?.args?.id
@@ -44,7 +44,13 @@ describe("Batches DataAvailability", () => {
       await dataAvailabilityContract.getBatchData(batchId);
 
     expect(fetchedPreviousBatchId).to.equal(previousId);
-    expect(fetchedUserCommands.map((x) => x.toNumber())).to.deep.equal(userCommands);
+
+    expect(
+      fetchedUserCommands.map(({ data, commandType }) => ({
+        data: ethers.utils.arrayify(data),
+        commandType,
+      }))
+    ).to.deep.equal(userCommands);
 
     const expectedSignatures: MinaSchnorrSignatureStruct[] = [];
 
@@ -52,7 +58,7 @@ describe("Batches DataAvailability", () => {
       const pubKey = validator.toPublicKey();
       const hashedPubKey = hashPublicKey(pubKey);
 
-      const signature = Signature.create(validator, sigData);
+      const signature = Signature.create(validator, [batchIdField]);
 
       const sigStruct = signatureToStruct(signature, pubKey);
 
@@ -102,7 +108,10 @@ describe("Batches DataAvailability", () => {
 
     const numberOfUserCommands = randomInt(5, 10);
 
-    const userCommands = Array.from({ length: numberOfUserCommands }, () => randomInt(0, 1000));
+    const userCommands = Array.from({ length: numberOfUserCommands }, () => ({
+      data: ethers.utils.randomBytes(randomInt(50, 100)),
+      commandType: randomInt(0, 1),
+    }));
 
     await expect(
       dataAvailabilityContract.postBatch(batchId, previousId, userCommands)

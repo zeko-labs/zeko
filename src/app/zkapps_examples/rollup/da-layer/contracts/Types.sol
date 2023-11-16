@@ -26,7 +26,7 @@ struct MinaCommand {
 
 struct RollupBatch {
     bytes32 previousId;
-    uint256[] commands;
+    MinaCommand[] commands;
     MinaSchnorrSignature[] signatures;
     mapping(HashedMinaPublicKey => bool) validatorSigned;
 }

@@ -1,5 +1,5 @@
 import { ethers } from "hardhat";
-import { PublicKey } from "snarkyjs";
+import { PublicKey } from "o1js";
 import { DataAvailabilityProxy } from "../typechain-types";
 import { DataAvailabilityDev } from "../typechain-types/contracts/dev";
 import { createCombinedArtifact } from "../utils/abi";
