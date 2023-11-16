@@ -1,5 +1,5 @@
 (executable
- (name server)
+ (name gql)
  (libraries
   zkapps_rollup
   ;; mina ;;
@@ -11,6 +11,9 @@
   mina_state
   mina_wire_types
   mina_numbers
+  mina_graphql
+  mina_signature_kind
+  graphql_wrapper
   transaction_snark
   transaction_protocol_state
   genesis_constants
@@ -21,7 +24,7 @@
   currency
   signature_lib
   sgn
-  data_hash_lib
+  fields_derivers.graphql
   fields_derivers_zkapps
   snark_params
   unsigned_extended
@@ -30,10 +33,20 @@
   pickles_types
   kimchi_backend.pasta
   kimchi_backend.pasta.basic
+  init
+  transition_frontier
+  transition_frontier_base
+  base58_check
+  graphql_lib
+  data_hash_lib
   ;; opam libraries ;;
   dispatch
   cohttp
   cohttp-async
+  graphql
+  graphql-async
+  graphql-cohttp
+  graphql_parser
   integers
   core
   core_kernel
@@ -45,5 +58,5 @@
   base.caml
   yojson
   ppx_deriving_yojson.runtime)
-  (preprocess (pps ppx_jane))
-  (modules server zeko_sequencer))
+  (preprocess (pps ppx_jane ppx_mina ppx_version ppx_deriving_yojson ppx_deriving.make))
+  (modules zeko_sequencer gql))
