@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { isReady as isSnarkyjsReady, PrivateKey, Signature } from "snarkyjs";
+import { isReady as isSnarkyjsReady, PrivateKey, Signature } from "o1js";
 import { bytesToFields, fieldToHex, hashPublicKey, signatureToStruct } from "../utils/mina";
 import { deployDataAvailabilityContract } from "./fixtures";
 

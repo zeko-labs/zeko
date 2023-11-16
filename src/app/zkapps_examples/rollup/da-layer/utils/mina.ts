@@ -1,6 +1,6 @@
 import { BytesLike } from "ethers";
 import { ethers } from "hardhat";
-import { Field, PublicKey, Scalar, Signature } from "snarkyjs";
+import { Field, PublicKey, Scalar, Signature } from "o1js";
 import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailability";
 
 export const fieldToHex = (field: Field | Scalar) => {
@@ -14,6 +14,17 @@ export const fieldToHex = (field: Field | Scalar) => {
       .join("") ?? "";
 
   return `0x${littleEndianHex}`;
+};
+
+export const hexToField = (hex: string): Field => {
+  const littleEndianHex =
+    hex
+      .slice(2)
+      .match(/.{1,2}/g)
+      ?.reverse()
+      .join("") ?? "";
+
+  return Field(BigInt(`0x${littleEndianHex}`));
 };
 
 const FIELD_BIT_CAPACITY = 254;

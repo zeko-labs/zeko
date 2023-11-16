@@ -77,9 +77,5 @@ abstract contract State {
      */
     mapping(bytes32 => RollupBatch) internal batches;
 
-    MinaCommand[] public commands;
-    mapping(uint256 => MinaSchnorrSignature[]) public commandSignatures;
-    mapping(uint256 => mapping(HashedMinaPublicKey => bool)) public validatorSignedCommand;
-
     address public sequencer;
 }

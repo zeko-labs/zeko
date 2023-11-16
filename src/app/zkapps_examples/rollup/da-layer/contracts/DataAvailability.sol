@@ -11,13 +11,6 @@ contract DataAvailability is MinaMultisig {
     using FieldBytes for bytes;
     using Endianness for bytes32;
 
-    event CommandPosted(uint256 indexed index, MinaCommand command);
-    event CommandSigned(
-        uint256 indexed index,
-        HashedMinaPublicKey indexed publicKey,
-        uint256 signatureCount
-    );
-
     event BatchPosted(bytes32 indexed id);
     event BatchSigned(
         bytes32 indexed id,
@@ -34,51 +27,12 @@ contract DataAvailability is MinaMultisig {
         sequencer = sequencer_;
     }
 
-    function postCommand(MinaCommand memory command) external onlySequencer {
-        commands.push(command);
-        emit CommandPosted(commands.length - 1, command);
-    }
-
-    function addCommandSignature(
-        uint256 commandIndex,
-        bytes32 commandCommitment,
-        MinaSchnorrSignature calldata signature
-    ) external validatorExists(hashPublicKey(signature.publicKey)) {
-        require(
-            !validatorSignedCommand[commandIndex][hashPublicKey(signature.publicKey)],
-            "Validator already signed"
-        );
-
-        bytes32[] memory sigData = new bytes32[](1);
-        sigData[0] = commandCommitment;
-
-        bool verified = signer.verify(
-            NetworkId.TESTNET,
-            signature.publicKey.x,
-            signature.publicKey.y,
-            signature.rx,
-            signature.s,
-            sigData
-        );
-
-        require(verified, "Invalid signature");
-
-        commandSignatures[commandIndex].push(signature);
-        validatorSignedCommand[commandIndex][hashPublicKey(signature.publicKey)] = true;
-
-        emit CommandSigned(
-            commandIndex,
-            hashPublicKey(signature.publicKey),
-            commandSignatures[commandIndex].length
-        );
-    }
-
     function postBatch(
         bytes32 id,
         bytes32 previousId,
-        uint256[] memory commands
+        MinaCommand[] memory commands
     ) external onlySequencer {
-        require(commands.length > 0, "Fields cannot be empty");
+        require(commands.length > 0, "Commands cannot be empty");
         require(id != previousId, "Batch cannot be equal to previous batch");
         require(
             batches[previousId].commands.length > 0 || previousId == bytes32(0),
@@ -109,11 +63,8 @@ contract DataAvailability is MinaMultisig {
             "Validator already signed"
         );
 
-        bytes32[] memory sigData = new bytes32[](batch.commands.length);
-
-        for (uint256 i = 0; i < batch.commands.length; i++) {
-            sigData[i] = (bytes32(batch.commands[i])).swapEndianness();
-        }
+        bytes32[] memory sigData = new bytes32[](1);
+        sigData[0] = id;
 
         bool verified = signer.verify(
             NetworkId.TESTNET,
@@ -136,17 +87,7 @@ contract DataAvailability is MinaMultisig {
         return batches[id].signatures;
     }
 
-    function getBatchData(bytes32 id) external view returns (bytes32, uint256[] memory) {
+    function getBatchData(bytes32 id) external view returns (bytes32, MinaCommand[] memory) {
         return (batches[id].previousId, batches[id].commands);
-    }
-
-    function getCommandSignatures(
-        uint256 commandIndex
-    ) external view returns (MinaSchnorrSignature[] memory) {
-        return commandSignatures[commandIndex];
-    }
-
-    function getCommandData(uint256 commandIndex) external view returns (MinaCommand memory) {
-        return commands[commandIndex];
     }
 }

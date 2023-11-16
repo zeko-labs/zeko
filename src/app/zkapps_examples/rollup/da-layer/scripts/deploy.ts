@@ -1,12 +1,10 @@
 import { ethers } from "hardhat";
-import { PrivateKey, isReady as isSnarkyjsReady, shutdown as shutdownSnarkyjs } from "snarkyjs";
+import { PrivateKey } from "o1js";
 import validatorsKeys from "../test-validators.json";
 import { createCombinedArtifact } from "../utils/abi";
 import { fieldToHex } from "../utils/mina";
 
 const main = async () => {
-  await isSnarkyjsReady;
-
   const upgradeableArtifact = await createCombinedArtifact(
     "DataAvailabilityProxy",
     "DataAvailability"
@@ -36,8 +34,6 @@ const main = async () => {
   );
 
   console.log(proxy.address);
-
-  await shutdownSnarkyjs();
 };
 
 main().catch(console.error);
