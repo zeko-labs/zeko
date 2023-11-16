@@ -11,13 +11,11 @@ let time label (d : 'a Deferred.t) =
   printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-module type Args_t = sig
-  val max_pool_size : int
+module Sequencer = struct
+  type config_t = { max_pool_size : int; committment_period_sec : float }
 
-  val committment_period_sec : float
-end
+  type t = { ledger : L.t; mutable slot : int; config : config_t }
 
-module Make (Args : Args_t) = struct
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
   let genesis_constants = Genesis_constants.compiled
@@ -135,32 +133,41 @@ module Make (Args : Args_t) = struct
               return () )
   end
 
-  let l = L.create ~depth:constraint_constants.ledger_depth ()
+  let create ~max_pool_size ~committment_period_sec =
+    { ledger = L.create ~depth:constraint_constants.ledger_depth ()
+    ; slot = 0
+    ; config = { max_pool_size; committment_period_sec }
+    }
 
-  let slot = ref 0
-
-  let run_committer () =
-    every (Time_ns.Span.of_sec Args.committment_period_sec) (fun () ->
+  let run_committer t =
+    every (Time_ns.Span.of_sec t.config.committment_period_sec) (fun () ->
         don't_wait_for @@ Snark_queue.commit () )
 
-  let add_account ?(token_id = Token_id.default) public_key balance =
+  let add_account t public_key token_id balance =
     let account_id = Account_id.create public_key token_id in
     let account =
       Account.create account_id (Currency.Balance.of_uint64 balance)
     in
-    L.create_new_account_exn l account_id account
+    L.create_new_account_exn t.ledger account_id account
 
-  let get_account ?(token_id = Token_id.default) public_key =
+  let get_account t public_key token_id =
     let account_id = Account_id.create public_key token_id in
-    let%bind.Option location = L.location_of_account l account_id in
-    L.get l location
+    let%bind.Option location = L.location_of_account t.ledger account_id in
+    L.get t.ledger location
 
-  let get_root () = L.merkle_root l
+  let inferr_nonce t public_key =
+    match get_account t public_key Token_id.default with
+    | Some account ->
+        account.nonce
+    | None ->
+        Unsigned.UInt32.zero
 
-  let apply_signed_command (signed_command : Signed_command.t) =
+  let get_root t () = L.merkle_root t.ledger
+
+  let apply_signed_command t (signed_command : Signed_command.t) =
     let () =
       match Snark_queue.queue_size () with
-      | x when x >= Args.max_pool_size ->
+      | x when x >= t.config.max_pool_size ->
           failwith "Maximum pool size reached, try later"
       | _ ->
           ()
@@ -177,15 +184,15 @@ module Make (Args : Args_t) = struct
         (User_command.Signed_command signed_command)
     in
     let prev_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int !slot
+      Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    slot := !slot + 1 ;
+    t.slot <- t.slot + 1 ;
     let curr_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int !slot
+      Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    let source_ledger_hash = L.merkle_root l in
+    let source_ledger_hash = L.merkle_root t.ledger in
     let sparse_ledger =
-      Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
+      Mina_ledger.Sparse_ledger.of_ledger_subset_exn t.ledger
         (Signed_command.accounts_referenced signed_command)
     in
 
@@ -194,12 +201,12 @@ module Make (Args : Args_t) = struct
         (L.apply_transaction_first_pass ~constraint_constants
            ~global_slot:curr_global_slot
            ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-           l (Command (Signed_command signed_command)) )
-        (L.apply_transaction_second_pass l)
+           t.ledger (Command (Signed_command signed_command)) )
+        (L.apply_transaction_second_pass t.ledger)
       |> Or_error.ok_exn
     in
 
-    let target_ledger_hash = L.merkle_root l in
+    let target_ledger_hash = L.merkle_root t.ledger in
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
       (* No coinbase to add to the stack. *)
       let stack_with_state global_slot =
@@ -236,43 +243,41 @@ module Make (Args : Args_t) = struct
     @@ Snark_queue.prove_signed_command ~sparse_ledger ~user_command_in_block
          ~statement ;
 
-    ( Mina_transaction.Transaction_hash.hash_command
-        (Signed_command signed_command)
-    , Signed_command.to_base64 signed_command )
+    txn_applied
 
-  let apply_zkapp_command (zkapp_command : Zkapp_command.t) =
+  let apply_zkapp_command t (zkapp_command : Zkapp_command.t) =
     let () =
       match Snark_queue.queue_size () with
-      | x when x >= Args.max_pool_size ->
+      | x when x >= t.config.max_pool_size ->
           failwith "Maximum pool size reached, try later"
       | _ ->
           ()
     in
     let prev_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int !slot
+      Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    slot := !slot + 1 ;
+    t.slot <- t.slot + 1 ;
     let curr_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int !slot
+      Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    let first_pass_ledger, second_pass_ledger, _ =
+    let first_pass_ledger, second_pass_ledger, txn_applied =
       match
         let first_pass_ledger =
-          Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
+          Mina_ledger.Sparse_ledger.of_ledger_subset_exn t.ledger
             (Zkapp_command.accounts_referenced zkapp_command)
         in
         let%bind.Result partialy_applied_txn =
           L.apply_transaction_first_pass ~constraint_constants
             ~global_slot:curr_global_slot
             ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-            l (Command (Zkapp_command zkapp_command))
+            t.ledger (Command (Zkapp_command zkapp_command))
         in
         let second_pass_ledger =
-          Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
+          Mina_ledger.Sparse_ledger.of_ledger_subset_exn t.ledger
             (Zkapp_command.accounts_referenced zkapp_command)
         in
         let%bind.Result txn_applied =
-          L.apply_transaction_second_pass l partialy_applied_txn
+          L.apply_transaction_second_pass t.ledger partialy_applied_txn
         in
         Result.return (first_pass_ledger, second_pass_ledger, txn_applied)
       with
@@ -311,7 +316,7 @@ module Make (Args : Args_t) = struct
     in
     don't_wait_for @@ Snark_queue.prove_zkapp_command ~witnesses ~zkapp_command ;
 
-    ( Mina_transaction.Transaction_hash.hash_command
-        (Zkapp_command zkapp_command)
-    , Zkapp_command.to_base64 zkapp_command )
+    txn_applied
 end
+
+include Sequencer
