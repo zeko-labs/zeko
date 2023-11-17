@@ -342,15 +342,10 @@ module Wrapper_rules = struct
       run_checked
       @@ Frozen_ledger_hash.assert_equal istmt.source.second_pass_ledger
            istmt.connecting_ledger_left ;
-      (* Blockchain snark checks this too, probably needed here too for correctness *)
-      (* No, `fee_excess` can't be zero after tx because it's equal to the fee.
-         In block snark it makes sense because `fee_excess` should be already given to the block creator *)
-      (* run_checked
-            @@ Fee_excess.assert_equal_checked
-                 Fee_excess.(var_of_t zero)
-                 istmt.fee_excess ;
-         ( run_checked
-            @@ CAS.(Checked.assert_equal (constant typ zero) istmt.supply_increase) ) ; *)
+      (* We don't check fee_excess because it's up to the sequencer what they do with it. *)
+      (* The supply however must not increase. *)
+      run_checked
+        @@ CAS.(Checked.assert_equal (constant typ zero) istmt.supply_increase) ;
       { previous_proof_statements =
           [ { public_input = istmt
             ; proof_must_verify = Boolean.true_
