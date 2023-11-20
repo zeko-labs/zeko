@@ -14,7 +14,12 @@ let time label (d : 'a Deferred.t) =
 module Sequencer = struct
   type config_t = { max_pool_size : int; committment_period_sec : float }
 
-  type t = { ledger : L.t; mutable slot : int; config : config_t }
+  type t =
+    { ledger : L.t
+    ; mutable slot : int
+    ; config : config_t
+    ; da_config : Da_layer.config_t
+    }
 
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -59,7 +64,7 @@ module Sequencer = struct
 
     let staged_commands = ref []
 
-    let committed_commands = ref []
+    let last_committed_ledger_hash = ref None
 
     let queue_size () = Throttle.num_jobs_waiting_to_start q
 
@@ -73,7 +78,7 @@ module Sequencer = struct
             return wrapped
       in
       last := Some final_snark ;
-      staged_commands := command :: !staged_commands ;
+      staged_commands := !staged_commands @ [ command ] ;
       return ()
 
     let prove_signed_command ~sparse_ledger ~user_command_in_block ~statement =
@@ -117,7 +122,7 @@ module Sequencer = struct
           in
           wrap_and_merge txn_snark (User_command.Zkapp_command zkapp_command) )
 
-    let commit () =
+    let commit t =
       Throttle.enqueue q (fun () ->
           match List.is_empty !staged_commands with
           | true ->
@@ -125,23 +130,43 @@ module Sequencer = struct
               return ()
           | false ->
               print_endline "Committing..." ;
+
+              let ledger_hash =
+                (Option.value_exn !last).statement.target_ledger
+              in
+              let batch_id =
+                Frozen_ledger_hash0.to_decimal_string ledger_hash
+              in
+              let previous_batch_id =
+                Frozen_ledger_hash0.to_decimal_string
+                  (Option.value
+                     ~default:(Frozen_ledger_hash0.of_decimal_string "0")
+                     !last_committed_ledger_hash )
+              in
+
+              let%bind () =
+                Da_layer.post_batch t.da_config ~commands:!staged_commands
+                  ~batch_id ~previous_batch_id
+              in
+              print_endline ("Posted batch " ^ batch_id) ;
+
               (* Add proving here *)
-              committed_commands :=
-                List.append !staged_commands !committed_commands ;
               staged_commands := [] ;
               last := None ;
+              last_committed_ledger_hash := Some ledger_hash ;
               return () )
   end
 
-  let create ~max_pool_size ~committment_period_sec =
+  let create ~max_pool_size ~committment_period_sec ~da_contract_address =
     { ledger = L.create ~depth:constraint_constants.ledger_depth ()
     ; slot = 0
     ; config = { max_pool_size; committment_period_sec }
+    ; da_config = { da_contract_address }
     }
 
   let run_committer t =
     every (Time_ns.Span.of_sec t.config.committment_period_sec) (fun () ->
-        don't_wait_for @@ Snark_queue.commit () )
+        don't_wait_for @@ Snark_queue.commit t )
 
   let add_account t public_key token_id balance =
     let account_id = Account_id.create public_key token_id in
