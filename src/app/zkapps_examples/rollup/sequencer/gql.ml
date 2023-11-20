@@ -41,6 +41,25 @@ module Types = struct
     let transaction_id = TransactionId.typ ()
   end
 
+  let sync_status : ('context, Sync_status.t option) typ =
+    enum "SyncStatus" ~doc:"Sync status of daemon"
+      ~values:
+        (List.map Sync_status.all ~f:(fun status ->
+             enum_value
+               (String.map ~f:Char.uppercase @@ Sync_status.to_string status)
+               ~value:status ) )
+
+  module DaemonStatus = struct
+    type t = { chain_id : string }
+
+    let t : ('context, t option) typ =
+      obj "DaemonStatus" ~fields:(fun _ ->
+          [ field "chainId" ~typ:(non_null string)
+              ~args:Arg.[]
+              ~resolve:(fun _ v -> v.chain_id)
+          ] )
+  end
+
   let merkle_path_element :
       (_, [ `Left of Zkapp_basic.F.t | `Right of Zkapp_basic.F.t ] option) typ =
     let field_elem = Mina_base_unix.Graphql_scalars.FieldElem.typ () in
@@ -1280,6 +1299,17 @@ end
 module Queries = struct
   open Schema
 
+  let sync_status =
+    io_field "syncStatus" ~doc:"Network sync status" ~args:[]
+      ~typ:(non_null Types.sync_status) ~resolve:(fun { ctx = _; _ } () ->
+        return (Ok `Synced) )
+
+  let daemon_status =
+    io_field "daemonStatus" ~doc:"Get running daemon status" ~args:[]
+      ~typ:(non_null Types.DaemonStatus.t) ~resolve:(fun { ctx = _; _ } () ->
+        let open Types.DaemonStatus in
+        return (Ok { chain_id = "69420" }) )
+
   let account =
     field "account" ~doc:"Find any account via a public key and token"
       ~typ:Types.AccountObj.account
@@ -1309,7 +1339,7 @@ module Queries = struct
           ]
       ~resolve:(fun _ () _ -> [])
 
-  let commands = [ account; accounts_for_pk ]
+  let commands = [ sync_status; daemon_status; account; accounts_for_pk ]
 end
 
 let schema =
