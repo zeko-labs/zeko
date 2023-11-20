@@ -4,16 +4,20 @@ module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 
-let run port max_pool_size commitment_period () =
+let run port max_pool_size commitment_period da_contract_address () =
   let sequencer =
     Zeko_sequencer.create ~max_pool_size
-      ~committment_period_sec:commitment_period
+      ~committment_period_sec:commitment_period ~da_contract_address
   in
-  Zeko_sequencer.add_account sequencer
-    (Signature_lib.Public_key.Compressed.of_base58_check_exn
-       "B62qkAdonbeqcuVwQJtHbcqMbb4fbuFHJpqvNCfCBt194xSQ1o3i5rt" )
-    Mina_base.Token_id.default
-    (Unsigned.UInt64.of_int64 1_000_000_000_000L) ;
+
+  List.iter
+    [ "B62qrrytZmo8SraqYfJMZ8E3QcK77uAGZhsGJGKmVF5E598E8KX9j6a"
+    ; "B62qkAdonbeqcuVwQJtHbcqMbb4fbuFHJpqvNCfCBt194xSQ1o3i5rt"
+    ] ~f:(fun pk ->
+      Zeko_sequencer.add_account sequencer
+        (Signature_lib.Public_key.Compressed.of_base58_check_exn pk)
+        Mina_base.Token_id.default
+        (Unsigned.UInt64.of_int64 1_000_000_000_000L) ) ;
 
   Zeko_sequencer.run_committer sequencer ;
 
@@ -48,6 +52,9 @@ let () =
        flag "--max-pool-size"
          (optional_with_default 10 int)
          ~doc:"int Maximum transaction pool size"
+     and da_contract_address =
+       flag "--da-contract-address" (required string)
+         ~doc:"string Address of the DA contract"
      in
-     run port max_pool_size commitment_period )
+     run port max_pool_size commitment_period da_contract_address )
   |> Command_unix.run
