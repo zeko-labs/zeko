@@ -5,22 +5,31 @@ open Async
 module Da_layer = struct
   type config_t = { da_contract_address : string }
 
+  let command_to_yojson command =
+    match command with
+    | User_command.Signed_command signed_command ->
+        `Assoc
+          [ ("commandType", `Int 0)
+          ; ( "data"
+            , `String
+                (Signed_command.to_base64
+                   (Signed_command.forget_check signed_command) ) )
+          ]
+    | User_command.Zkapp_command zkapp_command ->
+        `Assoc
+          [ ("commandType", `Int 1)
+          ; ("data", `String (Zkapp_command.to_base64 zkapp_command))
+          ]
+
   let post_batch config ~commands ~batch_id ~previous_batch_id =
     let payload =
-      String.concat ~sep:"\n"
-        ( config.da_contract_address
-        :: (batch_id ^ " " ^ previous_batch_id)
-        :: List.fold commands ~init:[] ~f:(fun accum command ->
-               let command_type, command_data =
-                 match command with
-                 | User_command.Signed_command signed_command ->
-                     ( 0
-                     , Signed_command.to_base64
-                         (Signed_command.forget_check signed_command) )
-                 | User_command.Zkapp_command zkapp_command ->
-                     (1, Zkapp_command.to_base64 zkapp_command)
-               in
-               accum @ [ Int.to_string command_type ^ " " ^ command_data ] ) )
+      Yojson.to_string
+        (`Assoc
+          [ ("address", `String config.da_contract_address)
+          ; ("id", `String batch_id)
+          ; ("previousId", `String previous_batch_id)
+          ; ("commands", `List (List.map commands ~f:command_to_yojson))
+          ] )
     in
     let stdin =
       Core.Unix.open_process_out
