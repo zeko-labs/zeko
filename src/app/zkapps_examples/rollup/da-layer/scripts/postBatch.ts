@@ -1,37 +1,29 @@
 import fs from "fs";
 import { ethers } from "hardhat";
 import { Field } from "o1js";
+import { z } from "zod";
 import { fieldToHex } from "../utils/mina";
+
+const schema = z.object({
+  address: z.string(),
+  id: z.string().transform((id) => fieldToHex(Field(id))),
+  previousId: z.string().transform((id) => fieldToHex(Field(id))),
+  commands: z.array(
+    z.object({
+      commandType: z.number().int().gte(0).lte(1),
+      data: z.string().transform((data) => Buffer.from(data, "base64")),
+    })
+  ),
+});
 
 const main = async () => {
   const daFactory = await ethers.getContractFactory("DataAvailability");
 
-  const [address, ...rest] = fs
-    .readFileSync(0)
-    .toString()
-    .trim()
-    .split("\n")
-    .map((x) => x.trim());
+  const { address, id, previousId, commands } = schema.parse(
+    JSON.parse(fs.readFileSync(0).toString())
+  );
 
   const contract = daFactory.attach(address);
-
-  const [[rawId, rawPreviousId], ...rawCommands] = rest.map((x) => x.split(" "));
-
-  const id = fieldToHex(Field(rawId));
-  const previousId = fieldToHex(Field(rawPreviousId));
-
-  const commands = rawCommands.map(([commandTypeStr, data]) => {
-    const commandType = parseInt(commandTypeStr);
-
-    if (commandType < 0 || commandType > 2) {
-      throw new Error("Invalid command type");
-    }
-
-    return {
-      commandType,
-      data: Buffer.from(data, "base64"),
-    };
-  });
 
   const tx = await contract.postBatch(id, previousId, commands);
 
