@@ -779,18 +779,21 @@ module Types = struct
       ; field_no_status "source" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command is sent from"
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.db)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "receiver" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command applies to"
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.db)
               (Signed_command.receiver cmd.With_hash.data) )
       ; field_no_status "feePayer" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that pays the fees for the command"
           ~deprecated:(Deprecated (Some "use source field instead"))
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.db)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "validUntil" ~typ:(non_null global_slot_since_genesis)
           ~args:[]
@@ -849,7 +852,7 @@ module Types = struct
           ~args:[] ~doc:"Account of the sender"
           ~deprecated:(Deprecated (Some "use feePayer field instead"))
           ~resolve:(fun { ctx = sequencer; _ } payment ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
             @@ Signed_command.fee_payer payment.With_hash.data )
       ; field_no_status "to" ~typ:(non_null public_key) ~args:[]
           ~doc:"Public key of the receiver"
@@ -861,7 +864,7 @@ module Types = struct
           ~deprecated:(Deprecated (Some "use receiver field instead"))
           ~args:Arg.[]
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
             @@ Signed_command.receiver cmd.With_hash.data )
       ; field "failureReason"
           ~typ:(Mina_base_unix.Graphql_scalars.TransactionStatusFailure.typ ())
