@@ -228,14 +228,13 @@ module Sequencer = struct
       Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
         (Signed_command.accounts_referenced signed_command)
     in
-    let txn_applied =
+    let%bind.Result txn_applied =
       Result.( >>= )
         (L.apply_transaction_first_pass ~constraint_constants
            ~global_slot:curr_global_slot
            ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
            l (Command (Signed_command signed_command)) )
         (L.apply_transaction_second_pass l)
-      |> Or_error.ok_exn
     in
     L.Mask.Attached.commit l ;
 
@@ -276,7 +275,7 @@ module Sequencer = struct
     @@ Snark_queue.prove_signed_command ~sparse_ledger ~user_command_in_block
          ~statement ;
 
-    txn_applied
+    Result.return txn_applied
 
   let apply_zkapp_command t (zkapp_command : Zkapp_command.t) =
     let () =
@@ -293,7 +292,7 @@ module Sequencer = struct
     let curr_global_slot =
       Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    let first_pass_ledger, second_pass_ledger, txn_applied =
+    let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
       let l = L.of_database t.db in
       let accounts_referenced =
         Zkapp_command.accounts_referenced zkapp_command
@@ -302,20 +301,18 @@ module Sequencer = struct
       let first_pass_ledger =
         Mina_ledger.Sparse_ledger.of_ledger_subset_exn l accounts_referenced
       in
-      let partialy_applied_txn =
+      let%bind.Result partialy_applied_txn =
         L.apply_transaction_first_pass ~constraint_constants
           ~global_slot:curr_global_slot
           ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
           l (Command (Zkapp_command zkapp_command))
-        |> Or_error.ok_exn
       in
 
       let second_pass_ledger =
         Mina_ledger.Sparse_ledger.of_ledger_subset_exn l accounts_referenced
       in
-      let txn_applied =
+      let%map.Result txn_applied =
         L.apply_transaction_second_pass l partialy_applied_txn
-        |> Or_error.ok_exn
       in
 
       L.Mask.Attached.commit l ;
@@ -350,7 +347,7 @@ module Sequencer = struct
     in
     don't_wait_for @@ Snark_queue.prove_zkapp_command ~witnesses ~zkapp_command ;
 
-    txn_applied
+    Result.return txn_applied
 end
 
 include Sequencer
