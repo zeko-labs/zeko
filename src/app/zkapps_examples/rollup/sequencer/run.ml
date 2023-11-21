@@ -60,7 +60,7 @@ let () =
          (optional_with_default 10 int)
          ~doc:"int Maximum transaction pool size"
      and da_contract_address =
-       flag "--da-contract-address" (required string)
+       flag "--da-contract-address" (optional string)
          ~doc:"string Address of the DA contract"
      in
      run port max_pool_size commitment_period da_contract_address )
