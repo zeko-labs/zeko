@@ -312,7 +312,16 @@ module Sequencer = struct
         Mina_ledger.Sparse_ledger.of_ledger_subset_exn l accounts_referenced
       in
       let%map.Result txn_applied =
-        L.apply_transaction_second_pass l partialy_applied_txn
+        let%bind.Result txn_applied =
+          L.apply_transaction_second_pass l partialy_applied_txn
+        in
+        match L.Transaction_applied.transaction_status txn_applied with
+        | Failed failure ->
+            Error
+              ( Error.of_string @@ Yojson.Safe.to_string
+              @@ Transaction_status.Failure.Collection.to_yojson failure )
+        | Applied ->
+            Ok txn_applied
       in
 
       L.Mask.Attached.commit l ;
