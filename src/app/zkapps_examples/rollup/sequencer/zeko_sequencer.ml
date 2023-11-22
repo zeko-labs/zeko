@@ -161,10 +161,12 @@ module Sequencer = struct
 
   let create ~max_pool_size ~committment_period_sec ~da_contract_address ~db_dir
       =
-    { db =
-        L.Db.create ~directory_name:db_dir
-          ~depth:constraint_constants.ledger_depth ()
-    ; archive = Archive.create ()
+    let db =
+      L.Db.create ~directory_name:db_dir
+        ~depth:constraint_constants.ledger_depth ()
+    in
+    { db
+    ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
     ; slot = 0
     ; config = { max_pool_size; committment_period_sec; db_dir }
     ; da_config = { da_contract_address }
