@@ -1203,6 +1203,179 @@ module Types = struct
                 ~typ:arg_typ
             ]
     end
+
+    module Archive = struct
+      module ActionFilterOptionsInput = struct
+        module Field = Snark_params.Tick.Field
+
+        type input =
+          { address : Account.key
+          ; token_id : Token_id.t option
+          ; from_action_state : Field.t option
+          ; end_action_state : Field.t option
+          }
+
+        let arg_typ =
+          obj "ActionFilterOptionsInput"
+            ~coerce:(fun address token_id from_action_state end_action_state ->
+              ( address
+              , token_id
+              , Option.map from_action_state ~f:Field.of_string
+              , Option.map end_action_state ~f:Field.of_string ) )
+            ~split:(fun f (x : input) ->
+              f x.address x.token_id
+                (Option.map x.from_action_state ~f:Field.to_string)
+                (Option.map x.end_action_state ~f:Field.to_string) )
+            ~fields:
+              [ arg "address" ~typ:(non_null PublicKey.arg_typ)
+              ; arg "tokenId" ~typ:TokenId.arg_typ
+              ; arg "fromActionState" ~typ:string
+              ; arg "endActionState" ~typ:string
+              ]
+      end
+    end
+  end
+
+  module Archive = struct
+    module BlockInfo = struct
+      type t = Archive.Block_info.t
+
+      let t : ('context, t option) typ =
+        let open Archive.Block_info in
+        obj "BlockInfo" ~fields:(fun _ ->
+            [ field "height" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.height)
+            ; field "stateHash" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.state_hash)
+            ; field "parentHash" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.parent_hash)
+            ; field "ledgerHash" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.ledger_hash)
+            ; field "timestamp" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.timestamp)
+            ; field "globalSlotSinceHardfork" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.global_slot_since_hardfork)
+            ; field "globalSlotSinceGenesis" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.global_slot_since_genesis)
+            ; field "distanceFromMaxBlockHeight" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.distance_from_max_block_height)
+            ] )
+    end
+
+    module TransactionInfo = struct
+      type t = Archive.Transaction_info.t
+
+      let t : ('context, t option) typ =
+        let open Archive.Transaction_info in
+        obj "TransactionInfo" ~fields:(fun _ ->
+            [ field "status" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ v ->
+                  Yojson.Safe.to_string @@ Transaction_status.to_yojson v.status
+                  )
+            ; field "hash"
+                ~typ:(non_null transaction_hash)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.hash)
+            ; field "memo" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> Signed_command_memo.to_string_hum v.memo)
+            ; field "authorizationKind" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ v ->
+                  Yojson.Safe.to_string
+                  @@ Account_update.Authorization_kind.to_yojson
+                       v.authorization_kind )
+            ] )
+    end
+
+    module StupidActionState = struct
+      type t = Snark_params.Tick.Field.t Pickles_types.Vector.Vector_5.t
+
+      let t : ('context, t option) typ =
+        obj "ActionStates" ~fields:(fun _ ->
+            [ field "actionStateOne" ~typ:string
+                ~args:Arg.[]
+                ~resolve:(fun _ action_state ->
+                  Option.map
+                    (Pickles_types.Vector.nth action_state 0)
+                    ~f:Snark_params.Tick.Field.to_string )
+            ; field "actionStateTwo" ~typ:string
+                ~args:Arg.[]
+                ~resolve:(fun _ action_state ->
+                  Option.map
+                    (Pickles_types.Vector.nth action_state 1)
+                    ~f:Snark_params.Tick.Field.to_string )
+            ; field "actionStateThree" ~typ:string
+                ~args:Arg.[]
+                ~resolve:(fun _ action_state ->
+                  Option.map
+                    (Pickles_types.Vector.nth action_state 2)
+                    ~f:Snark_params.Tick.Field.to_string )
+            ; field "actionStateFour" ~typ:string
+                ~args:Arg.[]
+                ~resolve:(fun _ action_state ->
+                  Option.map
+                    (Pickles_types.Vector.nth action_state 3)
+                    ~f:Snark_params.Tick.Field.to_string )
+            ; field "actionStateFive" ~typ:string
+                ~args:Arg.[]
+                ~resolve:(fun _ action_state ->
+                  Option.map
+                    (Pickles_types.Vector.nth action_state 4)
+                    ~f:Snark_params.Tick.Field.to_string )
+            ] )
+    end
+
+    module ActionData = struct
+      type t = Archive.Action.t * int
+
+      let t : ('context, t option) typ =
+        obj "ActionData" ~fields:(fun _ ->
+            [ field "accountUpdateId" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ (_, account_update_id) ->
+                  Int.to_string account_update_id )
+            ; field "data"
+                ~typ:(non_null @@ list @@ non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ (action, _) ->
+                  Array.to_list
+                  @@ Array.map action ~f:Snark_params.Tick.Field.to_string )
+            ] )
+    end
+
+    module ActionOutput = struct
+      type t = Archive.Account_update_actions.t
+
+      let t : ('context, t option) typ =
+        obj "ActionOutput" ~fields:(fun _ ->
+            let open Archive.Account_update_actions in
+            [ field "blockInfo" ~typ:BlockInfo.t
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.block_info)
+            ; field "transactionInfo" ~typ:TransactionInfo.t
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.transaction_info)
+            ; field "actionState"
+                ~typ:(non_null StupidActionState.t)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.action_state)
+            ; field "actionData"
+                ~typ:(non_null @@ list @@ non_null ActionData.t)
+                ~args:Arg.[]
+                ~resolve:(fun _ v ->
+                  List.map v.actions ~f:(fun x -> (x, v.account_update_id)) )
+            ] )
+    end
   end
 end
 
@@ -1346,7 +1519,28 @@ module Queries = struct
           ]
       ~resolve:(fun _ () _ -> [])
 
-  let commands = [ sync_status; daemon_status; account; accounts_for_pk ]
+  module Archive = struct
+    let actions =
+      field "actions"
+        ~typ:(non_null @@ list @@ non_null Types.Archive.ActionOutput.t)
+        ~args:
+          Arg.
+            [ arg "input"
+                ~typ:
+                  (non_null Types.Input.Archive.ActionFilterOptionsInput.arg_typ)
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } ()
+                      (public_key, token_id, from_action_state, _) ->
+          let token_id = Option.value ~default:Token_id.default token_id in
+          Archive.get_actions sequencer.archive
+            (Account_id.create public_key token_id)
+            from_action_state )
+
+    let commands = [ actions ]
+  end
+
+  let commands =
+    [ sync_status; daemon_status; account; accounts_for_pk ] @ Archive.commands
 end
 
 let schema =
