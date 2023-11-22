@@ -1,6 +1,10 @@
 module type S = sig
   include Base_ledger_intf.S
 
+  type kvdb
+
+  val kvdb : t -> kvdb
+
   val create : ?directory_name:string -> depth:int -> unit -> t
 
   (** create_checkpoint would create the checkpoint and open a db connection to that checkpoint *)

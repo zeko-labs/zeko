@@ -115,7 +115,8 @@ module Ledger_inner = struct
        and type token_id_set := Token_id.Set.t
        and type account := Account.t
        and type account_id_set := Account_id.Set.t
-       and type account_id := Account_id.t =
+       and type account_id := Account_id.t
+       and type kvdb := Kvdb.t =
     Database.Make (Inputs)
 
   module Null = Null_ledger.Make (Inputs)

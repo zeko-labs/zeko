@@ -23,7 +23,8 @@ module Make (Inputs : Inputs_intf) :
      and type root_hash := Inputs.Hash.t
      and type hash := Inputs.Hash.t
      and type account_id := Inputs.Account_id.t
-     and type account_id_set := Inputs.Account_id.Set.t = struct
+     and type account_id_set := Inputs.Account_id.Set.t
+     and type kvdb := Inputs.Kvdb.t = struct
   (* The max depth of a merkle tree can never be greater than 253. *)
   open Inputs
 
@@ -87,6 +88,8 @@ module Make (Inputs : Inputs_intf) :
     ; directory
     ; detached_parent_signal = Async.Ivar.create ()
     }
+
+  let kvdb t = t.kvdb
 
   let create_checkpoint t ~directory_name () =
     let uuid = Uuid_unix.create () in
