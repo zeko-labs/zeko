@@ -1233,6 +1233,21 @@ module Types = struct
               ; arg "endActionState" ~typ:string
               ]
       end
+
+      module EventFilterOptionsInput = struct
+        module Field = Snark_params.Tick.Field
+
+        type input = { address : Account.key; token_id : Token_id.t option }
+
+        let arg_typ =
+          obj "EventFilterOptionsInput"
+            ~coerce:(fun address token_id -> (address, token_id))
+            ~split:(fun f (x : input) -> f x.address x.token_id)
+            ~fields:
+              [ arg "address" ~typ:(non_null PublicKey.arg_typ)
+              ; arg "tokenId" ~typ:TokenId.arg_typ
+              ]
+      end
     end
   end
 
@@ -1255,6 +1270,9 @@ module Types = struct
             ; field "ledgerHash" ~typ:(non_null string)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.ledger_hash)
+            ; field "chainStatus" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.chain_status)
             ; field "timestamp" ~typ:(non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.timestamp)
@@ -1300,6 +1318,7 @@ module Types = struct
     module StupidActionState = struct
       type t = Snark_params.Tick.Field.t Pickles_types.Vector.Vector_5.t
 
+      (* Who thought it would be better to not use array like normal node, but rather enumerate fields by word *)
       let t : ('context, t option) typ =
         obj "ActionStates" ~fields:(fun _ ->
             [ field "actionStateOne" ~typ:string
@@ -1336,20 +1355,40 @@ module Types = struct
     end
 
     module ActionData = struct
-      type t = Archive.Action.t * int
+      type t = Archive.Action.t * int * Archive.Transaction_info.t option
 
       let t : ('context, t option) typ =
         obj "ActionData" ~fields:(fun _ ->
             [ field "accountUpdateId" ~typ:(non_null string)
                 ~args:Arg.[]
-                ~resolve:(fun _ (_, account_update_id) ->
+                ~resolve:(fun _ (_, account_update_id, _) ->
                   Int.to_string account_update_id )
             ; field "data"
                 ~typ:(non_null @@ list @@ non_null string)
                 ~args:Arg.[]
-                ~resolve:(fun _ (action, _) ->
+                ~resolve:(fun _ (action, _, _) ->
                   Array.to_list
                   @@ Array.map action ~f:Snark_params.Tick.Field.to_string )
+            ; field "transactionInfo" ~typ:TransactionInfo.t
+                ~args:Arg.[]
+                ~resolve:(fun _ (_, _, transaction_info) -> transaction_info)
+            ] )
+    end
+
+    module EventData = struct
+      type t = Archive.Event.t * Archive.Transaction_info.t option
+
+      let t : ('context, t option) typ =
+        obj "EventData" ~fields:(fun _ ->
+            [ field "data"
+                ~typ:(non_null @@ list @@ non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ (event, _) ->
+                  Array.to_list
+                  @@ Array.map event ~f:Snark_params.Tick.Field.to_string )
+            ; field "transactionInfo" ~typ:TransactionInfo.t
+                ~args:Arg.[]
+                ~resolve:(fun _ (_, transaction_info) -> transaction_info)
             ] )
     end
 
@@ -1373,7 +1412,25 @@ module Types = struct
                 ~typ:(non_null @@ list @@ non_null ActionData.t)
                 ~args:Arg.[]
                 ~resolve:(fun _ v ->
-                  List.map v.actions ~f:(fun x -> (x, v.account_update_id)) )
+                  List.map v.actions ~f:(fun x ->
+                      (x, v.account_update_id, v.transaction_info) ) )
+            ] )
+    end
+
+    module EventOutput = struct
+      type t = Archive.Account_update_events.t
+
+      let t : ('context, t option) typ =
+        obj "EventOutput" ~fields:(fun _ ->
+            let open Archive.Account_update_events in
+            [ field "blockInfo" ~typ:BlockInfo.t
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.block_info)
+            ; field "eventData"
+                ~typ:(non_null @@ list @@ non_null EventData.t)
+                ~args:Arg.[]
+                ~resolve:(fun _ v ->
+                  List.map v.events ~f:(fun x -> (x, v.transaction_info)) )
             ] )
     end
   end
@@ -1536,7 +1593,21 @@ module Queries = struct
             (Account_id.create public_key token_id)
             from_action_state )
 
-    let commands = [ actions ]
+    let events =
+      field "events"
+        ~typ:(non_null @@ list @@ non_null Types.Archive.EventOutput.t)
+        ~args:
+          Arg.
+            [ arg "input"
+                ~typ:
+                  (non_null Types.Input.Archive.EventFilterOptionsInput.arg_typ)
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } () (public_key, token_id) ->
+          let token_id = Option.value ~default:Token_id.default token_id in
+          Archive.get_events sequencer.archive
+            (Account_id.create public_key token_id) )
+
+    let commands = [ actions; events ]
   end
 
   let commands =

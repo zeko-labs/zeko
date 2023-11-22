@@ -336,7 +336,18 @@ module Sequencer = struct
                    (Account_update.public_key update)
                    (Account_update.token_id update)
             in
-            Archive.add_account_update t.archive update account )) ;
+            Archive.add_account_update t.archive update account
+              (Some
+                 Archive.Transaction_info.
+                   { status = Applied
+                   ; hash =
+                       Mina_transaction.Transaction_hash.hash_command
+                         (Zkapp_command zkapp_command)
+                   ; memo = Zkapp_command.memo zkapp_command
+                   ; authorization_kind =
+                       Account_update.Body.authorization_kind
+                       @@ Account_update.body update
+                   } ) )) ;
 
       (first_pass_ledger, second_pass_ledger, txn_applied)
     in
