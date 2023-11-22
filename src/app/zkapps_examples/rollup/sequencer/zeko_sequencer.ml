@@ -17,6 +17,7 @@ module Sequencer = struct
 
   type t =
     { db : L.Db.t
+    ; archive : Archive.t
     ; mutable slot : int
     ; config : config_t
     ; da_config : Da_layer.config_t
@@ -163,6 +164,7 @@ module Sequencer = struct
     { db =
         L.Db.create ~directory_name:db_dir
           ~depth:constraint_constants.ledger_depth ()
+    ; archive = Archive.create ()
     ; slot = 0
     ; config = { max_pool_size; committment_period_sec; db_dir }
     ; da_config = { da_contract_address }
@@ -325,6 +327,17 @@ module Sequencer = struct
 
       L.Mask.Attached.commit l ;
       t.slot <- Mina_numbers.Global_slot_since_genesis.to_int curr_global_slot ;
+
+      Zkapp_command.(
+        Call_forest.iteri (account_updates zkapp_command) ~f:(fun _ update ->
+            let account =
+              Option.value_exn
+              @@ get_account t
+                   (Account_update.public_key update)
+                   (Account_update.token_id update)
+            in
+            Archive.add_account_update t.archive update account )) ;
+
       (first_pass_ledger, second_pass_ledger, txn_applied)
     in
 

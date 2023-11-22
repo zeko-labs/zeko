@@ -61,6 +61,7 @@
   base
   base.caml
   yojson
-  ppx_deriving_yojson.runtime)
+  ppx_deriving_yojson.runtime
+  sexplib0)
   (preprocess (pps ppx_jane ppx_mina ppx_version ppx_deriving_yojson ppx_deriving.make))
-  (modules run zeko_sequencer gql da_layer))
+  (modules run zeko_sequencer gql da_layer archive))
