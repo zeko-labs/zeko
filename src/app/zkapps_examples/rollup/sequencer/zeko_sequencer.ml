@@ -12,10 +12,11 @@ let time label (d : 'a Deferred.t) =
   return x
 
 module Sequencer = struct
-  type config_t = { max_pool_size : int; committment_period_sec : float }
+  type config_t =
+    { max_pool_size : int; committment_period_sec : float; db_dir : string }
 
   type t =
-    { ledger : L.t
+    { db : L.Db.t
     ; mutable slot : int
     ; config : config_t
     ; da_config : Da_layer.config_t
@@ -157,10 +158,13 @@ module Sequencer = struct
               return () )
   end
 
-  let create ~max_pool_size ~committment_period_sec ~da_contract_address =
-    { ledger = L.create ~depth:constraint_constants.ledger_depth ()
+  let create ~max_pool_size ~committment_period_sec ~da_contract_address ~db_dir
+      =
+    { db =
+        L.Db.create ~directory_name:db_dir
+          ~depth:constraint_constants.ledger_depth ()
     ; slot = 0
-    ; config = { max_pool_size; committment_period_sec }
+    ; config = { max_pool_size; committment_period_sec; db_dir }
     ; da_config = { da_contract_address }
     }
 
@@ -173,12 +177,14 @@ module Sequencer = struct
     let account =
       Account.create account_id (Currency.Balance.of_uint64 balance)
     in
-    L.create_new_account_exn t.ledger account_id account
+    ( L.Db.get_or_create_account t.db account_id account |> Or_error.ok_exn
+      : [ `Added | `Existed ] * L.Db.Location.t )
+    |> ignore
 
   let get_account t public_key token_id =
     let account_id = Account_id.create public_key token_id in
-    let%bind.Option location = L.location_of_account t.ledger account_id in
-    L.get t.ledger location
+    let%bind.Option location = L.Db.location_of_account t.db account_id in
+    L.Db.get t.db location
 
   let inferr_nonce t public_key =
     match get_account t public_key Token_id.default with
@@ -187,7 +193,7 @@ module Sequencer = struct
     | None ->
         Unsigned.UInt32.zero
 
-  let get_root t () = L.merkle_root t.ledger
+  let get_root t () = L.Db.merkle_root t.db
 
   let apply_signed_command t (signed_command : Signed_command.t) =
     let () =
@@ -215,23 +221,24 @@ module Sequencer = struct
     let curr_global_slot =
       Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    let source_ledger_hash = L.merkle_root t.ledger in
+
+    let l = L.of_database t.db in
+    let source_ledger_hash = L.merkle_root l in
     let sparse_ledger =
-      Mina_ledger.Sparse_ledger.of_ledger_subset_exn t.ledger
+      Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
         (Signed_command.accounts_referenced signed_command)
     in
-
-    let txn_applied =
+    let%bind.Result txn_applied =
       Result.( >>= )
         (L.apply_transaction_first_pass ~constraint_constants
            ~global_slot:curr_global_slot
            ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-           t.ledger (Command (Signed_command signed_command)) )
-        (L.apply_transaction_second_pass t.ledger)
-      |> Or_error.ok_exn
+           l (Command (Signed_command signed_command)) )
+        (L.apply_transaction_second_pass l)
     in
+    L.Mask.Attached.commit l ;
 
-    let target_ledger_hash = L.merkle_root t.ledger in
+    let target_ledger_hash = L.merkle_root l in
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
       (* No coinbase to add to the stack. *)
       let stack_with_state global_slot =
@@ -268,7 +275,7 @@ module Sequencer = struct
     @@ Snark_queue.prove_signed_command ~sparse_ledger ~user_command_in_block
          ~statement ;
 
-    txn_applied
+    Result.return txn_applied
 
   let apply_zkapp_command t (zkapp_command : Zkapp_command.t) =
     let () =
@@ -285,32 +292,40 @@ module Sequencer = struct
     let curr_global_slot =
       Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    let first_pass_ledger, second_pass_ledger, txn_applied =
-      match
-        let first_pass_ledger =
-          Mina_ledger.Sparse_ledger.of_ledger_subset_exn t.ledger
-            (Zkapp_command.accounts_referenced zkapp_command)
-        in
-        let%bind.Result partialy_applied_txn =
-          L.apply_transaction_first_pass ~constraint_constants
-            ~global_slot:curr_global_slot
-            ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-            t.ledger (Command (Zkapp_command zkapp_command))
-        in
-        let second_pass_ledger =
-          Mina_ledger.Sparse_ledger.of_ledger_subset_exn t.ledger
-            (Zkapp_command.accounts_referenced zkapp_command)
-        in
+    let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
+      let l = L.of_database t.db in
+      let accounts_referenced =
+        Zkapp_command.accounts_referenced zkapp_command
+      in
+
+      let first_pass_ledger =
+        Mina_ledger.Sparse_ledger.of_ledger_subset_exn l accounts_referenced
+      in
+      let%bind.Result partialy_applied_txn =
+        L.apply_transaction_first_pass ~constraint_constants
+          ~global_slot:curr_global_slot
+          ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
+          l (Command (Zkapp_command zkapp_command))
+      in
+
+      let second_pass_ledger =
+        Mina_ledger.Sparse_ledger.of_ledger_subset_exn l accounts_referenced
+      in
+      let%map.Result txn_applied =
         let%bind.Result txn_applied =
-          L.apply_transaction_second_pass t.ledger partialy_applied_txn
+          L.apply_transaction_second_pass l partialy_applied_txn
         in
-        Result.return (first_pass_ledger, second_pass_ledger, txn_applied)
-      with
-      | Ok x ->
-          x
-      | Error e ->
-          (* this isn't correct, if only second pass fails the first pass keeps applied *)
-          failwith @@ Error.to_string_hum e
+        match L.Transaction_applied.transaction_status txn_applied with
+        | Failed failure ->
+            Error
+              ( Error.of_string @@ Yojson.Safe.to_string
+              @@ Transaction_status.Failure.Collection.to_yojson failure )
+        | Applied ->
+            Ok txn_applied
+      in
+
+      L.Mask.Attached.commit l ;
+      (first_pass_ledger, second_pass_ledger, txn_applied)
     in
 
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
@@ -341,7 +356,7 @@ module Sequencer = struct
     in
     don't_wait_for @@ Snark_queue.prove_zkapp_command ~witnesses ~zkapp_command ;
 
-    txn_applied
+    Result.return txn_applied
 end
 
 include Sequencer

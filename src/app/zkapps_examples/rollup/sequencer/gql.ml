@@ -779,18 +779,21 @@ module Types = struct
       ; field_no_status "source" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command is sent from"
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.db)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "receiver" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command applies to"
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.db)
               (Signed_command.receiver cmd.With_hash.data) )
       ; field_no_status "feePayer" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that pays the fees for the command"
           ~deprecated:(Deprecated (Some "use source field instead"))
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.db)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "validUntil" ~typ:(non_null global_slot_since_genesis)
           ~args:[]
@@ -849,7 +852,7 @@ module Types = struct
           ~args:[] ~doc:"Account of the sender"
           ~deprecated:(Deprecated (Some "use feePayer field instead"))
           ~resolve:(fun { ctx = sequencer; _ } payment ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
             @@ Signed_command.fee_payer payment.With_hash.data )
       ; field_no_status "to" ~typ:(non_null public_key) ~args:[]
           ~doc:"Public key of the receiver"
@@ -861,7 +864,7 @@ module Types = struct
           ~deprecated:(Deprecated (Some "use receiver field instead"))
           ~args:Arg.[]
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account sequencer.ledger
+            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
             @@ Signed_command.receiver cmd.With_hash.data )
       ; field "failureReason"
           ~typ:(Mina_base_unix.Graphql_scalars.TransactionStatusFailure.typ ())
@@ -1234,26 +1237,31 @@ module Mutations = struct
               (Signed_command_payload.Body.Payment
                  { receiver_pk = to_; amount = Amount.of_uint64 amount } )
         in
-
-        match signature with
-        | Some signature ->
-            let%bind.Deferred.Result signature = signature |> Deferred.return in
-            let command =
+        let%bind.Deferred.Result command =
+          match signature with
+          | None ->
+              return (Error "Signature needed")
+          | Some signature -> (
+              let%bind.Deferred.Result signature =
+                signature |> Deferred.return
+              in
               match
                 Signed_command.create_with_signature_checked
                   ~signature_kind:Mina_signature_kind.Testnet signature from
                   payload
               with
               | Some command ->
-                  command
+                  return (Ok command)
               | None ->
-                  failwith "Signature verification failed"
-            in
-            let (_ : Ledger.Transaction_applied.t) =
-              Zeko_sequencer.apply_signed_command sequencer
-                (Signed_command.forget_check command)
-            in
-
+                  return (Error "Signature verification failed") )
+        in
+        match
+          Zeko_sequencer.apply_signed_command sequencer
+            (Signed_command.forget_check command)
+        with
+        | Error err ->
+            return (Error (Error.to_string_mach err))
+        | Ok _ ->
             let cmd =
               { Types.User_command.With_status.data =
                   Signed_command.forget_check command
@@ -1267,8 +1275,7 @@ module Mutations = struct
                   } )
             in
             Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash)
-        | None ->
-            return (Error "Signature needed") )
+        )
 
   let send_zkapp =
     io_field "sendZkapp" ~doc:"Send a zkApp transaction"
@@ -1276,22 +1283,22 @@ module Mutations = struct
       ~args:
         Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
       ~resolve:(fun { ctx = sequencer; _ } () zkapp_command ->
-        let (_ : Ledger.Transaction_applied.t) =
-          Zeko_sequencer.apply_zkapp_command sequencer zkapp_command
-        in
-
-        let cmd =
-          { Types.Zkapp_command.With_status.data = zkapp_command
-          ; status = Applied
-          }
-        in
-        let cmd_with_hash =
-          Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
-              { With_hash.data = cmd
-              ; hash = Transaction_hash.hash_command (Zkapp_command cmd)
-              } )
-        in
-        return (Ok cmd_with_hash) )
+        match Zeko_sequencer.apply_zkapp_command sequencer zkapp_command with
+        | Error err ->
+            return (Error (Error.to_string_mach err))
+        | Ok _ ->
+            let cmd =
+              { Types.Zkapp_command.With_status.data = zkapp_command
+              ; status = Applied
+              }
+            in
+            let cmd_with_hash =
+              Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
+                  { With_hash.data = cmd
+                  ; hash = Transaction_hash.hash_command (Zkapp_command cmd)
+                  } )
+            in
+            return (Ok cmd_with_hash) )
 
   let commands = [ send_payment; send_zkapp ]
 end

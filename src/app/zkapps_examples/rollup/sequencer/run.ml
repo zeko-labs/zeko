@@ -4,10 +4,10 @@ module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 
-let run port max_pool_size commitment_period da_contract_address () =
+let run port max_pool_size commitment_period da_contract_address db_dir () =
   let sequencer =
     Zeko_sequencer.create ~max_pool_size
-      ~committment_period_sec:commitment_period ~da_contract_address
+      ~committment_period_sec:commitment_period ~da_contract_address ~db_dir
   in
 
   List.iter
@@ -62,6 +62,10 @@ let () =
      and da_contract_address =
        flag "--da-contract-address" (optional string)
          ~doc:"string Address of the DA contract"
+     and db_dir =
+       flag "--db-dir"
+         (optional_with_default "db" string)
+         ~doc:"string Directory to store the database"
      in
-     run port max_pool_size commitment_period da_contract_address )
+     run port max_pool_size commitment_period da_contract_address db_dir )
   |> Command_unix.run
