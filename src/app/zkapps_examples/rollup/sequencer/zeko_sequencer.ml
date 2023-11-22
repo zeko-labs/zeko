@@ -217,9 +217,8 @@ module Sequencer = struct
     let prev_global_slot =
       Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    t.slot <- t.slot + 1 ;
     let curr_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int t.slot
+      Mina_numbers.Global_slot_since_genesis.of_int (t.slot + 1)
     in
 
     let l = L.of_database t.db in
@@ -237,6 +236,7 @@ module Sequencer = struct
         (L.apply_transaction_second_pass l)
     in
     L.Mask.Attached.commit l ;
+    t.slot <- Mina_numbers.Global_slot_since_genesis.to_int curr_global_slot ;
 
     let target_ledger_hash = L.merkle_root l in
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
@@ -288,9 +288,8 @@ module Sequencer = struct
     let prev_global_slot =
       Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    t.slot <- t.slot + 1 ;
     let curr_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int t.slot
+      Mina_numbers.Global_slot_since_genesis.of_int (t.slot + 1)
     in
     let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
       let l = L.of_database t.db in
@@ -325,6 +324,7 @@ module Sequencer = struct
       in
 
       L.Mask.Attached.commit l ;
+      t.slot <- Mina_numbers.Global_slot_since_genesis.to_int curr_global_slot ;
       (first_pass_ledger, second_pass_ledger, txn_applied)
     in
 
