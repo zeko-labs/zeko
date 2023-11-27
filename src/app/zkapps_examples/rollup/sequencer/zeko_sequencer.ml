@@ -17,6 +17,7 @@ module Sequencer = struct
 
   type t =
     { db : L.Db.t
+    ; archive : Archive.t
     ; mutable slot : int
     ; config : config_t
     ; da_config : Da_layer.config_t
@@ -160,9 +161,12 @@ module Sequencer = struct
 
   let create ~max_pool_size ~committment_period_sec ~da_contract_address ~db_dir
       =
-    { db =
-        L.Db.create ~directory_name:db_dir
-          ~depth:constraint_constants.ledger_depth ()
+    let db =
+      L.Db.create ~directory_name:db_dir
+        ~depth:constraint_constants.ledger_depth ()
+    in
+    { db
+    ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
     ; slot = 0
     ; config = { max_pool_size; committment_period_sec; db_dir }
     ; da_config = { da_contract_address }
@@ -217,9 +221,8 @@ module Sequencer = struct
     let prev_global_slot =
       Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    t.slot <- t.slot + 1 ;
     let curr_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int t.slot
+      Mina_numbers.Global_slot_since_genesis.of_int (t.slot + 1)
     in
 
     let l = L.of_database t.db in
@@ -237,6 +240,7 @@ module Sequencer = struct
         (L.apply_transaction_second_pass l)
     in
     L.Mask.Attached.commit l ;
+    t.slot <- Mina_numbers.Global_slot_since_genesis.to_int curr_global_slot ;
 
     let target_ledger_hash = L.merkle_root l in
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
@@ -288,9 +292,8 @@ module Sequencer = struct
     let prev_global_slot =
       Mina_numbers.Global_slot_since_genesis.of_int t.slot
     in
-    t.slot <- t.slot + 1 ;
     let curr_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int t.slot
+      Mina_numbers.Global_slot_since_genesis.of_int (t.slot + 1)
     in
     let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
       let l = L.of_database t.db in
@@ -325,6 +328,29 @@ module Sequencer = struct
       in
 
       L.Mask.Attached.commit l ;
+      t.slot <- Mina_numbers.Global_slot_since_genesis.to_int curr_global_slot ;
+
+      Zkapp_command.(
+        Call_forest.iteri (account_updates zkapp_command) ~f:(fun _ update ->
+            let account =
+              Option.value_exn
+              @@ get_account t
+                   (Account_update.public_key update)
+                   (Account_update.token_id update)
+            in
+            Archive.add_account_update t.archive update account
+              (Some
+                 Archive.Transaction_info.
+                   { status = Applied
+                   ; hash =
+                       Mina_transaction.Transaction_hash.hash_command
+                         (Zkapp_command zkapp_command)
+                   ; memo = Zkapp_command.memo zkapp_command
+                   ; authorization_kind =
+                       Account_update.Body.authorization_kind
+                       @@ Account_update.body update
+                   } ) )) ;
+
       (first_pass_ledger, second_pass_ledger, txn_applied)
     in
 

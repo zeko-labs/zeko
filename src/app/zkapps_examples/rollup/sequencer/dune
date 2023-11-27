@@ -41,6 +41,10 @@
   data_hash_lib
   sync_status
   daemon_rpcs
+  rocksdb
+  snarky.intf
+  snarky.backendless
+  key_value_database
   ;; opam libraries ;;
   re2
   stdio
@@ -61,6 +65,8 @@
   base
   base.caml
   yojson
-  ppx_deriving_yojson.runtime)
-  (preprocess (pps ppx_jane ppx_mina ppx_version ppx_deriving_yojson ppx_deriving.make))
-  (modules run zeko_sequencer gql da_layer))
+  ppx_deriving_yojson.runtime
+  sexplib
+  sexplib0)
+  (preprocess (pps ppx_jane ppx_mina ppx_version ppx_deriving_yojson ppx_deriving.make ppx_sexp_conv))
+  (modules run zeko_sequencer gql da_layer archive))
