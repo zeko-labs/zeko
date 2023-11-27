@@ -66,7 +66,7 @@ module Sequencer = struct
 
     let staged_commands = ref []
 
-    let last_committed_ledger_hash = ref None
+    let previous_committed_ledger_hash = ref None
 
     let queue_size () = Throttle.num_jobs_waiting_to_start q
 
@@ -143,7 +143,7 @@ module Sequencer = struct
                 Frozen_ledger_hash0.to_decimal_string
                   (Option.value
                      ~default:(Frozen_ledger_hash0.of_decimal_string "0")
-                     !last_committed_ledger_hash )
+                     !previous_committed_ledger_hash )
               in
 
               let%bind () =
@@ -155,7 +155,7 @@ module Sequencer = struct
               (* Add proving here *)
               staged_commands := [] ;
               last := None ;
-              last_committed_ledger_hash := Some ledger_hash ;
+              previous_committed_ledger_hash := Some ledger_hash ;
               return () )
   end
 
@@ -174,6 +174,11 @@ module Sequencer = struct
 
   let run_committer t =
     every (Time_ns.Span.of_sec t.config.committment_period_sec) (fun () ->
+        let commit_dir = Filename.concat t.config.db_dir "commit" in
+        ( try
+            FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
+            L.Db.make_checkpoint t.db ~directory_name:commit_dir
+          with err -> print_endline (Exn.to_string err) ) ;
         don't_wait_for @@ Snark_queue.commit t )
 
   let add_account t public_key token_id balance =
@@ -197,9 +202,10 @@ module Sequencer = struct
     | None ->
         Unsigned.UInt32.zero
 
-  let get_root t () = L.Db.merkle_root t.db
+  let get_root t = L.Db.merkle_root t.db
 
-  let apply_signed_command t (signed_command : Signed_command.t) =
+  let apply_signed_command t (signed_command : Signed_command.t)
+      ?(with_prove = true) =
     let () =
       match Snark_queue.queue_size () with
       | x when x >= t.config.max_pool_size ->
@@ -275,13 +281,15 @@ module Sequencer = struct
         ~pending_coinbase_stack_state:pc
     in
 
-    don't_wait_for
-    @@ Snark_queue.prove_signed_command ~sparse_ledger ~user_command_in_block
-         ~statement ;
+    if with_prove then
+      don't_wait_for
+      @@ Snark_queue.prove_signed_command ~sparse_ledger ~user_command_in_block
+           ~statement ;
 
     Result.return txn_applied
 
-  let apply_zkapp_command t (zkapp_command : Zkapp_command.t) =
+  let apply_zkapp_command t (zkapp_command : Zkapp_command.t)
+      ?(with_prove = true) =
     let () =
       match Snark_queue.queue_size () with
       | x when x >= t.config.max_pool_size ->
@@ -380,9 +388,55 @@ module Sequencer = struct
           , zkapp_command )
         ]
     in
-    don't_wait_for @@ Snark_queue.prove_zkapp_command ~witnesses ~zkapp_command ;
+
+    if with_prove then
+      don't_wait_for
+      @@ Snark_queue.prove_zkapp_command ~witnesses ~zkapp_command ;
 
     Result.return txn_applied
+
+  let bootstrap ~max_pool_size ~committment_period_sec ~da_contract_address
+      ~db_dir =
+    ( try
+        let commit_dir = Filename.concat db_dir "commit" in
+        let commit_files = FileUtil.ls commit_dir in
+        FileUtil.cp ~force:Force ~recurse:true commit_files db_dir
+      with err -> print_endline (Exn.to_string err) ) ;
+    let t =
+      create ~max_pool_size ~committment_period_sec ~da_contract_address ~db_dir
+    in
+
+    (* Only for testing *)
+    List.iter
+      [ "B62qrrytZmo8SraqYfJMZ8E3QcK77uAGZhsGJGKmVF5E598E8KX9j6a"
+      ; "B62qkAdonbeqcuVwQJtHbcqMbb4fbuFHJpqvNCfCBt194xSQ1o3i5rt"
+      ] ~f:(fun pk ->
+        add_account t
+          (Signature_lib.Public_key.Compressed.of_base58_check_exn pk)
+          Mina_base.Token_id.default
+          (Unsigned.UInt64.of_int64 1_000_000_000_000L) ) ;
+
+    let%bind commands =
+      Da_layer.get_batches t.da_config
+        ~from:(Frozen_ledger_hash.to_decimal_string @@ get_root t)
+      (* ~to:(fetch from L1) *)
+    in
+    List.iter commands ~f:(fun command ->
+        match command with
+        | User_command.Signed_command signed_command ->
+            ( apply_signed_command t signed_command ~with_prove:false
+              |> Or_error.ok_exn
+              : L.Transaction_applied.t )
+            |> ignore
+        | User_command.Zkapp_command zkapp_command ->
+            ( apply_zkapp_command t zkapp_command ~with_prove:false
+              |> Or_error.ok_exn
+              : L.Transaction_applied.t )
+            |> ignore ) ;
+
+    Snark_queue.previous_committed_ledger_hash := Some (get_root t) ;
+
+    return t
 end
 
 include Sequencer
