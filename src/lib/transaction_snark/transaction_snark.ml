@@ -2792,6 +2792,8 @@ module Make_str (A : Wire_types.Concrete) = struct
       let%bind user_command_fails =
         Boolean.(!receiver_overflow ||| user_command_fails)
       in
+      (* ZEKO NOTE: Do not accept failing user commands *)
+      let%bind () = Boolean.Assert.is_true @@ Boolean.not user_command_fails in
       let%bind fee_payer_is_source =
         Account_id.Checked.equal fee_payer source
       in
