@@ -1,13 +1,12 @@
 import fs from "fs";
 import { ethers } from "hardhat";
-import { Field } from "o1js";
 import { z } from "zod";
 import { fieldToHex } from "../utils/mina";
 
 const schema = z.object({
   address: z.string(),
-  id: z.string().transform((id) => fieldToHex(Field(id))),
-  previousId: z.string().transform((id) => fieldToHex(Field(id))),
+  id: z.string().transform(fieldToHex),
+  previousId: z.string().transform(fieldToHex),
   commands: z.array(
     z.object({
       commandType: z.number().int().gte(0).lte(1),
