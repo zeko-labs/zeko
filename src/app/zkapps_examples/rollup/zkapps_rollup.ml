@@ -350,8 +350,16 @@ module Wrapper_rules = struct
            istmt.connecting_ledger_left ;
       (* We don't check fee_excess because it's up to the sequencer what they do with it. *)
       (* The supply however must not increase. *)
-      run_checked
-        @@ CAS.(Checked.assert_equal (constant typ zero) istmt.supply_increase) ;
+      let is_neg =
+        Sgn.Checked.is_neg @@ run @@ CAS.Checked.sgn istmt.supply_increase
+      in
+      let is_zero =
+        run
+        @@ CA.Checked.equal (constant CA.typ CA.zero)
+        @@ run
+        @@ CAS.Checked.magnitude istmt.supply_increase
+      in
+      Boolean.Assert.is_true Boolean.(is_neg || is_zero) ;
       { previous_proof_statements =
           [ { public_input = istmt
             ; proof_must_verify = Boolean.true_
