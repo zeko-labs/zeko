@@ -45,6 +45,52 @@ module Da_layer = struct
         Out_channel.output_string stdin payload ;
         Out_channel.close stdin ;
         Unix.waitpid_exn (Pid.of_int pid)
+
+  let get_batches config ~from =
+    match config.da_contract_address with
+    | None ->
+        print_endline "No da contract address provided. Skipping bootstrapping" ;
+        return []
+    | Some da_contract_address ->
+        let payload =
+          Yojson.to_string
+            (`Assoc
+              [ ("address", `String da_contract_address)
+              ; ("from", `String from)
+              ] )
+        in
+        let stdout, stdin =
+          Core.Unix.open_process
+            "cd ../da-layer && npx hardhat run scripts/getBatches.ts  \
+             --network dev"
+        in
+        let pid = UnixLabels.process_pid (stdout, stdin) in
+        Out_channel.output_string stdin payload ;
+        Out_channel.close stdin ;
+        let result = In_channel.input_all stdout in
+        In_channel.close stdout ;
+        let%bind () = Unix.waitpid_exn (Pid.of_int pid) in
+        let commands =
+          Yojson.Safe.Util.(
+            to_list @@ Yojson.Safe.from_string result
+            |> List.map ~f:(fun json ->
+                   match member "commandType" json |> to_int with
+                   | 0 ->
+                       let data = member "data" json |> to_string in
+                       let signed_command =
+                         Signed_command.of_base64 data |> ok_exn
+                       in
+                       User_command.Signed_command signed_command
+                   | 1 ->
+                       let data = member "data" json |> to_string in
+                       let zkapp_command =
+                         Zkapp_command.of_base64 data |> ok_exn
+                       in
+                       User_command.Zkapp_command zkapp_command
+                   | _ ->
+                       failwith "Unknown command type" ))
+        in
+        return commands
 end
 
 include Da_layer
