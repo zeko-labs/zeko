@@ -14,7 +14,10 @@ let time label (d : 'a Deferred.t) =
 
 module Sequencer = struct
   type config_t =
-    { max_pool_size : int; commitment_period_sec : float; db_dir : string }
+    { max_pool_size : int
+    ; commitment_period_sec : float
+    ; db_dir : string option
+    }
 
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -163,6 +166,8 @@ module Sequencer = struct
               t.last <- None ;
               t.previous_committed_ledger_hash <- Some ledger_hash ;
               return () )
+
+    let wait_to_finish t = Throttle.capacity_available t.q
   end
 
   type t =
@@ -177,7 +182,7 @@ module Sequencer = struct
   let create ~max_pool_size ~commitment_period_sec ~da_contract_address ~db_dir
       =
     let db =
-      L.Db.create ~directory_name:db_dir
+      L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
     in
     let da_config : Da_layer.config_t = { da_contract_address } in
@@ -193,11 +198,17 @@ module Sequencer = struct
     if Float.(t.config.commitment_period_sec <= 0.) then ()
     else
       every (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
-          let commit_dir = Filename.concat t.config.db_dir "commit" in
-          ( try
-              FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
-              L.Db.make_checkpoint t.db ~directory_name:commit_dir
-            with err -> print_endline (Exn.to_string err) ) ;
+          let () =
+            match t.config.db_dir with
+            | None ->
+                ()
+            | Some db_dir -> (
+                let commit_dir = Filename.concat db_dir "commit" in
+                try
+                  FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
+                  L.Db.make_checkpoint t.db ~directory_name:commit_dir
+                with err -> print_endline (Exn.to_string err) )
+          in
           don't_wait_for @@ Snark_queue.commit t.snark_q )
 
   let add_account t public_key token_id balance =
@@ -264,6 +275,16 @@ module Sequencer = struct
            l (Command (Signed_command signed_command)) )
         (L.apply_transaction_second_pass l)
     in
+    let%bind.Result txn_applied =
+      match L.Transaction_applied.transaction_status txn_applied with
+      | Failed failure ->
+          Error
+            ( Error.of_string @@ Yojson.Safe.to_string
+            @@ Transaction_status.Failure.Collection.to_yojson failure )
+      | Applied ->
+          Ok txn_applied
+    in
+
     L.Mask.Attached.commit l ;
     t.slot <- Mina_numbers.Global_slot_since_genesis.to_int curr_global_slot ;
 
@@ -300,12 +321,16 @@ module Sequencer = struct
         ~pending_coinbase_stack_state:pc
     in
 
-    if with_prove then
-      don't_wait_for
-      @@ Snark_queue.prove_signed_command t.snark_q ~sparse_ledger
-           ~user_command_in_block ~statement ;
+    let dproof =
+      match with_prove with
+      | true ->
+          Snark_queue.prove_signed_command t.snark_q ~sparse_ledger
+            ~user_command_in_block ~statement
+      | false ->
+          Deferred.unit
+    in
 
-    Result.return txn_applied
+    Result.return (txn_applied, dproof)
 
   let apply_zkapp_command t (zkapp_command : Zkapp_command.t)
       ?(with_prove = true) =
@@ -408,11 +433,15 @@ module Sequencer = struct
         ]
     in
 
-    if with_prove then
-      don't_wait_for
-      @@ Snark_queue.prove_zkapp_command t.snark_q ~witnesses ~zkapp_command ;
+    let dproof =
+      match with_prove with
+      | true ->
+          Snark_queue.prove_zkapp_command t.snark_q ~witnesses ~zkapp_command
+      | false ->
+          Deferred.unit
+    in
 
-    Result.return txn_applied
+    Result.return (txn_applied, dproof)
 
   let bootstrap ~max_pool_size ~commitment_period_sec ~da_contract_address
       ~db_dir =
@@ -422,7 +451,8 @@ module Sequencer = struct
         FileUtil.cp ~force:Force ~recurse:true commit_files db_dir
       with err -> print_endline (Exn.to_string err) ) ;
     let t =
-      create ~max_pool_size ~commitment_period_sec ~da_contract_address ~db_dir
+      create ~max_pool_size ~commitment_period_sec ~da_contract_address
+        ~db_dir:(Some db_dir)
     in
 
     (* Only for testing *)
@@ -445,12 +475,12 @@ module Sequencer = struct
         | User_command.Signed_command signed_command ->
             ( apply_signed_command t signed_command ~with_prove:false
               |> Or_error.ok_exn
-              : L.Transaction_applied.t )
+              : L.Transaction_applied.t * unit Deferred.t )
             |> ignore
         | User_command.Zkapp_command zkapp_command ->
             ( apply_zkapp_command t zkapp_command ~with_prove:false
               |> Or_error.ok_exn
-              : L.Transaction_applied.t )
+              : L.Transaction_applied.t * unit Deferred.t )
             |> ignore ) ;
 
     t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
@@ -459,3 +489,162 @@ module Sequencer = struct
 end
 
 include Sequencer
+
+let%test_module "Sequencer tests" =
+  ( module struct
+    let keypair = Signature_lib.Keypair.create ()
+
+    let test_account =
+      Account.create
+        (Account_id.of_public_key keypair.public_key)
+        (Currency.Balance.of_mina_int_exn 1_000)
+
+    let create_sequencer () =
+      let sequencer =
+        Sequencer.create ~max_pool_size:10 ~commitment_period_sec:0.
+          ~da_contract_address:None ~db_dir:None
+      in
+      let () =
+        add_account sequencer test_account.public_key test_account.token_id
+          (Currency.Balance.to_uint64 test_account.balance)
+      in
+      sequencer
+
+    let%test_unit "get_account" =
+      let sequencer = create_sequencer () in
+      let account =
+        get_account sequencer
+          (Signature_lib.Public_key.compress keypair.public_key)
+          Token_id.default
+      in
+      assert (Option.is_some account) ;
+      let account = Option.value_exn account in
+      assert (Currency.Balance.equal account.balance test_account.balance)
+
+    let%test_unit "apply_signed_command(s)" =
+      let sequencer = create_sequencer () in
+      let source_ledger_hash = get_root sequencer in
+      let receiver = Signature_lib.Keypair.create () in
+      let amount = Currency.Amount.of_mina_int_exn 100 in
+      let fee = Currency.Fee.of_uint64 (Unsigned.UInt64.of_int64 1L) in
+
+      Thread_safe.block_on_async_exn (fun () ->
+          (* Apply first command *)
+          let signed_command =
+            Signed_command.forget_check
+            @@ Signed_command.sign keypair
+                 (Signed_command_payload.create ~fee
+                    ~fee_payer_pk:
+                      (Signature_lib.Public_key.compress keypair.public_key)
+                    ~nonce:Unsigned.UInt32.zero ~valid_until:None
+                    ~memo:Signed_command_memo.dummy
+                    ~body:
+                      (Payment
+                         { receiver_pk =
+                             Signature_lib.Public_key.compress
+                               receiver.public_key
+                         ; amount
+                         } ) )
+          in
+          let txn_applied =
+            apply_signed_command sequencer signed_command ~with_prove:true
+          in
+          assert (Or_error.is_ok txn_applied) ;
+          let txn_applied, dproof = Or_error.ok_exn txn_applied in
+
+          don't_wait_for dproof ;
+
+          let status = L.Transaction_applied.transaction_status txn_applied in
+          assert (Transaction_status.equal status Applied) ;
+
+          let supply_increase =
+            Or_error.ok_exn @@ L.Transaction_applied.supply_increase txn_applied
+          in
+          let expected_supply_increase =
+            Currency.Amount.(
+              Signed.negate
+              @@ Signed.of_unsigned
+                   (of_fee constraint_constants.account_creation_fee))
+          in
+          assert (
+            Currency.Amount.Signed.equal supply_increase
+              expected_supply_increase ) ;
+
+          let receiver_account =
+            get_account sequencer
+              (Signature_lib.Public_key.compress receiver.public_key)
+              Token_id.default
+          in
+          assert (Option.is_some receiver_account) ;
+          let receiver_account = Option.value_exn receiver_account in
+          let expected_balance =
+            Option.value_exn
+            @@ Currency.(
+                 Balance.(
+                   of_mina_int_exn 100
+                   - Amount.of_fee constraint_constants.account_creation_fee))
+          in
+          assert (
+            Currency.Balance.equal receiver_account.balance expected_balance ) ;
+
+          (* Apply second command *)
+          let payload =
+            { signed_command.payload with
+              common =
+                { signed_command.payload.common with
+                  nonce = Unsigned.UInt32.one
+                }
+            }
+          in
+          let signed_command =
+            Signed_command.forget_check @@ Signed_command.sign keypair payload
+          in
+
+          let txn_applied =
+            apply_signed_command sequencer signed_command ~with_prove:true
+          in
+          assert (Or_error.is_ok txn_applied) ;
+          let txn_applied, dproof = Or_error.ok_exn txn_applied in
+
+          don't_wait_for dproof ;
+
+          let status = L.Transaction_applied.transaction_status txn_applied in
+          assert (Transaction_status.equal status Applied) ;
+
+          let supply_increase =
+            Or_error.ok_exn @@ L.Transaction_applied.supply_increase txn_applied
+          in
+          let expected_supply_increase = Currency.Amount.Signed.zero in
+          assert (
+            Currency.Amount.Signed.equal supply_increase
+              expected_supply_increase ) ;
+
+          let receiver_account =
+            get_account sequencer
+              (Signature_lib.Public_key.compress receiver.public_key)
+              Token_id.default
+          in
+          assert (Option.is_some receiver_account) ;
+          let receiver_account = Option.value_exn receiver_account in
+          let expected_balance =
+            Option.value_exn
+            @@ Currency.(
+                 Balance.(
+                   of_mina_int_exn 200
+                   - Amount.of_fee constraint_constants.account_creation_fee))
+          in
+          assert (
+            Currency.Balance.equal receiver_account.balance expected_balance ) ;
+
+          let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+
+          let target_ledger_hash = get_root sequencer in
+
+          assert (Option.is_some sequencer.snark_q.last) ;
+          let snark = Option.value_exn sequencer.snark_q.last in
+          let stmt = Zkapps_rollup.Wrapped_Transaction_snark.statement snark in
+          assert (Frozen_ledger_hash.equal stmt.source_ledger source_ledger_hash) ;
+          assert (Frozen_ledger_hash.equal stmt.target_ledger target_ledger_hash) ;
+
+          return () )
+  end )

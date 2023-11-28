@@ -275,10 +275,10 @@ module Wrapper_rules = struct
     module Poly = struct
       type 'ledger_hash t =
         { source_ledger : 'ledger_hash; target_ledger : 'ledger_hash }
-      [@@deriving hlist]
+      [@@deriving hlist, yojson]
     end
 
-    type t = Frozen_ledger_hash.t Poly.t
+    type t = Frozen_ledger_hash.t Poly.t [@@deriving yojson]
 
     type var = Frozen_ledger_hash.var Poly.t
 
