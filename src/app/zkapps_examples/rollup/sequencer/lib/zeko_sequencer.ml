@@ -646,5 +646,10 @@ let%test_module "Sequencer tests" =
           assert (Frozen_ledger_hash.equal stmt.source_ledger source_ledger_hash) ;
           assert (Frozen_ledger_hash.equal stmt.target_ledger target_ledger_hash) ;
 
+          let%bind res =
+            M.Wrapper.Proof.verify [ (snark.statement, snark.proof) ]
+          in
+          assert (Or_error.is_ok res) ;
+
           return () )
   end )
