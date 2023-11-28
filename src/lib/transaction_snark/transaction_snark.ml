@@ -1789,13 +1789,11 @@ module Make_str (A : Wire_types.Concrete) = struct
             (eff : (r, Env.t) Mina_transaction_logic.Zkapp_command_logic.Eff.t)
             : r =
           match eff with
-          | Check_valid_while_precondition (valid_while, global_state) ->
-              Zkapp_precondition.Valid_while.Checked.check valid_while
-                global_state.block_global_slot
-          | Check_protocol_state_precondition
-              (protocol_state_predicate, global_state) ->
-              Zkapp_precondition.Protocol_state.Checked.check
-                protocol_state_predicate global_state.protocol_state
+          (* ZEKO NOTE: We don't support time/network preconditions (issue #63) *)
+          | Check_valid_while_precondition _ ->
+              Boolean.false_
+          | Check_protocol_state_precondition _ ->
+              Boolean.false_
           | Check_account_precondition
               ({ account_update; _ }, account, new_account, local_state) ->
               let local_state = ref local_state in
