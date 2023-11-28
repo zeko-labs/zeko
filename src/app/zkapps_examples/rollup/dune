@@ -12,6 +12,9 @@
   cache_dir
   crypto_params
   currency
+  consensus
+  genesis_ledger
+  staged_ledger_diff
   data_hash_lib
   fields_derivers
   fields_derivers_zkapps
