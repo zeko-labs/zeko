@@ -1,0 +1,64 @@
+(library
+ (name sequencer_lib)
+ (libraries
+  zkapps_rollup
+  ;; mina ;;
+  mina_base
+  mina_base.import
+  mina_ledger
+  mina_transaction
+  mina_transaction_logic
+  mina_state
+  mina_wire_types
+  mina_numbers
+  mina_graphql
+  mina_signature_kind
+  graphql_wrapper
+  transaction_snark
+  transaction_protocol_state
+  genesis_constants
+  genesis_ledger
+  consensus
+  staged_ledger_diff
+  with_hash
+  currency
+  signature_lib
+  sgn
+  fields_derivers.graphql
+  fields_derivers_zkapps
+  snark_params
+  unsigned_extended
+  pickles
+  pickles.backend
+  pickles_types
+  kimchi_backend.pasta
+  kimchi_backend.pasta.basic
+  transition_frontier
+  transition_frontier_base
+  base58_check
+  graphql_lib
+  data_hash_lib
+  sync_status
+  daemon_rpcs
+  rocksdb
+  snarky.intf
+  snarky.backendless
+  key_value_database
+  ;; opam libraries ;;
+  re2
+  stdio
+  graphql
+  graphql-async
+  graphql_parser
+  integers
+  core
+  core_kernel
+  async_kernel
+  async
+  async_unix
+  base.caml
+  yojson
+  sexplib
+  sexplib0
+  fileutils)
+  (preprocess (pps ppx_jane ppx_mina)))
