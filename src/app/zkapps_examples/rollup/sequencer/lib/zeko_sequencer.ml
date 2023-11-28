@@ -16,14 +16,6 @@ module Sequencer = struct
   type config_t =
     { max_pool_size : int; commitment_period_sec : float; db_dir : string }
 
-  type t =
-    { db : L.Db.t
-    ; archive : Archive.t
-    ; mutable slot : int
-    ; config : config_t
-    ; da_config : Da_layer.config_t
-    }
-
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
   let genesis_constants = Genesis_constants.compiled
@@ -61,31 +53,44 @@ module Sequencer = struct
          ~prover:(Signature_lib.Public_key.compress keypair.public_key)
 
   module Snark_queue = struct
-    let q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
+    type t =
+      { q : unit Throttle.t
+      ; da_config : Da_layer.config_t
+      ; mutable last : Zkapps_rollup.Wrapped_Transaction_snark.t option
+      ; mutable staged_commands :
+          ( Signed_command.With_valid_signature.t
+          , Zkapp_command.t )
+          User_command.t_
+          list
+      ; mutable previous_committed_ledger_hash : Frozen_ledger_hash0.t option
+      }
 
-    let last = ref None
+    let create ~da_config =
+      { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
+      ; da_config
+      ; last = None
+      ; staged_commands = []
+      ; previous_committed_ledger_hash = None
+      }
 
-    let staged_commands = ref []
+    let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
-    let previous_committed_ledger_hash = ref None
-
-    let queue_size () = Throttle.num_jobs_waiting_to_start q
-
-    let wrap_and_merge txn_snark command =
+    let wrap_and_merge t txn_snark command =
       let%bind wrapped = time "Wrapper.wrap" (M.Wrapper.wrap txn_snark) in
       let%bind final_snark =
-        match !last with
+        match t.last with
         | Some last' ->
             time "Wrapper.merge" (M.Wrapper.merge last' wrapped)
         | None ->
             return wrapped
       in
-      last := Some final_snark ;
-      staged_commands := !staged_commands @ [ command ] ;
+      t.last <- Some final_snark ;
+      t.staged_commands <- t.staged_commands @ [ command ] ;
       return ()
 
-    let prove_signed_command ~sparse_ledger ~user_command_in_block ~statement =
-      Throttle.enqueue q (fun () ->
+    let prove_signed_command t ~sparse_ledger ~user_command_in_block ~statement
+        =
+      Throttle.enqueue t.q (fun () ->
           let handler =
             unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
           in
@@ -95,11 +100,11 @@ module Sequencer = struct
                  ~init_stack:Mina_base.Pending_coinbase.Stack.empty ~statement
                  user_command_in_block handler )
           in
-          wrap_and_merge txn_snark
+          wrap_and_merge t txn_snark
             (User_command.Signed_command user_command_in_block.transaction) )
 
-    let prove_zkapp_command ~witnesses ~zkapp_command =
-      Throttle.enqueue q (fun () ->
+    let prove_zkapp_command t ~witnesses ~zkapp_command =
+      Throttle.enqueue t.q (fun () ->
           let%bind txn_snark =
             match witnesses with
             | [] ->
@@ -123,11 +128,11 @@ module Sequencer = struct
                     in
                     return (Or_error.ok_exn merged) )
           in
-          wrap_and_merge txn_snark (User_command.Zkapp_command zkapp_command) )
+          wrap_and_merge t txn_snark (User_command.Zkapp_command zkapp_command) )
 
     let commit t =
-      Throttle.enqueue q (fun () ->
-          match List.is_empty !staged_commands with
+      Throttle.enqueue t.q (fun () ->
+          match List.is_empty t.staged_commands with
           | true ->
               print_endline "Nothing to commit" ;
               return ()
@@ -135,7 +140,7 @@ module Sequencer = struct
               print_endline "Committing..." ;
 
               let ledger_hash =
-                (Option.value_exn !last).statement.target_ledger
+                (Option.value_exn t.last).statement.target_ledger
               in
               let batch_id =
                 Frozen_ledger_hash0.to_decimal_string ledger_hash
@@ -144,21 +149,30 @@ module Sequencer = struct
                 Frozen_ledger_hash0.to_decimal_string
                   (Option.value
                      ~default:(Frozen_ledger_hash0.of_decimal_string "0")
-                     !previous_committed_ledger_hash )
+                     t.previous_committed_ledger_hash )
               in
 
               let%bind () =
-                Da_layer.post_batch t.da_config ~commands:!staged_commands
+                Da_layer.post_batch t.da_config ~commands:t.staged_commands
                   ~batch_id ~previous_batch_id
               in
               print_endline ("Posted batch " ^ batch_id) ;
 
               (* Add proving here *)
-              staged_commands := [] ;
-              last := None ;
-              previous_committed_ledger_hash := Some ledger_hash ;
+              t.staged_commands <- [] ;
+              t.last <- None ;
+              t.previous_committed_ledger_hash <- Some ledger_hash ;
               return () )
   end
+
+  type t =
+    { db : L.Db.t
+    ; archive : Archive.t
+    ; mutable slot : int
+    ; config : config_t
+    ; da_config : Da_layer.config_t
+    ; snark_q : Snark_queue.t
+    }
 
   let create ~max_pool_size ~commitment_period_sec ~da_contract_address ~db_dir
       =
@@ -166,21 +180,25 @@ module Sequencer = struct
       L.Db.create ~directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
     in
+    let da_config : Da_layer.config_t = { da_contract_address } in
     { db
     ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
     ; slot = 0
     ; config = { max_pool_size; commitment_period_sec; db_dir }
-    ; da_config = { da_contract_address }
+    ; da_config
+    ; snark_q = Snark_queue.create ~da_config
     }
 
   let run_committer t =
-    every (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
-        let commit_dir = Filename.concat t.config.db_dir "commit" in
-        ( try
-            FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
-            L.Db.make_checkpoint t.db ~directory_name:commit_dir
-          with err -> print_endline (Exn.to_string err) ) ;
-        don't_wait_for @@ Snark_queue.commit t )
+    if Float.(t.config.commitment_period_sec <= 0.) then ()
+    else
+      every (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
+          let commit_dir = Filename.concat t.config.db_dir "commit" in
+          ( try
+              FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
+              L.Db.make_checkpoint t.db ~directory_name:commit_dir
+            with err -> print_endline (Exn.to_string err) ) ;
+          don't_wait_for @@ Snark_queue.commit t.snark_q )
 
   let add_account t public_key token_id balance =
     let account_id = Account_id.create public_key token_id in
@@ -208,7 +226,7 @@ module Sequencer = struct
   let apply_signed_command t (signed_command : Signed_command.t)
       ?(with_prove = true) =
     let () =
-      match Snark_queue.queue_size () with
+      match Snark_queue.queue_size t.snark_q with
       | x when x >= t.config.max_pool_size ->
           failwith "Maximum pool size reached, try later"
       | _ ->
@@ -284,15 +302,15 @@ module Sequencer = struct
 
     if with_prove then
       don't_wait_for
-      @@ Snark_queue.prove_signed_command ~sparse_ledger ~user_command_in_block
-           ~statement ;
+      @@ Snark_queue.prove_signed_command t.snark_q ~sparse_ledger
+           ~user_command_in_block ~statement ;
 
     Result.return txn_applied
 
   let apply_zkapp_command t (zkapp_command : Zkapp_command.t)
       ?(with_prove = true) =
     let () =
-      match Snark_queue.queue_size () with
+      match Snark_queue.queue_size t.snark_q with
       | x when x >= t.config.max_pool_size ->
           failwith "Maximum pool size reached, try later"
       | _ ->
@@ -392,7 +410,7 @@ module Sequencer = struct
 
     if with_prove then
       don't_wait_for
-      @@ Snark_queue.prove_zkapp_command ~witnesses ~zkapp_command ;
+      @@ Snark_queue.prove_zkapp_command t.snark_q ~witnesses ~zkapp_command ;
 
     Result.return txn_applied
 
@@ -435,11 +453,9 @@ module Sequencer = struct
               : L.Transaction_applied.t )
             |> ignore ) ;
 
-    Snark_queue.previous_committed_ledger_hash := Some (get_root t) ;
+    t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
 
     return t
 end
 
 include Sequencer
-
-let%test "kokot" = false
