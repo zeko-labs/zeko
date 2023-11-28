@@ -1491,7 +1491,8 @@ module Mutations = struct
         with
         | Error err ->
             return (Error (Error.to_string_mach err))
-        | Ok _ ->
+        | Ok (_, dproof) ->
+            don't_wait_for dproof ;
             let cmd =
               { Types.User_command.With_status.data =
                   Signed_command.forget_check command
@@ -1519,7 +1520,8 @@ module Mutations = struct
         with
         | Error err ->
             return (Error (Error.to_string_mach err))
-        | Ok _ ->
+        | Ok (_, dproof) ->
+            don't_wait_for dproof ;
             let cmd =
               { Types.Zkapp_command.With_status.data = zkapp_command
               ; status = Applied
