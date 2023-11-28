@@ -1,3 +1,4 @@
+open Base
 open Core_kernel
 open Async
 open Async_kernel
@@ -13,7 +14,7 @@ let time label (d : 'a Deferred.t) =
 
 module Sequencer = struct
   type config_t =
-    { max_pool_size : int; committment_period_sec : float; db_dir : string }
+    { max_pool_size : int; commitment_period_sec : float; db_dir : string }
 
   type t =
     { db : L.Db.t
@@ -159,7 +160,7 @@ module Sequencer = struct
               return () )
   end
 
-  let create ~max_pool_size ~committment_period_sec ~da_contract_address ~db_dir
+  let create ~max_pool_size ~commitment_period_sec ~da_contract_address ~db_dir
       =
     let db =
       L.Db.create ~directory_name:db_dir
@@ -168,12 +169,12 @@ module Sequencer = struct
     { db
     ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
     ; slot = 0
-    ; config = { max_pool_size; committment_period_sec; db_dir }
+    ; config = { max_pool_size; commitment_period_sec; db_dir }
     ; da_config = { da_contract_address }
     }
 
   let run_committer t =
-    every (Time_ns.Span.of_sec t.config.committment_period_sec) (fun () ->
+    every (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
         let commit_dir = Filename.concat t.config.db_dir "commit" in
         ( try
             FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
@@ -395,7 +396,7 @@ module Sequencer = struct
 
     Result.return txn_applied
 
-  let bootstrap ~max_pool_size ~committment_period_sec ~da_contract_address
+  let bootstrap ~max_pool_size ~commitment_period_sec ~da_contract_address
       ~db_dir =
     ( try
         let commit_dir = Filename.concat db_dir "commit" in
@@ -403,7 +404,7 @@ module Sequencer = struct
         FileUtil.cp ~force:Force ~recurse:true commit_files db_dir
       with err -> print_endline (Exn.to_string err) ) ;
     let t =
-      create ~max_pool_size ~committment_period_sec ~da_contract_address ~db_dir
+      create ~max_pool_size ~commitment_period_sec ~da_contract_address ~db_dir
     in
 
     (* Only for testing *)
@@ -440,3 +441,5 @@ module Sequencer = struct
 end
 
 include Sequencer
+
+let%test "kokot" = false
