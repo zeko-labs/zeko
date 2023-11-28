@@ -2214,7 +2214,11 @@ module Make_str (A : Wire_types.Concrete) = struct
       let is_fee_transfer =
         Transaction_union.Tag.Unpacked.is_fee_transfer tag
       in
+      (* ZEKO NOTE: Disallow fee transfers *)
+      let%bind () = Boolean.Assert.is_true (Boolean.not is_fee_transfer) in
       let is_coinbase = Transaction_union.Tag.Unpacked.is_coinbase tag in
+      (* ZEKO NOTE: Disallow coinbase *)
+      let%bind () = Boolean.Assert.is_true (Boolean.not is_coinbase) in
       let fee_token = payload.common.fee_token in
       let%bind fee_token_default =
         make_checked (fun () ->
