@@ -67,6 +67,7 @@
   yojson
   ppx_deriving_yojson.runtime
   sexplib
-  sexplib0)
+  sexplib0
+  fileutils)
   (preprocess (pps ppx_jane ppx_mina ppx_version ppx_deriving_yojson ppx_deriving.make ppx_sexp_conv))
   (modules run zeko_sequencer gql da_layer archive))

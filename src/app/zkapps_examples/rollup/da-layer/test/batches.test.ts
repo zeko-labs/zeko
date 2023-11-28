@@ -40,8 +40,10 @@ describe("Batches DataAvailability", () => {
       proposalReceipt.events?.find(({ event }) => event === "BatchPosted")?.args?.id
     ).to.equal(batchId);
 
-    const [fetchedPreviousBatchId, fetchedUserCommands] =
+    const [genesis, fetchedPreviousBatchId, fetchedUserCommands] =
       await dataAvailabilityContract.getBatchData(batchId);
+
+    expect(genesis).to.be.true;
 
     expect(fetchedPreviousBatchId).to.equal(previousId);
 
@@ -51,6 +53,8 @@ describe("Batches DataAvailability", () => {
         commandType,
       }))
     ).to.deep.equal(userCommands);
+
+    expect(await dataAvailabilityContract.lastBatchId()).to.equal(batchId);
 
     const expectedSignatures: MinaSchnorrSignatureStruct[] = [];
 

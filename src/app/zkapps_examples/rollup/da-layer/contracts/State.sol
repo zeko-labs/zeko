@@ -78,4 +78,6 @@ abstract contract State {
     mapping(bytes32 => RollupBatch) internal batches;
 
     address public sequencer;
+
+    bytes32 public lastBatchId;
 }

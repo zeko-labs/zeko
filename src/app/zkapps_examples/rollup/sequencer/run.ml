@@ -6,18 +6,10 @@ module Graphql_cohttp_async =
 
 let run port max_pool_size commitment_period da_contract_address db_dir () =
   let sequencer =
-    Zeko_sequencer.create ~max_pool_size
-      ~committment_period_sec:commitment_period ~da_contract_address ~db_dir
+    Thread_safe.block_on_async_exn (fun () ->
+        Zeko_sequencer.bootstrap ~max_pool_size
+          ~committment_period_sec:commitment_period ~da_contract_address ~db_dir )
   in
-
-  List.iter
-    [ "B62qrrytZmo8SraqYfJMZ8E3QcK77uAGZhsGJGKmVF5E598E8KX9j6a"
-    ; "B62qkAdonbeqcuVwQJtHbcqMbb4fbuFHJpqvNCfCBt194xSQ1o3i5rt"
-    ] ~f:(fun pk ->
-      Zeko_sequencer.add_account sequencer
-        (Signature_lib.Public_key.Compressed.of_base58_check_exn pk)
-        Mina_base.Token_id.default
-        (Unsigned.UInt64.of_int64 1_000_000_000_000L) ) ;
 
   Zeko_sequencer.run_committer sequencer ;
 
