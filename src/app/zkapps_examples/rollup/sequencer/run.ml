@@ -1,5 +1,6 @@
 open Core
 open Async
+open Sequencer_lib
 module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
