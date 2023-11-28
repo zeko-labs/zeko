@@ -299,20 +299,16 @@ module Wrapper_rules = struct
       }
   end
 
-  type t =
-    { statement : S.t; proof : Pickles.Proof.Proofs_verified_2.Stable.V2.t }
-  [@@deriving fields]
+  type t = { statement : S.t; proof : Proof.t } [@@deriving fields]
 
   module Wrap = struct
     include struct
       open Snarky_backendless.Request
 
-      type _ t +=
-        | Statement_to_wrap : T.t t
-        | Proof_to_wrap : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t t
+      type _ t += Statement_to_wrap : T.t t | Proof_to_wrap : Proof.t t
     end
 
-    let handler (stmt : T.t) (prf : _ Pickles.Proof.t)
+    let handler (stmt : T.t) (prf : Proof.t)
         (Snarky_backendless.Request.With { request; respond }) =
       match request with
       | Statement_to_wrap ->
@@ -322,32 +318,70 @@ module Wrapper_rules = struct
       | _ ->
           respond Unhandled
 
+    let dummy_pc_init = Pending_coinbase.Stack.empty
+
+    let genesis_constants = Genesis_constants.compiled
+
+    let consensus_constants =
+      Consensus.Constants.create ~constraint_constants
+        ~protocol_constants:genesis_constants.protocol
+
+    let dummy_state_body =
+      let compile_time_genesis =
+        Mina_state.Genesis_protocol_state.t
+          ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+          ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+          ~constraint_constants ~consensus_constants
+          ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+      in
+      Mina_state.Protocol_state.body compile_time_genesis.data
+
+    let dummy_pc =
+      Pending_coinbase.Stack.push_state
+        (Mina_state.Protocol_state.Body.hash dummy_state_body)
+        Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
+
     let%snarkydef_ main { public_input = (stmt : S.Checked.t) } =
       let istmt = exists T.typ ~request:(fun () -> Statement_to_wrap) in
       let prf =
         exists (Typ.Internal.ref ()) ~request:(fun () -> Proof_to_wrap)
       in
+
+      (* Check that istmt and stmt match *)
       run
       @@ Frozen_ledger_hash.assert_equal stmt.source_ledger
            istmt.source.first_pass_ledger ;
       run
       @@ Frozen_ledger_hash.assert_equal stmt.target_ledger
            istmt.target.second_pass_ledger ;
-      (*  Check that transactions have been completely applied *)
-      let empty_state = constant Local_state.typ @@ Local_state.empty () in
+
+      (* Check that pending_coinbase_stack is correctly set *)
+      let dummy_pc = constant Pending_coinbase.Stack.typ dummy_pc in
+      Boolean.Assert.is_true @@ run
+      @@ Pending_coinbase.Stack.equal_var dummy_pc
+           istmt.source.pending_coinbase_stack ;
+      Boolean.Assert.is_true @@ run
+      @@ Pending_coinbase.Stack.equal_var dummy_pc
+           istmt.target.pending_coinbase_stack ;
+
+      (* Check that transactions have been completely applied *)
+      let empty_state = Local_state.(constant typ @@ empty ()) in
       Local_state.Checked.assert_equal empty_state istmt.source.local_state ;
       Local_state.Checked.assert_equal empty_state istmt.target.local_state ;
+
       (* Check that first and second passes are connected *)
       run
       @@ Frozen_ledger_hash.assert_equal istmt.target.first_pass_ledger
            istmt.source.second_pass_ledger ;
-      run
+
       (* Check that it's a complete transaction (a "block") *)
+      run
       @@ Frozen_ledger_hash.assert_equal istmt.target.first_pass_ledger
            istmt.connecting_ledger_right ;
       run
       @@ Frozen_ledger_hash.assert_equal istmt.source.second_pass_ledger
            istmt.connecting_ledger_left ;
+
       (* We don't check fee_excess because it's up to the sequencer what they do with it. *)
       (* The supply however must not increase. *)
       let is_neg =
@@ -360,7 +394,9 @@ module Wrapper_rules = struct
         @@ CAS.Checked.magnitude istmt.supply_increase
       in
       Boolean.Assert.is_true Boolean.(is_neg || is_zero) ;
+
       { previous_proof_statements =
+          (* Proof for istmt using normal txn snark *)
           [ { public_input = istmt
             ; proof_must_verify = Boolean.true_
             ; proof = prf
@@ -384,10 +420,7 @@ module Wrapper_rules = struct
 
       type _ t +=
         | Statements_to_merge : (S.t * S.t) t
-        | Proofs_to_merge :
-            ( (Nat.N2.n, Nat.N2.n) Pickles.Proof.t
-            * (Nat.N2.n, Nat.N2.n) Pickles.Proof.t )
-            t
+        | Proofs_to_merge : (Proof.t * Proof.t) t
     end
 
     let handler s1 s2 p1 p2
@@ -778,7 +811,7 @@ module Rules = struct
 
       type _ t +=
         | Stmt : S.t t
-        | Prf : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t t
+        | Prf : Proof.t t
         | Action_prf : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t t
         | Public_key : PC.t t
         | Vk_hash : field t
@@ -788,10 +821,9 @@ module Rules = struct
       (* has length processing_transfers_length *)
     end
 
-    let handler (stmt : S.t) (prf : _ Pickles.Proof.t)
-        (action_prf : _ Pickles.Proof.t) (pk : PC.t) (vk_hash : field)
-        (action_state : field) (processed_transfers : field)
-        (processing_transfers : TR.t list)
+    let handler (stmt : S.t) (prf : Proof.t) (action_prf : _ Pickles.Proof.t)
+        (pk : PC.t) (vk_hash : field) (action_state : field)
+        (processed_transfers : field) (processing_transfers : TR.t list)
         (Snarky_backendless.Request.With { request; respond }) =
       match request with
       | Stmt ->
