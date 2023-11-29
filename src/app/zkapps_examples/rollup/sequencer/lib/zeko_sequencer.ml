@@ -490,166 +490,99 @@ end
 
 include Sequencer
 
-let%test_module "Sequencer tests" =
-  ( module struct
-    let keypair = Signature_lib.Keypair.create ()
-
-    let test_account =
-      Account.create
-        (Account_id.of_public_key keypair.public_key)
-        (Currency.Balance.of_mina_int_exn 1_000)
-
-    let create_sequencer () =
+let%test_unit "apply commands" =
+  let open Mina_transaction_logic.For_tests in
+  Quickcheck.test ~trials:1 (Test_spec.mk_gen ~num_transactions:5 ())
+    ~f:(fun { init_ledger; specs } ->
       let sequencer =
         Sequencer.create ~max_pool_size:10 ~commitment_period_sec:0.
           ~da_contract_address:None ~db_dir:None
       in
-      let () =
-        add_account sequencer test_account.public_key test_account.token_id
-          (Currency.Balance.to_uint64 test_account.balance)
-      in
-      sequencer
+      L.with_ledger ~depth:constraint_constants.ledger_depth
+        ~f:(fun expected_ledger ->
+          (* Init ledgers *)
+          Array.iter init_ledger ~f:(fun (keypair, balance) ->
+              let pk = Signature_lib.Public_key.compress keypair.public_key in
+              let account_id = Account_id.create pk Token_id.default in
+              let balance = Unsigned.UInt64.of_int64 balance in
+              let account =
+                Account.create account_id (Currency.Balance.of_uint64 balance)
+              in
+              L.create_new_account_exn expected_ledger account_id account ;
+              add_account sequencer pk Token_id.default balance ) ;
 
-    let%test_unit "get_account" =
-      let sequencer = create_sequencer () in
-      let account =
-        get_account sequencer
-          (Signature_lib.Public_key.compress keypair.public_key)
-          Token_id.default
-      in
-      assert (Option.is_some account) ;
-      let account = Option.value_exn account in
-      assert (Currency.Balance.equal account.balance test_account.balance)
+          let source_ledger_hash = get_root sequencer in
 
-    let%test_unit "apply_signed_command(s)" =
-      let sequencer = create_sequencer () in
-      let source_ledger_hash = get_root sequencer in
-      let receiver = Signature_lib.Keypair.create () in
-      let amount = Currency.Amount.of_mina_int_exn 100 in
-      let fee = Currency.Fee.of_uint64 (Unsigned.UInt64.of_int64 1L) in
+          [%test_eq: Frozen_ledger_hash.t] source_ledger_hash
+            (L.merkle_root expected_ledger) ;
 
-      Thread_safe.block_on_async_exn (fun () ->
-          (* Apply first command *)
-          let signed_command =
-            Signed_command.forget_check
-            @@ Signed_command.sign keypair
-                 (Signed_command_payload.create ~fee
-                    ~fee_payer_pk:
-                      (Signature_lib.Public_key.compress keypair.public_key)
-                    ~nonce:Unsigned.UInt32.zero ~valid_until:None
-                    ~memo:Signed_command_memo.dummy
-                    ~body:
-                      (Payment
-                         { receiver_pk =
-                             Signature_lib.Public_key.compress
-                               receiver.public_key
-                         ; amount
-                         } ) )
-          in
-          let txn_applied =
-            apply_signed_command sequencer signed_command ~with_prove:true
-          in
-          assert (Or_error.is_ok txn_applied) ;
-          let txn_applied, dproof = Or_error.ok_exn txn_applied in
+          Thread_safe.block_on_async_exn (fun () ->
+              List.iter specs ~f:(fun spec ->
+                  let txn_applied =
+                    match Quickcheck.random_value Bool.quickcheck_generator with
+                    | true ->
+                        let command = account_update_send spec in
+                        ( match
+                            L.apply_zkapp_command_unchecked expected_ledger
+                              command ~constraint_constants
+                              ~global_slot:
+                                (Mina_numbers.Global_slot_since_genesis.of_int
+                                   sequencer.slot )
+                              ~state_view:
+                                (Mina_state.Protocol_state.Body.view state_body)
+                          with
+                        | Ok _ ->
+                            ()
+                        | _ ->
+                            () ) ;
 
-          don't_wait_for dproof ;
+                        apply_zkapp_command sequencer command ~with_prove:true
+                    | false ->
+                        let command = command_send spec in
+                        ( match
+                            L.apply_user_command_unchecked expected_ledger
+                              command ~constraint_constants
+                              ~txn_global_slot:
+                                (Mina_numbers.Global_slot_since_genesis.of_int
+                                   sequencer.slot )
+                          with
+                        | Ok _ ->
+                            ()
+                        | _ ->
+                            () ) ;
 
-          let status = L.Transaction_applied.transaction_status txn_applied in
-          assert (Transaction_status.equal status Applied) ;
+                        apply_signed_command sequencer command ~with_prove:true
+                  in
+                  [%test_eq: Bool.t] true (Or_error.is_ok txn_applied) ;
+                  let txn_applied, dproof = Or_error.ok_exn txn_applied in
 
-          let supply_increase =
-            Or_error.ok_exn @@ L.Transaction_applied.supply_increase txn_applied
-          in
-          let expected_supply_increase =
-            Currency.Amount.(
-              Signed.negate
-              @@ Signed.of_unsigned
-                   (of_fee constraint_constants.account_creation_fee))
-          in
-          assert (
-            Currency.Amount.Signed.equal supply_increase
-              expected_supply_increase ) ;
+                  don't_wait_for dproof ;
 
-          let receiver_account =
-            get_account sequencer
-              (Signature_lib.Public_key.compress receiver.public_key)
-              Token_id.default
-          in
-          assert (Option.is_some receiver_account) ;
-          let receiver_account = Option.value_exn receiver_account in
-          let expected_balance =
-            Option.value_exn
-            @@ Currency.(
-                 Balance.(
-                   of_mina_int_exn 100
-                   - Amount.of_fee constraint_constants.account_creation_fee))
-          in
-          assert (
-            Currency.Balance.equal receiver_account.balance expected_balance ) ;
+                  let status =
+                    L.Transaction_applied.transaction_status txn_applied
+                  in
+                  [%test_eq: Transaction_status.t] status Applied ) ;
 
-          (* Apply second command *)
-          let payload =
-            { signed_command.payload with
-              common =
-                { signed_command.payload.common with
-                  nonce = Unsigned.UInt32.one
-                }
-            }
-          in
-          let signed_command =
-            Signed_command.forget_check @@ Signed_command.sign keypair payload
-          in
+              let target_ledger_hash = get_root sequencer in
 
-          let txn_applied =
-            apply_signed_command sequencer signed_command ~with_prove:true
-          in
-          assert (Or_error.is_ok txn_applied) ;
-          let txn_applied, dproof = Or_error.ok_exn txn_applied in
+              [%test_eq: Frozen_ledger_hash.t] target_ledger_hash
+                (L.merkle_root expected_ledger) ;
 
-          don't_wait_for dproof ;
+              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
 
-          let status = L.Transaction_applied.transaction_status txn_applied in
-          assert (Transaction_status.equal status Applied) ;
+              [%test_eq: Bool.t] true (Option.is_some sequencer.snark_q.last) ;
+              let snark = Option.value_exn sequencer.snark_q.last in
+              let stmt =
+                Zkapps_rollup.Wrapped_Transaction_snark.statement snark
+              in
+              [%test_eq: Frozen_ledger_hash.t] stmt.source_ledger
+                source_ledger_hash ;
+              [%test_eq: Frozen_ledger_hash.t] stmt.target_ledger
+                target_ledger_hash ;
 
-          let supply_increase =
-            Or_error.ok_exn @@ L.Transaction_applied.supply_increase txn_applied
-          in
-          let expected_supply_increase = Currency.Amount.Signed.zero in
-          assert (
-            Currency.Amount.Signed.equal supply_increase
-              expected_supply_increase ) ;
+              let%bind res =
+                M.Wrapper.Proof.verify [ (snark.statement, snark.proof) ]
+              in
+              [%test_eq: Bool.t] true (Or_error.is_ok res) ;
 
-          let receiver_account =
-            get_account sequencer
-              (Signature_lib.Public_key.compress receiver.public_key)
-              Token_id.default
-          in
-          assert (Option.is_some receiver_account) ;
-          let receiver_account = Option.value_exn receiver_account in
-          let expected_balance =
-            Option.value_exn
-            @@ Currency.(
-                 Balance.(
-                   of_mina_int_exn 200
-                   - Amount.of_fee constraint_constants.account_creation_fee))
-          in
-          assert (
-            Currency.Balance.equal receiver_account.balance expected_balance ) ;
-
-          let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-
-          let target_ledger_hash = get_root sequencer in
-
-          assert (Option.is_some sequencer.snark_q.last) ;
-          let snark = Option.value_exn sequencer.snark_q.last in
-          let stmt = Zkapps_rollup.Wrapped_Transaction_snark.statement snark in
-          assert (Frozen_ledger_hash.equal stmt.source_ledger source_ledger_hash) ;
-          assert (Frozen_ledger_hash.equal stmt.target_ledger target_ledger_hash) ;
-
-          let%bind res =
-            M.Wrapper.Proof.verify [ (snark.statement, snark.proof) ]
-          in
-          assert (Or_error.is_ok res) ;
-
-          return () )
-  end )
+              return () ) ) )
