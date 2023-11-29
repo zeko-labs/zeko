@@ -74,6 +74,8 @@ open struct
 
   let ignore = Or_ignore.Checked.make_unsafe Boolean.false_ Field.zero
 
+  let run = run_checked
+
   module Public_key = Signature_lib.Public_key
   module PC = Public_key.Compressed
   module CAS = Currency.Amount.Signed
@@ -297,16 +299,16 @@ module Wrapper_rules = struct
       }
   end
 
+  type t = { statement : S.t; proof : Proof.t } [@@deriving fields]
+
   module Wrap = struct
     include struct
       open Snarky_backendless.Request
 
-      type _ t +=
-        | Statement_to_wrap : T.t t
-        | Proof_to_wrap : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t t
+      type _ t += Statement_to_wrap : T.t t | Proof_to_wrap : Proof.t t
     end
 
-    let handler (stmt : T.t) (prf : _ Pickles.Proof.t)
+    let handler (stmt : T.t) (prf : Proof.t)
         (Snarky_backendless.Request.With { request; respond }) =
       match request with
       | Statement_to_wrap ->
@@ -316,37 +318,85 @@ module Wrapper_rules = struct
       | _ ->
           respond Unhandled
 
+    let dummy_pc_init = Pending_coinbase.Stack.empty
+
+    let genesis_constants = Genesis_constants.compiled
+
+    let consensus_constants =
+      Consensus.Constants.create ~constraint_constants
+        ~protocol_constants:genesis_constants.protocol
+
+    let dummy_state_body =
+      let compile_time_genesis =
+        Mina_state.Genesis_protocol_state.t
+          ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+          ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+          ~constraint_constants ~consensus_constants
+          ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+      in
+      Mina_state.Protocol_state.body compile_time_genesis.data
+
+    let dummy_pc =
+      Pending_coinbase.Stack.push_state
+        (Mina_state.Protocol_state.Body.hash dummy_state_body)
+        Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
+
     let%snarkydef_ main { public_input = (stmt : S.Checked.t) } =
       let istmt = exists T.typ ~request:(fun () -> Statement_to_wrap) in
       let prf =
         exists (Typ.Internal.ref ()) ~request:(fun () -> Proof_to_wrap)
       in
-      run_checked
+
+      (* Check that istmt and stmt match *)
+      run
       @@ Frozen_ledger_hash.assert_equal stmt.source_ledger
            istmt.source.first_pass_ledger ;
-      run_checked
+      run
       @@ Frozen_ledger_hash.assert_equal stmt.target_ledger
            istmt.target.second_pass_ledger ;
-      (*  Check that transactions have been completely applied *)
-      let empty_state = constant Local_state.typ @@ Local_state.empty () in
+
+      (* Check that pending_coinbase_stack is correctly set *)
+      let dummy_pc = constant Pending_coinbase.Stack.typ dummy_pc in
+      Boolean.Assert.is_true @@ run
+      @@ Pending_coinbase.Stack.equal_var dummy_pc
+           istmt.source.pending_coinbase_stack ;
+      Boolean.Assert.is_true @@ run
+      @@ Pending_coinbase.Stack.equal_var dummy_pc
+           istmt.target.pending_coinbase_stack ;
+
+      (* Check that transactions have been completely applied *)
+      let empty_state = Local_state.(constant typ @@ empty ()) in
       Local_state.Checked.assert_equal empty_state istmt.source.local_state ;
       Local_state.Checked.assert_equal empty_state istmt.target.local_state ;
+
       (* Check that first and second passes are connected *)
-      run_checked
+      run
       @@ Frozen_ledger_hash.assert_equal istmt.target.first_pass_ledger
            istmt.source.second_pass_ledger ;
-      run_checked
+
       (* Check that it's a complete transaction (a "block") *)
+      run
       @@ Frozen_ledger_hash.assert_equal istmt.target.first_pass_ledger
            istmt.connecting_ledger_right ;
-      run_checked
+      run
       @@ Frozen_ledger_hash.assert_equal istmt.source.second_pass_ledger
            istmt.connecting_ledger_left ;
+
       (* We don't check fee_excess because it's up to the sequencer what they do with it. *)
       (* The supply however must not increase. *)
-      run_checked
-        @@ CAS.(Checked.assert_equal (constant typ zero) istmt.supply_increase) ;
+      let is_neg =
+        Sgn.Checked.is_neg @@ run @@ CAS.Checked.sgn istmt.supply_increase
+      in
+      let is_zero =
+        run
+        @@ CA.Checked.equal (constant CA.typ CA.zero)
+        @@ run
+        @@ CAS.Checked.magnitude istmt.supply_increase
+      in
+      Boolean.Assert.is_true Boolean.(is_neg || is_zero) ;
+
       { previous_proof_statements =
+          (* Proof for istmt using normal txn snark *)
           [ { public_input = istmt
             ; proof_must_verify = Boolean.true_
             ; proof = prf
@@ -370,10 +420,7 @@ module Wrapper_rules = struct
 
       type _ t +=
         | Statements_to_merge : (S.t * S.t) t
-        | Proofs_to_merge :
-            ( (Nat.N2.n, Nat.N2.n) Pickles.Proof.t
-            * (Nat.N2.n, Nat.N2.n) Pickles.Proof.t )
-            t
+        | Proofs_to_merge : (Proof.t * Proof.t) t
     end
 
     let handler s1 s2 p1 p2
@@ -395,12 +442,9 @@ module Wrapper_rules = struct
           Typ.(Internal.ref () * Internal.ref ())
           ~request:(fun () -> Proofs_to_merge)
       in
-      run_checked
-      @@ Frozen_ledger_hash.assert_equal s.source_ledger s1.source_ledger ;
-      run_checked
-      @@ Frozen_ledger_hash.assert_equal s1.target_ledger s2.source_ledger ;
-      run_checked
-      @@ Frozen_ledger_hash.assert_equal s2.target_ledger s.target_ledger ;
+      run @@ Frozen_ledger_hash.assert_equal s.source_ledger s1.source_ledger ;
+      run @@ Frozen_ledger_hash.assert_equal s1.target_ledger s2.source_ledger ;
+      run @@ Frozen_ledger_hash.assert_equal s2.target_ledger s.target_ledger ;
       { previous_proof_statements =
           [ { public_input = s1; proof_must_verify = Boolean.true_; proof = p1 }
           ; { public_input = s2; proof_must_verify = Boolean.true_; proof = p2 }
@@ -420,12 +464,6 @@ end
 
 open struct
   module S = Wrapper_rules.S
-end
-
-module Wrapped_Transaction_snark = struct
-  type t =
-    { statement : S.t; proof : Pickles.Proof.Proofs_verified_2.Stable.V2.t }
-  [@@deriving fields]
 end
 
 module TR = struct
@@ -455,7 +493,7 @@ module TR = struct
     let empty_actions =
       exists Zkapp_account.Actions.typ ~compute:(fun () -> [])
     in
-    Boolean.Assert.is_true @@ run_checked @@ Actions.is_empty_var empty_actions ;
+    Boolean.Assert.is_true @@ run @@ Actions.is_empty_var empty_actions ;
     let actions =
       Actions.push_to_data_as_hash empty_actions (var_to_fields typ tr)
     in
@@ -494,7 +532,7 @@ module Process_transfer = struct
         calls
     in
     if_
-      (run_checked @@ CA.Checked.equal transfer.amount CA.(constant typ zero))
+      (run @@ CA.Checked.equal transfer.amount CA.(constant typ zero))
       ~typ:Typ.(Field.typ * Zkapp_call_forest.typ)
       ~then_:(transfers, calls) ~else_:(transfers', calls')
 end
@@ -542,7 +580,7 @@ module Transfer_action_rule = struct
     let empty_actions =
       exists Zkapp_account.Actions.typ ~compute:(fun () -> [])
     in
-    Boolean.Assert.is_true @@ run_checked @@ Actions.is_empty_var empty_actions ;
+    Boolean.Assert.is_true @@ run @@ Actions.is_empty_var empty_actions ;
     let actions =
       Actions.push_to_data_as_hash empty_actions (var_to_fields TR.typ tr)
     in
@@ -773,7 +811,7 @@ module Rules = struct
 
       type _ t +=
         | Stmt : S.t t
-        | Prf : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t t
+        | Prf : Proof.t t
         | Action_prf : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t t
         | Public_key : PC.t t
         | Vk_hash : field t
@@ -783,10 +821,9 @@ module Rules = struct
       (* has length processing_transfers_length *)
     end
 
-    let handler (stmt : S.t) (prf : _ Pickles.Proof.t)
-        (action_prf : _ Pickles.Proof.t) (pk : PC.t) (vk_hash : field)
-        (action_state : field) (processed_transfers : field)
-        (processing_transfers : TR.t list)
+    let handler (stmt : S.t) (prf : Proof.t) (action_prf : _ Pickles.Proof.t)
+        (pk : PC.t) (vk_hash : field) (action_state : field)
+        (processed_transfers : field) (processing_transfers : TR.t list)
         (Snarky_backendless.Request.With { request; respond }) =
       match request with
       | Stmt ->
@@ -817,15 +854,15 @@ module Rules = struct
       let depth = constraint_constants.ledger_depth in
       let acc = constant (Account.Index.Unpacked.typ depth) 0 in
       let old_acc =
-        run_checked @@ Frozen_ledger_hash.get depth stmt.source_ledger acc
+        run @@ Frozen_ledger_hash.get depth stmt.source_ledger acc
       in
       let new_acc =
-        run_checked @@ Frozen_ledger_hash.get depth stmt.target_ledger acc
+        run @@ Frozen_ledger_hash.get depth stmt.target_ledger acc
       in
       let () =
-        run_checked
+        run
         @@ Nonce.Checked.Assert.equal
-             (run_checked @@ Nonce.Checked.succ old_acc.nonce)
+             (run @@ Nonce.Checked.succ old_acc.nonce)
              new_acc.nonce
       in
       let old_zkapp_hash, old_zkapp = old_acc.zkapp in
@@ -1007,6 +1044,8 @@ struct
   end
 
   module Wrapper = struct
+    open Wrapper_rules
+
     let tag, cache_handle, p, Pickles.Provers.[ wrap_; merge_ ] =
       time "Wrapper.compile" (fun () ->
           Pickles.compile ()
@@ -1019,27 +1058,20 @@ struct
             ~constraint_constants:
               (Genesis_constants.Constraint_constants.to_snark_keys_header
                  constraint_constants )
-            ~choices:(fun ~self ->
-              [ Wrapper_rules.Wrap.rule T.tag; Wrapper_rules.Merge.rule self ]
-              ) )
+            ~choices:(fun ~self -> [ Wrap.rule T.tag; Merge.rule self ]) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-    let wrap (txn_snark : Transaction_snark.t) :
-        Wrapped_Transaction_snark.t Deferred.t =
+    let wrap (txn_snark : Transaction_snark.t) : t Deferred.t =
       let statement = Transaction_snark.statement_with_sok txn_snark in
       let proof = Transaction_snark.proof txn_snark in
       let wrapped_statement = S.of_txn_snark_statement statement in
       let%bind (), (), wrapped_proof =
-        wrap_
-          ~handler:(Wrapper_rules.Wrap.handler statement proof)
-          wrapped_statement
+        wrap_ ~handler:(Wrap.handler statement proof) wrapped_statement
       in
-      let open Wrapped_Transaction_snark in
       return { statement = wrapped_statement; proof = wrapped_proof }
 
-    let merge (p1 : Wrapped_Transaction_snark.t)
-        (p2 : Wrapped_Transaction_snark.t) =
+    let merge (p1 : t) (p2 : t) =
       let wrapped_statement : S.t =
         { source_ledger = p1.statement.source_ledger
         ; target_ledger = p2.statement.target_ledger
@@ -1047,12 +1079,9 @@ struct
       in
       let%bind (), (), wrapped_proof =
         merge_
-          ~handler:
-            (Wrapper_rules.Merge.handler p1.statement p2.statement p1.proof
-               p2.proof )
+          ~handler:(Merge.handler p1.statement p2.statement p1.proof p2.proof)
           wrapped_statement
       in
-      let open Wrapped_Transaction_snark in
       return { statement = wrapped_statement; proof = wrapped_proof }
 
     module Proof = (val p)

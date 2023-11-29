@@ -1052,9 +1052,8 @@ module Make (Inputs : Inputs_intf) = struct
     let s1_updated = Actions.push_events s1' actions in
     let s1 = Field.if_ is_empty ~then_:s1' ~else_:s1_updated in
     (* Shift along if not empty and last update wasn't this slot *)
-    let is_this_slot =
-      Global_slot_since_genesis.equal txn_global_slot last_action_slot
-    in
+    (* ZEKO NOTE: We don't support time, so we shift it along every time. (issue #64) *)
+    let is_this_slot = Bool.false_ in
     let is_empty_or_this_slot = Bool.(is_empty ||| is_this_slot) in
     let s5 = Field.if_ is_empty_or_this_slot ~then_:s5' ~else_:s4' in
     let s4 = Field.if_ is_empty_or_this_slot ~then_:s4' ~else_:s3' in
