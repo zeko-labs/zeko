@@ -9,7 +9,7 @@ dune build
 ## Run
 
 ```bash
-dune exec ./run.exe -- -p <int?> --max-pool-size <int?> --committment-period <float?> --da-contract-address <string?>
+dune exec ./run.exe -- -p <int?> --max-pool-size <int?> --commitment-period <float?> --da-contract-address <string?>
 ```
 
 Run help to see the options:
