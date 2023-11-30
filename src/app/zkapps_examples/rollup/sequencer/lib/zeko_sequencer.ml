@@ -59,7 +59,7 @@ module Sequencer = struct
     type t =
       { q : unit Throttle.t
       ; da_config : Da_layer.config_t
-      ; mutable last : Zkapps_rollup.Wrapped_Transaction_snark.t option
+      ; mutable last : Zkapps_rollup.Wrapper_rules.t option
       ; mutable staged_commands :
           ( Signed_command.With_valid_signature.t
           , Zkapp_command.t )
@@ -254,13 +254,7 @@ module Sequencer = struct
       Mina_transaction.Transaction.Command
         (User_command.Signed_command signed_command)
     in
-    let prev_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int t.slot
-    in
-    let curr_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int (t.slot + 1)
-    in
-
+    let global_slot = Mina_numbers.Global_slot_since_genesis.of_int t.slot in
     let l = L.of_database t.db in
     let source_ledger_hash = L.merkle_root l in
     let sparse_ledger =
@@ -269,8 +263,7 @@ module Sequencer = struct
     in
     let%bind.Result txn_applied =
       Result.( >>= )
-        (L.apply_transaction_first_pass ~constraint_constants
-           ~global_slot:curr_global_slot
+        (L.apply_transaction_first_pass ~constraint_constants ~global_slot
            ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
            l (Command (Signed_command signed_command)) )
         (L.apply_transaction_second_pass l)
@@ -286,7 +279,6 @@ module Sequencer = struct
     in
 
     L.Mask.Attached.commit l ;
-    t.slot <- Mina_numbers.Global_slot_since_genesis.to_int curr_global_slot ;
 
     let target_ledger_hash = L.merkle_root l in
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
@@ -296,14 +288,14 @@ module Sequencer = struct
           (Mina_state.Protocol_state.Body.hash state_body)
           global_slot Pending_coinbase.Stack.empty
       in
-      { source = stack_with_state prev_global_slot
-      ; target = stack_with_state curr_global_slot
+      { source = stack_with_state global_slot
+      ; target = stack_with_state global_slot
       }
     in
     let user_command_in_block =
       { Transaction_protocol_state.Poly.transaction = with_valid_signature
       ; block_data = state_body
-      ; global_slot = curr_global_slot
+      ; global_slot
       }
     in
     let (statement : Transaction_snark.Statement.With_sok.t) =
@@ -341,12 +333,7 @@ module Sequencer = struct
       | _ ->
           ()
     in
-    let prev_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int t.slot
-    in
-    let curr_global_slot =
-      Mina_numbers.Global_slot_since_genesis.of_int (t.slot + 1)
-    in
+    let global_slot = Mina_numbers.Global_slot_since_genesis.of_int t.slot in
     let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
       let l = L.of_database t.db in
       let accounts_referenced =
@@ -357,8 +344,7 @@ module Sequencer = struct
         Mina_ledger.Sparse_ledger.of_ledger_subset_exn l accounts_referenced
       in
       let%bind.Result partialy_applied_txn =
-        L.apply_transaction_first_pass ~constraint_constants
-          ~global_slot:curr_global_slot
+        L.apply_transaction_first_pass ~constraint_constants ~global_slot
           ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
           l (Command (Zkapp_command zkapp_command))
       in
@@ -380,7 +366,6 @@ module Sequencer = struct
       in
 
       L.Mask.Attached.commit l ;
-      t.slot <- Mina_numbers.Global_slot_since_genesis.to_int curr_global_slot ;
 
       Zkapp_command.(
         Call_forest.iteri (account_updates zkapp_command) ~f:(fun _ update ->
@@ -413,13 +398,13 @@ module Sequencer = struct
           (Mina_state.Protocol_state.Body.hash state_body)
           global_slot Pending_coinbase.Stack.empty
       in
-      { source = stack_with_state prev_global_slot
-      ; target = stack_with_state curr_global_slot
+      { source = stack_with_state global_slot
+      ; target = stack_with_state global_slot
       }
     in
     let witnesses =
       Transaction_snark.zkapp_command_witnesses_exn ~constraint_constants
-        ~global_slot:curr_global_slot ~state_body
+        ~global_slot ~state_body
         ~fee_excess:
           ( Currency.Amount.Signed.of_unsigned
           @@ Currency.Amount.of_fee (Zkapp_command.fee zkapp_command) )
@@ -572,9 +557,7 @@ let%test_unit "apply commands" =
 
               [%test_eq: Bool.t] true (Option.is_some sequencer.snark_q.last) ;
               let snark = Option.value_exn sequencer.snark_q.last in
-              let stmt =
-                Zkapps_rollup.Wrapped_Transaction_snark.statement snark
-              in
+              let stmt = Zkapps_rollup.Wrapper_rules.statement snark in
               [%test_eq: Frozen_ledger_hash.t] stmt.source_ledger
                 source_ledger_hash ;
               [%test_eq: Frozen_ledger_hash.t] stmt.target_ledger
