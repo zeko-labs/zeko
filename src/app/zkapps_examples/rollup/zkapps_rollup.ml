@@ -876,6 +876,12 @@ module Rules = struct
   end
 end
 
+type t = Wrapper_rules.t
+
+let source_ledger (t : t) = t.stmt.source_ledger
+
+let target_ledger (t : t) = t.stmt.target_ledger
+
 module Make (T : sig
   val tag : Transaction_snark.tag
 end) =
