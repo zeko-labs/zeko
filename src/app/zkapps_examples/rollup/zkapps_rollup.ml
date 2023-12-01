@@ -17,7 +17,6 @@ open struct
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
   module L = Mina_ledger.Ledger
-  module T = Transaction_snark.Statement.With_sok
 
   (* let (!) = run_checked *)
 
@@ -237,6 +236,10 @@ end
 
 (* TODO: Use Zkapp_command_logic here and bypass transaction snark and two pass system *)
 module Wrapper_rules = struct
+  open struct
+    module With_sok = Transaction_snark.Statement.With_sok
+  end
+
   module S = struct
     type t =
       { source_ledger : Frozen_ledger_hash.t
@@ -244,17 +247,23 @@ module Wrapper_rules = struct
       }
     [@@deriving snarky]
 
-    let of_txn_snark_statement (txn_snark : T.t) : t =
+    let of_txn_snark_statement (txn_snark : With_sok.t) : t =
       { source_ledger = txn_snark.source.first_pass_ledger
       ; target_ledger = txn_snark.target.second_pass_ledger
       }
   end
 
-  type t = { statement : S.t; proof : Proof.t } [@@deriving fields]
+  module Snark = struct
+    type t = { stmt : S.t; proof : RefProof.t } [@@deriving snarky]
+  end
+
+  include Snark
 
   module Wrap = struct
     module Witness = struct
-      type t = { istmt : T.t; prf : RefProof.t } [@@deriving snarky]
+      module R = MkRef (Transaction_snark)
+
+      type t = { txn_snark : R.t } [@@deriving snarky]
     end
 
     include MkHandler (Witness)
@@ -282,8 +291,18 @@ module Wrapper_rules = struct
         (Mina_state.Protocol_state.Body.hash dummy_state_body)
         Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
 
-    let%snarkydef_ main { public_input = (stmt : S.var) } =
-      let Witness.{ istmt; prf } = exists_witness () in
+    let%snarkydef_ main { public_input = () } =
+      let Witness.{ txn_snark } = exists_witness () in
+      let istmt =
+        Transaction_snark.(
+          exists With_sok.typ ~compute:(fun () ->
+              statement_with_sok @@ As_prover.Ref.get txn_snark ))
+      in
+      let stmt =
+        S.(
+          exists typ ~compute:(fun () ->
+              of_txn_snark_statement @@ As_prover.read With_sok.typ istmt ))
+      in
       (* Check that istmt and stmt match *)
       run
       @@ Frozen_ledger_hash.assert_equal stmt.source_ledger
@@ -336,10 +355,12 @@ module Wrapper_rules = struct
           (* Proof for istmt using normal txn snark *)
           [ { public_input = istmt
             ; proof_must_verify = Boolean.true_
-            ; proof = prf
+            ; proof =
+                As_prover.Ref.create (fun () ->
+                    Transaction_snark.proof @@ As_prover.Ref.get txn_snark )
             }
           ]
-      ; public_output = ()
+      ; public_output = stmt
       ; auxiliary_output = ()
       }
 
@@ -353,22 +374,33 @@ module Wrapper_rules = struct
 
   module Merge = struct
     module Witness = struct
-      type t = { s1 : S.t; s2 : S.t; p1 : RefProof.t; p2 : RefProof.t }
-      [@@deriving snarky]
+      type t = { s1 : Snark.t; s2 : Snark.t } [@@deriving snarky]
     end
 
     include MkHandler (Witness)
 
-    let%snarkydef_ main { public_input = (s : S.var) } =
-      let Witness.{ s1; s2; p1; p2 } = exists_witness () in
-      run @@ Frozen_ledger_hash.assert_equal s.source_ledger s1.source_ledger ;
-      run @@ Frozen_ledger_hash.assert_equal s1.target_ledger s2.source_ledger ;
-      run @@ Frozen_ledger_hash.assert_equal s2.target_ledger s.target_ledger ;
+    let%snarkydef_ main { public_input = () } =
+      let Witness.{ s1; s2 } = exists_witness () in
+      let s =
+        S.
+          { source_ledger = s1.stmt.source_ledger
+          ; target_ledger = s2.stmt.target_ledger
+          }
+      in
+      run
+      @@ Frozen_ledger_hash.assert_equal s1.stmt.target_ledger
+           s2.stmt.source_ledger ;
       { previous_proof_statements =
-          [ { public_input = s1; proof_must_verify = Boolean.true_; proof = p1 }
-          ; { public_input = s2; proof_must_verify = Boolean.true_; proof = p2 }
+          [ { public_input = s1.stmt
+            ; proof_must_verify = Boolean.true_
+            ; proof = s1.proof
+            }
+          ; { public_input = s2.stmt
+            ; proof_must_verify = Boolean.true_
+            ; proof = s2.proof
+            }
           ]
-      ; public_output = ()
+      ; public_output = s
       ; auxiliary_output = ()
       }
 
@@ -890,7 +922,7 @@ struct
       time "Wrapper.compile" (fun () ->
           Pickles.compile ()
             ~override_wrap_domain:Pickles_base.Proofs_verified.N1
-            ~cache:Cache_dir.cache ~public_input:(Input S.typ)
+            ~cache:Cache_dir.cache ~public_input:(Output S.typ)
             ~auxiliary_typ:Typ.unit
             ~branches:(module Nat.N2)
             ~max_proofs_verified:(module Nat.N2)
@@ -902,35 +934,15 @@ struct
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-    let wrap (txn_snark : Transaction_snark.t) : t Deferred.t =
-      let statement = Transaction_snark.statement_with_sok txn_snark in
-      let proof = Transaction_snark.proof txn_snark in
-      let wrapped_statement = S.of_txn_snark_statement statement in
-      let%bind (), (), wrapped_proof =
-        wrap_
-          ~handler:(Wrap.handler { istmt = statement; prf = proof })
-          wrapped_statement
+    let wrap txn_snark =
+      let%bind stmt, _, proof =
+        wrap_ ~handler:(Wrap.handler { txn_snark }) ()
       in
-      return { statement = wrapped_statement; proof = wrapped_proof }
+      return ({ stmt; proof } : t)
 
-    let merge (p1 : t) (p2 : t) =
-      let wrapped_statement : S.t =
-        { source_ledger = p1.statement.source_ledger
-        ; target_ledger = p2.statement.target_ledger
-        }
-      in
-      let%bind (), (), wrapped_proof =
-        merge_
-          ~handler:
-            (Merge.handler
-               { s1 = p1.statement
-               ; s2 = p2.statement
-               ; p1 = p1.proof
-               ; p2 = p2.proof
-               } )
-          wrapped_statement
-      in
-      return { statement = wrapped_statement; proof = wrapped_proof }
+    let merge (s1 : t) (s2 : t) =
+      let%bind stmt, _, proof = merge_ ~handler:(Merge.handler { s1; s2 }) () in
+      return ({ stmt; proof } : t)
 
     module Proof = (val p)
   end
@@ -959,25 +971,28 @@ struct
     module Proof = (val p)
   end
 
-  let tag, cache_handle, p, Pickles.Provers.[ step_; action_ ] =
-    time "Zkapp.compile" (fun () ->
-        Pickles.compile () ~override_wrap_domain:Pickles_base.Proofs_verified.N1
-          ~cache:Cache_dir.cache ~public_input:(Output Zkapp_statement.typ)
-          ~auxiliary_typ:Typ.(Prover_value.typ ())
-          ~branches:(module Nat.N2)
-          ~max_proofs_verified:(module Nat.N2)
-          ~name:"rollup"
-          ~constraint_constants:
-            (Genesis_constants.Constraint_constants.to_snark_keys_header
-               constraint_constants )
-          ~choices:(fun ~self:_ ->
-            [ Rules.Step.rule Wrapper.tag Action_state_extension.tag
-            ; Transfer_action_rule.rule
-            ] ) )
+  module Outer = struct
+    let tag, cache_handle, p, Pickles.Provers.[ step_; action_ ] =
+      time "Zkapp.compile" (fun () ->
+          Pickles.compile ()
+            ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+            ~cache:Cache_dir.cache ~public_input:(Output Zkapp_statement.typ)
+            ~auxiliary_typ:Typ.(Prover_value.typ ())
+            ~branches:(module Nat.N2)
+            ~max_proofs_verified:(module Nat.N2)
+            ~name:"rollup"
+            ~constraint_constants:
+              (Genesis_constants.Constraint_constants.to_snark_keys_header
+                 constraint_constants )
+            ~choices:(fun ~self:_ ->
+              [ Rules.Step.rule Wrapper.tag Action_state_extension.tag
+              ; Transfer_action_rule.rule
+              ] ) )
 
-  let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
+    let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-  let step w = step_ ~handler:(Rules.Step.handler w)
+    let step w = step_ ~handler:(Rules.Step.handler w)
 
-  module Proof = (val p)
+    module Proof = (val p)
+  end
 end

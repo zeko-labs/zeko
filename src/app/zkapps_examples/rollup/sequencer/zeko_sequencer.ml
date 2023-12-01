@@ -133,9 +133,7 @@ module Sequencer = struct
           | false ->
               print_endline "Committing..." ;
 
-              let ledger_hash =
-                (Option.value_exn !last).statement.target_ledger
-              in
+              let ledger_hash = (Option.value_exn !last).stmt.target_ledger in
               let batch_id =
                 Frozen_ledger_hash0.to_decimal_string ledger_hash
               in
