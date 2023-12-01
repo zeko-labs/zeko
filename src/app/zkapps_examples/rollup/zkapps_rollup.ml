@@ -76,6 +76,82 @@ open struct
 
   let run = run_checked
 
+  module F = struct
+    type t = field
+
+    type var = Field.t
+
+    let typ : (var, t) Typ.t = Field.typ
+  end
+
+  module MkRef (T : sig
+    type t
+  end) =
+  struct
+    type t = T.t
+
+    type var = T.t As_prover.Ref.t
+
+    let typ : (var, t) Typ.t = Typ.Internal.ref ()
+  end
+
+  module Proof1 = struct
+    type t = (Nat.N1.n, Nat.N1.n) Pickles.Proof.t
+  end
+
+  module SnarkList (T : sig
+    module T : sig
+      type t
+
+      type var
+
+      val typ : (var, t) Typ.t
+    end
+
+    val length : int
+  end) =
+  struct
+    type t = T.T.t list
+
+    type var = T.T.var list
+
+    let typ : (var, t) Typ.t = Typ.list ~length:T.length T.T.typ
+  end
+
+  module RefProof = MkRef (Proof)
+  module RefProof1 = MkRef (Proof1)
+
+  module Boolean = struct
+    include Boolean
+
+    type t = bool
+  end
+
+  module MkHandler (Witness : sig
+    type t
+
+    type var
+
+    val typ : (var, t) Typ.t
+  end) =
+  struct
+    open Snarky_backendless.Request
+
+    open struct
+      type _ t += Witness : Witness.t t
+    end
+
+    let handler (w : Witness.t) (With { request; respond }) =
+      match request with
+      | Witness ->
+          respond (Provide w)
+      | _ ->
+          respond Unhandled
+
+    let exists_witness () : Witness.var =
+      exists Witness.typ ~request:(fun () -> Witness)
+  end
+
   module Public_key = Signature_lib.Public_key
   module PC = Public_key.Compressed
   module CAS = Currency.Amount.Signed
@@ -83,52 +159,24 @@ open struct
 end
 
 (* FIXME: Improve performance *)
+
+(** A proof for source0, target0, source1, target1, means the targets are
+action states that originate from the sources *)
 module Action_state_extension_rule = struct
   module Stmt = struct
-    module Poly = struct
-      type 'field t =
-        { source0 : 'field
-        ; target0 : 'field
-        ; source1 : 'field
-        ; target1 : 'field
-        }
-      [@@deriving hlist]
-    end
-
-    type t = field Poly.t
-
-    type var = Field.t Poly.t
-
-    let typ : (var, t) Tick.Typ.t =
-      let open Poly in
-      Tick.Typ.of_hlistable
-        [ Field.typ; Field.typ; Field.typ; Field.typ ]
-        ~var_to_hlist:to_hlist ~var_of_hlist:of_hlist ~value_to_hlist:to_hlist
-        ~value_of_hlist:of_hlist
-
-    module Checked = struct
-      type t = var
-    end
+    type t = { source0 : F.t; target0 : F.t; source1 : F.t; target1 : F.t }
+    [@@deriving snarky]
   end
 
   module Base = struct
-    open Snarky_backendless.Request
+    module Witness = struct
+      type t = { source0 : F.t; source1 : F.t } [@@deriving snarky]
+    end
 
-    type _ t += Source0 : field t | Source1 : field t
-
-    let handler (source0 : field) (source1 : field) (With { request; respond })
-        =
-      match request with
-      | Source0 ->
-          respond @@ Provide source0
-      | Source1 ->
-          respond @@ Provide source1
-      | _ ->
-          respond Unhandled
+    include MkHandler (Witness)
 
     let main { public_input = () } =
-      let source0 = exists Field.typ ~request:(fun () -> Source0) in
-      let source1 = exists Field.typ ~request:(fun () -> Source1) in
+      let Witness.{ source0; source1 } = exists_witness () in
       { previous_proof_statements = []
       ; public_output =
           ({ source0; target0 = source0; source1; target1 = source1 } : Stmt.var)
@@ -144,119 +192,37 @@ module Action_state_extension_rule = struct
   end
 
   module StepBoth = struct
-    open Snarky_backendless.Request
+    module Witness = struct
+      type t =
+        { actions0 : Actions.t
+        ; actions1 : Actions.t
+        ; step0 : Boolean.t
+        ; step1 : Boolean.t
+        ; prev : Stmt.t
+        ; proof : RefProof1.t
+        }
+      [@@deriving snarky]
+    end
 
-    type _ t +=
-      | Actions0 : Actions.t t
-      | Actions1 : Actions.t t
-      | Prev : Stmt.t t
-      | Proof : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t t
-
-    let handler (actions0 : Actions.t) (actions1 : Actions.t) (prev : Stmt.t)
-        (proof : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t)
-        (With { request; respond }) =
-      match request with
-      | Actions0 ->
-          respond @@ Provide actions0
-      | Actions1 ->
-          respond @@ Provide actions1
-      | Prev ->
-          respond @@ Provide prev
-      | Proof ->
-          respond @@ Provide proof
-      | _ ->
-          respond Unhandled
+    include MkHandler (Witness)
 
     let main { public_input = () } =
-      let actions0 = exists Actions.typ ~request:(fun () -> Actions0) in
-      let actions1 = exists Actions.typ ~request:(fun () -> Actions1) in
-      let prev = exists Stmt.typ ~request:(fun () -> Prev) in
-      let proof = exists (Typ.Internal.ref ()) ~request:(fun () -> Proof) in
-      let target0 = Actions.push_events_checked prev.target0 actions0 in
-      let target1 = Actions.push_events_checked prev.target1 actions1 in
+      let Witness.{ actions0; actions1; step0; step1; prev; proof } =
+        exists_witness ()
+      in
+      let target0 =
+        Field.if_ step0
+          (Actions.push_events_checked prev.target0 actions0)
+          prev.target0
+      in
+      let target1 =
+        Field.if_ step1
+          (Actions.push_events_checked prev.target1 actions1)
+          prev.target1
+      in
       { previous_proof_statements =
           [ { public_input = prev; proof_must_verify = Boolean.true_; proof } ]
       ; public_output = { prev with target0; target1 }
-      ; auxiliary_output = ()
-      }
-
-    let rule tag : _ Pickles.Inductive_rule.t =
-      { identifier = "action state extension step"
-      ; prevs = [ tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
-  end
-
-  module Step0 = struct
-    open Snarky_backendless.Request
-
-    type _ t +=
-      | Actions0 : Actions.t t
-      | Prev : Stmt.t t
-      | Proof : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t t
-
-    let handler (actions0 : Actions.t) (prev : Stmt.t)
-        (proof : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t)
-        (With { request; respond }) =
-      match request with
-      | Actions0 ->
-          respond @@ Provide actions0
-      | Prev ->
-          respond @@ Provide prev
-      | Proof ->
-          respond @@ Provide proof
-      | _ ->
-          respond Unhandled
-
-    let main { public_input = () } =
-      let actions0 = exists Actions.typ ~request:(fun () -> Actions0) in
-      let prev = exists Stmt.typ ~request:(fun () -> Prev) in
-      let proof = exists (Typ.Internal.ref ()) ~request:(fun () -> Proof) in
-      let target0 = Actions.push_events_checked prev.target0 actions0 in
-      { previous_proof_statements =
-          [ { public_input = prev; proof_must_verify = Boolean.true_; proof } ]
-      ; public_output = { prev with target0 }
-      ; auxiliary_output = ()
-      }
-
-    let rule tag : _ Pickles.Inductive_rule.t =
-      { identifier = "action state extension step"
-      ; prevs = [ tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
-  end
-
-  module Step1 = struct
-    open Snarky_backendless.Request
-
-    type _ t +=
-      | Actions1 : Actions.t t
-      | Prev : Stmt.t t
-      | Proof : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t t
-
-    let handler (actions1 : Actions.t) (prev : Stmt.t)
-        (proof : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t)
-        (With { request; respond }) =
-      match request with
-      | Actions1 ->
-          respond @@ Provide actions1
-      | Prev ->
-          respond @@ Provide prev
-      | Proof ->
-          respond @@ Provide proof
-      | _ ->
-          respond Unhandled
-
-    let main { public_input = () } =
-      let actions1 = exists Actions.typ ~request:(fun () -> Actions1) in
-      let prev = exists Stmt.typ ~request:(fun () -> Prev) in
-      let proof = exists (Typ.Internal.ref ()) ~request:(fun () -> Proof) in
-      let target1 = Actions.push_events_checked prev.target1 actions1 in
-      { previous_proof_statements =
-          [ { public_input = prev; proof_must_verify = Boolean.true_; proof } ]
-      ; public_output = { prev with target1 }
       ; auxiliary_output = ()
       }
 
@@ -272,26 +238,11 @@ end
 (* TODO: Use Zkapp_command_logic here and bypass transaction snark and two pass system *)
 module Wrapper_rules = struct
   module S = struct
-    module Poly = struct
-      type 'ledger_hash t =
-        { source_ledger : 'ledger_hash; target_ledger : 'ledger_hash }
-      [@@deriving hlist]
-    end
-
-    type t = Frozen_ledger_hash.t Poly.t
-
-    type var = Frozen_ledger_hash.var Poly.t
-
-    let typ : (var, t) Tick.Typ.t =
-      let open Poly in
-      Tick.Typ.of_hlistable
-        [ Frozen_ledger_hash.typ; Frozen_ledger_hash.typ ]
-        ~var_to_hlist:to_hlist ~var_of_hlist:of_hlist ~value_to_hlist:to_hlist
-        ~value_of_hlist:of_hlist
-
-    module Checked = struct
-      type t = var
-    end
+    type t =
+      { source_ledger : Frozen_ledger_hash.t
+      ; target_ledger : Frozen_ledger_hash.t
+      }
+    [@@deriving snarky]
 
     let of_txn_snark_statement (txn_snark : T.t) : t =
       { source_ledger = txn_snark.source.first_pass_ledger
@@ -302,21 +253,11 @@ module Wrapper_rules = struct
   type t = { statement : S.t; proof : Proof.t } [@@deriving fields]
 
   module Wrap = struct
-    include struct
-      open Snarky_backendless.Request
-
-      type _ t += Statement_to_wrap : T.t t | Proof_to_wrap : Proof.t t
+    module Witness = struct
+      type t = { istmt : T.t; prf : RefProof.t } [@@deriving snarky]
     end
 
-    let handler (stmt : T.t) (prf : Proof.t)
-        (Snarky_backendless.Request.With { request; respond }) =
-      match request with
-      | Statement_to_wrap ->
-          respond (Provide stmt)
-      | Proof_to_wrap ->
-          respond (Provide prf)
-      | _ ->
-          respond Unhandled
+    include MkHandler (Witness)
 
     let dummy_pc_init = Pending_coinbase.Stack.empty
 
@@ -341,12 +282,8 @@ module Wrapper_rules = struct
         (Mina_state.Protocol_state.Body.hash dummy_state_body)
         Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
 
-    let%snarkydef_ main { public_input = (stmt : S.Checked.t) } =
-      let istmt = exists T.typ ~request:(fun () -> Statement_to_wrap) in
-      let prf =
-        exists (Typ.Internal.ref ()) ~request:(fun () -> Proof_to_wrap)
-      in
-
+    let%snarkydef_ main { public_input = (stmt : S.var) } =
+      let Witness.{ istmt; prf } = exists_witness () in
       (* Check that istmt and stmt match *)
       run
       @@ Frozen_ledger_hash.assert_equal stmt.source_ledger
@@ -415,33 +352,15 @@ module Wrapper_rules = struct
   end
 
   module Merge = struct
-    include struct
-      open Snarky_backendless.Request
-
-      type _ t +=
-        | Statements_to_merge : (S.t * S.t) t
-        | Proofs_to_merge : (Proof.t * Proof.t) t
+    module Witness = struct
+      type t = { s1 : S.t; s2 : S.t; p1 : RefProof.t; p2 : RefProof.t }
+      [@@deriving snarky]
     end
 
-    let handler s1 s2 p1 p2
-        (Snarky_backendless.Request.With { request; respond }) =
-      match request with
-      | Statements_to_merge ->
-          respond (Provide (s1, s2))
-      | Proofs_to_merge ->
-          respond (Provide (p1, p2))
-      | _ ->
-          respond Unhandled
+    include MkHandler (Witness)
 
-    let%snarkydef_ main { public_input = (s : S.Checked.t) } =
-      let s1, s2 =
-        exists Typ.(S.typ * S.typ) ~request:(fun () -> Statements_to_merge)
-      in
-      let p1, p2 =
-        Run.exists
-          Typ.(Internal.ref () * Internal.ref ())
-          ~request:(fun () -> Proofs_to_merge)
-      in
+    let%snarkydef_ main { public_input = (s : S.var) } =
+      let Witness.{ s1; s2; p1; p2 } = exists_witness () in
       run @@ Frozen_ledger_hash.assert_equal s.source_ledger s1.source_ledger ;
       run @@ Frozen_ledger_hash.assert_equal s1.target_ledger s2.source_ledger ;
       run @@ Frozen_ledger_hash.assert_equal s2.target_ledger s.target_ledger ;
@@ -467,25 +386,7 @@ open struct
 end
 
 module TR = struct
-  module Poly = struct
-    type ('amount, 'recipient) t = { amount : 'amount; recipient : 'recipient }
-    [@@deriving hlist]
-  end
-
-  type t = (CA.t, PC.t) Poly.t
-
-  type var = (CA.var, PC.var) Poly.t
-
-  let typ : (var, t) Tick.Typ.t =
-    let open Poly in
-    Tick.Typ.of_hlistable
-      [ Currency.Amount.typ; PC.typ ]
-      ~var_to_hlist:to_hlist ~var_of_hlist:of_hlist ~value_to_hlist:to_hlist
-      ~value_of_hlist:of_hlist
-
-  module Checked = struct
-    type t = var
-  end
+  type t = { amount : CA.t; recipient : PC.t } [@@deriving snarky]
 
   let dummy : t = { amount = CA.zero; recipient = PC.empty }
 
@@ -538,38 +439,25 @@ module Process_transfer = struct
 end
 
 module Transfer_action_rule = struct
-  include struct
-    open Snarky_backendless.Request
-
-    type _ t +=
-      | Stmt : S.t t
-      | Prf : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t t
-      | Public_key : PC.t t
-      | Vk_hash : field t
-      | Amount : CA.t t
-      | Recipient : PC.t t
+  module Witness = struct
+    type t =
+      { stmt : S.t
+      ; prf : RefProof.t
+      ; public_key : PC.t
+      ; vk_hash : F.t
+      ; amount : CA.t
+      ; recipient : PC.t
+      }
+    [@@deriving snarky]
   end
 
-  let handler (pk : PC.t) (vk_hash : field) (amount : CA.t) (recipient : PC.t)
-      (Snarky_backendless.Request.With { request; respond }) =
-    match request with
-    | Public_key ->
-        respond (Provide pk)
-    | Vk_hash ->
-        respond (Provide vk_hash)
-    | Amount ->
-        respond (Provide amount)
-    | Recipient ->
-        respond (Provide recipient)
-    | _ ->
-        respond Unhandled
+  include MkHandler (Witness)
 
   let main { public_input = () } =
-    let public_key = exists PC.typ ~request:(fun () -> Public_key) in
-    let vk_hash = exists Field.typ ~request:(fun () -> Vk_hash) in
-    let amount = exists CA.typ ~request:(fun () -> Amount) in
-    let recipient = exists PC.typ ~request:(fun () -> Recipient) in
-    let account_update = constant (Body.typ ()) Body.dummy in
+    let Witness.{ stmt; prf; public_key; vk_hash; amount; recipient } =
+      exists_witness ()
+    in
+    let account_update = Body.(constant (typ ()) dummy) in
     let authorization_kind : Authorization_kind.Checked.t =
       { is_signed = Boolean.false_
       ; is_proved = Boolean.true_
@@ -607,62 +495,47 @@ end
 
 module Inner_rules = struct
   module Step = struct
-    include struct
-      open Snarky_backendless.Request
+    let processing_transfers_length = 8
 
-      let processing_transfers_length = 8
+    module TR_8 = struct
+      module T = TR
 
-      type _ t +=
-        | Public_key : PC.t t
-        | Vk_hash : field t
-        | Action_prf : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t t
-        | All_transfers : field t
-        | Processed_transfers : field t
-        | Processing_transfers : TR.t list t
-      (* has length processing_transfers_length *)
+      let length = processing_transfers_length
     end
 
-    let handler (pk : PC.t) (vk_hash : field)
-        (action_prf : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t)
-        (all_transfers : field) (processed_transfers : field)
-        (processing_transfers : TR.t list)
-        (Snarky_backendless.Request.With { request; respond }) =
-      match request with
-      | Public_key ->
-          respond (Provide pk)
-      | Vk_hash ->
-          respond (Provide vk_hash)
-      | Action_prf ->
-          respond (Provide action_prf)
-      | All_transfers ->
-          respond (Provide all_transfers)
-      | Processed_transfers ->
-          respond (Provide processed_transfers)
-      | Processing_transfers ->
-          respond (Provide processing_transfers)
-      | _ ->
-          respond Unhandled
+    module List_TR_8 = SnarkList (TR_8)
+
+    module Witness = struct
+      type t =
+        { public_key : PC.t
+        ; vk_hash : F.t
+        ; action_prf : RefProof1.t
+        ; all_transfers : F.t
+        ; processed_transfers : F.t
+        ; trs : List_TR_8.t
+        }
+      [@@deriving snarky]
+    end
+
+    include MkHandler (Witness)
 
     let main { public_input = () } =
-      let public_key = exists PC.typ ~request:(fun () -> Public_key) in
-      let vk_hash = exists Field.typ ~request:(fun () -> Vk_hash) in
+      let Witness.
+            { public_key
+            ; vk_hash
+            ; action_prf
+            ; all_transfers
+            ; processed_transfers
+            ; trs
+            } =
+        exists_witness ()
+      in
       let account_update = constant (Body.typ ()) Body.dummy in
       let authorization_kind : Authorization_kind.Checked.t =
         { is_signed = Boolean.false_
         ; is_proved = Boolean.true_
         ; verification_key_hash = vk_hash
         }
-      in
-      let action_prf =
-        exists (Typ.Internal.ref ()) ~request:(fun () -> Action_prf)
-      in
-      let all_transfers = exists Field.typ ~request:(fun () -> All_transfers) in
-      let processed_transfers =
-        exists Field.typ ~request:(fun () -> Processed_transfers)
-      in
-      let trs =
-        exists (Typ.list ~length:processing_transfers_length TR.typ)
-          ~request:(fun () -> Processing_transfers)
       in
       let calls = Zkapp_call_forest.Checked.empty () in
       (* NOTE: processed_transfers' must be a prefix of all_transfers, checked using action_prf. *)
@@ -804,53 +677,45 @@ end
 
 module Rules = struct
   module Step = struct
-    include struct
-      open Snarky_backendless.Request
+    let processing_transfers_length = 8
 
-      let processing_transfers_length = 8
+    module TR_8 = struct
+      module T = TR
 
-      type _ t +=
-        | Stmt : S.t t
-        | Prf : Proof.t t
-        | Action_prf : (Nat.N1.n, Nat.N1.n) Pickles.Proof.t t
-        | Public_key : PC.t t
-        | Vk_hash : field t
-        | Action_state : field t
-        | Processed_transfers : field t
-        | Processing_transfers : TR.t list t
-      (* has length processing_transfers_length *)
+      let length = processing_transfers_length
     end
 
-    let handler (stmt : S.t) (prf : Proof.t) (action_prf : _ Pickles.Proof.t)
-        (pk : PC.t) (vk_hash : field) (action_state : field)
-        (processed_transfers : field) (processing_transfers : TR.t list)
-        (Snarky_backendless.Request.With { request; respond }) =
-      match request with
-      | Stmt ->
-          respond (Provide stmt)
-      | Prf ->
-          respond (Provide prf)
-      | Action_prf ->
-          respond (Provide action_prf)
-      | Public_key ->
-          respond (Provide pk)
-      | Vk_hash ->
-          respond (Provide vk_hash)
-      | Action_state ->
-          respond (Provide action_state)
-      | Processed_transfers ->
-          respond (Provide processed_transfers)
-      | Processing_transfers ->
-          respond (Provide processing_transfers)
-      | _ ->
-          respond Unhandled
+    module List_TR_8 = SnarkList (TR_8)
+
+    module Witness = struct
+      type t =
+        { stmt : S.t
+        ; prf : RefProof.t
+        ; action_prf : RefProof1.t
+        ; public_key : PC.t
+        ; vk_hash : F.t
+        ; action_state : F.t
+        ; processed_transfers : F.t
+        ; processing_transfers : List_TR_8.t
+        }
+      [@@deriving snarky]
+    end
+
+    include MkHandler (Witness)
 
     let main { public_input = () } =
-      let stmt = exists S.typ ~request:(fun () -> Stmt) in
-      let prf = exists (Typ.Internal.ref ()) ~request:(fun () -> Prf) in
-      let public_key = exists PC.typ ~request:(fun () -> Public_key) in
-      let vk_hash = exists Field.typ ~request:(fun () -> Vk_hash) in
-      let action_state = exists Field.typ ~request:(fun () -> Action_state) in
+      let ({ stmt
+           ; prf
+           ; action_prf
+           ; public_key
+           ; vk_hash
+           ; action_state
+           ; processed_transfers
+           ; processing_transfers = trs
+           }
+            : Witness.var ) =
+        exists_witness ()
+      in
       let depth = constraint_constants.ledger_depth in
       let acc = constant (Account.Index.Unpacked.typ depth) 0 in
       let old_acc =
@@ -882,9 +747,6 @@ module Rules = struct
          go backward and perhaps break something *)
       let (old_outer_action_state_in_inner :: _) = old_zkapp.app_state in
       let (outer_action_state_in_inner :: _) = zkapp.app_state in
-      let action_prf =
-        exists (Typ.Internal.ref ()) ~request:(fun () -> Action_prf)
-      in
       Field.Assert.equal outer_action_state_in_inner action_state ;
       let account_update = constant (Body.typ ()) Body.dummy in
       let authorization_kind : Authorization_kind.Checked.t =
@@ -895,13 +757,6 @@ module Rules = struct
       in
       let update = account_update.update in
       let (all_transfers :: _) = zkapp.action_state in
-      let processed_transfers =
-        exists Field.typ ~request:(fun () -> Processed_transfers)
-      in
-      let trs =
-        exists (Typ.list ~length:processing_transfers_length TR.typ)
-          ~request:(fun () -> Processing_transfers)
-      in
       let calls = Zkapp_call_forest.Checked.empty () in
       (* NOTE: processed_transfers' must be a prefix of all_transfers, checked also using action_prf. *)
       let processed_transfers', calls =
@@ -1005,10 +860,7 @@ struct
   module Action_state_extension = struct
     open Action_state_extension_rule
 
-    let ( tag
-        , cache_handle
-        , p
-        , Pickles.Provers.[ base_; step_both_; step0_; step1_ ] ) =
+    let tag, cache_handle, p, Pickles.Provers.[ base_; step_both_ ] =
       time "Action_state_extension.compile" (fun () ->
           Pickles.compile ()
             ~override_wrap_domain:Pickles_base.Proofs_verified.N1
@@ -1020,25 +872,13 @@ struct
             ~constraint_constants:
               (Genesis_constants.Constraint_constants.to_snark_keys_header
                  constraint_constants )
-            ~choices:(fun ~self ->
-              [ Base.rule
-              ; StepBoth.rule self
-              ; Step0.rule self
-              ; Step1.rule self
-              ] ) )
+            ~choices:(fun ~self -> [ Base.rule; StepBoth.rule self ]) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-    let base source0 source1 = base_ ~handler:(Base.handler source0 source1)
+    let base w = base_ ~handler:(Base.handler w)
 
-    let step_both actions0 actions1 prev proof =
-      step_both_ ~handler:(StepBoth.handler actions0 actions1 prev proof)
-
-    let step0 actions0 prev proof =
-      step0_ ~handler:(Step0.handler actions0 prev proof)
-
-    let step1 actions1 prev proof =
-      step1_ ~handler:(Step1.handler actions1 prev proof)
+    let step_both w = step_both_ ~handler:(StepBoth.handler w)
 
     module Proof = (val p)
   end
@@ -1067,7 +907,9 @@ struct
       let proof = Transaction_snark.proof txn_snark in
       let wrapped_statement = S.of_txn_snark_statement statement in
       let%bind (), (), wrapped_proof =
-        wrap_ ~handler:(Wrap.handler statement proof) wrapped_statement
+        wrap_
+          ~handler:(Wrap.handler { istmt = statement; prf = proof })
+          wrapped_statement
       in
       return { statement = wrapped_statement; proof = wrapped_proof }
 
@@ -1079,7 +921,13 @@ struct
       in
       let%bind (), (), wrapped_proof =
         merge_
-          ~handler:(Merge.handler p1.statement p2.statement p1.proof p2.proof)
+          ~handler:
+            (Merge.handler
+               { s1 = p1.statement
+               ; s2 = p2.statement
+               ; p1 = p1.proof
+               ; p2 = p2.proof
+               } )
           wrapped_statement
       in
       return { statement = wrapped_statement; proof = wrapped_proof }
@@ -1106,11 +954,7 @@ struct
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-    let step pk vk_hash action_prf all processed processing =
-      step_
-        ~handler:
-          (Inner_rules.Step.handler pk vk_hash action_prf all processed
-             processing )
+    let step w = step_ ~handler:(Inner_rules.Step.handler w)
 
     module Proof = (val p)
   end
@@ -1133,12 +977,7 @@ struct
 
   let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-  let step stmt prf action_prf pk vk_hash action_state processed_transfers
-      processing_transfers =
-    step_
-      ~handler:
-        (Rules.Step.handler stmt prf action_prf pk vk_hash action_state
-           processed_transfers processing_transfers )
+  let step w = step_ ~handler:(Rules.Step.handler w)
 
   module Proof = (val p)
 end
