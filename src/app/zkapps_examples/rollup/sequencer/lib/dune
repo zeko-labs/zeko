@@ -64,4 +64,5 @@
   sexplib0
   fileutils
   ppx_inline_test.config)
-  (preprocess (pps ppx_jane ppx_mina)))
+ (preprocess
+  (pps ppx_jane ppx_mina)))

@@ -1,11 +1,11 @@
 (library
  (name zkapps_rollup)
  (libraries
-   ;; opam libraries
-   base
-   core_kernel
-   async_kernel
-   ;; local libraries
+  ;; opam libraries
+  base
+  core_kernel
+  async_kernel
+  ;; local libraries
   allocation_functor
   base58_check
   block_time
@@ -59,11 +59,11 @@
   tuple_lib
   unsigned_extended
   with_hash
-  zkapps_examples
- )
+  zkapps_examples)
  (inline_tests)
- (instrumentation (backend bisect_ppx))
+ (instrumentation
+  (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
  (flags
-	 (:standard -w a -warn-error +a)))
+  (:standard -w a -warn-error +a)))
