@@ -661,15 +661,15 @@ module Inner_rules = struct
   end
 end
 
+let inner_pk =
+  PC.of_base58_check_exn
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
 (** Account update for deploying outer zkapp *)
 module Deploy = struct
   let deploy (public_key : PC.t) (vk : Side_loaded_verification_key.t)
       (inner_vk : Side_loaded_verification_key.t) : L.t * Update.t =
     let l = L.create ~depth:constraint_constants.ledger_depth () in
-    let inner_pk =
-      PC.of_base58_check_exn
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    in
     L.create_new_account_exn l
       (Account_id.of_public_key @@ Public_key.decompress_exn inner_pk)
       { Account.empty with
@@ -760,44 +760,66 @@ module Outer_rules = struct
         exists_witness ()
       in
       let depth = constraint_constants.ledger_depth in
+      (* inner account should be first account *)
       let acc = constant (Account.Index.Unpacked.typ depth) 0 in
+      (* Fetch old account state *)
       let old_acc =
         run @@ Frozen_ledger_hash.get depth stmt.source_ledger acc
       in
+      (* Fetch new account state *)
       let new_acc =
         run @@ Frozen_ledger_hash.get depth stmt.target_ledger acc
       in
+      (* There must have been exactly one "step" in the inner account, checked by checking nonce *)
       let () =
         run
         @@ Nonce.Checked.Assert.equal
              (run @@ Nonce.Checked.succ old_acc.nonce)
              new_acc.nonce
       in
+      (* FIXME: shouldn't be necessary but who knows whether an account index is reliable *)
+      let () =
+        run
+        @@ PC.Checked.Assert.equal new_acc.public_key (constant PC.typ inner_pk)
+      in
+      (* We get the old & new zkapp state, a bit complicated to get because field is actually hash of contents *)
       let old_zkapp_hash, old_zkapp = old_acc.zkapp in
       let old_zkapp =
         exists Zkapp_account.typ ~compute:(fun () ->
             Option.value_exn @@ As_prover.Ref.get old_zkapp )
       in
+      (* We check that witness old zkapp is correct *)
+      Field.Assert.equal old_zkapp_hash
+      @@ Zkapp_account.Checked.digest old_zkapp ;
       let zkapp_hash, zkapp = new_acc.zkapp in
       let zkapp =
         exists Zkapp_account.typ ~compute:(fun () ->
             Option.value_exn @@ As_prover.Ref.get zkapp )
       in
+      (* We check that witness new zkapp is correct *)
       Field.Assert.equal zkapp_hash @@ Zkapp_account.Checked.digest zkapp ;
-      (* NOTE: outer_action_state_in_inner must be extension of old_outer_action_state_in_inner,
-         that is, we synchronise the outer action state to the inner account but make sure that it only goes forward,
-         since the action state precondition can actually be one of the last 5 states, meaning you could otherwise
-         go backward and perhaps break something *)
+      (* The inner account keeps track of _our_ action state, that's how it knows
+         what transfer requests have been logged on the L1 to the L2.
+         We check that it's been set to our current app state,
+         and seemingly redundantly, that it's also an extension of the old one.
+         It's in fact possible to go _backwards_ if we're not careful, since
+         what we think is our action state is in fact just a recent one,
+         so you could set the action state precondition to an old state and go backwards.
+         I haven't considered whether it's problematic to go backwards, but we disallow it anyway. *)
       let (old_outer_action_state_in_inner :: _) = old_zkapp.app_state in
       let (outer_action_state_in_inner :: _) = zkapp.app_state in
+      (* Check that it matches action_state witness *)
       Field.Assert.equal outer_action_state_in_inner action_state ;
+      (* Init account update *)
       let account_update = constant (Body.typ ()) Body.dummy in
+      (* Declare that we're authorized by a proof *)
       let authorization_kind : Authorization_kind.Checked.t =
         { is_signed = Boolean.false_
         ; is_proved = Boolean.true_
         ; verification_key_hash = vk_hash
         }
       in
+      (* Init update *)
       let update = account_update.update in
       let (all_transfers :: _) = zkapp.action_state in
       let calls = Zkapp_call_forest.Checked.empty () in
@@ -807,13 +829,17 @@ module Outer_rules = struct
           ~f:(fun (transfers, calls) tr ->
             Process_transfer.process_transfer transfers tr calls )
       in
+      (* Finalize update  *)
       let update =
         { update with
           app_state =
             [ Set_or_keep.Checked.set
               @@ Frozen_ledger_hash.var_to_field stmt.target_ledger
+              (* Update recorded ledger *)
             ; Set_or_keep.Checked.set all_transfers
+              (* This is the action state for the inner account *)
             ; Set_or_keep.Checked.set processed_transfers'
+              (* This is the merkle list of _processed_ transfers, a prefix of all_transfers *)
             ; keep
             ; keep
             ; keep
@@ -822,6 +848,7 @@ module Outer_rules = struct
             ]
         }
       in
+      (* Init account state precondition *)
       let account_precondition =
         constant
           (Zkapp_precondition.Account.typ ())
@@ -832,8 +859,11 @@ module Outer_rules = struct
           state =
             [ Or_ignore.Checked.make_unsafe Boolean.true_
                 (Frozen_ledger_hash.var_to_field stmt.source_ledger)
+              (* Our previous ledger must be this *)
             ; ignore
+              (* This is the old all_transfers, we don't need to check this *)
             ; Or_ignore.Checked.make_unsafe Boolean.true_ processed_transfers
+              (* The list of processed transfers before the current update *)
             ; ignore
             ; ignore
             ; ignore
@@ -842,14 +872,17 @@ module Outer_rules = struct
             ]
         ; action_state =
             Or_ignore.Checked.make_unsafe Boolean.true_ action_state
+            (* Our action state must match *)
         }
       in
       let preconditions =
         constant (Preconditions.typ ()) Preconditions.accept
       in
+      (* Finalize preconditions *)
       let preconditions =
         { preconditions with account = account_precondition }
       in
+      (* Our account update is assembled, specifying our state update, our preconditions, our pk, and our authorization *)
       let account_update =
         { account_update with
           public_key
@@ -858,6 +891,7 @@ module Outer_rules = struct
         ; preconditions
         }
       in
+      (* Assemble some stuff to help the prover and calculate public output *)
       let public_output, auxiliary_output = make_outputs account_update calls in
       Pickles.Inductive_rule.
         { previous_proof_statements =
@@ -865,6 +899,7 @@ module Outer_rules = struct
               ; proof_must_verify = Boolean.true_
               ; proof = prf
               }
+              (* Proof for Wrapper_rules showing there is a valid transition from source to target *)
             ; { public_input =
                   ({ source0 = old_outer_action_state_in_inner
                    ; target0 = outer_action_state_in_inner
@@ -874,6 +909,8 @@ module Outer_rules = struct
               ; proof_must_verify = Boolean.true_
               ; proof = action_prf
               }
+              (* Proof that _our_ outer action state, as recorded in the inner account, stepped forward, along
+                 with the _inner_ action state, as recorded in the outer account, is an extension of our processed transfers *)
             ]
         ; public_output
         ; auxiliary_output
@@ -888,13 +925,16 @@ module Outer_rules = struct
   end
 end
 
+(* What we expose from this module *)
 type t = Wrapper_rules.t
 
 let source_ledger (t : t) = t.stmt.source_ledger
 
 let target_ledger (t : t) = t.stmt.target_ledger
 
+(** Compile the circuits *)
 module Make (T : sig
+  (** Tag for transaction snark rules *)
   val tag : Transaction_snark.tag
 end) =
 struct
