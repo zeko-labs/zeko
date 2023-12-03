@@ -1,16 +1,11 @@
-(* FIXME: switch to simplified zkapps_examples framework *)
-
 open Core_kernel
-open Pickles_types
 open Mina_base
-open Snark_params
-open Tick
-open Run
-open Pickles.Inductive_rule
+open Snark_params.Tick.Run
 open Zkapp_basic
 open Account_update
 
 open struct
+  module Nat = Pickles_types.Nat
   module Nonce = Mina_numbers.Account_nonce
   module Local_state = Mina_state.Local_state
 
@@ -18,19 +13,14 @@ open struct
 
   module L = Mina_ledger.Ledger
 
-  (* let (!) = run_checked *)
-
+  (** Converts a variable to its constituent fields *)
   let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :
       Field.t array =
     let (Typ typ) = typ in
     let fields, aux = typ.var_to_fields x in
     fields
 
-  let to_field (type var value) (typ : (var, value) Typ.t) (x : value) : field =
-    let (Typ typ) = typ in
-    let fields, aux = typ.value_to_fields x in
-    fields.(0)
-
+  (** Default permissions for deployments *)
   let proof_permissions : Permissions.t =
     { edit_state = Proof
     ; send = Proof
@@ -47,6 +37,7 @@ open struct
     ; access = Proof
     }
 
+  (** Given calls the zkapp wishes to make, constructs output that can be used to construct a full account update *)
   let make_outputs account_update calls =
     let account_update_digest =
       Zkapp_command.Call_forest.Digest.Account_update.Checked.create
@@ -69,12 +60,16 @@ open struct
     in
     (public_output, auxiliary_output)
 
+  (** A shorthand function to keep a field in the update for the app state *)
   let keep = Set_or_keep.Checked.keep ~dummy:Field.zero
 
+  (** A shorthand function to ignore a field in the precondition for the app state *)
   let ignore = Or_ignore.Checked.make_unsafe Boolean.false_ Field.zero
 
+  (** FIXME: Very commonly used, but should be replaced by monadic style *)
   let run = run_checked
 
+  (** To be used with deriving snarky, a simple field *)
   module F = struct
     type t = field
 
@@ -83,6 +78,7 @@ open struct
     let typ : (var, t) Typ.t = Field.typ
   end
 
+  (** To be used with deriving snarky, a reference to T with no in-circuit representation *)
   module MkRef (T : sig
     type t
   end) =
@@ -94,10 +90,7 @@ open struct
     let typ : (var, t) Typ.t = Typ.Internal.ref ()
   end
 
-  module Proof1 = struct
-    type t = (Nat.N1.n, Nat.N1.n) Pickles.Proof.t
-  end
-
+  (** A list of `length` `t`s *)
   module SnarkList (T : sig
     module T : sig
       type t
@@ -117,15 +110,25 @@ open struct
     let typ : (var, t) Typ.t = Typ.list ~length:T.length T.T.typ
   end
 
+  (** A proof with max width 1 *)
+  module Proof1 = struct
+    type t = (Nat.N1.n, Nat.N1.n) Pickles.Proof.t
+  end
+
+  (** Reference to Proof  *)
   module RefProof = MkRef (Proof)
+
+  (** Reference to Proof1  *)
   module RefProof1 = MkRef (Proof1)
 
+  (** Boolean but monkey-patched to have `t`*)
   module Boolean = struct
     include Boolean
 
     type t = bool
   end
 
+  (** Helper to construct snarky handler from type *)
   module MkHandler (Witness : sig
     type t
 
@@ -157,8 +160,6 @@ open struct
   module CA = Currency.Amount
 end
 
-(* FIXME: Improve performance *)
-
 (** A proof for source0, target0, source1, target1, means the targets are
 action states that originate from the sources *)
 module Action_state_extension_rule = struct
@@ -167,6 +168,7 @@ module Action_state_extension_rule = struct
     [@@deriving snarky]
   end
 
+  (** Base case, source equal to target *)
   module Base = struct
     module Witness = struct
       type t = { source0 : F.t; source1 : F.t } [@@deriving snarky]
@@ -174,13 +176,15 @@ module Action_state_extension_rule = struct
 
     include MkHandler (Witness)
 
-    let main { public_input = () } =
+    let main Pickles.Inductive_rule.{ public_input = () } =
       let Witness.{ source0; source1 } = exists_witness () in
-      { previous_proof_statements = []
-      ; public_output =
-          ({ source0; target0 = source0; source1; target1 = source1 } : Stmt.var)
-      ; auxiliary_output = ()
-      }
+      Pickles.Inductive_rule.
+        { previous_proof_statements = []
+        ; public_output =
+            ({ source0; target0 = source0; source1; target1 = source1 } : Stmt
+                                                                          .var)
+        ; auxiliary_output = ()
+        }
 
     let rule : _ Pickles.Inductive_rule.t =
       { identifier = "action state extension base"
@@ -190,6 +194,7 @@ module Action_state_extension_rule = struct
       }
   end
 
+  (** Step case, can step once forward in either, both, or neither fields *)
   module StepBoth = struct
     module Witness = struct
       type t =
@@ -205,7 +210,7 @@ module Action_state_extension_rule = struct
 
     include MkHandler (Witness)
 
-    let main { public_input = () } =
+    let main Pickles.Inductive_rule.{ public_input = () } =
       let Witness.{ actions0; actions1; step0; step1; prev; proof } =
         exists_witness ()
       in
@@ -219,11 +224,13 @@ module Action_state_extension_rule = struct
           (Actions.push_events_checked prev.target1 actions1)
           prev.target1
       in
-      { previous_proof_statements =
-          [ { public_input = prev; proof_must_verify = Boolean.true_; proof } ]
-      ; public_output = { prev with target0; target1 }
-      ; auxiliary_output = ()
-      }
+      Pickles.Inductive_rule.
+        { previous_proof_statements =
+            [ { public_input = prev; proof_must_verify = Boolean.true_; proof }
+            ]
+        ; public_output = { prev with target0; target1 }
+        ; auxiliary_output = ()
+        }
 
     let rule tag : _ Pickles.Inductive_rule.t =
       { identifier = "action state extension step"
@@ -234,12 +241,14 @@ module Action_state_extension_rule = struct
   end
 end
 
-(* TODO: Use Zkapp_command_logic here and bypass transaction snark and two pass system *)
+(** Rules for wrapping txn snarks, necessary because we don't use passes
+ TODO: Use Zkapp_command_logic here and bypass transaction snark and two pass system *)
 module Wrapper_rules = struct
   open struct
     module With_sok = Transaction_snark.Statement.With_sok
   end
 
+  (** Statement for this *)
   module S = struct
     type t =
       { source_ledger : Frozen_ledger_hash.t
@@ -254,11 +263,13 @@ module Wrapper_rules = struct
   end
 
   module Snark = struct
+    (** Akin to Transaction_snark.t  *)
     type t = { stmt : S.t; proof : RefProof.t } [@@deriving snarky]
   end
 
   include Snark
 
+  (** Base case, wraps a complete txn snark, morally wraps a block *)
   module Wrap = struct
     module Witness = struct
       module R = MkRef (Transaction_snark)
@@ -276,6 +287,7 @@ module Wrapper_rules = struct
       Consensus.Constants.create ~constraint_constants
         ~protocol_constants:genesis_constants.protocol
 
+    (** Dummy state body, network preconditions are disabled anyway *)
     let dummy_state_body =
       let compile_time_genesis =
         Mina_state.Genesis_protocol_state.t
@@ -291,7 +303,7 @@ module Wrapper_rules = struct
         (Mina_state.Protocol_state.Body.hash dummy_state_body)
         Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
 
-    let%snarkydef_ main { public_input = () } =
+    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
       let Witness.{ txn_snark } = exists_witness () in
       let istmt =
         Transaction_snark.(
@@ -351,18 +363,19 @@ module Wrapper_rules = struct
       in
       Boolean.Assert.is_true Boolean.(is_neg || is_zero) ;
 
-      { previous_proof_statements =
-          (* Proof for istmt using normal txn snark *)
-          [ { public_input = istmt
-            ; proof_must_verify = Boolean.true_
-            ; proof =
-                As_prover.Ref.create (fun () ->
-                    Transaction_snark.proof @@ As_prover.Ref.get txn_snark )
-            }
-          ]
-      ; public_output = stmt
-      ; auxiliary_output = ()
-      }
+      Pickles.Inductive_rule.
+        { previous_proof_statements =
+            (* Proof for istmt using normal txn snark *)
+            [ { public_input = istmt
+              ; proof_must_verify = Boolean.true_
+              ; proof =
+                  As_prover.Ref.create (fun () ->
+                      Transaction_snark.proof @@ As_prover.Ref.get txn_snark )
+              }
+            ]
+        ; public_output = stmt
+        ; auxiliary_output = ()
+        }
 
     let rule txn_snark_tag : _ Pickles.Inductive_rule.t =
       { identifier = "zeko wrap"
@@ -372,6 +385,7 @@ module Wrapper_rules = struct
       }
   end
 
+  (** Merges two statements that line up *)
   module Merge = struct
     module Witness = struct
       type t = { s1 : Snark.t; s2 : Snark.t } [@@deriving snarky]
@@ -379,7 +393,7 @@ module Wrapper_rules = struct
 
     include MkHandler (Witness)
 
-    let%snarkydef_ main { public_input = () } =
+    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
       let Witness.{ s1; s2 } = exists_witness () in
       let s =
         S.
@@ -390,19 +404,20 @@ module Wrapper_rules = struct
       run
       @@ Frozen_ledger_hash.assert_equal s1.stmt.target_ledger
            s2.stmt.source_ledger ;
-      { previous_proof_statements =
-          [ { public_input = s1.stmt
-            ; proof_must_verify = Boolean.true_
-            ; proof = s1.proof
-            }
-          ; { public_input = s2.stmt
-            ; proof_must_verify = Boolean.true_
-            ; proof = s2.proof
-            }
-          ]
-      ; public_output = s
-      ; auxiliary_output = ()
-      }
+      Pickles.Inductive_rule.
+        { previous_proof_statements =
+            [ { public_input = s1.stmt
+              ; proof_must_verify = Boolean.true_
+              ; proof = s1.proof
+              }
+            ; { public_input = s2.stmt
+              ; proof_must_verify = Boolean.true_
+              ; proof = s2.proof
+              }
+            ]
+        ; public_output = s
+        ; auxiliary_output = ()
+        }
 
     let rule self : _ Pickles.Inductive_rule.t =
       { identifier = "zeko merge"
@@ -417,22 +432,21 @@ open struct
   module S = Wrapper_rules.S
 end
 
+(** The type for "transfer requests" put in actions *)
 module TR = struct
   type t = { amount : CA.t; recipient : PC.t } [@@deriving snarky]
 
   let dummy : t = { amount = CA.zero; recipient = PC.empty }
 
   let to_actions (tr : var) : Actions.var =
-    let empty_actions =
-      exists Zkapp_account.Actions.typ ~compute:(fun () -> [])
-    in
-    Boolean.Assert.is_true @@ run @@ Actions.is_empty_var empty_actions ;
+    let empty_actions = Zkapp_account.Actions.(constant typ []) in
     let actions =
       Actions.push_to_data_as_hash empty_actions (var_to_fields typ tr)
     in
     actions
 end
 
+(** Partial circuit for processing a single transfer request *)
 module Process_transfer = struct
   let process_transfer transfers (transfer : TR.var)
       (calls : Zkapp_call_forest.Checked.t) :
@@ -470,23 +484,18 @@ module Process_transfer = struct
       ~then_:(transfers, calls) ~else_:(transfers', calls')
 end
 
+(** Rule used by both inner and outer accounts to validate actions posted to account *)
 module Transfer_action_rule = struct
   module Witness = struct
     type t =
-      { stmt : S.t
-      ; prf : RefProof.t
-      ; public_key : PC.t
-      ; vk_hash : F.t
-      ; amount : CA.t
-      ; recipient : PC.t
-      }
+      { public_key : PC.t; vk_hash : F.t; amount : CA.t; recipient : PC.t }
     [@@deriving snarky]
   end
 
   include MkHandler (Witness)
 
-  let main { public_input = () } =
-    let Witness.{ stmt; prf; public_key; vk_hash; amount; recipient } =
+  let main Pickles.Inductive_rule.{ public_input = () } =
+    let Witness.{ public_key; vk_hash; amount; recipient } =
       exists_witness ()
     in
     let account_update = Body.(constant (typ ()) dummy) in
@@ -497,10 +506,7 @@ module Transfer_action_rule = struct
       }
     in
     let tr : TR.var = { amount; recipient } in
-    let empty_actions =
-      exists Zkapp_account.Actions.typ ~compute:(fun () -> [])
-    in
-    Boolean.Assert.is_true @@ run @@ Actions.is_empty_var empty_actions ;
+    let empty_actions = Zkapp_account.Actions.(constant typ []) in
     let actions =
       Actions.push_to_data_as_hash empty_actions (var_to_fields TR.typ tr)
     in
@@ -515,7 +521,8 @@ module Transfer_action_rule = struct
     let public_output, auxiliary_output =
       make_outputs account_update @@ Zkapp_call_forest.Checked.empty ()
     in
-    { previous_proof_statements = []; public_output; auxiliary_output }
+    Pickles.Inductive_rule.
+      { previous_proof_statements = []; public_output; auxiliary_output }
 
   let rule : _ Pickles.Inductive_rule.t =
     { identifier = "Rollup step"
@@ -525,6 +532,7 @@ module Transfer_action_rule = struct
     }
 end
 
+(** The rules for the inner account zkapp, that controls the money supply and transfers on the rollup *)
 module Inner_rules = struct
   module Step = struct
     let processing_transfers_length = 8
@@ -551,7 +559,7 @@ module Inner_rules = struct
 
     include MkHandler (Witness)
 
-    let main { public_input = () } =
+    let main Pickles.Inductive_rule.{ public_input = () } =
       let Witness.
             { public_key
             ; vk_hash
@@ -628,20 +636,21 @@ module Inner_rules = struct
         }
       in
       let public_output, auxiliary_output = make_outputs account_update calls in
-      { previous_proof_statements =
-          [ { public_input =
-                ({ source0 = processed_transfers'
-                 ; target0 = all_transfers
-                 ; source1 = processed_transfers'
-                 ; target1 = all_transfers
-                 } : Action_state_extension_rule.Stmt.var)
-            ; proof_must_verify = Boolean.true_
-            ; proof = action_prf
-            }
-          ]
-      ; public_output
-      ; auxiliary_output
-      }
+      Pickles.Inductive_rule.
+        { previous_proof_statements =
+            [ { public_input =
+                  ({ source0 = processed_transfers'
+                   ; target0 = all_transfers
+                   ; source1 = processed_transfers'
+                   ; target1 = all_transfers
+                   } : Action_state_extension_rule.Stmt.var)
+              ; proof_must_verify = Boolean.true_
+              ; proof = action_prf
+              }
+            ]
+        ; public_output
+        ; auxiliary_output
+        }
 
     let rule tag : _ Pickles.Inductive_rule.t =
       { identifier = "Rollup special account step"
@@ -652,6 +661,7 @@ module Inner_rules = struct
   end
 end
 
+(** Account update for deploying outer zkapp *)
 module Deploy = struct
   let deploy (public_key : PC.t) (vk : Side_loaded_verification_key.t)
       (inner_vk : Side_loaded_verification_key.t) : L.t * Update.t =
@@ -707,7 +717,8 @@ module Deploy = struct
     (l, update)
 end
 
-module Rules = struct
+(** Rules for outer account zkapp *)
+module Outer_rules = struct
   module Step = struct
     let processing_transfers_length = 8
 
@@ -735,7 +746,7 @@ module Rules = struct
 
     include MkHandler (Witness)
 
-    let main { public_input = () } =
+    let main Pickles.Inductive_rule.{ public_input = () } =
       let ({ stmt
            ; prf
            ; action_prf
@@ -848,24 +859,25 @@ module Rules = struct
         }
       in
       let public_output, auxiliary_output = make_outputs account_update calls in
-      { previous_proof_statements =
-          [ { public_input = stmt
-            ; proof_must_verify = Boolean.true_
-            ; proof = prf
-            }
-          ; { public_input =
-                ({ source0 = old_outer_action_state_in_inner
-                 ; target0 = outer_action_state_in_inner
-                 ; source1 = processed_transfers'
-                 ; target1 = all_transfers
-                 } : Action_state_extension_rule.Stmt.var)
-            ; proof_must_verify = Boolean.true_
-            ; proof = action_prf
-            }
-          ]
-      ; public_output
-      ; auxiliary_output
-      }
+      Pickles.Inductive_rule.
+        { previous_proof_statements =
+            [ { public_input = stmt
+              ; proof_must_verify = Boolean.true_
+              ; proof = prf
+              }
+            ; { public_input =
+                  ({ source0 = old_outer_action_state_in_inner
+                   ; target0 = outer_action_state_in_inner
+                   ; source1 = processed_transfers'
+                   ; target1 = all_transfers
+                   } : Action_state_extension_rule.Stmt.var)
+              ; proof_must_verify = Boolean.true_
+              ; proof = action_prf
+              }
+            ]
+        ; public_output
+        ; auxiliary_output
+        }
 
     let rule tag action_tag : _ Pickles.Inductive_rule.t =
       { identifier = "Rollup step"
@@ -941,14 +953,12 @@ struct
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
     let wrap txn_snark =
-      let%bind stmt, _, proof =
-        wrap_ ~handler:(Wrap.handler { txn_snark }) ()
-      in
-      return ({ stmt; proof } : t)
+      let%map stmt, _, proof = wrap_ ~handler:(Wrap.handler { txn_snark }) () in
+      ({ stmt; proof } : t)
 
     let merge (s1 : t) (s2 : t) =
-      let%bind stmt, _, proof = merge_ ~handler:(Merge.handler { s1; s2 }) () in
-      return ({ stmt; proof } : t)
+      let%map stmt, _, proof = merge_ ~handler:(Merge.handler { s1; s2 }) () in
+      ({ stmt; proof } : t)
 
     module Proof = (val p)
   end
@@ -972,9 +982,25 @@ struct
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
+    let vk_hash = Zkapp_account.digest_vk vk
+
     let step w = step_ ~handler:(Inner_rules.Step.handler w)
 
-    module Proof = (val p)
+    let action ~public_key ~amount ~recipient =
+      let%map _, (account_update, account_update_digest, calls), proof =
+        action_
+          ~handler:
+            (Transfer_action_rule.handler
+               { vk_hash; public_key; amount; recipient } )
+          ()
+      in
+      let account_update : Account_update.t =
+        { body = account_update
+        ; authorization = Proof (Pickles.Side_loaded.Proof.of_proof proof)
+        }
+      in
+      Zkapp_command.Call_forest.Tree.
+        { account_update; account_update_digest; calls }
   end
 
   module Outer = struct
@@ -991,13 +1017,31 @@ struct
               (Genesis_constants.Constraint_constants.to_snark_keys_header
                  constraint_constants )
             ~choices:(fun ~self:_ ->
-              [ Rules.Step.rule Wrapper.tag Action_state_extension.tag
+              [ Outer_rules.Step.rule Wrapper.tag Action_state_extension.tag
               ; Transfer_action_rule.rule
               ] ) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-    let step w = step_ ~handler:(Rules.Step.handler w)
+    let vk_hash = Zkapp_account.digest_vk vk
+
+    let step w = step_ ~handler:(Outer_rules.Step.handler w)
+
+    let action ~public_key ~amount ~recipient =
+      let%map _, (account_update, account_update_digest, calls), proof =
+        action_
+          ~handler:
+            (Transfer_action_rule.handler
+               { vk_hash; public_key; amount; recipient } )
+          ()
+      in
+      let account_update : Account_update.t =
+        { body = account_update
+        ; authorization = Proof (Pickles.Side_loaded.Proof.of_proof proof)
+        }
+      in
+      Zkapp_command.Call_forest.Tree.
+        { account_update; account_update_digest; calls }
 
     module Proof = (val p)
   end
