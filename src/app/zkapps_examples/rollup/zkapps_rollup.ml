@@ -510,11 +510,16 @@ module Transfer_action_rule = struct
     let actions =
       Actions.push_to_data_as_hash empty_actions (var_to_fields TR.typ tr)
     in
+    let account_creation_fee =
+      CA.(constant typ @@ of_fee constraint_constants.account_creation_fee)
+    in
     let account_update =
       { account_update with
         public_key
       ; authorization_kind
-      ; balance_change = CAS.Checked.of_unsigned amount
+      ; balance_change =
+          CAS.Checked.of_unsigned @@ run
+          @@ CA.Checked.add amount account_creation_fee
       ; actions
       }
     in
