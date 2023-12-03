@@ -1,6 +1,8 @@
 open Core_kernel
 open Mina_base
 open Snark_params.Tick.Run
+(* Impure interface to snarky, FIXME: replace with pure one *)
+
 open Zkapp_basic
 open Account_update
 
@@ -451,33 +453,40 @@ module Process_transfer = struct
   let process_transfer transfers (transfer : TR.var)
       (calls : Zkapp_call_forest.Checked.t) :
       Field.t * Zkapp_call_forest.Checked.t =
+    (* Transfers including our new transfer *)
     let transfers' =
       Actions.push_events_checked transfers @@ TR.to_actions transfer
     in
+    (* Init child account update *)
     let account_update = constant (Body.typ ()) Body.dummy in
-    let balance_change = CAS.Checked.of_unsigned transfer.amount in
-    let public_key = transfer.recipient in
     let account_update =
       { account_update with
-        balance_change
-      ; public_key
+        (* Send amount money *)
+        balance_change =
+          CAS.Checked.of_unsigned transfer.amount (* to public_key *)
+      ; public_key =
+          transfer.recipient (* and take creation fee implicitly if necessary *)
       ; implicit_account_creation_fee = Boolean.true_
       }
     in
+    (* Digest child account update *)
     let digest =
       Zkapp_command.Call_forest.Digest.Account_update.Checked.create
         account_update
     in
+    (* Attach digest to body *)
     let account_update : Zkapp_call_forest.Checked.account_update =
       { account_update = { data = account_update; hash = digest }
       ; control = Prover_value.create (fun () -> Control.None_given)
       }
     in
+    (* Update calls to child account updates *)
     let calls' =
       Zkapp_call_forest.Checked.push ~account_update
         ~calls:(Zkapp_call_forest.Checked.empty ())
         calls
     in
+    (* Only do all of this if TR isn't the dummy TR *)
     if_
       (run @@ CA.Checked.equal transfer.amount CA.(constant typ zero))
       ~typ:Typ.(Field.typ * Zkapp_call_forest.typ)
@@ -498,6 +507,12 @@ module Transfer_action_rule = struct
     let Witness.{ public_key; vk_hash; amount; recipient } =
       exists_witness ()
     in
+    let account_creation_fee =
+      CA.(constant typ @@ of_fee constraint_constants.account_creation_fee)
+    in
+    (* We increase amount by the fee necessary to create an account, to ensure
+       we can always make an account if it doesn't already exist *)
+    let amount = run @@ CA.Checked.add amount account_creation_fee in
     let account_update = Body.(constant (typ ()) dummy) in
     let authorization_kind : Authorization_kind.Checked.t =
       { is_signed = Boolean.false_
@@ -505,21 +520,18 @@ module Transfer_action_rule = struct
       ; verification_key_hash = vk_hash
       }
     in
+    (* The amount will go the recipient on the other side *)
     let tr : TR.var = { amount; recipient } in
+    (* We add a single action which is the above amount and recipient *)
     let empty_actions = Zkapp_account.Actions.(constant typ []) in
     let actions =
       Actions.push_to_data_as_hash empty_actions (var_to_fields TR.typ tr)
-    in
-    let account_creation_fee =
-      CA.(constant typ @@ of_fee constraint_constants.account_creation_fee)
     in
     let account_update =
       { account_update with
         public_key
       ; authorization_kind
-      ; balance_change =
-          CAS.Checked.of_unsigned @@ run
-          @@ CA.Checked.add amount account_creation_fee
+      ; balance_change = CAS.Checked.of_unsigned @@ amount
       ; actions
       }
     in
@@ -575,7 +587,9 @@ module Inner_rules = struct
             } =
         exists_witness ()
       in
+      (* Init account update *)
       let account_update = constant (Body.typ ()) Body.dummy in
+      (* We are authorized by a proof *)
       let authorization_kind : Authorization_kind.Checked.t =
         { is_signed = Boolean.false_
         ; is_proved = Boolean.true_
@@ -827,8 +841,10 @@ module Outer_rules = struct
       (* Init update *)
       let update = account_update.update in
       let (all_transfers :: _) = zkapp.action_state in
+      (* Init calls *)
       let calls = Zkapp_call_forest.Checked.empty () in
       (* NOTE: processed_transfers' must be a prefix of all_transfers, checked also using action_prf. *)
+      (* For every transfer, we add a "call", i.e. an account update as child where we inc balance *)
       let processed_transfers', calls =
         List.fold trs ~init:(processed_transfers, calls)
           ~f:(fun (transfers, calls) tr ->
