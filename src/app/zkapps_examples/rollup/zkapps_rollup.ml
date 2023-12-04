@@ -68,6 +68,42 @@ open struct
   (** A shorthand function to ignore a field in the precondition for the app state *)
   let ignore = Or_ignore.Checked.make_unsafe Boolean.false_ Field.zero
 
+  let var_to_state (some : Field.t -> 'option) (none : 'option)
+      (typ : ('var, 'value) Typ.t) (x : 'var) : 'option Zkapp_state.V.t =
+    let fields = var_to_fields typ x in
+    let missing = 8 - Array.length fields in
+    Zkapp_state.V.of_list_exn
+    @@ List.append
+         (List.map ~f:(fun f -> some f) @@ Array.to_list fields)
+         (List.init missing ~f:(fun _ -> none))
+
+  let var_to_app_state typ x =
+    var_to_state Set_or_keep.Checked.set
+      (Set_or_keep.Checked.keep ~dummy:Field.zero)
+      typ x
+
+  let var_to_precondition_state typ x =
+    var_to_state
+      (Or_ignore.Checked.make_unsafe Boolean.true_)
+      (Or_ignore.Checked.make_unsafe Boolean.false_ Field.zero)
+      typ x
+
+  let value_to_state (some : field -> 'option) (none : 'option)
+      (typ : ('var, 'value) Typ.t) (x : 'value) : 'option Zkapp_state.V.t =
+    let (Typ typ) = typ in
+    let fields, aux = typ.value_to_fields x in
+    let missing = 8 - Array.length fields in
+    Zkapp_state.V.of_list_exn
+    @@ List.append
+         (List.map ~f:(fun f -> some f) @@ Array.to_list fields)
+         (List.init missing ~f:(fun _ -> none))
+
+  let value_to_init_state typ x =
+    value_to_state (fun f -> f) Field.Constant.zero typ x
+
+  let value_to_app_state typ x =
+    value_to_state (fun f -> Set_or_keep.Set f) Set_or_keep.Keep typ x
+
   (** FIXME: Very commonly used, but should be replaced by monadic style *)
   let run = run_checked
 
@@ -551,25 +587,40 @@ end
 
 (** The rules for the inner account zkapp, that controls the money supply and transfers on the rollup *)
 module Inner_rules = struct
-  module Step = struct
-    let processing_transfers_length = 8
+  let public_key =
+    PC.of_base58_check_exn
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
+  module State = struct
+    (* NB! Don't change this, code depends on the layout, sorry *)
+    type t =
+      { all_deposits : F.t
+            (** All deposits that have been made on the L1. We must pay them out on the L2. *)
+      ; deposits_processed : F.t
+            (** All deposits that have been processed successfully. *)
+      }
+    [@@deriving snarky]
+  end
+
+  module Step = struct
     module TR_8 = struct
       module T = TR
 
-      let length = processing_transfers_length
+      let length = 8
     end
 
     module List_TR_8 = SnarkList (TR_8)
 
     module Witness = struct
       type t =
-        { public_key : PC.t
-        ; vk_hash : F.t
+        { vk_hash : F.t
         ; action_prf : RefProof1.t
-        ; all_transfers : F.t
-        ; processed_transfers : F.t
-        ; trs : List_TR_8.t
+              (** action_prf is a proof for Action_state_extension_rule that all_deposits
+           is an extension of deposits_processed + new_deposits *)
+        ; all_deposits : F.t
+        ; deposits_processed : F.t
+        ; new_deposits : List_TR_8.t
+              (** Deposits that have yet to be processed *)
         }
       [@@deriving snarky]
     end
@@ -578,12 +629,11 @@ module Inner_rules = struct
 
     let main Pickles.Inductive_rule.{ public_input = () } =
       let Witness.
-            { public_key
-            ; vk_hash
+            { vk_hash
             ; action_prf
-            ; all_transfers
-            ; processed_transfers
-            ; trs
+            ; all_deposits
+            ; deposits_processed
+            ; new_deposits
             } =
         exists_witness ()
       in
@@ -596,38 +646,31 @@ module Inner_rules = struct
         ; verification_key_hash = vk_hash
         }
       in
+      (* Init calls *)
       let calls = Zkapp_call_forest.Checked.empty () in
-      (* NOTE: processed_transfers' must be a prefix of all_transfers, checked using action_prf. *)
-      let processed_transfers', calls =
-        List.fold trs ~init:(processed_transfers, calls)
-          ~f:(fun (transfers, calls) tr ->
-            Process_transfer.process_transfer transfers tr calls )
+      (* Process deposits, add a call per deposit *)
+      let deposits_processed', calls =
+        List.fold new_deposits ~init:(deposits_processed, calls)
+          ~f:(fun (deposits, calls) tr ->
+            Process_transfer.process_transfer deposits tr calls )
       in
-      let update = account_update.update in
+      (* Set all_deposits and deposits_processed' *)
       let update =
-        { update with
+        { account_update.update with
           app_state =
-            [ Set_or_keep.Checked.set all_transfers
-            ; Set_or_keep.Checked.set processed_transfers'
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ]
+            State.(
+              var_to_app_state typ
+                ( { all_deposits; deposits_processed = deposits_processed' }
+                  : var ))
         }
       in
+      (* Set account precondition such that deposits_processed must be correct.
+         We don't care about the previous all_deposits. *)
       let account_precondition =
-        constant
-          (Zkapp_precondition.Account.typ ())
-          Zkapp_precondition.Account.accept
-      in
-      let account_precondition =
-        { account_precondition with
+        { Zkapp_precondition.Account.(constant (typ ()) accept) with
           state =
             [ ignore
-            ; Or_ignore.Checked.make_unsafe Boolean.true_ processed_transfers
+            ; Or_ignore.Checked.make_unsafe Boolean.true_ deposits_processed
             ; ignore
             ; ignore
             ; ignore
@@ -638,34 +681,37 @@ module Inner_rules = struct
         }
       in
       let preconditions =
-        constant (Preconditions.typ ()) Preconditions.accept
-      in
-      let preconditions =
-        { preconditions with account = account_precondition }
+        { Preconditions.(constant (typ ()) accept) with
+          account = account_precondition
+        }
       in
       let account_update =
         { account_update with
-          public_key
+          public_key = constant PC.typ public_key
         ; authorization_kind
         ; update
         ; preconditions
         ; increment_nonce =
             Boolean.true_
-            (* NOTE: Nonce **must** be incremented for soundness! *)
+            (* We increment the nonce to signal that a step has been performed to the outer account *)
         }
       in
       let public_output, auxiliary_output = make_outputs account_update calls in
       Pickles.Inductive_rule.
         { previous_proof_statements =
             [ { public_input =
-                  ({ source0 = processed_transfers'
-                   ; target0 = all_transfers
-                   ; source1 = processed_transfers'
-                   ; target1 = all_transfers
+                  ({ source0 = deposits_processed'
+                   ; target0 = all_deposits
+                   ; source1 = deposits_processed'
+                   ; target1 = all_deposits
                    } : Action_state_extension_rule.Stmt.var)
               ; proof_must_verify = Boolean.true_
               ; proof = action_prf
               }
+              (* We check that all_deposits is an extension of deposits_processed',
+                 which inherently must be an extension of deposits_processed,
+                 ensuring continuity and soundness.
+                 We duplicate the check since the proof checks two at the same time. *)
             ]
         ; public_output
         ; auxiliary_output
@@ -680,85 +726,40 @@ module Inner_rules = struct
   end
 end
 
-let inner_pk =
-  PC.of_base58_check_exn
-    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-
-(** Account update for deploying outer zkapp *)
-module Deploy = struct
-  let deploy (public_key : PC.t) (vk : Side_loaded_verification_key.t)
-      (inner_vk : Side_loaded_verification_key.t) : L.t * Update.t =
-    let l = L.create ~depth:constraint_constants.ledger_depth () in
-    L.create_new_account_exn l
-      (Account_id.of_public_key @@ Public_key.decompress_exn inner_pk)
-      { Account.empty with
-        public_key = inner_pk
-      ; balance = Currency.Balance.max_int
-      ; permissions = proof_permissions
-      ; zkapp =
-          Some
-            { Zkapp_account.default with
-              app_state =
-                [ Actions.empty_hash (* actions from outer account *)
-                ; Actions.empty_hash (* actions from outer account processed *)
-                ; Field.Constant.zero
-                ; Field.Constant.zero
-                ; Field.Constant.zero
-                ; Field.Constant.zero
-                ; Field.Constant.zero
-                ; Field.Constant.zero
-                ]
-            ; verification_key =
-                Some (Verification_key_wire.Stable.Latest.M.of_binable inner_vk)
-            }
-      } ;
-    if not (PC.equal inner_pk (L.get_at_index_exn l 0).public_key) then
-      failwith "bug"
-    else () ;
-    let state_0 = L.merkle_root l in
-    let update =
-      { Update.dummy with
-        app_state =
-          [ Set (Frozen_ledger_hash.to_field (L.merkle_root l))
-            (* ledger merkle root *)
-          ; Set Actions.empty_hash (* actions from inner account *)
-          ; Set Actions.empty_hash (* actions from inner account processed *)
-          ; Set Field.Constant.zero
-          ; Set Field.Constant.zero
-          ; Set Field.Constant.zero
-          ; Set Field.Constant.zero
-          ; Set Field.Constant.zero
-          ]
-      ; verification_key = Set { data = vk; hash = Zkapp_account.digest_vk vk }
-      ; permissions = Set proof_permissions
-      }
-    in
-    (l, update)
-end
-
 (** Rules for outer account zkapp *)
 module Outer_rules = struct
-  module Step = struct
-    let processing_transfers_length = 8
+  module State = struct
+    (* NB! Don't change this, code depends on the layout, sorry *)
+    type t =
+      { ledger_hash : Frozen_ledger_hash.t  (** The ledger hash of the rollup *)
+      ; all_withdrawals : F.t
+            (** All withdrawals registered on the L2. We must pay them out on the L1. *)
+      ; withdrawals_processed : F.t
+            (** All withdrawals successfully processed. *)
+      }
+    [@@deriving snarky]
+  end
 
+  module Step = struct
     module TR_8 = struct
       module T = TR
 
-      let length = processing_transfers_length
+      let length = 8
     end
 
     module List_TR_8 = SnarkList (TR_8)
 
     module Witness = struct
       type t =
-        { stmt : S.t
-        ; prf : RefProof.t
-        ; action_prf : RefProof1.t
-        ; public_key : PC.t
-        ; vk_hash : F.t
-        ; action_state : F.t
-        ; processed_transfers : F.t
-        ; processing_transfers : List_TR_8.t
+        { stmt : S.t  (** The ledger transition we are performing. *)
+        ; prf : RefProof.t  (** Proof of ledger transition being valid. *)
+        ; action_prf : RefProof1.t  (** Proof that actions moved forward. *)
+        ; public_key : PC.t  (** Our public key on the L2 *)
+        ; vk_hash : F.t  (** Our vk hash *)
+        ; action_state : F.t  (** Action state on the L1 *)
+        ; withdrawals_processed : F.t
+        ; new_withdrawals : List_TR_8.t
+              (** Withdrawals to be processed this time *)
         }
       [@@deriving snarky]
     end
@@ -772,8 +773,8 @@ module Outer_rules = struct
            ; public_key
            ; vk_hash
            ; action_state
-           ; processed_transfers
-           ; processing_transfers = trs
+           ; withdrawals_processed
+           ; new_withdrawals
            }
             : Witness.var ) =
         exists_witness ()
@@ -799,7 +800,8 @@ module Outer_rules = struct
       (* FIXME: shouldn't be necessary but who knows whether an account index is reliable *)
       let () =
         run
-        @@ PC.Checked.Assert.equal new_acc.public_key (constant PC.typ inner_pk)
+        @@ PC.Checked.Assert.equal new_acc.public_key
+             (constant PC.typ Inner_rules.public_key)
       in
       (* We get the old & new zkapp state, a bit complicated to get because field is actually hash of contents *)
       let old_zkapp_hash, old_zkapp = old_acc.zkapp in
@@ -825,10 +827,10 @@ module Outer_rules = struct
          what we think is our action state is in fact just a recent one,
          so you could set the action state precondition to an old state and go backwards.
          I haven't considered whether it's problematic to go backwards, but we disallow it anyway. *)
-      let (old_outer_action_state_in_inner :: _) = old_zkapp.app_state in
-      let (outer_action_state_in_inner :: _) = zkapp.app_state in
+      let (old_all_deposits :: _) = old_zkapp.app_state in
+      let (all_deposits :: _) = zkapp.app_state in
       (* Check that it matches action_state witness *)
-      Field.Assert.equal outer_action_state_in_inner action_state ;
+      Field.Assert.equal all_deposits action_state ;
       (* Init account update *)
       let account_update = constant (Body.typ ()) Body.dummy in
       (* Declare that we're authorized by a proof *)
@@ -838,35 +840,28 @@ module Outer_rules = struct
         ; verification_key_hash = vk_hash
         }
       in
-      (* Init update *)
-      let update = account_update.update in
-      let (all_transfers :: _) = zkapp.action_state in
+      (* Withdrawals are registered in the inner account's action state *)
+      let (all_withdrawals :: _) = zkapp.action_state in
       (* Init calls *)
       let calls = Zkapp_call_forest.Checked.empty () in
       (* NOTE: processed_transfers' must be a prefix of all_transfers, checked also using action_prf. *)
       (* For every transfer, we add a "call", i.e. an account update as child where we inc balance *)
-      let processed_transfers', calls =
-        List.fold trs ~init:(processed_transfers, calls)
-          ~f:(fun (transfers, calls) tr ->
-            Process_transfer.process_transfer transfers tr calls )
+      let withdrawals_processed', calls =
+        List.fold new_withdrawals ~init:(withdrawals_processed, calls)
+          ~f:(fun (withdrawals, calls) withdrawal ->
+            Process_transfer.process_transfer withdrawals withdrawal calls )
       in
       (* Finalize update  *)
       let update =
-        { update with
+        { account_update.update with
           app_state =
-            [ Set_or_keep.Checked.set
-              @@ Frozen_ledger_hash.var_to_field stmt.target_ledger
-              (* Update recorded ledger *)
-            ; Set_or_keep.Checked.set all_transfers
-              (* This is the action state for the inner account *)
-            ; Set_or_keep.Checked.set processed_transfers'
-              (* This is the merkle list of _processed_ transfers, a prefix of all_transfers *)
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ]
+            State.(
+              var_to_app_state typ
+                ( { ledger_hash = stmt.target_ledger
+                  ; all_withdrawals
+                  ; withdrawals_processed = withdrawals_processed'
+                  }
+                  : var ))
         }
       in
       (* Init account state precondition *)
@@ -882,9 +877,9 @@ module Outer_rules = struct
                 (Frozen_ledger_hash.var_to_field stmt.source_ledger)
               (* Our previous ledger must be this *)
             ; ignore
-              (* This is the old all_transfers, we don't need to check this *)
-            ; Or_ignore.Checked.make_unsafe Boolean.true_ processed_transfers
-              (* The list of processed transfers before the current update *)
+              (* This is the old all_withdrawals, we don't need to check this *)
+            ; Or_ignore.Checked.make_unsafe Boolean.true_ withdrawals_processed
+              (* The list of withdrawals processed before the current update *)
             ; ignore
             ; ignore
             ; ignore
@@ -897,11 +892,9 @@ module Outer_rules = struct
         }
       in
       let preconditions =
-        constant (Preconditions.typ ()) Preconditions.accept
-      in
-      (* Finalize preconditions *)
-      let preconditions =
-        { preconditions with account = account_precondition }
+        { Preconditions.(constant (typ ()) accept) with
+          account = account_precondition
+        }
       in
       (* Our account update is assembled, specifying our state update, our preconditions, our pk, and our authorization *)
       let account_update =
@@ -922,10 +915,10 @@ module Outer_rules = struct
               }
               (* Proof for Wrapper_rules showing there is a valid transition from source to target *)
             ; { public_input =
-                  ({ source0 = old_outer_action_state_in_inner
-                   ; target0 = outer_action_state_in_inner
-                   ; source1 = processed_transfers'
-                   ; target1 = all_transfers
+                  ({ source0 = old_all_deposits
+                   ; target0 = all_deposits
+                   ; source1 = withdrawals_processed'
+                   ; target1 = all_withdrawals
                    } : Action_state_extension_rule.Stmt.var)
               ; proof_must_verify = Boolean.true_
               ; proof = action_prf
@@ -944,6 +937,53 @@ module Outer_rules = struct
       ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
       }
   end
+end
+
+(** Account update for deploying outer zkapp *)
+module Deploy = struct
+  let deploy (public_key : PC.t) (vk : Side_loaded_verification_key.t)
+      (inner_vk : Side_loaded_verification_key.t) : L.t * Update.t =
+    let l = L.create ~depth:constraint_constants.ledger_depth () in
+    L.create_new_account_exn l
+      ( Account_id.of_public_key
+      @@ Public_key.decompress_exn Inner_rules.public_key )
+      { Account.empty with
+        public_key = Inner_rules.public_key
+      ; balance = Currency.Balance.max_int
+      ; permissions = proof_permissions
+      ; zkapp =
+          Some
+            { Zkapp_account.default with
+              app_state =
+                Inner_rules.State.(
+                  value_to_init_state typ
+                    ( { all_deposits = Actions.empty_hash
+                      ; deposits_processed = Actions.empty_hash
+                      }
+                      : t ))
+            ; verification_key =
+                Some (Verification_key_wire.Stable.Latest.M.of_binable inner_vk)
+            }
+      } ;
+    if not (PC.equal Inner_rules.public_key (L.get_at_index_exn l 0).public_key)
+    then failwith "bug"
+    else () ;
+    let state_0 = L.merkle_root l in
+    let update =
+      { Update.dummy with
+        app_state =
+          Outer_rules.State.(
+            value_to_app_state typ
+              ( { ledger_hash = L.merkle_root l
+                ; all_withdrawals = Actions.empty_hash
+                ; withdrawals_processed = Actions.empty_hash
+                }
+                : t ))
+      ; verification_key = Set { data = vk; hash = Zkapp_account.digest_vk vk }
+      ; permissions = Set proof_permissions
+      }
+    in
+    (l, update)
 end
 
 (* What we expose from this module *)
