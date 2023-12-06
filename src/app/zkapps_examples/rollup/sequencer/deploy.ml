@@ -14,34 +14,6 @@ module M = Zkapps_rollup.Make (struct
   let tag = T.tag
 end)
 
-let fetch_nonce uri pk =
-  let q =
-    object
-      method query =
-        {|
-          query ($pk: PublicKey!) {
-            account(publicKey: $pk){
-              nonce
-            }
-          } 
-        |}
-
-      method variables =
-        `Assoc
-          [ ( "pk"
-            , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
-            )
-          ]
-        |> Yojson.Safe.to_basic
-    end
-  in
-  Thread_safe.block_on_async_exn (fun () ->
-      let%map result = Init.Graphql_client.query_json_exn q uri in
-      print_endline Yojson.Safe.(to_string result) ;
-      Yojson.Safe.Util.(
-        result |> member "account" |> member "nonce" |> to_string)
-      |> Int.of_string )
-
 let run uri init_state sk () =
   let sender_keypair =
     Signature_lib.(
@@ -55,8 +27,9 @@ let run uri init_state sk () =
       Compressed.to_base58_check @@ compress zkapp_keypair.public_key) ;
 
   let nonce =
-    fetch_nonce uri
-      (Signature_lib.Public_key.compress sender_keypair.public_key)
+    Thread_safe.block_on_async_exn (fun () ->
+        Sequencer_lib.Gql_client.fetch_nonce uri
+          (Signature_lib.Public_key.compress sender_keypair.public_key) )
   in
   let command =
     M.Mocked_zkapp.Deploy.deploy ~signer:sender_keypair ~zkapp:zkapp_keypair
@@ -65,29 +38,9 @@ let run uri init_state sk () =
       ~vk:M.Mocked.vk
       ~initial_state:(Frozen_ledger_hash.of_decimal_string init_state)
   in
-  let q =
-    object
-      method query =
-        {|
-          mutation ($input: SendZkappInput!) {
-            sendZkapp(input: $input){
-              zkapp {
-                id
-              }
-            }
-          } 
-        |}
-
-      method variables =
-        `Assoc
-          [ ("input", `Assoc [ ("zkappCommand", Zkapp_command.to_json command) ])
-          ]
-        |> Yojson.Safe.to_basic
-    end
-  in
   Thread_safe.block_on_async_exn (fun () ->
-      let%map result = Init.Graphql_client.query_json_exn q uri in
-      print_endline Yojson.Safe.(to_string result) )
+      let%map result = Sequencer_lib.Gql_client.send_zkapp uri command in
+      print_endline result )
 
 let () =
   Command_unix.run

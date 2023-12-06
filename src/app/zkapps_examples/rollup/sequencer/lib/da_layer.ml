@@ -46,7 +46,7 @@ module Da_layer = struct
         Out_channel.close stdin ;
         Unix.waitpid_exn (Pid.of_int pid)
 
-  let get_batches config ~from =
+  let get_batches config ~from ~to_ =
     match config.da_contract_address with
     | None ->
         print_endline "No da contract address provided. Skipping bootstrapping" ;
@@ -57,6 +57,7 @@ module Da_layer = struct
             (`Assoc
               [ ("address", `String da_contract_address)
               ; ("from", `String from)
+              ; ("to", `String to_)
               ] )
         in
         let stdout, stdin =

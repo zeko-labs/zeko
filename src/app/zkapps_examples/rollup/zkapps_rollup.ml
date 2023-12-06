@@ -1139,9 +1139,7 @@ struct
               ; authorization = Signature.dummy
               }
           ; account_updates =
-              Zkapp_command.Call_forest.accumulate_hashes
-                ~hash_account_update:(fun p ->
-                  Zkapp_command.Digest.Account_update.create p )
+              Zkapp_command.Call_forest.accumulate_hashes'
               @@ Zkapp_command.Call_forest.of_account_updates
                    ~account_update_depth:(fun _ -> 0)
                    [ zkapp_update; sender_update ]
@@ -1423,9 +1421,8 @@ struct
   module Mocked = struct
     let tag, cache_handle, p, Pickles.Provers.[ step_ ] =
       time "Mocked_zkapp.compile" (fun () ->
-          Pickles.compile
-            () (* ~override_wrap_domain:Pickles_base.Proofs_verified.N1 *)
-            ~cache:Cache_dir.cache ~public_input:(Output Zkapp_statement.typ)
+          Pickles.compile () ~cache:Cache_dir.cache
+            ~public_input:(Output Zkapp_statement.typ)
             ~auxiliary_typ:Typ.(Prover_value.typ ())
             ~branches:(module Nat.N1)
             ~max_proofs_verified:(module Nat.N1)

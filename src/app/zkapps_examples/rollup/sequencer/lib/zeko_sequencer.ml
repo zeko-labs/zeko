@@ -66,14 +66,20 @@ module Sequencer = struct
           User_command.t_
           list
       ; mutable previous_committed_ledger_hash : Frozen_ledger_hash0.t option
+      ; zkapp_pk : Signature_lib.Public_key.Compressed.t
+      ; signer : Signature_lib.Keypair.t
+      ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name option
       }
 
-    let create ~da_config =
+    let create ~da_config ~zkapp_pk ~l1_uri ~signer =
       { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
       ; da_config
       ; last = None
       ; staged_commands = []
       ; previous_committed_ledger_hash = None
+      ; zkapp_pk
+      ; signer
+      ; l1_uri
       }
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
@@ -161,7 +167,75 @@ module Sequencer = struct
               in
               print_endline ("Posted batch " ^ batch_id) ;
 
-              (* Add proving here *)
+              let%bind ( _stmt
+                       , (account_update, account_update_digest, calls)
+                       , proof ) =
+                time "Mocked.step"
+                  (M.Mocked.step t.zkapp_pk
+                     Zkapp_account.(digest_vk M.Mocked.vk)
+                     Option.(value_exn t.last)
+                     () )
+              in
+              let account_update =
+                { Zkapp_command.Call_forest.Tree.account_update =
+                    { Account_update.body = account_update
+                    ; authorization =
+                        Proof (Pickles.Side_loaded.Proof.of_proof proof)
+                    }
+                ; account_update_digest
+                ; calls
+                }
+              in
+              let%bind () =
+                match t.l1_uri with
+                | Some uri ->
+                    let%bind nonce =
+                      Gql_client.fetch_nonce uri
+                        (Signature_lib.Public_key.compress t.signer.public_key)
+                    in
+                    let command : Zkapp_command.t =
+                      { fee_payer =
+                          { Account_update.Fee_payer.body =
+                              { public_key =
+                                  Signature_lib.Public_key.compress
+                                    t.signer.public_key
+                              ; fee = Currency.Fee.of_mina_int_exn 1
+                              ; valid_until = None
+                              ; nonce = Unsigned.UInt32.of_int nonce
+                              }
+                          ; authorization = Signature.dummy
+                          }
+                      ; account_updates =
+                          Zkapp_command.Call_forest.(
+                            cons_tree account_update [])
+                      ; memo = Signed_command_memo.empty
+                      }
+                    in
+                    let full_commitment =
+                      Zkapp_command.Transaction_commitment.create_complete
+                        (Zkapp_command.commitment command)
+                        ~memo_hash:(Signed_command_memo.hash command.memo)
+                        ~fee_payer_hash:
+                          (Zkapp_command.Digest.Account_update.create
+                             (Account_update.of_fee_payer command.fee_payer) )
+                    in
+                    let signature =
+                      Signature_lib.Schnorr.Chunked.sign
+                        ~signature_kind:Mina_signature_kind.Testnet
+                        t.signer.private_key
+                        (Random_oracle.Input.Chunked.field full_commitment)
+                    in
+                    let command =
+                      { command with
+                        fee_payer =
+                          { command.fee_payer with authorization = signature }
+                      }
+                    in
+                    let%bind result = Gql_client.send_zkapp uri command in
+                    return @@ print_endline result
+                | None ->
+                    Deferred.unit
+              in
               t.staged_commands <- [] ;
               t.last <- None ;
               t.previous_committed_ledger_hash <- Some ledger_hash ;
@@ -179,8 +253,8 @@ module Sequencer = struct
     ; snark_q : Snark_queue.t
     }
 
-  let create ~max_pool_size ~commitment_period_sec ~da_contract_address ~db_dir
-      =
+  let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
+      ~da_contract_address ~db_dir ~l1_uri ~signer =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -191,7 +265,7 @@ module Sequencer = struct
     ; slot = 0
     ; config = { max_pool_size; commitment_period_sec; db_dir }
     ; da_config
-    ; snark_q = Snark_queue.create ~da_config
+    ; snark_q = Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
     }
 
   let run_committer t =
@@ -428,16 +502,16 @@ module Sequencer = struct
 
     Result.return (txn_applied, dproof)
 
-  let bootstrap ~max_pool_size ~commitment_period_sec ~da_contract_address
-      ~db_dir =
+  let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
+      ~da_contract_address ~db_dir ~l1_uri ~signer =
     ( try
         let commit_dir = Filename.concat db_dir "commit" in
         let commit_files = FileUtil.ls commit_dir in
         FileUtil.cp ~force:Force ~recurse:true commit_files db_dir
       with err -> print_endline (Exn.to_string err) ) ;
     let t =
-      create ~max_pool_size ~commitment_period_sec ~da_contract_address
-        ~db_dir:(Some db_dir)
+      create ~zkapp_pk ~max_pool_size ~commitment_period_sec
+        ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
     in
 
     (* Only for testing *)
@@ -450,23 +524,46 @@ module Sequencer = struct
           Mina_base.Token_id.default
           (Unsigned.UInt64.of_int64 1_000_000_000_000L) ) ;
 
-    let%bind commands =
-      Da_layer.get_batches t.da_config
-        ~from:(Frozen_ledger_hash.to_decimal_string @@ get_root t)
-      (* ~to:(fetch from L1) *)
+    print_endline
+      ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ;
+
+    let%bind () =
+      match l1_uri with
+      | Some uri -> (
+          let%bind commited_ledger_hash =
+            Gql_client.fetch_commited_state uri zkapp_pk
+          in
+          let current_ledger_hash = get_root t in
+          match
+            Frozen_ledger_hash.equal commited_ledger_hash current_ledger_hash
+          with
+          | true ->
+              return @@ print_endline "L1 and L2 are in sync"
+          | false ->
+              let%bind commands =
+                Da_layer.get_batches t.da_config
+                  ~from:
+                    (Frozen_ledger_hash.to_decimal_string current_ledger_hash)
+                  ~to_:
+                    (Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
+              in
+              return
+              @@ List.iter commands ~f:(fun command ->
+                     match command with
+                     | User_command.Signed_command signed_command ->
+                         ( apply_signed_command t signed_command
+                             ~with_prove:false
+                           |> Or_error.ok_exn
+                           : L.Transaction_applied.t * unit Deferred.t )
+                         |> ignore
+                     | User_command.Zkapp_command zkapp_command ->
+                         ( apply_zkapp_command t zkapp_command ~with_prove:false
+                           |> Or_error.ok_exn
+                           : L.Transaction_applied.t * unit Deferred.t )
+                         |> ignore ) )
+      | None ->
+          return @@ print_endline "No L1 URI provided, skipping L1 bootstrap"
     in
-    List.iter commands ~f:(fun command ->
-        match command with
-        | User_command.Signed_command signed_command ->
-            ( apply_signed_command t signed_command ~with_prove:false
-              |> Or_error.ok_exn
-              : L.Transaction_applied.t * unit Deferred.t )
-            |> ignore
-        | User_command.Zkapp_command zkapp_command ->
-            ( apply_zkapp_command t zkapp_command ~with_prove:false
-              |> Or_error.ok_exn
-              : L.Transaction_applied.t * unit Deferred.t )
-            |> ignore ) ;
 
     t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
 
@@ -480,8 +577,10 @@ let%test_unit "apply commands" =
   Quickcheck.test ~trials:1 (Test_spec.mk_gen ~num_transactions:5 ())
     ~f:(fun { init_ledger; specs } ->
       let sequencer =
-        Sequencer.create ~max_pool_size:10 ~commitment_period_sec:0.
-          ~da_contract_address:None ~db_dir:None
+        Sequencer.create ~zkapp_pk:Signature_lib.Public_key.Compressed.empty
+          ~max_pool_size:10 ~commitment_period_sec:0. ~da_contract_address:None
+          ~db_dir:None ~l1_uri:None
+          ~signer:(Signature_lib.Keypair.create ())
       in
       L.with_ledger ~depth:constraint_constants.ledger_depth
         ~f:(fun expected_ledger ->

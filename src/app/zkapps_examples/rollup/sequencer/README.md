@@ -3,13 +3,19 @@
 ## Build
 
 ```bash
-dune build
+DUNE_PROFILE=devnet dune build
 ```
 
 ## Run
 
 ```bash
-dune exec ./run.exe -- -p <int?> --max-pool-size <int?> --commitment-period <float?> --da-contract-address <string?>
+dune exec ./run.exe -- \
+    -p <int?> \
+    --zkapp-pk <string> \
+    --max-pool-size <int?> \
+    --commitment-period <float?> \
+    --da-contract-address <string?> \
+    --db-dir <string?>
 ```
 
 Run help to see the options:
