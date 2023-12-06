@@ -4,6 +4,8 @@
   sequencer_lib
   ;; mina ;;
   init
+  signature_lib
+  cli_lib
   ;; opam libraries ;;
   cohttp
   cohttp-async
