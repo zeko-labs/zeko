@@ -49,6 +49,6 @@ let () =
         and init_state =
           flag "--initial-state" (required string) ~doc:"string Ledger hash"
         and sk =
-          flag "-sk" (required string) ~doc:"string Signer private key"
+          flag "--signer" (required string) ~doc:"string Signer private key"
         in
         run uri init_state sk )
