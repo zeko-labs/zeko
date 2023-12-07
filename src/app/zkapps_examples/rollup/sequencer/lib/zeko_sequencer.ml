@@ -231,8 +231,8 @@ module Sequencer = struct
                           { command.fee_payer with authorization = signature }
                       }
                     in
-                    let%bind result = Gql_client.send_zkapp uri command in
-                    return @@ print_endline result
+                    let%bind _result = Gql_client.send_zkapp uri command in
+                    Deferred.unit
                 | None ->
                     Deferred.unit
               in
@@ -277,7 +277,12 @@ module Sequencer = struct
             | None ->
                 ()
             | Some db_dir -> (
-                let commit_dir = Filename.concat db_dir "commit" in
+                let ledger_hash =
+                  Frozen_ledger_hash.to_decimal_string L.Db.(merkle_root t.db)
+                in
+                let commit_dir =
+                  Filename.concat db_dir ("commit-" ^ ledger_hash)
+                in
                 try
                   FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
                   L.Db.make_checkpoint t.db ~directory_name:commit_dir
@@ -502,18 +507,7 @@ module Sequencer = struct
 
     Result.return (txn_applied, dproof)
 
-  let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer =
-    ( try
-        let commit_dir = Filename.concat db_dir "commit" in
-        let commit_files = FileUtil.ls commit_dir in
-        FileUtil.cp ~force:Force ~recurse:true commit_files db_dir
-      with err -> print_endline (Exn.to_string err) ) ;
-    let t =
-      create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-        ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
-    in
-
+  let add_test_accounts t =
     (* Only for testing *)
     List.iter
       [ "B62qrrytZmo8SraqYfJMZ8E3QcK77uAGZhsGJGKmVF5E598E8KX9j6a"
@@ -525,48 +519,77 @@ module Sequencer = struct
           (Unsigned.UInt64.of_int64 1_000_000_000_000L) ) ;
 
     print_endline
-      ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ;
+      ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t)))
 
-    let%bind () =
+  let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
+      ~da_contract_address ~db_dir ~l1_uri ~signer =
+    let%bind commited_ledger_hash =
       match l1_uri with
-      | Some uri -> (
-          let%bind commited_ledger_hash =
-            Gql_client.fetch_commited_state uri zkapp_pk
-          in
-          let current_ledger_hash = get_root t in
-          match
-            Frozen_ledger_hash.equal commited_ledger_hash current_ledger_hash
-          with
-          | true ->
-              return @@ print_endline "L1 and L2 are in sync"
-          | false ->
-              let%bind commands =
-                Da_layer.get_batches t.da_config
-                  ~from:
-                    (Frozen_ledger_hash.to_decimal_string current_ledger_hash)
-                  ~to_:
-                    (Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
-              in
-              return
-              @@ List.iter commands ~f:(fun command ->
-                     match command with
-                     | User_command.Signed_command signed_command ->
-                         ( apply_signed_command t signed_command
-                             ~with_prove:false
-                           |> Or_error.ok_exn
-                           : L.Transaction_applied.t * unit Deferred.t )
-                         |> ignore
-                     | User_command.Zkapp_command zkapp_command ->
-                         ( apply_zkapp_command t zkapp_command ~with_prove:false
-                           |> Or_error.ok_exn
-                           : L.Transaction_applied.t * unit Deferred.t )
-                         |> ignore ) )
+      | Some uri ->
+          let%map hash = Gql_client.fetch_commited_state uri zkapp_pk in
+          Some hash
       | None ->
-          return @@ print_endline "No L1 URI provided, skipping L1 bootstrap"
+          return None
+    in
+    let commit_dir =
+      Option.map
+        ~f:(fun ledger_hash ->
+          Filename.concat db_dir
+            ("commit-" ^ Frozen_ledger_hash.to_decimal_string ledger_hash) )
+        commited_ledger_hash
+    in
+    let%bind found_checkpoint =
+      match commit_dir with
+      | Some commit_dir ->
+          return @@ FileUtil.test Exists commit_dir
+      | None ->
+          return false
+    in
+    let () =
+      match (found_checkpoint, commit_dir) with
+      | true, Some commit_dir -> (
+          print_endline "Found checkpoint, skipping bootstrap" ;
+          let commit_files = FileUtil.ls commit_dir in
+          try
+            FileUtil.cp ~force:FileUtil.Force ~recurse:true commit_files db_dir
+          with err -> print_endline (Exn.to_string err) )
+      | _ -> (
+          print_endline "No checkpoint found, bootstrapping from genesis" ;
+          try FileUtil.rm ~force:Force ~recurse:true [ db_dir ]
+          with err -> print_endline (Exn.to_string err) )
+    in
+    let t =
+      create ~zkapp_pk ~max_pool_size ~commitment_period_sec
+        ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
     in
 
-    t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
+    (* Only for testing *)
+    if not found_checkpoint then add_test_accounts t ;
 
+    let%bind () =
+      match (found_checkpoint, commited_ledger_hash) with
+      | false, Some ledger_hash ->
+          let%bind commands =
+            Da_layer.get_batches t.da_config
+              ~to_:(Frozen_ledger_hash.to_decimal_string ledger_hash)
+          in
+          return
+          @@ List.iter commands ~f:(fun command ->
+                 match command with
+                 | User_command.Signed_command signed_command ->
+                     ( apply_signed_command t signed_command ~with_prove:false
+                       |> Or_error.ok_exn
+                       : L.Transaction_applied.t * unit Deferred.t )
+                     |> ignore
+                 | User_command.Zkapp_command zkapp_command ->
+                     ( apply_zkapp_command t zkapp_command ~with_prove:false
+                       |> Or_error.ok_exn
+                       : L.Transaction_applied.t * unit Deferred.t )
+                     |> ignore )
+      | _ ->
+          return ()
+    in
+    t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
     return t
 end
 
