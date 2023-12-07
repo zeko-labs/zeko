@@ -34,10 +34,6 @@ contract DataAvailability is MinaMultisig {
     ) external onlySequencer {
         require(commands.length > 0, "Commands cannot be empty");
         require(id != previousId, "Batch cannot be equal to previous batch");
-        require(
-            batches[previousId].commands.length > 0 || previousId == bytes32(0),
-            "Previous batch does not exist"
-        );
 
         RollupBatch storage batch = batches[id];
 
@@ -45,10 +41,17 @@ contract DataAvailability is MinaMultisig {
 
         batch.previousId = previousId;
 
+        if (batches[previousId].commands.length == 0 || previousId == bytes32(0)) {
+            batch.genesis = true;
+        } else {
+            batch.genesis = false;
+        }
+
         for (uint256 i = 0; i < commands.length; i++) {
             batch.commands.push(commands[i]);
         }
 
+        lastBatchId = id;
         emit BatchPosted(id);
     }
 
@@ -87,7 +90,7 @@ contract DataAvailability is MinaMultisig {
         return batches[id].signatures;
     }
 
-    function getBatchData(bytes32 id) external view returns (bytes32, MinaCommand[] memory) {
-        return (batches[id].previousId, batches[id].commands);
+    function getBatchData(bytes32 id) external view returns (bool, bytes32, MinaCommand[] memory) {
+        return (batches[id].genesis, batches[id].previousId, batches[id].commands);
     }
 }

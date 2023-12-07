@@ -1,4 +1,4 @@
-[%%import "/src/config/devnet.mlh"]
+[%%import "/src/config.mlh"]
 
 open Core_kernel
 

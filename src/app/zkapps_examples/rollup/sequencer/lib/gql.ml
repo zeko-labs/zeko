@@ -1486,12 +1486,13 @@ module Mutations = struct
                   return (Error "Signature verification failed") )
         in
         match
-          Zeko_sequencer.apply_signed_command sequencer
+          Zeko_sequencer.apply_signed_command ~with_prove:true sequencer
             (Signed_command.forget_check command)
         with
         | Error err ->
             return (Error (Error.to_string_mach err))
-        | Ok _ ->
+        | Ok (_, dproof) ->
+            don't_wait_for dproof ;
             let cmd =
               { Types.User_command.With_status.data =
                   Signed_command.forget_check command
@@ -1513,10 +1514,14 @@ module Mutations = struct
       ~args:
         Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
       ~resolve:(fun { ctx = sequencer; _ } () zkapp_command ->
-        match Zeko_sequencer.apply_zkapp_command sequencer zkapp_command with
+        match
+          Zeko_sequencer.apply_zkapp_command ~with_prove:true sequencer
+            zkapp_command
+        with
         | Error err ->
             return (Error (Error.to_string_mach err))
-        | Ok _ ->
+        | Ok (_, dproof) ->
+            don't_wait_for dproof ;
             let cmd =
               { Types.Zkapp_command.With_status.data = zkapp_command
               ; status = Applied

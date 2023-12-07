@@ -3,7 +3,11 @@ import { ethers } from "hardhat";
 import { Field, PublicKey, Scalar, Signature } from "o1js";
 import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailability";
 
-export const fieldToHex = (field: Field | Scalar) => {
+export const fieldToHex = (field: string | Field | Scalar) => {
+  if (typeof field === "string") {
+    field = Field(field);
+  }
+
   const bigEndianHex = BigInt(field.toJSON()).toString(16);
 
   const littleEndianHex =

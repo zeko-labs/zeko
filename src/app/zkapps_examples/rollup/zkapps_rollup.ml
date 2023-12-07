@@ -347,7 +347,7 @@ module Wrapper_rules = struct
       { source_ledger : Frozen_ledger_hash.t
       ; target_ledger : Frozen_ledger_hash.t
       }
-    [@@deriving snarky]
+    [@@deriving snarky, yojson]
 
     let of_txn_snark_statement (txn_snark : With_sok.t) : t =
       { source_ledger = txn_snark.source.first_pass_ledger

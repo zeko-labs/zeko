@@ -29,6 +29,7 @@ struct RollupBatch {
     MinaCommand[] commands;
     MinaSchnorrSignature[] signatures;
     mapping(HashedMinaPublicKey => bool) validatorSigned;
+    bool genesis;
 }
 
 /**
