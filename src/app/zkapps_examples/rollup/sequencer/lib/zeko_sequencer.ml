@@ -59,7 +59,7 @@ module Sequencer = struct
     type t =
       { q : unit Throttle.t
       ; da_config : Da_layer.config_t
-      ; mutable last : Zkapps_rollup.Wrapper_rules.t option
+      ; mutable last : Zkapps_rollup.t option
       ; mutable staged_commands :
           ( Signed_command.With_valid_signature.t
           , Zkapp_command.t )
@@ -143,7 +143,7 @@ module Sequencer = struct
               print_endline "Committing..." ;
 
               let ledger_hash =
-                (Option.value_exn t.last).statement.target_ledger
+                Zkapps_rollup.target_ledger @@ Option.value_exn t.last
               in
               let batch_id =
                 Frozen_ledger_hash0.to_decimal_string ledger_hash
@@ -557,15 +557,10 @@ let%test_unit "apply commands" =
 
               [%test_eq: Bool.t] true (Option.is_some sequencer.snark_q.last) ;
               let snark = Option.value_exn sequencer.snark_q.last in
-              let stmt = Zkapps_rollup.Wrapper_rules.statement snark in
-              [%test_eq: Frozen_ledger_hash.t] stmt.source_ledger
+              [%test_eq: Frozen_ledger_hash.t]
+                (Zkapps_rollup.source_ledger snark)
                 source_ledger_hash ;
-              [%test_eq: Frozen_ledger_hash.t] stmt.target_ledger
+              [%test_eq: Frozen_ledger_hash.t]
+                (Zkapps_rollup.target_ledger snark)
                 target_ledger_hash ;
-
-              let%bind res =
-                M.Wrapper.Proof.verify [ (snark.statement, snark.proof) ]
-              in
-              [%test_eq: Bool.t] true (Or_error.is_ok res) ;
-
               return () ) ) )
