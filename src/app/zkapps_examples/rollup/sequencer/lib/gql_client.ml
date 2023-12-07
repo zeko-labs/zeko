@@ -78,3 +78,28 @@ let send_zkapp uri command =
   in
   let%map result = Init.Graphql_client.query_json_exn q uri in
   Yojson.Safe.(to_string result)
+
+let fetch_block_height uri =
+  let q =
+    object
+      method query =
+        {|
+        query {
+          bestChain(maxLength: 1) {
+            protocolState {
+              consensusState {
+                blockHeight
+              }
+            }
+          }
+        } 
+      |}
+
+      method variables = `Assoc []
+    end
+  in
+  let%map result = Init.Graphql_client.query_json_exn q uri in
+  Yojson.Safe.Util.(
+    result |> member "bestChain" |> index 0 |> member "protocolState"
+    |> member "consensusState" |> member "blockHeight" |> to_string)
+  |> Int.of_string
