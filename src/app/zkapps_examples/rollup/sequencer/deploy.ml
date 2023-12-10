@@ -32,7 +32,8 @@ let run uri init_state sk () =
           (Signature_lib.Public_key.compress sender_keypair.public_key) )
   in
   let command =
-    M.Mocked_zkapp.Deploy.deploy ~signer:sender_keypair ~zkapp:zkapp_keypair
+    Zkapps_rollup.Mocked_zkapp.Deploy.deploy ~signer:sender_keypair
+      ~zkapp:zkapp_keypair
       ~fee:(Currency.Fee.of_mina_int_exn 1)
       ~nonce:(Account.Nonce.of_int nonce)
       ~vk:M.Mocked.vk
