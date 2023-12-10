@@ -14,6 +14,19 @@ module TR : sig
   type t = { amount : Currency.Amount.t; recipient : Public_key.Compressed.t }
 end
 
+module Mocked_zkapp : sig
+  module Deploy : sig
+    val deploy :
+         signer:Signature_lib.Keypair.t
+      -> fee:Currency.Fee.t
+      -> nonce:Account.Nonce.t
+      -> zkapp:Signature_lib.Keypair.t
+      -> vk:Side_loaded_verification_key.t
+      -> initial_state:Frozen_ledger_hash.t
+      -> Zkapp_command.t
+  end
+end
+
 module Make (T : sig
   val tag : Transaction_snark.tag
 end) : sig
@@ -21,6 +34,8 @@ end) : sig
     val wrap : Transaction_snark.t -> t Deferred.t
 
     val merge : t -> t -> t Deferred.t
+
+    val verify : t -> unit Or_error.t Deferred.t
   end
 
   module Inner : sig
@@ -50,6 +65,25 @@ end) : sig
            Zkapp_command.Call_forest.Tree.t
          * field
          * TR.t list )
+         Deferred.t
+  end
+
+  module Mocked : sig
+    val vk : Pickles.Side_loaded.Verification_key.t
+
+    val step :
+         t
+      -> Public_key.Compressed.t
+      -> field
+      -> unit
+      -> ( field Zkapp_statement.Poly.t
+         * ( Account_update.Body.t
+           * Zkapp_command.Digest.Account_update.t
+           * ( Account_update.t
+             , Zkapp_command.Digest.Account_update.t
+             , Zkapp_command.Digest.Forest.t )
+             Zkapp_command.Call_forest.t )
+         * (Pickles_types.Nat.N1.n, Pickles_types.Nat.N1.n) Pickles.Proof.t )
          Deferred.t
   end
 

@@ -171,9 +171,10 @@ module Sequencer = struct
                        , (account_update, account_update_digest, calls)
                        , proof ) =
                 time "Mocked.step"
-                  (M.Mocked.step t.zkapp_pk
-                     Zkapp_account.(digest_vk M.Mocked.vk)
+                  (M.Mocked.step
                      Option.(value_exn t.last)
+                     t.zkapp_pk
+                     Zkapp_account.(digest_vk M.Mocked.vk)
                      () )
               in
               let account_update =
@@ -676,7 +677,8 @@ let%test_unit "apply commands and commit" =
                   (Signature_lib.Public_key.compress signer.public_key)
               in
               let command =
-                M.Mocked_zkapp.Deploy.deploy ~signer ~zkapp:zkapp_keypair
+                Zkapps_rollup.Mocked_zkapp.Deploy.deploy ~signer
+                  ~zkapp:zkapp_keypair
                   ~fee:(Currency.Fee.of_mina_int_exn 1)
                   ~nonce:(Account.Nonce.of_int nonce)
                   ~vk:M.Mocked.vk ~initial_state:source_ledger_hash
@@ -746,15 +748,15 @@ let%test_unit "apply commands and commit" =
 
                 [%test_eq: Bool.t] true (Option.is_some sequencer.snark_q.last) ;
                 let snark = Option.value_exn sequencer.snark_q.last in
-                let stmt = Zkapps_rollup.Wrapper_rules.statement snark in
-                [%test_eq: Frozen_ledger_hash.t] stmt.source_ledger
+                (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
+                [%test_eq: Frozen_ledger_hash.t]
+                  (Zkapps_rollup.source_ledger snark)
                   source_ledger_hash ;
-                [%test_eq: Frozen_ledger_hash.t] stmt.target_ledger
+                [%test_eq: Frozen_ledger_hash.t]
+                  (Zkapps_rollup.target_ledger snark)
                   target_ledger_hash ;
 
-                let%bind res =
-                  M.Wrapper.Proof.verify [ (snark.statement, snark.proof) ]
-                in
+                let%bind res = M.Wrapper.verify snark in
                 [%test_eq: Bool.t] true (Or_error.is_ok res) ;
 
                 return target_ledger_hash )
