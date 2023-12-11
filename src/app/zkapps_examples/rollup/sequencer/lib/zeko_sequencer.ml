@@ -252,6 +252,7 @@ module Sequencer = struct
     ; config : config_t
     ; da_config : Da_layer.config_t
     ; snark_q : Snark_queue.t
+    ; stop : unit Ivar.t
     }
 
   let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
@@ -267,12 +268,19 @@ module Sequencer = struct
     ; config = { max_pool_size; commitment_period_sec; db_dir }
     ; da_config
     ; snark_q = Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
+    ; stop = Ivar.create ()
     }
+
+  let close t =
+    L.Db.close t.db ;
+    Ivar.fill_if_empty t.stop () ;
+    Throttle.kill t.snark_q.q
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()
     else
-      every (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
+      every ~stop:(Ivar.read t.stop)
+        (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
           let () =
             match t.config.db_dir with
             | None ->
