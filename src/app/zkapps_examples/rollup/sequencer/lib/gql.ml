@@ -956,6 +956,14 @@ module Types = struct
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
           ] )
+
+    let prove_transfer =
+      obj "ProveTransferPayload" ~fields:(fun _ ->
+          [ field "accountUpdateKey" ~typ:(non_null string)
+              ~doc:"Key for querying the account update"
+              ~args:Arg.[]
+              ~resolve:(fun _ -> Fn.id)
+          ] )
   end
 
   module Input = struct
@@ -1201,6 +1209,27 @@ module Types = struct
             [ arg "zkappCommand"
                 ~doc:"zkApp command structure representing the transaction"
                 ~typ:arg_typ
+            ]
+    end
+
+    module Transfer = struct
+      type input = Zeko_sequencer.transfer_t
+
+      let arg_typ =
+        obj "TransferInput"
+          ~coerce:(fun address amount direction -> (address, amount, direction))
+          ~split:(fun f (x : input) -> f x.address x.amount x.direction)
+          ~fields:
+            [ arg "address" ~typ:(non_null PublicKey.arg_typ)
+            ; arg "amount" ~typ:(non_null UInt64.arg_typ)
+            ; arg "direction"
+                ~typ:
+                  ( non_null
+                  @@ enum "TransferDirection"
+                       ~values:
+                         [ enum_value "WRAP" ~value:Zeko_sequencer.Wrap
+                         ; enum_value "UNWRAP" ~value:Zeko_sequencer.Unwrap
+                         ] )
             ]
     end
 
@@ -1535,7 +1564,19 @@ module Mutations = struct
             in
             return (Ok cmd_with_hash) )
 
-  let commands = [ send_payment; send_zkapp ]
+  let prove_transfer =
+    io_field "proveTransfer" ~doc:"Prove rollup transfer"
+      ~typ:(non_null Types.Payload.prove_transfer)
+      ~args:Arg.[ arg "input" ~typ:(non_null Types.Input.Transfer.arg_typ) ]
+      ~resolve:(fun { ctx = sequencer; _ } () (address, amount, direction) ->
+        let key =
+          Zeko_sequencer.Snark_queue.prove_transfer
+            Zeko_sequencer.(sequencer.snark_q)
+            ~transfer:Zeko_sequencer.{ address; amount; direction }
+        in
+        return (Ok key) )
+
+  let commands = [ send_payment; send_zkapp; prove_transfer ]
 end
 
 module Queries = struct
@@ -1581,6 +1622,30 @@ module Queries = struct
           ]
       ~resolve:(fun _ () _ -> [])
 
+  let transfer =
+    let conv
+        (x :
+          ( Zeko_sequencer.t
+          , Account_update.Graphql_repr.t option )
+          Fields_derivers_graphql.Schema.typ ) :
+        (Zeko_sequencer.t, Account_update.Graphql_repr.t option) typ =
+      Obj.magic x
+    in
+    let typ () =
+      Fields_derivers_zkapps.(
+        nullable_typ (Account_update.Graphql_repr.deriver @@ Derivers.o ()))
+    in
+    field "transfer" ~doc:"Query proved account update for transfer"
+      ~typ:(typ () |> conv)
+      ~args:Arg.[ arg "key" ~typ:(non_null string) ]
+      ~resolve:(fun { ctx = sequencer; _ } () key ->
+        match Transfers_memory.get sequencer.snark_q.transfers_memory key with
+        | None ->
+            None
+        | Some (_, account_update) ->
+            Some (Account_update.to_graphql_repr ~call_depth:0 account_update)
+        )
+
   module Archive = struct
     let actions =
       field "actions"
@@ -1616,7 +1681,8 @@ module Queries = struct
   end
 
   let commands =
-    [ sync_status; daemon_status; account; accounts_for_pk ] @ Archive.commands
+    [ sync_status; daemon_status; account; accounts_for_pk; transfer ]
+    @ Archive.commands
 end
 
 let schema =

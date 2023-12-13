@@ -19,6 +19,14 @@ module Sequencer = struct
     ; db_dir : string option
     }
 
+  type transfer_direction_t = Wrap | Unwrap
+
+  type transfer_t =
+    { address : Account.key
+    ; amount : Unsigned.UInt64.t
+    ; direction : transfer_direction_t
+    }
+
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
   let genesis_constants = Genesis_constants.compiled
@@ -69,6 +77,7 @@ module Sequencer = struct
       ; zkapp_pk : Signature_lib.Public_key.Compressed.t
       ; signer : Signature_lib.Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name option
+      ; transfers_memory : Transfers_memory.t
       }
 
     let create ~da_config ~zkapp_pk ~l1_uri ~signer =
@@ -80,6 +89,7 @@ module Sequencer = struct
       ; zkapp_pk
       ; signer
       ; l1_uri
+      ; transfers_memory = Transfers_memory.create ~lifetime:Float.(60. * 10.)
       }
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
@@ -241,6 +251,28 @@ module Sequencer = struct
               t.last <- None ;
               t.previous_committed_ledger_hash <- Some ledger_hash ;
               return () )
+
+    let prove_transfer t ~(transfer : transfer_t) =
+      let key = Int.to_string @@ Random.int Int.max_value in
+      don't_wait_for
+      @@ Throttle.enqueue t.q (fun () ->
+             let%bind call_tree =
+               match transfer.direction with
+               | Wrap ->
+                   time "Outer.action"
+                     (M.Outer.action ~public_key:t.zkapp_pk
+                        ~amount:(Currency.Amount.of_uint64 transfer.amount)
+                        ~recipient:transfer.address )
+               | Unwrap ->
+                   time "Inner.action"
+                     (M.Inner.action ~public_key:t.zkapp_pk
+                        ~amount:(Currency.Amount.of_uint64 transfer.amount)
+                        ~recipient:transfer.address )
+             in
+             Transfers_memory.add t.transfers_memory key
+               call_tree.account_update ;
+             return () ) ;
+      key
 
     let wait_to_finish t = Throttle.capacity_available t.q
   end
