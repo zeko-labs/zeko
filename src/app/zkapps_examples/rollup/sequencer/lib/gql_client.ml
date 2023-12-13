@@ -1,7 +1,7 @@
 open Core_kernel
-open Async
 open Async_kernel
 open Mina_base
+open Init
 
 let fetch_nonce uri pk =
   let q =
@@ -21,11 +21,9 @@ let fetch_nonce uri pk =
             , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
             )
           ]
-        |> Yojson.Safe.to_basic
     end
   in
-  let%map result = Init.Graphql_client.query_json_exn q uri in
-  print_endline Yojson.Safe.(to_string result) ;
+  let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.Util.(result |> member "account" |> member "nonce" |> to_string)
   |> Int.of_string
 
@@ -47,10 +45,9 @@ let fetch_commited_state uri pk =
             , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
             )
           ]
-        |> Yojson.Safe.to_basic
     end
   in
-  let%map result = Init.Graphql_client.query_json_exn q uri in
+  let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.Util.(
     result |> member "account" |> member "zkappState" |> index 0 |> to_string)
   |> Frozen_ledger_hash.of_decimal_string
@@ -71,12 +68,15 @@ let send_zkapp uri command =
 
       method variables =
         `Assoc
-          [ ("input", `Assoc [ ("zkappCommand", Zkapp_command.to_json command) ])
+          [ ( "input"
+            , `Assoc
+                [ ( "zkappCommand"
+                  , Yojson.Safe.to_basic @@ Zkapp_command.to_json command )
+                ] )
           ]
-        |> Yojson.Safe.to_basic
     end
   in
-  let%map result = Init.Graphql_client.query_json_exn q uri in
+  let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.(to_string result)
 
 let fetch_block_height uri =
@@ -98,8 +98,29 @@ let fetch_block_height uri =
       method variables = `Assoc []
     end
   in
-  let%map result = Init.Graphql_client.query_json_exn q uri in
+  let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.Util.(
     result |> member "bestChain" |> index 0 |> member "protocolState"
     |> member "consensusState" |> member "blockHeight" |> to_string)
   |> Int.of_string
+
+let fetch_best_chain ?(max_length = 10) uri =
+  let q =
+    object
+      method query =
+        {|
+        query ($maxLength: Int!) {
+          bestChain(maxLength: $maxLength) {
+            stateHash
+          }
+        } 
+      |}
+
+      method variables = `Assoc [ ("maxLength", `Int max_length) ]
+    end
+  in
+  let%map result = Graphql_client.query_json_exn q uri in
+  Yojson.Safe.Util.(
+    result |> member "bestChain"
+    |> map (member "stateHash")
+    |> to_list |> List.map ~f:to_string)
