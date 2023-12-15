@@ -368,6 +368,9 @@ module Make (Schema : Graphql_intf.Schema) = struct
 
   let typ obj = !(obj#graphql_fields).Graphql.Fields.Input.T.run ()
 
+  let nullable_typ obj =
+    !(obj#nullable_graphql_fields).Graphql.Fields.Input.T.run ()
+
   let arg_typ obj = !(obj#graphql_arg) ()
 
   let inner_query obj = Fields_derivers_graphql.Graphql_query.inner_query obj
