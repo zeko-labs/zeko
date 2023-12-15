@@ -15,7 +15,7 @@ module M = Zkapps_rollup.Make (struct
 end)
 
 let run uri init_state sk () =
-  let sender_keypair =
+  let signer =
     Signature_lib.(
       Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk)
   in
@@ -26,18 +26,18 @@ let run uri init_state sk () =
     Signature_lib.Public_key.(
       Compressed.to_base58_check @@ compress zkapp_keypair.public_key) ;
 
-  let nonce =
-    Thread_safe.block_on_async_exn (fun () ->
-        Sequencer_lib.Gql_client.fetch_nonce uri
-          (Signature_lib.Public_key.compress sender_keypair.public_key) )
+  let fee_payer_nonce =
+    Account.Nonce.of_int
+    @@ Thread_safe.block_on_async_exn (fun () ->
+           Sequencer_lib.Gql_client.fetch_nonce uri
+             (Signature_lib.Public_key.compress signer.public_key) )
+  in
+  let deploy_update =
+    M.Outer.unsafe_deploy (Ledger_hash.of_decimal_string init_state)
   in
   let command =
-    Zkapps_rollup.Mocked_zkapp.Deploy.deploy ~signer:sender_keypair
-      ~zkapp:zkapp_keypair
-      ~fee:(Currency.Fee.of_mina_int_exn 1)
-      ~nonce:(Account.Nonce.of_int nonce)
-      ~vk:M.Mocked.vk
-      ~initial_state:(Frozen_ledger_hash.of_decimal_string init_state)
+    Sequencer_lib.Deploy.deploy deploy_update ~fee_payer:signer ~fee_payer_nonce
+      ~zkapp_keypair
   in
   Thread_safe.block_on_async_exn (fun () ->
       let%map result = Sequencer_lib.Gql_client.send_zkapp uri command in

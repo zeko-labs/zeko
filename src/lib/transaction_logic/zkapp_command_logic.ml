@@ -1295,7 +1295,7 @@ module Make (Inputs : Inputs_intf) = struct
         Inputs.Bool.(
           Inputs.Account_update.increment_nonce account_update ||| not is_start')
     in
-    (* ZEKO NOTE: We disable this *)
+    (* ZEKO NOTE: We don't require a signature for the fee payer *)
     (*
          let local_state =
            Local_state.add_check local_state Fee_payer_must_be_signed
