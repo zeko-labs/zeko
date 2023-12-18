@@ -48,7 +48,7 @@ end) : sig
       -> ( Account_update.t
          , Zkapp_command.Digest.Account_update.t
          , Zkapp_command.Digest.Forest.t )
-         Zkapp_command.Call_forest.Tree.t
+         Zkapp_command.Call_forest.t
          Deferred.t
 
     (** Given the old state,
@@ -62,7 +62,7 @@ end) : sig
       -> ( ( Account_update.t
            , Zkapp_command.Digest.Account_update.t
            , Zkapp_command.Digest.Forest.t )
-           Zkapp_command.Call_forest.Tree.t
+           Zkapp_command.Call_forest.t
          * field
          * TR.t list )
          Deferred.t
@@ -97,7 +97,7 @@ end) : sig
       -> ( Account_update.t
          , Zkapp_command.Digest.Account_update.t
          , Zkapp_command.Digest.Forest.t )
-         Zkapp_command.Call_forest.Tree.t
+         Zkapp_command.Call_forest.t
          Deferred.t
 
     (** Given the old state,
@@ -115,7 +115,7 @@ end) : sig
       -> ( ( Account_update.t
            , Zkapp_command.Digest.Account_update.t
            , Zkapp_command.Digest.Forest.t )
-           Zkapp_command.Call_forest.Tree.t
+           Zkapp_command.Call_forest.t
          * field
          * TR.t list )
          Deferred.t

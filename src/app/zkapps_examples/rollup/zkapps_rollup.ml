@@ -61,14 +61,15 @@ let make_outputs account_update calls =
   (public_output, auxiliary_output)
 
 (** Takes output from make_outputs and makes it usable *)
-let mktree (account_update, account_update_digest, calls) proof =
+let mkforest (account_update, account_update_digest, calls) proof =
   let account_update : Account_update.t =
     { body = account_update
     ; authorization = Proof (Pickles.Side_loaded.Proof.of_proof proof)
     }
   in
-  Zkapp_command.Call_forest.Tree.
+  Zkapp_command.Call_forest.cons_tree
     { account_update; account_update_digest; calls }
+    []
 
 (** A shorthand function to keep a field in the update for the app state *)
 let keep = Set_or_keep.Checked.keep ~dummy:Field.zero
@@ -1353,7 +1354,7 @@ struct
                { vk_hash; public_key; amount; recipient } )
           ()
       in
-      mktree tree proof
+      mkforest tree proof
 
     let extend_action_state (action_state : field) (trs : TR.t list) :
         (Action_state_extension_rule.Stmt.t * Proof.t) Deferred.t =
@@ -1387,7 +1388,7 @@ struct
         ( ( Account_update.t
           , Zkapp_command.Digest.Account_update.t
           , Zkapp_command.Digest.Forest.t )
-          Zkapp_command.Call_forest.Tree.t
+          Zkapp_command.Call_forest.t
         * field
         * TR.t list )
         Deferred.t =
@@ -1415,7 +1416,7 @@ struct
             ; action_prf
             }
       in
-      let tree = mktree tree proof in
+      let tree = mkforest tree proof in
       return (tree, deposits_processed', remaining_deposits)
   end
 
@@ -1463,20 +1464,14 @@ struct
     let vk_hash = Zkapp_account.digest_vk vk
 
     let action ~public_key ~amount ~recipient =
-      let%map _, (account_update, account_update_digest, calls), proof =
+      let%map _, tree, proof =
         action_
           ~handler:
             (Transfer_action_rule.handler
                { vk_hash; public_key; amount; recipient } )
           ()
       in
-      let account_update : Account_update.t =
-        { body = account_update
-        ; authorization = Proof (Pickles.Side_loaded.Proof.of_proof proof)
-        }
-      in
-      Zkapp_command.Call_forest.Tree.
-        { account_update; account_update_digest; calls }
+      mkforest tree proof
 
     let step w = step_ ~handler:(Outer_rules.Step.handler w) ()
 
@@ -1486,7 +1481,7 @@ struct
         ( ( Account_update.t
           , Zkapp_command.Digest.Account_update.t
           , Zkapp_command.Digest.Forest.t )
-          Zkapp_command.Call_forest.Tree.t
+          Zkapp_command.Call_forest.t
         * field
         * TR.t list )
         Deferred.t =
@@ -1533,7 +1528,7 @@ struct
             ; public_key
             }
       in
-      let tree = mktree tree proof in
+      let tree = mkforest tree proof in
       return (tree, withdrawals_processed', remaining_withdrawals)
   end
 end

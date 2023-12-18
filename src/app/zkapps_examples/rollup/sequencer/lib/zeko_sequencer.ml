@@ -256,7 +256,7 @@ module Sequencer = struct
       let key = Int.to_string @@ Random.int Int.max_value in
       don't_wait_for
       @@ Throttle.enqueue t.q (fun () ->
-             let%bind call_tree =
+             let%bind call_forest =
                match transfer.direction with
                | Wrap ->
                    time "Outer.action"
@@ -269,8 +269,7 @@ module Sequencer = struct
                         ~amount:(Currency.Amount.of_uint64 transfer.amount)
                         ~recipient:transfer.address )
              in
-             Transfers_memory.add t.transfers_memory key
-               call_tree.account_update ;
+             Transfers_memory.add t.transfers_memory key call_forest ;
              return () ) ;
       key
 
