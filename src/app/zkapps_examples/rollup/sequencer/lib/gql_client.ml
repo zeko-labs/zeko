@@ -32,12 +32,12 @@ let fetch_commited_state uri pk =
     object
       method query =
         {|
-        query ($pk: PublicKey!) {
-          account(publicKey: $pk){
-            zkappState
-          }
-        } 
-      |}
+          query ($pk: PublicKey!) {
+            account(publicKey: $pk){
+              zkappState
+            }
+          } 
+        |}
 
       method variables =
         `Assoc
@@ -84,16 +84,16 @@ let fetch_block_height uri =
     object
       method query =
         {|
-        query {
-          bestChain(maxLength: 1) {
-            protocolState {
-              consensusState {
-                blockHeight
+          query {
+            bestChain(maxLength: 1) {
+              protocolState {
+                consensusState {
+                  blockHeight
+                }
               }
             }
-          }
-        } 
-      |}
+          } 
+        |}
 
       method variables = `Assoc []
     end
@@ -109,12 +109,12 @@ let fetch_best_chain ?(max_length = 10) uri =
     object
       method query =
         {|
-        query ($maxLength: Int!) {
-          bestChain(maxLength: $maxLength) {
-            stateHash
-          }
-        } 
-      |}
+          query ($maxLength: Int!) {
+            bestChain(maxLength: $maxLength) {
+              stateHash
+            }
+          } 
+        |}
 
       method variables = `Assoc [ ("maxLength", `Int max_length) ]
     end
