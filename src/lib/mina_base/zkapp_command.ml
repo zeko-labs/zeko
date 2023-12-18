@@ -1481,6 +1481,9 @@ let account_updates_of_json x =
       ((list @@ Account_update.Graphql_repr.deriver @@ o ()) @@ derivers ()))
     x
 
+let account_updates_to_json x =
+  Fields_derivers_zkapps.(to_json (account_updates_deriver @@ derivers ())) x
+
 let zkapp_command_to_json x =
   Fields_derivers_zkapps.(to_json (deriver @@ derivers ())) x
 
