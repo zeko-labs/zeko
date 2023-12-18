@@ -3,7 +3,14 @@ open Mina_base
 
 module Transfers_memory = struct
   type t =
-    { table : (string, float * Account_update.t) Hashtbl.t
+    { table :
+        ( string
+        , float
+          * ( Account_update.t
+            , Zkapp_command.Digest.Account_update.t
+            , Zkapp_command.Digest.Forest.t )
+            Zkapp_command.Call_forest.t )
+        Hashtbl.t
     ; queue : (string * float) Queue.t
     ; lifetime : float
     }
