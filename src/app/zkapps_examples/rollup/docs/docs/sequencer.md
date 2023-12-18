@@ -83,7 +83,7 @@ The returned json can be used to create a zkapp command for the bridge contract.
 
 ```graphql
 query {
-  transferJson(key: "key returned from proveTransfer")
+  transfer(key: "key returned from proveTransfer")
 }
 ```
 
@@ -155,7 +155,6 @@ JSON.parse(transferCallForest).forEach((accountUpdate) => {
   txn.transaction.accountUpdates.push(AccountUpdate.fromJSON(accountUpdate));
 });
 
-await txn.prove();
 await txn.sign([sender]).send();
 ```
 
