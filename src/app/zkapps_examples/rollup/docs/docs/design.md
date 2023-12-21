@@ -1,3 +1,7 @@
+---
+sidebar_position: 2
+---
+
 # Design of zkApp for rollup MVP
 
 ## Basic functionality
@@ -13,7 +17,7 @@ One fundamental constraint is that zkApp commands have a complexity limit,
 i.e. you can not have an infinite amount of account updates in a single command
 (for obvious reasons).
 
-We also disregard non-Mina tokenes for now.
+We also disregard non-Mina tokens for now.
 
 The L1 and L2 are connected by a special account on the L2,
 denoted by having the account index 0.
