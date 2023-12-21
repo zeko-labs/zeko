@@ -7,7 +7,7 @@ const darkCodeTheme = themes.dracula;
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: "CML",
+  title: "Docs",
   tagline: 'Getting started',
   url: "https://zeko-labs.github.io",
   baseUrl: "/zeko/",
