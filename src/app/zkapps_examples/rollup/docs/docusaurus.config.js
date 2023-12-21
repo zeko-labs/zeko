@@ -11,6 +11,7 @@ const config = {
   tagline: 'Getting started',
   url: "https://zeko-labs.github.io",
   baseUrl: "/zeko/",
+  trailingSlash: true,
   onBrokenLinks: "throw",
   onBrokenMarkdownLinks: "warn",
   favicon: "img/favicon.svg",
