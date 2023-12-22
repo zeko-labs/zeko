@@ -1,4 +1,5 @@
 [@@@warning "-26-33"]
+
 open Core_kernel
 open Async
 open Async_kernel
@@ -7,14 +8,7 @@ module L = Mina_ledger.Ledger
 open Sequencer_lib.Zeko_sequencer
 open Sequencer_lib
 
-
 let () =
-let auwd  = Thread_safe.block_on_async_exn (fun () ->
-                time "Inner.step"
-                  (M.Inner.step
-                     ~deposits_processed:Zkapp_account.Actions.empty_hash
-                     ~remaining_deposits:[] )) in ()
-              (*
   let number_of_transactions = 1 in
   let zkapp_keypair = Signature_lib.Keypair.create () in
   let gql_uri =
@@ -202,4 +196,3 @@ let auwd  = Thread_safe.block_on_async_exn (fun () ->
                 target_ledger_hash ;
 
               Deferred.unit ) ) )
-              *)

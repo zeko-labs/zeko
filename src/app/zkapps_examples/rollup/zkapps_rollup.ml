@@ -13,8 +13,7 @@ let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
 module L = Mina_ledger.Ledger
 
-let p n =
-  print_string n ; print_string "\n"
+let p n = print_string n ; print_string "\n"
 
 (** Converts a variable to its constituent fields *)
 let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :
@@ -144,6 +143,9 @@ module F = struct
   type var = Field.t
 
   let typ : (var, t) Typ.t = Field.typ
+
+  let pp : Format.formatter -> field -> unit =
+   fun fmt f -> Format.pp_print_string fmt @@ Field.Constant.to_string f
 end
 
 (** To be used with deriving snarky, a reference to T with no in-circuit representation *)
@@ -218,7 +220,14 @@ action states that originate from the sources *)
 module Action_state_extension_rule = struct
   module Stmt = struct
     type t = { source0 : F.t; target0 : F.t; source1 : F.t; target1 : F.t }
-    [@@deriving snarky]
+    [@@deriving show, snarky]
+
+    let zero : t =
+      { source0 = Field.Constant.zero
+      ; source1 = Field.Constant.zero
+      ; target0 = Field.Constant.zero
+      ; target1 = Field.Constant.zero
+      }
   end
 
   (** Base case, source equal to target *)
@@ -531,6 +540,8 @@ module TR = struct
   type t = { amount : CA.t; recipient : PC.t } [@@deriving snarky]
 
   let dummy : t = { amount = CA.zero; recipient = PC.empty }
+
+  let is_dummy (t : t) = CA.(equal t.amount zero)
 end
 
 (** Partial circuit for processing a single transfer request *)
@@ -592,6 +603,9 @@ module Transfer_action_rule = struct
     let Witness.{ public_key; vk_hash; amount; recipient } =
       exists_witness ()
     in
+    (* The amount and the recipient must not be zero, because then it's a dummy *)
+    Boolean.Assert.is_true @@ Boolean.not @@ run @@ CA.(Checked.equal amount (constant typ zero)) ;
+    Boolean.Assert.is_true @@ Boolean.not @@ run @@ PC.(Checked.equal recipient (constant typ empty)) ;
     let account_creation_fee =
       CA.(constant typ @@ of_fee constraint_constants.account_creation_fee)
     in
@@ -671,6 +685,7 @@ module Inner_rules = struct
            is an extension of deposits_processed + new_deposits *)
         ; all_deposits : F.t
         ; deposits_processed : F.t
+        ; deposits_processed' : F.t
         ; new_deposits : List_TR_8.t
               (** Deposits that have yet to be processed *)
         }
@@ -686,6 +701,7 @@ module Inner_rules = struct
             ; action_prf
             ; all_deposits
             ; deposits_processed
+            ; deposits_processed'
             ; new_deposits
             } =
         exists_witness ()
@@ -706,11 +722,34 @@ module Inner_rules = struct
       let calls = Zkapp_call_forest.Checked.empty () in
       p "5" ;
       (* Process deposits, add a call per deposit *)
-      let deposits_processed', calls =
+      let deposits_processed'', calls =
         List.fold new_deposits ~init:(deposits_processed, calls)
           ~f:(fun (deposits, calls) tr ->
             Process_transfer.process_transfer deposits tr calls )
       in
+      let stmt =
+        ( { source0 = deposits_processed'
+          ; target0 = all_deposits
+          ; source1 = deposits_processed'
+          ; target1 = all_deposits
+          }
+          : Action_state_extension_rule.Stmt.var )
+      in
+      let (_ : unit Prover_value.t) =
+        Prover_value.create (fun () ->
+            printf "Verifying proof for %s\n"
+              Action_state_extension_rule.Stmt.(show (As_prover.read typ stmt)) ;
+            printf "deposits_processed: %s\n"
+              (Field.Constant.to_string (As_prover.read_var deposits_processed)) ;
+            printf "deposits_processed': %s\n"
+              (Field.Constant.to_string
+                 (As_prover.read_var deposits_processed') ) ;
+            printf "deposits_processed'': %s\n"
+              (Field.Constant.to_string
+                 (As_prover.read_var deposits_processed'') ) )
+      in
+      with_label __LOC__ (fun () ->
+          Field.Assert.equal deposits_processed' deposits_processed'' ) ;
       p "6" ;
       (* Set all_deposits and deposits_processed' *)
       let update =
@@ -762,12 +801,7 @@ module Inner_rules = struct
       p "b" ;
       Pickles.Inductive_rule.
         { previous_proof_statements =
-            [ { public_input =
-                  ({ source0 = deposits_processed'
-                   ; target0 = all_deposits
-                   ; source1 = deposits_processed'
-                   ; target1 = all_deposits
-                   } : Action_state_extension_rule.Stmt.var)
+            [ { public_input = stmt
               ; proof_must_verify = Boolean.true_
               ; proof = action_prf
               }
@@ -781,7 +815,7 @@ module Inner_rules = struct
         }
 
     let rule tag : _ Pickles.Inductive_rule.t =
-      { identifier = "Rollup special account step"
+      { identifier = "Rollup inner account step"
       ; prevs = [ tag ]
       ; main
       ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
@@ -1104,8 +1138,6 @@ struct
 
     let vk_hash = Zkapp_account.digest_vk vk
 
-    let step w = step_ ~handler:(Inner_rules.Step.handler w) ()
-
     let withdraw ~public_key ~amount ~recipient =
       let%map _, tree, proof =
         action_
@@ -1127,20 +1159,22 @@ struct
         List.fold trs
           ~init:(return (stmt, proof))
           ~f:(fun x tr ->
-            let%bind stmt, proof = x in
-            let action = TR.(value_to_actions typ tr) in
-            let%bind stmt, (), proof =
-              Action_state_extension.step_both
-                ( { actions0 = action
-                  ; actions1 = action
-                  ; step0 = true
-                  ; step1 = true
-                  ; prev = stmt
-                  ; proof
-                  }
-                  : Action_state_extension_rule.StepBoth.Witness.t )
-            in
-            return (stmt, proof) )
+            if TR.is_dummy tr then return (stmt, proof)
+            else
+              let%bind stmt, proof = x in
+              let action = TR.(value_to_actions typ tr) in
+              let%bind stmt, (), proof =
+                Action_state_extension.step_both
+                  ( { actions0 = action
+                    ; actions1 = action
+                    ; step0 = true
+                    ; step1 = true
+                    ; prev = stmt
+                    ; proof
+                    }
+                    : Action_state_extension_rule.StepBoth.Witness.t )
+              in
+              return (stmt, proof) )
       in
       return (stmt, proof)
 
@@ -1159,22 +1193,32 @@ struct
         List.append new_deposits
           (List.init (8 - List.length new_deposits) ~f:(fun _ -> TR.dummy))
       in
-      let remaining_deposits = List.drop remaining_deposits 8 in
+      let remaining_deposits =
+        List.drop remaining_deposits Inner_rules.Step.TR_8.length
+      in
+      printf "deposits_processed: %s\n"
+        (Field.Constant.to_string deposits_processed) ;
       let%bind { target0 = deposits_processed' }, _ =
         extend_action_state deposits_processed new_deposits
       in
-      let%bind { target0 = all_deposits }, action_prf =
+      printf "length of new_deposits: %i\n" (List.length new_deposits) ;
+      printf "deposits_processed': %s\n"
+        (Field.Constant.to_string deposits_processed') ;
+      let%bind ({ target0 = all_deposits } as stmt), action_prf =
         extend_action_state deposits_processed' remaining_deposits
       in
+      printf "Made proof for %s\n" (Action_state_extension_rule.Stmt.show stmt) ;
       let%bind _, tree, proof =
-        step
-          Inner_rules.Step.Witness.
-            { vk_hash
-            ; deposits_processed
-            ; new_deposits
-            ; all_deposits
-            ; action_prf
-            }
+        let w : Inner_rules.Step.Witness.t =
+          { vk_hash
+          ; deposits_processed
+          ; deposits_processed'
+          ; new_deposits
+          ; all_deposits
+          ; action_prf
+          }
+        in
+        step_ ~handler:(Inner_rules.Step.handler w) ()
       in
       let tree = mktree tree proof in
       return (tree, deposits_processed', remaining_deposits)
@@ -1243,8 +1287,6 @@ struct
       Zkapp_command.Call_forest.Tree.
         { account_update; account_update_digest; calls }
 
-    let step w = step_ ~handler:(Outer_rules.Step.handler w) ()
-
     let step (t : t) ~(public_key : PC.t) ~(old_action_state : field)
         ~(new_actions : TR.t list) ~(withdrawals_processed : field)
         ~(remaining_withdrawals : TR.t list) :
@@ -1286,17 +1328,18 @@ struct
           }
       in
       let%bind _, tree, proof =
-        step
-          Outer_rules.Step.Witness.
-            { vk_hash
-            ; all_deposits = stmt_deposits.target0
-            ; withdrawals_processed
-            ; new_withdrawals
-            ; action_prf
-            ; stmt = t.stmt
-            ; prf = t.proof
-            ; public_key
-            }
+        let w : Outer_rules.Step.Witness.t =
+          { vk_hash
+          ; all_deposits = stmt_deposits.target0
+          ; withdrawals_processed
+          ; new_withdrawals
+          ; action_prf
+          ; stmt = t.stmt
+          ; prf = t.proof
+          ; public_key
+          }
+        in
+        step_ ~handler:(Outer_rules.Step.handler w) ()
       in
       let tree = mktree tree proof in
       return (tree, withdrawals_processed', remaining_withdrawals)

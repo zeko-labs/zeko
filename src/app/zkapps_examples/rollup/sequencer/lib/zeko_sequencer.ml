@@ -442,8 +442,7 @@ module Sequencer = struct
                 ; memo = Signed_command_memo.empty
                 }
               in
-              let[@warning "-8"] (Ok (_, dproof)) =
-                apply_zkapp_command sequencer command ~with_prove:true
+              let (_, dproof) = Result.ok_exn @@ Result.map_error ~f:Error.to_exn @@ apply_zkapp_command sequencer command ~with_prove:true
               in
               dproof
             in
