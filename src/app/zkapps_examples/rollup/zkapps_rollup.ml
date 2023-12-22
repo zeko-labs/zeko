@@ -763,9 +763,9 @@ module Inner_rules = struct
       Pickles.Inductive_rule.
         { previous_proof_statements =
             [ { public_input =
-                  ({ source0 = deposits_processed(*'*)
+                  ({ source0 = deposits_processed'
                    ; target0 = all_deposits
-                   ; source1 = deposits_processed(*'*)
+                   ; source1 = deposits_processed'
                    ; target1 = all_deposits
                    } : Action_state_extension_rule.Stmt.var)
               ; proof_must_verify = Boolean.true_
