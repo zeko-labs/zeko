@@ -853,13 +853,7 @@ let to_simple (t : t) : Simple.t =
   }
 
 let all_account_updates (t : t) : _ Call_forest.t =
-  let p = t.fee_payer in
-  let body = Account_update.Body.of_fee_payer p.body in
-  let fee_payer : Account_update.t =
-    let p = t.fee_payer in
-    { authorization = Control.Signature p.authorization; body }
-  in
-  Call_forest.cons fee_payer t.account_updates
+  Call_forest.cons (Account_update.of_fee_payer t.fee_payer) t.account_updates
 
 let fee (t : t) : Currency.Fee.t = t.fee_payer.body.fee
 

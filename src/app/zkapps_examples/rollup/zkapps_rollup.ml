@@ -36,7 +36,7 @@ let proof_permissions : Permissions.t =
   ; increment_nonce = Proof
   ; set_voting_for = Proof
   ; set_timing = Proof
-  ; access = Proof
+  ; access = None
   }
 
 (** Given calls the zkapp wishes to make, constructs output that can be used to construct a full account update *)
@@ -604,8 +604,10 @@ module Transfer_action_rule = struct
       exists_witness ()
     in
     (* The amount and the recipient must not be zero, because then it's a dummy *)
-    Boolean.Assert.is_true @@ Boolean.not @@ run @@ CA.(Checked.equal amount (constant typ zero)) ;
-    Boolean.Assert.is_true @@ Boolean.not @@ run @@ PC.(Checked.equal recipient (constant typ empty)) ;
+    ( Boolean.Assert.is_true @@ Boolean.not @@ run
+    @@ CA.(Checked.equal amount (constant typ zero)) ) ;
+    ( Boolean.Assert.is_true @@ Boolean.not @@ run
+    @@ PC.(Checked.equal recipient (constant typ empty)) ) ;
     let account_creation_fee =
       CA.(constant typ @@ of_fee constraint_constants.account_creation_fee)
     in

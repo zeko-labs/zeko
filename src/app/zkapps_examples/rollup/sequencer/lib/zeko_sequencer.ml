@@ -28,7 +28,6 @@ module Sequencer = struct
       ~protocol_constants:genesis_constants.protocol
 
   let state_body =
-    (* FIXME: Use the correct values *)
     let compile_time_genesis =
       Mina_state.Genesis_protocol_state.t
         ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
@@ -427,13 +426,14 @@ module Sequencer = struct
               let fee = Currency.Fee.of_mina_int_exn 0 in
               let command : Zkapp_command.t =
                 { fee_payer =
+                    (* Setting public_key to empty results in a dummy fee payer with public key near 123456789 (dumb). *)
+                    (* FIXME: Do this a better way without hard-coding values. *)
                     { Account_update.Fee_payer.body =
-                        { public_key = M.Inner.public_key
+                        { public_key = Signature_lib.Public_key.Compressed.empty
                         ; fee
                         ; valid_until = None
-                        ; nonce = Account.Nonce.of_int 0 (* FIXME *)
+                        ; nonce = Account.Nonce.zero
                         }
-                        (* This is legal because of special Zeko exception: Don't check signature if fee is zero. *)
                     ; authorization = Signature.dummy
                     }
                 ; account_updates =
@@ -442,7 +442,10 @@ module Sequencer = struct
                 ; memo = Signed_command_memo.empty
                 }
               in
-              let (_, dproof) = Result.ok_exn @@ Result.map_error ~f:Error.to_exn @@ apply_zkapp_command sequencer command ~with_prove:true
+              let _, dproof =
+                Result.ok_exn
+                @@ Result.map_error ~f:Error.to_exn
+                @@ apply_zkapp_command sequencer command ~with_prove:true
               in
               dproof
             in
