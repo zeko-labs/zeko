@@ -132,7 +132,17 @@ let () =
                           | _ ->
                               () ) ;
 
-                          apply_zkapp_command sequencer command ~with_prove:true
+                          let%bind.Result txn_applied, (witnesses, zkapp_command)
+                              =
+                            apply_zkapp_command sequencer command
+                          in
+
+                          don't_wait_for
+                          @@ Zeko_sequencer.Snark_queue
+                             .enqueue_prove_zkapp_command sequencer.snark_q
+                               ~witnesses ~zkapp_command ;
+
+                          Result.return txn_applied
                       | false ->
                           let command = command_send spec in
                           ( match
@@ -147,13 +157,22 @@ let () =
                           | _ ->
                               () ) ;
 
-                          apply_signed_command sequencer command
-                            ~with_prove:true
-                    in
-                    [%test_eq: Bool.t] true (Or_error.is_ok txn_applied) ;
-                    let txn_applied, dproof = Or_error.ok_exn txn_applied in
+                          let%bind.Result ( txn_applied
+                                          , ( sparse_ledger
+                                            , user_command_in_block
+                                            , statement ) ) =
+                            apply_signed_command sequencer command
+                          in
+                          don't_wait_for
+                          @@ Zeko_sequencer.Snark_queue
+                             .enqueue_prove_signed_command sequencer.snark_q
+                               ~sparse_ledger ~user_command_in_block ~statement ;
 
-                    don't_wait_for dproof ;
+                          Result.return txn_applied
+                    in
+
+                    [%test_eq: Bool.t] true (Or_error.is_ok txn_applied) ;
+                    let txn_applied = Or_error.ok_exn txn_applied in
 
                     let status =
                       L.Transaction_applied.transaction_status txn_applied
