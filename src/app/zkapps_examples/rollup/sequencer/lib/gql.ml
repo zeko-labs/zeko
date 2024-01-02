@@ -1623,28 +1623,22 @@ module Queries = struct
       ~resolve:(fun _ () _ -> [])
 
   let transfer =
-    let conv
-        (x :
-          ( Zeko_sequencer.t
-          , Account_update.Graphql_repr.t option )
-          Fields_derivers_graphql.Schema.typ ) :
-        (Zeko_sequencer.t, Account_update.Graphql_repr.t option) typ =
-      Obj.magic x
-    in
-    let typ () =
-      Fields_derivers_zkapps.(
-        nullable_typ (Account_update.Graphql_repr.deriver @@ Derivers.o ()))
-    in
-    field "transfer" ~doc:"Query proved account update for transfer"
-      ~typ:(typ () |> conv)
+    field "transfer"
+      ~doc:"Query proved account update for transfer in a JSON format"
+      ~typ:string
       ~args:Arg.[ arg "key" ~typ:(non_null string) ]
       ~resolve:(fun { ctx = sequencer; _ } () key ->
-        match Transfers_memory.get sequencer.snark_q.transfers_memory key with
+        match
+          Transfers_memory.get
+            Zeko_sequencer.(sequencer.snark_q.transfers_memory)
+            key
+        with
         | None ->
             None
         | Some (_, account_update) ->
-            Some (Account_update.to_graphql_repr ~call_depth:0 account_update)
-        )
+            Some
+              ( Yojson.Safe.to_string
+              @@ Zkapp_command.account_updates_to_json account_update ) )
 
   module Archive = struct
     let actions =
