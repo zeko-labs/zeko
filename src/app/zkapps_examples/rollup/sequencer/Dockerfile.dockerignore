@@ -1,0 +1,15 @@
+.graphql_ppx_cache/
+.vscode/
+_build/
+src/app/libp2p_helper/result/
+src/app/zkapps_examples/rollup/da-layer/.DS_Store
+src/app/zkapps_examples/rollup/da-layer/artifacts/
+src/app/zkapps_examples/rollup/da-layer/cache/
+src/app/zkapps_examples/rollup/da-layer/container.log
+src/app/zkapps_examples/rollup/da-layer/geth_db/geth/
+src/app/zkapps_examples/rollup/da-layer/node_modules/
+src/app/zkapps_examples/rollup/da-layer/typechain-types/
+src/app/zkapps_examples/rollup/sequencer/db/
+src/config.mlh
+src/libp2p_ipc/build/
+src/libp2p_ipc/libp2p_ipc.capnp.go
