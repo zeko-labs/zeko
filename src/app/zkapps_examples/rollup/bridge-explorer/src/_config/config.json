@@ -1,0 +1,12 @@
+{
+  "c1-devnet": {
+    "bridgeApiBaseURL": "https://proxy.berkeley.minaexplorer.com/graphql",
+    "rollupExplorerBaseURL": "https://devnet.zekoexplorer.com",
+    "mainchainExplorerBaseURL": "https://devnet.minaexplorer.com"
+  },
+  "c1-mainnet": {
+    "bridgeApiBaseURL": "https://proxy.berkeley.minaexplorer.com/graphql",
+    "rollupExplorerBaseURL": "https://zekoexplorer.com",
+    "mainchainExplorerBaseURL": "https://minaexplorer.com"
+  }
+}
