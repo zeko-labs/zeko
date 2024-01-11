@@ -78,8 +78,6 @@ let () =
      and zkapp_pk =
        flag "--zkapp-pk" (optional string) ~doc:"string ZkApp public key"
      and l1_uri = Cli_lib.Flag.Uri.Client.rest_graphql_opt
-     and signer =
-       flag "--signer" (required string) ~doc:"string Signer private key"
      and commitment_period =
        flag "--commitment-period"
          (optional_with_default 120. float)
@@ -103,6 +101,8 @@ let () =
        flag "--test-accounts-path" (optional string)
          ~doc:"string Path to the test genesis accounts file"
      in
+     let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+
      run port zkapp_pk max_pool_size commitment_period da_contract_address
        db_dir l1_uri signer rollback_checker_interval test_accounts_path )
   |> Command_unix.run
