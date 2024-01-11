@@ -1290,7 +1290,7 @@ module Make (Inputs : Inputs_intf) = struct
     assert_ ~pos:__POS__
       (Bool.equal signature_verifies (Account_update.is_signed account_update)) ;
     (* ZEKO NOTE: We don't mandate that the nonce is increased.
-    This is useful for simplifying the L1's mempool, not relevant for us. *)
+       This is useful for simplifying the L1's mempool, not relevant for us. *)
     (*
     (* The fee-payer must increment their nonce. *)
     let local_state =
