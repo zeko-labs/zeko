@@ -728,11 +728,9 @@ let%test_unit "apply commands and commit" =
           (* Apply commands *)
           let target_ledger_hash =
             Thread_safe.block_on_async_exn (fun () ->
-                List.iter specs ~f:(fun spec ->
+                List.iteri specs ~f:(fun i spec ->
                     let txn_applied =
-                      match
-                        Quickcheck.random_value Bool.quickcheck_generator
-                      with
+                      match i % 2 = 0 with
                       | true ->
                           let command = account_update_send spec in
                           ( match
