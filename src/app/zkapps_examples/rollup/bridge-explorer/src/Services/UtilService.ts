@@ -60,14 +60,14 @@ class UtilService {
 
   public static getExplorerFromTxUrlBase(selectedNetwork: Network, direction: RequestType): string {
     return direction === RequestType.WRAP
-      ? selectedNetwork.mainchainExplorerBaseURL
-      : selectedNetwork.rollupExplorerBaseURL;
+      ? `${selectedNetwork.mainchainExplorerBaseURL}/transaction`
+      : `${selectedNetwork.rollupExplorerBaseURL}/tx`;
   }
 
   public static getExplorerToTxUrlBase(selectedNetwork: Network, direction: RequestType): string {
     return direction === RequestType.WRAP
-      ? selectedNetwork.rollupExplorerBaseURL
-      : selectedNetwork.mainchainExplorerBaseURL;
+      ? `${selectedNetwork.rollupExplorerBaseURL}/tx`
+      : `${selectedNetwork.mainchainExplorerBaseURL}/transaction`;
   }
 
   public static formatCompactNumber(value: string): string | number {

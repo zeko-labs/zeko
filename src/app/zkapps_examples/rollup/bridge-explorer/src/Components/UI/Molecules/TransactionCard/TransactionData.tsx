@@ -50,7 +50,7 @@ function TransactionData({ requestItem }: TransactionDataProps) {
                   href={`${UtilService.getExplorerFromTxUrlBase(
                     selectedNetwork,
                     requestItem.direction
-                  )}/transaction/${requestItem.actionState}`}
+                  )}/${requestItem.actionState}`}
                 >
                   {requestItem.address}
                 </ExternalLink>
@@ -77,7 +77,7 @@ function TransactionData({ requestItem }: TransactionDataProps) {
                   href={`${UtilService.getExplorerToTxUrlBase(
                     selectedNetwork,
                     requestItem.direction
-                  )}/transaction/${requestItem.actionState}`}
+                  )}/${requestItem.actionState}`}
                 >
                   {requestItem.address}
                 </ExternalLink>
