@@ -1818,8 +1818,26 @@ let verification_key_update_to_option (t : t) :
     Verification_key_wire.t option Zkapp_basic.Set_or_keep.t =
   Zkapp_basic.Set_or_keep.map ~f:Option.some t.body.update.verification_key
 
+let key_123456789 : Public_key.Compressed.t lazy_t =
+  lazy
+    (let pk =
+       Snark_params.Tick.Inner_curve.(
+         to_affine_exn @@ point_near_x @@ Field.of_int 123456789)
+     in
+     Public_key.compress pk )
+
+let dummy_fee_payer : t =
+  { authorization = None_given
+  ; body = { Body.dummy with public_key = force key_123456789 }
+  }
+
+(* ZEKO NOTE: When we create a fee payer from a dummy fee payer that
+   has the empty public key, we ignore the existing logic and replace it with
+   a dummy account update with public key set to point near 123456789 *)
 let of_fee_payer ({ body; authorization } : Fee_payer.t) : t =
-  { authorization = Signature authorization; body = Body.of_fee_payer body }
+  if Public_key.Compressed.(equal empty body.public_key) then dummy_fee_payer
+  else
+    { authorization = Signature authorization; body = Body.of_fee_payer body }
 
 (** The change in balance to apply to the target account of this account_update.
       When this is negative, the amount will be withdrawn from the account and

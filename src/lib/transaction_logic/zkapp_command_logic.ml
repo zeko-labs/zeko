@@ -1289,13 +1289,17 @@ module Make (Inputs : Inputs_intf) = struct
       (Bool.equal proof_verifies (Account_update.is_proved account_update)) ;
     assert_ ~pos:__POS__
       (Bool.equal signature_verifies (Account_update.is_signed account_update)) ;
+    (* ZEKO NOTE: We don't mandate that the nonce is increased.
+       This is useful for simplifying the L1's mempool, not relevant for us. *)
+    (*
     (* The fee-payer must increment their nonce. *)
     let local_state =
       Local_state.add_check local_state Fee_payer_nonce_must_increase
         Inputs.Bool.(
           Inputs.Account_update.increment_nonce account_update ||| not is_start')
     in
-    (* ZEKO NOTE: We disable this *)
+    *)
+    (* ZEKO NOTE: We don't require a signature for the fee payer *)
     (*
          let local_state =
            Local_state.add_check local_state Fee_payer_must_be_signed
