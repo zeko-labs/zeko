@@ -259,13 +259,13 @@ module Sequencer = struct
              let%bind call_forest =
                match transfer.direction with
                | Wrap ->
-                   time "Outer.action"
-                     (M.Outer.action ~public_key:t.zkapp_pk
+                   time "Outer.deposit"
+                     (M.Outer.deposit ~public_key:t.zkapp_pk
                         ~amount:(Currency.Amount.of_uint64 transfer.amount)
                         ~recipient:transfer.address )
                | Unwrap ->
-                   time "Inner.action"
-                     (M.Inner.action ~public_key:t.zkapp_pk
+                   time "Inner.withdraw"
+                     (M.Inner.withdraw ~public_key:t.zkapp_pk
                         ~amount:(Currency.Amount.of_uint64 transfer.amount)
                         ~recipient:transfer.address )
              in
