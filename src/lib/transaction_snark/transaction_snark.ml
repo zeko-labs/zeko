@@ -1789,11 +1789,27 @@ module Make_str (A : Wire_types.Concrete) = struct
             (eff : (r, Env.t) Mina_transaction_logic.Zkapp_command_logic.Eff.t)
             : r =
           match eff with
-          (* ZEKO NOTE: We don't support time/network preconditions (issue #63) *)
-          | Check_valid_while_precondition _ ->
-              Boolean.false_
-          | Check_protocol_state_precondition _ ->
-              Boolean.false_
+          (* ZEKO NOTE: We don't allow time/network preconditions because we haven't defined
+             what they should mean yet. What is a slot on the rollup? What about the epoch data?
+             (issue #63) *)
+          | Check_valid_while_precondition (valid_while, _global_state) ->
+              Boolean.not (Zkapp_basic.Or_ignore.Checked.is_check valid_while)
+          | Check_protocol_state_precondition (protocol_state, _global_state)
+            -> (
+              let open Zkapp_precondition.Protocol_state in
+              let accept = constant typ accept in
+              let (Typ typ) = typ in
+              let fields, _ = typ.var_to_fields protocol_state in
+              let fields', _ = typ.var_to_fields accept in
+              let zipped =
+                List.zip (Array.to_list fields) (Array.to_list fields')
+              in
+              match zipped with
+              | Ok zipped ->
+                  List.fold zipped ~init:Boolean.true_ ~f:(fun acc (x, y) ->
+                      Boolean.(acc || Field.equal x y) )
+              | Unequal_lengths ->
+                  failwith "failed to compare protocol state precondition" )
           | Check_account_precondition
               ({ account_update; _ }, account, new_account, local_state) ->
               let local_state = ref local_state in
