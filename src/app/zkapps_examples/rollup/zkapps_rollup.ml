@@ -884,7 +884,9 @@ module Outer_rules = struct
              (run @@ Nonce.Checked.succ old_acc.nonce)
              new_acc.nonce
       in
-      (* FIXME: shouldn't be necessary but who knows whether an account index is reliable *)
+      (* FIXME: shouldn't be necessary but who knows whether an account index is reliable.
+         We use `old_acc` instead of `new_acc`, because _possibly_ old_acc could be PC.empty while new_acc is not.
+         Maybe this isn't the case though. *)
       let () =
         run
         @@ PC.Checked.Assert.equal old_acc.public_key
