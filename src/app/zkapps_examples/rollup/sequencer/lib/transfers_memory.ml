@@ -1,3 +1,8 @@
+(**
+  Hash table that holds the item only for the specified lifetime.
+  Used to store proved transfer requested by users.
+*)
+
 open Base
 open Mina_base
 
