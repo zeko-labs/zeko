@@ -13,19 +13,23 @@ let time label (d : 'a Deferred.t) =
   return x
 
 module Sequencer = struct
-  type config_t =
-    { max_pool_size : int
-    ; commitment_period_sec : float
-    ; db_dir : string option
-    }
+  module Config = struct
+    type t =
+      { max_pool_size : int
+      ; commitment_period_sec : float
+      ; db_dir : string option
+      }
+  end
 
-  type transfer_direction_t = Deposit | Withdraw
+  module Transfer = struct
+    type direction = Deposit | Withdraw
 
-  type transfer_t =
-    { address : Account.key
-    ; amount : Unsigned.UInt64.t
-    ; direction : transfer_direction_t
-    }
+    type t =
+      { address : Account.key
+      ; amount : Unsigned.UInt64.t
+      ; direction : direction
+      }
+  end
 
   let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -66,8 +70,8 @@ module Sequencer = struct
   module Snark_queue = struct
     type t =
       { q : unit Throttle.t
-      ; da_config : Da_layer.config_t
-      ; mutable last : Zkapps_rollup.Wrapper_rules.t option
+      ; da_config : Da_layer.Config.t
+      ; mutable last : Zkapps_rollup.t option
       ; mutable staged_commands :
           ( Signed_command.With_valid_signature.t
           , Zkapp_command.t )
@@ -252,7 +256,7 @@ module Sequencer = struct
               t.previous_committed_ledger_hash <- Some ledger_hash ;
               return () )
 
-    let prove_transfer t ~(transfer : transfer_t) =
+    let prove_transfer t ~(transfer : Transfer.t) =
       let key = Int.to_string @@ Random.int Int.max_value in
       don't_wait_for
       @@ Throttle.enqueue t.q (fun () ->
@@ -280,8 +284,8 @@ module Sequencer = struct
     { db : L.Db.t
     ; archive : Archive.t
     ; mutable slot : int
-    ; config : config_t
-    ; da_config : Da_layer.config_t
+    ; config : Config.t
+    ; da_config : Da_layer.Config.t
     ; snark_q : Snark_queue.t
     ; stop : unit Ivar.t
     }
@@ -292,7 +296,7 @@ module Sequencer = struct
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
     in
-    let da_config : Da_layer.config_t = { da_contract_address } in
+    let da_config : Da_layer.Config.t = { da_contract_address } in
     { db
     ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
     ; slot = 0
