@@ -1213,7 +1213,7 @@ module Types = struct
     end
 
     module Transfer = struct
-      type input = Zeko_sequencer.transfer_t
+      type input = Zeko_sequencer.Transfer.t
 
       let arg_typ =
         obj "TransferInput"
@@ -1227,8 +1227,10 @@ module Types = struct
                   ( non_null
                   @@ enum "TransferDirection"
                        ~values:
-                         [ enum_value "DEPOSIT" ~value:Zeko_sequencer.Deposit
-                         ; enum_value "WITHDRAW" ~value:Zeko_sequencer.Withdraw
+                         [ enum_value "DEPOSIT"
+                             ~value:Zeko_sequencer.Transfer.Deposit
+                         ; enum_value "WITHDRAW"
+                             ~value:Zeko_sequencer.Transfer.Withdraw
                          ] )
             ]
     end
@@ -1572,7 +1574,7 @@ module Mutations = struct
         let key =
           Zeko_sequencer.Snark_queue.prove_transfer
             Zeko_sequencer.(sequencer.snark_q)
-            ~transfer:Zeko_sequencer.{ address; amount; direction }
+            ~transfer:Zeko_sequencer.Transfer.{ address; amount; direction }
         in
         return (Ok key) )
 
