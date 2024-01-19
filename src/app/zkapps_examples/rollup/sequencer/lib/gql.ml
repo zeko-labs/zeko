@@ -1227,8 +1227,8 @@ module Types = struct
                   ( non_null
                   @@ enum "TransferDirection"
                        ~values:
-                         [ enum_value "WRAP" ~value:Zeko_sequencer.Wrap
-                         ; enum_value "UNWRAP" ~value:Zeko_sequencer.Unwrap
+                         [ enum_value "DEPOSIT" ~value:Zeko_sequencer.Deposit
+                         ; enum_value "WITHDRAW" ~value:Zeko_sequencer.Withdraw
                          ] )
             ]
     end
