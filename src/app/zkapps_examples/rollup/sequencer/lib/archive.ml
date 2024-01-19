@@ -1,3 +1,7 @@
+(**
+  Stores actions/events from zkapp commands applied to the rollup.
+*)
+
 open Core_kernel
 open Mina_base
 open Mina_transaction
