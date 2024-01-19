@@ -17,6 +17,7 @@
   graphql_wrapper
   transaction_snark
   transaction_protocol_state
+  transaction_witness
   genesis_constants
   genesis_ledger
   consensus

@@ -111,47 +111,66 @@ module Sequencer = struct
       t.staged_commands <- t.staged_commands @ [ command ] ;
       return ()
 
+    module Command_witness = struct
+      type t =
+        | Signed_command of
+            Sparse_ledger_base.t
+            * Signed_command.With_valid_signature.t Transaction_protocol_state.t
+            * Transaction_snark.Statement.With_sok.t
+        | Zkapp_command of
+            ( Transaction_witness.Zkapp_command_segment_witness.t
+            * Transaction_snark.Zkapp_command_segment.Basic.t
+            * Mina_state.Snarked_ledger_state.With_sok.t )
+            list
+            * Zkapp_command.t
+    end
+
     let prove_signed_command t ~sparse_ledger ~user_command_in_block ~statement
         =
-      Throttle.enqueue t.q (fun () ->
-          let handler =
-            unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
-          in
-          let%bind txn_snark =
-            time "Transaction_snark.of_signed_command"
-              (T.of_user_command
-                 ~init_stack:Mina_base.Pending_coinbase.Stack.empty ~statement
-                 user_command_in_block handler )
-          in
-          wrap_and_merge t txn_snark
-            (User_command.Signed_command user_command_in_block.transaction) )
+      let handler =
+        unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
+      in
+      let%bind txn_snark =
+        time "Transaction_snark.of_signed_command"
+          (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
+             ~statement user_command_in_block handler )
+      in
+      wrap_and_merge t txn_snark
+        (User_command.Signed_command user_command_in_block.transaction)
 
     let prove_zkapp_command t ~witnesses ~zkapp_command =
-      Throttle.enqueue t.q (fun () ->
-          let%bind txn_snark =
-            match witnesses with
-            | [] ->
-                failwith "No witnesses"
-            | (witness, spec, statement) :: rest ->
-                let%bind p1 =
+      let%bind txn_snark =
+        match witnesses with
+        | [] ->
+            failwith "No witnesses"
+        | (witness, spec, statement) :: rest ->
+            let%bind p1 =
+              time "Transaction_snark.of_zkapp_command_segment"
+                (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
+            in
+            Deferred.List.fold ~init:p1 rest
+              ~f:(fun acc (witness, spec, statement) ->
+                let%bind prev = return acc in
+                let%bind curr =
                   time "Transaction_snark.of_zkapp_command_segment"
                     (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
                 in
-                Deferred.List.fold ~init:p1 rest
-                  ~f:(fun acc (witness, spec, statement) ->
-                    let%bind prev = return acc in
-                    let%bind curr =
-                      time "Transaction_snark.of_zkapp_command_segment"
-                        (T.of_zkapp_command_segment_exn ~statement ~witness
-                           ~spec )
-                    in
-                    let%bind merged =
-                      time "Transaction_snark.merge"
-                        (T.merge curr prev ~sok_digest)
-                    in
-                    return (Or_error.ok_exn merged) )
-          in
-          wrap_and_merge t txn_snark (User_command.Zkapp_command zkapp_command) )
+                let%bind merged =
+                  time "Transaction_snark.merge" (T.merge curr prev ~sok_digest)
+                in
+                return (Or_error.ok_exn merged) )
+      in
+      wrap_and_merge t txn_snark (User_command.Zkapp_command zkapp_command)
+
+    let enqueue_prove_command t command_witness =
+      Throttle.enqueue t.q (fun () ->
+          match command_witness with
+          | Command_witness.Signed_command
+              (sparse_ledger, user_command_in_block, statement) ->
+              prove_signed_command t ~sparse_ledger ~user_command_in_block
+                ~statement
+          | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
+              prove_zkapp_command t ~witnesses ~zkapp_command )
 
     let commit t =
       Throttle.enqueue t.q (fun () ->
@@ -357,8 +376,7 @@ module Sequencer = struct
 
   let get_root t = L.Db.merkle_root t.db
 
-  let apply_signed_command t (signed_command : Signed_command.t)
-      ?(with_prove = true) =
+  let apply_signed_command t (signed_command : Signed_command.t) =
     let () =
       match Snark_queue.queue_size t.snark_q with
       | x when x >= t.config.max_pool_size ->
@@ -436,19 +454,12 @@ module Sequencer = struct
         ~pending_coinbase_stack_state:pc
     in
 
-    let dproof =
-      match with_prove with
-      | true ->
-          Snark_queue.prove_signed_command t.snark_q ~sparse_ledger
-            ~user_command_in_block ~statement
-      | false ->
-          Deferred.unit
-    in
+    Result.return
+      ( txn_applied
+      , Snark_queue.Command_witness.Signed_command
+          (sparse_ledger, user_command_in_block, statement) )
 
-    Result.return (txn_applied, dproof)
-
-  let apply_zkapp_command t (zkapp_command : Zkapp_command.t)
-      ?(with_prove = true) =
+  let apply_zkapp_command t (zkapp_command : Zkapp_command.t) =
     let () =
       match Snark_queue.queue_size t.snark_q with
       | x when x >= t.config.max_pool_size ->
@@ -541,15 +552,9 @@ module Sequencer = struct
         ]
     in
 
-    let dproof =
-      match with_prove with
-      | true ->
-          Snark_queue.prove_zkapp_command t.snark_q ~witnesses ~zkapp_command
-      | false ->
-          Deferred.unit
-    in
-
-    Result.return (txn_applied, dproof)
+    Result.return
+      ( txn_applied
+      , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command) )
 
   let add_test_accounts t =
     (* Only for testing *)
@@ -621,14 +626,12 @@ module Sequencer = struct
           @@ List.iter commands ~f:(fun command ->
                  match command with
                  | User_command.Signed_command signed_command ->
-                     ( apply_signed_command t signed_command ~with_prove:false
-                       |> Or_error.ok_exn
-                       : L.Transaction_applied.t * unit Deferred.t )
+                     ( apply_signed_command t signed_command |> Or_error.ok_exn
+                       : L.Transaction_applied.t * _ )
                      |> ignore
                  | User_command.Zkapp_command zkapp_command ->
-                     ( apply_zkapp_command t zkapp_command ~with_prove:false
-                       |> Or_error.ok_exn
-                       : L.Transaction_applied.t * unit Deferred.t )
+                     ( apply_zkapp_command t zkapp_command |> Or_error.ok_exn
+                       : L.Transaction_applied.t * _ )
                      |> ignore )
       | _ ->
           return ()
@@ -733,7 +736,7 @@ let%test_unit "apply commands and commit" =
           let target_ledger_hash =
             Thread_safe.block_on_async_exn (fun () ->
                 List.iteri specs ~f:(fun i spec ->
-                    let txn_applied =
+                    let result =
                       match i % 2 = 0 with
                       | true ->
                           let command = account_update_send spec in
@@ -752,7 +755,7 @@ let%test_unit "apply commands and commit" =
                           | _ ->
                               () ) ;
 
-                          apply_zkapp_command sequencer command ~with_prove:true
+                          apply_zkapp_command sequencer command
                       | false ->
                           let command = command_send spec in
                           ( match
@@ -768,12 +771,14 @@ let%test_unit "apply commands and commit" =
                               () ) ;
 
                           apply_signed_command sequencer command
-                            ~with_prove:true
                     in
-                    [%test_eq: Bool.t] true (Or_error.is_ok txn_applied) ;
-                    let txn_applied, dproof = Or_error.ok_exn txn_applied in
 
-                    don't_wait_for dproof ;
+                    [%test_eq: Bool.t] true (Or_error.is_ok result) ;
+                    let txn_applied, command_witness = Or_error.ok_exn result in
+
+                    don't_wait_for
+                    @@ Snark_queue.enqueue_prove_command sequencer.snark_q
+                         command_witness ;
 
                     let status =
                       L.Transaction_applied.transaction_status txn_applied
