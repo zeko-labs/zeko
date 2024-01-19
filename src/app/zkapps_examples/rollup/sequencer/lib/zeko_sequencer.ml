@@ -19,7 +19,7 @@ module Sequencer = struct
     ; db_dir : string option
     }
 
-  type transfer_direction_t = Wrap | Unwrap
+  type transfer_direction_t = Deposit | Withdraw
 
   type transfer_t =
     { address : Account.key
@@ -258,12 +258,12 @@ module Sequencer = struct
       @@ Throttle.enqueue t.q (fun () ->
              let%bind call_forest =
                match transfer.direction with
-               | Wrap ->
+               | Deposit ->
                    time "Outer.deposit"
                      (M.Outer.deposit ~public_key:t.zkapp_pk
                         ~amount:(Currency.Amount.of_uint64 transfer.amount)
                         ~recipient:transfer.address )
-               | Unwrap ->
+               | Withdraw ->
                    time "Inner.withdraw"
                      (M.Inner.withdraw ~public_key:t.zkapp_pk
                         ~amount:(Currency.Amount.of_uint64 transfer.amount)

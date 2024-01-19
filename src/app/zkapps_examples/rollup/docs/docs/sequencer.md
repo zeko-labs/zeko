@@ -70,7 +70,7 @@ mutation {
   proveTransfer(input: {
     "address": "recipient base58 address",
     "amount": "uint64 amount to transfer",
-    "direction": WRAP | UNWRAP
+    "direction": DEPOSIT | WITHDRAW
   }) {
     key
   }
