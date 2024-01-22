@@ -14,19 +14,6 @@ module TR : sig
   type t = { amount : Currency.Amount.t; recipient : Public_key.Compressed.t }
 end
 
-module Mocked_zkapp : sig
-  module Deploy : sig
-    val deploy :
-         signer:Signature_lib.Keypair.t
-      -> fee:Currency.Fee.t
-      -> nonce:Account.Nonce.t
-      -> zkapp:Signature_lib.Keypair.t
-      -> vk:Side_loaded_verification_key.t
-      -> initial_state:Frozen_ledger_hash.t
-      -> Zkapp_command.t
-  end
-end
-
 module Make (T : sig
   val tag : Transaction_snark.tag
 end) : sig
@@ -76,25 +63,6 @@ end) : sig
     val initial_account : Account.t
   end
 
-  module Mocked : sig
-    val vk : Pickles.Side_loaded.Verification_key.t
-
-    val step :
-         t
-      -> Public_key.Compressed.t
-      -> field
-      -> unit
-      -> ( field Zkapp_statement.Poly.t
-         * ( Account_update.Body.t
-           * Zkapp_command.Digest.Account_update.t
-           * ( Account_update.t
-             , Zkapp_command.Digest.Account_update.t
-             , Zkapp_command.Digest.Forest.t )
-             Zkapp_command.Call_forest.t )
-         * (Pickles_types.Nat.N1.n, Pickles_types.Nat.N1.n) Pickles.Proof.t )
-         Deferred.t
-  end
-
   module Outer : sig
     val vk : Pickles.Side_loaded.Verification_key.t
 
@@ -130,9 +98,17 @@ end) : sig
          Deferred.t
 
     (* Create an account update update for deploying the zkapp, given a valid ledger for it. *)
-    val deploy_exn : Mina_ledger.Ledger.t -> Account_update.Update.t
+    val deploy_update_exn : Mina_ledger.Ledger.t -> Account_update.Update.t
 
     (* Create an account update update for deploying the zkapp, given a ledger hash for it. If ledger hash is invalid rollup will be borked. *)
-    val unsafe_deploy : Ledger_hash.t -> Account_update.Update.t
+    val unsafe_deploy_update : Ledger_hash.t -> Account_update.Update.t
+
+    val deploy_command_exn :
+         signer:Signature_lib.Keypair.t
+      -> fee:Currency.Fee.t
+      -> nonce:Account.Nonce.t
+      -> zkapp:Signature_lib.Keypair.t
+      -> initial_ledger:Mina_ledger.Ledger.t
+      -> Zkapp_command.t
   end
 end

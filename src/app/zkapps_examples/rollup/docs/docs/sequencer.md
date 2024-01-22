@@ -44,7 +44,6 @@ The following script deploys the rollup contract on the L1 with the initial stat
 ```bash
 DUNE_PROFILE=devnet dune exec ./deploy.exe -- \
     --rest-server <string> \
-    --init-state <int> \
     --signer <string>
 ```
 
