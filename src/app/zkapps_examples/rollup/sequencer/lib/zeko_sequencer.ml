@@ -377,19 +377,18 @@ module Sequencer = struct
   let get_root t = L.Db.merkle_root t.db
 
   let apply_signed_command t (signed_command : Signed_command.t) =
-    let () =
-      match Snark_queue.queue_size t.snark_q with
-      | x when x >= t.config.max_pool_size ->
-          failwith "Maximum pool size reached, try later"
-      | _ ->
-          ()
+    let%bind.Result () =
+      if Snark_queue.queue_size t.snark_q >= t.config.max_pool_size then
+        Error (Error.of_string "Maximum pool size reached, try later")
+      else Ok ()
     in
-    let with_valid_signature =
+
+    let%bind.Result with_valid_signature =
       match Signed_command.check_only_for_signature signed_command with
       | Some x ->
-          x
+          Ok x
       | None ->
-          failwith "Signature check failed"
+          Error (Error.of_string "Signature check failed")
     in
     let txn =
       Mina_transaction.Transaction.Command
@@ -460,12 +459,10 @@ module Sequencer = struct
           (sparse_ledger, user_command_in_block, statement) )
 
   let apply_zkapp_command t (zkapp_command : Zkapp_command.t) =
-    let () =
-      match Snark_queue.queue_size t.snark_q with
-      | x when x >= t.config.max_pool_size ->
-          failwith "Maximum pool size reached, try later"
-      | _ ->
-          ()
+    let%bind.Result () =
+      if Snark_queue.queue_size t.snark_q >= t.config.max_pool_size then
+        Error (Error.of_string "Maximum pool size reached, try later")
+      else Ok ()
     in
     let global_slot = Mina_numbers.Global_slot_since_genesis.of_int t.slot in
     let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
