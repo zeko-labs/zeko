@@ -1309,8 +1309,12 @@ module Make_str (A : Wire_types.Concrete) = struct
               run_checked (Amount.Signed.Checked.if_ b ~then_ ~else_)
 
             let is_non_neg (t : t) =
-              Sgn.Checked.is_pos
-                (run_checked (Currency.Amount.Signed.Checked.sgn t))
+              Boolean.if_
+                (equal t Amount.Signed.(Checked.constant zero))
+                ~then_:Boolean.true_
+                ~else_:
+                  (Sgn.Checked.is_pos
+                     (run_checked (Currency.Amount.Signed.Checked.sgn t)) )
 
             let is_neg (t : t) =
               Sgn.Checked.is_neg

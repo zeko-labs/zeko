@@ -1588,8 +1588,12 @@ module Make (L : Ledger_intf.S) :
            For the moment, however, there is some consolation in the fact that
            addition never produces negative zero, even if it was one of its
            arguments. For that reason the risk of this function misbehaving is
-           minimal and can probably be safely ignored. *)
-        let is_non_neg (t : t) = Sgn.equal t.sgn Pos
+           minimal and can probably be safely ignored.
+
+           ^ not true, you can create negative zero with `negate zero`
+        *)
+        let is_non_neg (t : t) =
+          if_ (equal t zero) ~then_:true ~else_:(Sgn.equal t.sgn Pos)
 
         let is_neg (t : t) = Sgn.equal t.sgn Neg
       end
