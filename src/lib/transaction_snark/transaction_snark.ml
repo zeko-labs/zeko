@@ -726,7 +726,8 @@ module Make_str (A : Wire_types.Concrete) = struct
               with Failure msg -> raise_failure ~pos msg
           end
 
-          let display _b ~label:_ = ""
+          let display _b ~label =
+            label ^ ": " ^ Bool.to_string (As_prover.read Boolean.typ _b)
 
           type failure_status = unit
 
