@@ -89,6 +89,8 @@ end) : sig
       -> new_actions:TR.t list
       -> withdrawals_processed:field
       -> remaining_withdrawals:TR.t list
+      -> source_ledger:Mina_ledger.Sparse_ledger.t
+      -> target_ledger:Mina_ledger.Sparse_ledger.t
       -> ( ( Account_update.t
            , Zkapp_command.Digest.Account_update.t
            , Zkapp_command.Digest.Forest.t )

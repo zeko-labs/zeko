@@ -78,6 +78,7 @@ module Sequencer = struct
           User_command.t_
           list
       ; mutable previous_committed_ledger_hash : Frozen_ledger_hash0.t option
+      ; mutable previous_committed_ledger : Mina_ledger.Sparse_ledger.t option
       ; zkapp_pk : Signature_lib.Public_key.Compressed.t
       ; signer : Signature_lib.Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name option
@@ -90,6 +91,7 @@ module Sequencer = struct
       ; last = None
       ; staged_commands = []
       ; previous_committed_ledger_hash = None
+      ; previous_committed_ledger = None
       ; zkapp_pk
       ; signer
       ; l1_uri
@@ -423,92 +425,109 @@ module Sequencer = struct
       ( txn_applied
       , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command) )
 
-  let commit sequencer =
-    let t = sequencer.snark_q in
-    Throttle.enqueue t.q (fun () ->
-        match List.is_empty t.staged_commands with
+  let commit t =
+    let%bind () =
+      let%bind inner_account_update, _, _ =
+        time "Inner.step"
+          (M.Inner.step ~deposits_processed:Zkapp_account.Actions.empty_hash
+             ~remaining_deposits:[] )
+      in
+      let fee = Currency.Fee.of_mina_int_exn 0 in
+      let command : Zkapp_command.t =
+        { fee_payer =
+            (* Setting public_key to empty results in a dummy fee payer with public key near 123456789 (dumb). *)
+            (* FIXME: Do this a better way without hard-coding values. *)
+            { Account_update.Fee_payer.body =
+                { public_key = Signature_lib.Public_key.Compressed.empty
+                ; fee
+                ; valid_until = None
+                ; nonce = Account.Nonce.zero
+                }
+            ; authorization = Signature.dummy
+            }
+        ; account_updates = inner_account_update
+        ; memo = Signed_command_memo.empty
+        }
+      in
+      let _, command_witness =
+        Result.ok_exn
+        @@ Result.map_error ~f:Error.to_exn
+        @@ apply_zkapp_command t command
+      in
+      Snark_queue.enqueue_prove_command t.snark_q command_witness
+    in
+
+    let () =
+      match t.config.db_dir with
+      | None ->
+          ()
+      | Some db_dir -> (
+          let ledger_hash =
+            Frozen_ledger_hash.to_decimal_string L.Db.(merkle_root t.db)
+          in
+          let commit_dir = Filename.concat db_dir ("commit-" ^ ledger_hash) in
+          try
+            FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
+            L.Db.make_checkpoint t.db ~directory_name:commit_dir
+          with err -> print_endline (Exn.to_string err) )
+    in
+    let target_ledger =
+      Mina_ledger.Sparse_ledger.of_ledger_subset_exn
+        L.(of_database t.db)
+        [ M.Inner.account_id ]
+    in
+    Throttle.enqueue t.snark_q.q (fun () ->
+        match List.is_empty t.snark_q.staged_commands with
         | true ->
             print_endline "Nothing to commit" ;
             return ()
         | false ->
             print_endline "Committing..." ;
 
-            let%bind () =
-              let%bind inner_account_update, _, _ =
-                time "Inner.step"
-                  (M.Inner.step
-                     ~deposits_processed:Zkapp_account.Actions.empty_hash
-                     ~remaining_deposits:[] )
-              in
-              let fee = Currency.Fee.of_mina_int_exn 0 in
-              let command : Zkapp_command.t =
-                { fee_payer =
-                    (* Setting public_key to empty results in a dummy fee payer with public key near 123456789 (dumb). *)
-                    (* FIXME: Do this a better way without hard-coding values. *)
-                    { Account_update.Fee_payer.body =
-                        { public_key = Signature_lib.Public_key.Compressed.empty
-                        ; fee
-                        ; valid_until = None
-                        ; nonce = Account.Nonce.zero
-                        }
-                    ; authorization = Signature.dummy
-                    }
-                ; account_updates = inner_account_update
-                ; memo = Signed_command_memo.empty
-                }
-              in
-
-              let _, command_witness =
-                Result.ok_exn
-                @@ Result.map_error ~f:Error.to_exn
-                @@ apply_zkapp_command sequencer command
-              in
-              match command_witness with
-              | Snark_queue.Command_witness.Signed_command _ ->
-                  failwith "Impossible"
-              | Snark_queue.Command_witness.Zkapp_command
-                  (witnesses, zkapp_command) ->
-                  Snark_queue.prove_zkapp_command t ~witnesses ~zkapp_command
-            in
-
             let ledger_hash =
-              Zkapps_rollup.target_ledger @@ Option.value_exn t.last
+              Zkapps_rollup.target_ledger @@ Option.value_exn t.snark_q.last
             in
             let batch_id = Frozen_ledger_hash0.to_decimal_string ledger_hash in
             let previous_batch_id =
               Frozen_ledger_hash0.to_decimal_string
                 (Option.value
                    ~default:(Frozen_ledger_hash0.of_decimal_string "0")
-                   t.previous_committed_ledger_hash )
+                   t.snark_q.previous_committed_ledger_hash )
             in
 
             let%bind () =
-              Da_layer.post_batch t.da_config ~commands:t.staged_commands
-                ~batch_id ~previous_batch_id
+              Da_layer.post_batch t.da_config
+                ~commands:t.snark_q.staged_commands ~batch_id ~previous_batch_id
             in
             print_endline ("Posted batch " ^ batch_id) ;
 
             let%bind account_update, _, _ =
               time "Outer.step"
-                (M.Outer.step (Option.value_exn t.last) ~public_key:t.zkapp_pk
+                (M.Outer.step
+                   (Option.value_exn t.snark_q.last)
+                   ~public_key:t.snark_q.zkapp_pk
                    ~old_action_state:Zkapp_account.Actions.empty_hash
                    ~new_actions:[]
                    ~withdrawals_processed:Zkapp_account.Actions.empty_hash
-                   ~remaining_withdrawals:[] )
+                   ~remaining_withdrawals:[]
+                   ~source_ledger:
+                     (Option.value_exn t.snark_q.previous_committed_ledger)
+                   ~target_ledger )
             in
             let%bind () =
-              match t.l1_uri with
+              match t.snark_q.l1_uri with
               | Some uri ->
                   let%bind nonce =
                     Gql_client.fetch_nonce uri
-                      (Signature_lib.Public_key.compress t.signer.public_key)
+                      (Signature_lib.Public_key.compress
+                         t.snark_q.signer.public_key )
                   in
                   let command : Zkapp_command.t =
                     { fee_payer =
                         { Account_update.Fee_payer.body =
                             { public_key =
                                 Signature_lib.Public_key.compress
-                                  t.signer.public_key
+                                  t.snark_q.signer.public_key
                             ; fee = Currency.Fee.of_mina_int_exn 1
                             ; valid_until = None
                             ; nonce = Unsigned.UInt32.of_int nonce
@@ -530,7 +549,7 @@ module Sequencer = struct
                   let signature =
                     Signature_lib.Schnorr.Chunked.sign
                       ~signature_kind:Mina_signature_kind.Testnet
-                      t.signer.private_key
+                      t.snark_q.signer.private_key
                       (Random_oracle.Input.Chunked.field full_commitment)
                   in
                   let command =
@@ -544,9 +563,10 @@ module Sequencer = struct
               | None ->
                   Deferred.unit
             in
-            t.staged_commands <- [] ;
-            t.last <- None ;
-            t.previous_committed_ledger_hash <- Some ledger_hash ;
+            t.snark_q.staged_commands <- [] ;
+            t.snark_q.last <- None ;
+            t.snark_q.previous_committed_ledger_hash <- Some ledger_hash ;
+            t.snark_q.previous_committed_ledger <- Some target_ledger ;
             return () )
 
   let run_committer t =
@@ -554,22 +574,6 @@ module Sequencer = struct
     else
       every ~stop:(Ivar.read t.stop)
         (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
-          let () =
-            match t.config.db_dir with
-            | None ->
-                ()
-            | Some db_dir -> (
-                let ledger_hash =
-                  Frozen_ledger_hash.to_decimal_string L.Db.(merkle_root t.db)
-                in
-                let commit_dir =
-                  Filename.concat db_dir ("commit-" ^ ledger_hash)
-                in
-                try
-                  FileUtil.rm ~force:Force ~recurse:true [ commit_dir ] ;
-                  L.Db.make_checkpoint t.db ~directory_name:commit_dir
-                with err -> print_endline (Exn.to_string err) )
-          in
           don't_wait_for @@ commit t )
 
   let add_test_accounts t =
@@ -741,6 +745,11 @@ let%test_unit "apply commands and commit" =
 
           [%test_eq: Frozen_ledger_hash.t] source_ledger_hash
             (L.merkle_root expected_ledger) ;
+
+          sequencer.snark_q.previous_committed_ledger <-
+            Some
+              (Mina_ledger.Sparse_ledger.of_ledger_subset_exn expected_ledger
+                 [ M.Inner.account_id ] ) ;
 
           (* Deploy *)
           Thread_safe.block_on_async_exn (fun () ->
