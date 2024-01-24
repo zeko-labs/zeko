@@ -1573,11 +1573,12 @@ module Mutations = struct
       ~typ:(non_null Types.Payload.prove_transfer)
       ~args:Arg.[ arg "input" ~typ:(non_null Types.Input.Transfer.arg_typ) ]
       ~resolve:(fun { ctx = sequencer; _ } () (address, amount, direction) ->
-        let key =
-          Zeko_sequencer.Snark_queue.prove_transfer
-            Zeko_sequencer.(sequencer.snark_q)
-            ~transfer:Zeko_sequencer.Transfer.{ address; amount; direction }
-        in
+        let key = Int.to_string @@ Random.int Int.max_value in
+        don't_wait_for
+        @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer
+             Zeko_sequencer.(sequencer.snark_q)
+             ~key
+             ~transfer:Zeko_sequencer.Transfer.{ address; amount; direction } ;
         return (Ok key) )
 
   let commands = [ send_payment; send_zkapp; prove_transfer ]
