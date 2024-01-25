@@ -116,7 +116,7 @@ module Sequencer = struct
     module Command_witness = struct
       type t =
         | Signed_command of
-            Sparse_ledger_base.t
+            Mina_ledger.Sparse_ledger.t
             * Signed_command.With_valid_signature.t Transaction_protocol_state.t
             * Transaction_snark.Statement.With_sok.t
         | Zkapp_command of
@@ -506,7 +506,7 @@ module Sequencer = struct
           , `Sparse_ledger first_pass_ledger
           , `Sparse_ledger second_pass_ledger
           , `Connecting_ledger_hash
-              (Sparse_ledger_base.merkle_root second_pass_ledger)
+              (Mina_ledger.Sparse_ledger.merkle_root second_pass_ledger)
           , zkapp_command )
         ]
     in
