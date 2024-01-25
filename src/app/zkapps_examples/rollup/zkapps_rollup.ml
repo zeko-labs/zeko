@@ -12,6 +12,7 @@ module Local_state = Mina_state.Local_state
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
 module L = Mina_ledger.Ledger
+module SL = Mina_ledger.Sparse_ledger
 
 (** Converts a variable to its constituent fields *)
 let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :
@@ -836,6 +837,12 @@ module Outer_rules = struct
 
     module List_TR_8 = SnarkList (TR_8)
 
+    module Ledger_path = SnarkList (struct
+      module T = F
+
+      let length = constraint_constants.ledger_depth
+    end)
+
     module Witness = struct
       type t =
         { stmt : S.t  (** The ledger transition we are performing. *)
@@ -847,43 +854,15 @@ module Outer_rules = struct
         ; withdrawals_processed : F.t
         ; new_withdrawals : List_TR_8.t
               (** Withdrawals to be processed this time *)
+        ; old_inner_acc : Account.t
+        ; old_inner_acc_path : Ledger_path.t
+        ; new_inner_acc : Account.t
+        ; new_inner_acc_path : Ledger_path.t
         }
       [@@deriving snarky]
     end
 
     include MkHandler (Witness)
-
-    (* hack copied from txn snark *)
-    let (ledgers_witness :
-          (Sparse_ledger_base.t * Sparse_ledger_base.t) option ref ) =
-      ref None
-
-    let get_inner_account root ledger =
-      let index = 0 in
-      let account =
-        exists Mina_base.Account.typ ~compute:(fun () ->
-            Sparse_ledger_base.get_exn (Prover_value.get ledger) index )
-      in
-      let account_hash = run @@ Mina_base.Account.Checked.digest account in
-      let path =
-        exists
-          Typ.(
-            list ~length:constraint_constants.ledger_depth (Boolean.typ * field))
-          ~compute:(fun () ->
-            List.map
-              (Sparse_ledger_base.path_exn (Prover_value.get ledger) index)
-              ~f:(fun x ->
-                match x with `Left h -> (false, h) | `Right h -> (true, h) ) )
-      in
-      let implied_root account path =
-        List.foldi path ~init:account ~f:(fun height acc (_, h) ->
-            (* To constrain `index` being 0, we are counting on the path being fully on left *)
-            Ledger_hash.merge_var ~height acc h )
-      in
-      Field.Assert.equal
-        (Ledger_hash.var_to_hash_packed root)
-        (implied_root account_hash path) ;
-      account
 
     let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
       let ({ stmt
@@ -894,38 +873,46 @@ module Outer_rules = struct
            ; all_deposits
            ; withdrawals_processed
            ; new_withdrawals
+           ; old_inner_acc
+           ; old_inner_acc_path
+           ; new_inner_acc
+           ; new_inner_acc_path
            }
             : Witness.var ) =
         exists_witness ()
       in
-      let source_ledger =
-        Prover_value.create (fun () -> fst @@ Option.value_exn !ledgers_witness)
-      in
-      let target_ledger =
-        Prover_value.create (fun () -> snd @@ Option.value_exn !ledgers_witness)
-      in
 
-      (* Fetch old account state *)
-      let old_acc = get_inner_account stmt.source_ledger source_ledger in
-      (* Fetch new account state *)
-      let new_acc = get_inner_account stmt.target_ledger target_ledger in
+      let check_incl_proof root path account =
+        let account_hash = run @@ Mina_base.Account.Checked.digest account in
+        let implied_root =
+          List.foldi path ~init:account_hash ~f:(fun height acc h ->
+              (* To constrain `index` being 0, we are counting on the path being fully on left *)
+              (* Normally we would need also `bool list` specifying the path from leaf to the root *)
+              Ledger_hash.merge_var ~height acc h )
+        in
+        Field.Assert.equal (Ledger_hash.var_to_hash_packed root) implied_root
+      in
+      check_incl_proof stmt.source_ledger old_inner_acc_path old_inner_acc ;
+      check_incl_proof stmt.target_ledger new_inner_acc_path new_inner_acc ;
+
       (* There must have been exactly one "step" in the inner account, checked by checking nonce *)
       let () =
         run
         @@ Nonce.Checked.Assert.equal
-             (run @@ Nonce.Checked.succ old_acc.nonce)
-             new_acc.nonce
+             (run @@ Nonce.Checked.succ old_inner_acc.nonce)
+             new_inner_acc.nonce
       in
       (* FIXME: shouldn't be necessary but who knows whether an account index is reliable.
          We use `old_acc` instead of `new_acc`, because _possibly_ old_acc could be PC.empty while new_acc is not.
          Maybe this isn't the case though. *)
+      (* FIXME: public key is not constrained to be the near 123456789 *)
       let () =
         run
-        @@ PC.Checked.Assert.equal old_acc.public_key
+        @@ PC.Checked.Assert.equal old_inner_acc.public_key
              (constant PC.typ Inner_rules.public_key)
       in
       (* We get the old & new zkapp state, a bit complicated to get because field is actually hash of contents *)
-      let old_zkapp_hash, old_zkapp = old_acc.zkapp in
+      let old_zkapp_hash, old_zkapp = old_inner_acc.zkapp in
       let old_zkapp =
         exists Zkapp_account.typ ~compute:(fun () ->
             Option.value_exn @@ As_prover.Ref.get old_zkapp )
@@ -933,7 +920,7 @@ module Outer_rules = struct
       (* We check that witness old zkapp is correct *)
       Field.Assert.equal old_zkapp_hash
       @@ Zkapp_account.Checked.digest old_zkapp ;
-      let zkapp_hash, zkapp = new_acc.zkapp in
+      let zkapp_hash, zkapp = new_inner_acc.zkapp in
       let zkapp =
         exists Zkapp_account.typ ~compute:(fun () ->
             Option.value_exn @@ As_prover.Ref.get zkapp )
@@ -1302,9 +1289,8 @@ struct
 
     let step (t : t) ~(public_key : PC.t) ~(old_action_state : field)
         ~(new_actions : TR.t list) ~(withdrawals_processed : field)
-        ~(remaining_withdrawals : TR.t list)
-        ~(source_ledger : Mina_ledger.Sparse_ledger.t)
-        ~(target_ledger : Mina_ledger.Sparse_ledger.t) :
+        ~(remaining_withdrawals : TR.t list) ~(source_ledger : SL.t)
+        ~(target_ledger : SL.t) :
         ( ( Account_update.t
           , Zkapp_command.Digest.Account_update.t
           , Zkapp_command.Digest.Forest.t )
@@ -1352,12 +1338,15 @@ struct
           ; stmt = t.stmt
           ; prf = t.proof
           ; public_key
+          ; old_inner_acc = SL.get_exn source_ledger 0
+          ; old_inner_acc_path =
+              List.map ~f:Obj.magic (SL.path_exn source_ledger 0)
+          ; new_inner_acc = SL.get_exn target_ledger 0
+          ; new_inner_acc_path =
+              List.map ~f:Obj.magic (SL.path_exn target_ledger 0)
           }
         in
-        Outer_rules.Step.ledgers_witness := Some (source_ledger, target_ledger) ;
-        let res = step_ ~handler:(Outer_rules.Step.handler w) () in
-        Outer_rules.Step.ledgers_witness := None ;
-        res
+        step_ ~handler:(Outer_rules.Step.handler w) ()
       in
       let tree = mkforest tree proof in
       return (tree, withdrawals_processed', remaining_withdrawals)
