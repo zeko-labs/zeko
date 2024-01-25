@@ -7,13 +7,14 @@ let fetch_nonce uri pk =
   let q =
     object
       method query =
-        {|
-          query ($pk: PublicKey!) {
-            account(publicKey: $pk){
-              nonce
-            }
-          } 
-        |}
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!) {
+              account(publicKey: $pk){
+                nonce
+              }
+            } 
+          |}
 
       method variables =
         `Assoc
@@ -31,13 +32,14 @@ let fetch_commited_state uri pk =
   let q =
     object
       method query =
-        {|
-          query ($pk: PublicKey!) {
-            account(publicKey: $pk){
-              zkappState
-            }
-          } 
-        |}
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!) {
+              account(publicKey: $pk){
+                zkappState
+              }
+            } 
+          |}
 
       method variables =
         `Assoc
@@ -56,15 +58,20 @@ let send_zkapp uri command =
   let q =
     object
       method query =
-        {|
-          mutation ($input: SendZkappInput!) {
-            sendZkapp(input: $input){
-              zkapp {
-                id
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            mutation ($input: SendZkappInput!) {
+              sendZkapp(input: $input){
+                zkapp {
+                  id
+                  failureReason {
+                    index
+                    failures
+                  }
+                }
               }
-            }
-          } 
-        |}
+            } 
+          |}
 
       method variables =
         `Assoc
@@ -83,17 +90,18 @@ let fetch_block_height uri =
   let q =
     object
       method query =
-        {|
-          query {
-            bestChain(maxLength: 1) {
-              protocolState {
-                consensusState {
-                  blockHeight
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query {
+              bestChain(maxLength: 1) {
+                protocolState {
+                  consensusState {
+                    blockHeight
+                  }
                 }
               }
-            }
-          } 
-        |}
+            } 
+          |}
 
       method variables = `Assoc []
     end
@@ -108,13 +116,14 @@ let fetch_best_chain ?(max_length = 10) uri =
   let q =
     object
       method query =
-        {|
-          query ($maxLength: Int!) {
-            bestChain(maxLength: $maxLength) {
-              stateHash
-            }
-          } 
-        |}
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($maxLength: Int!) {
+              bestChain(maxLength: $maxLength) {
+                stateHash
+              }
+            } 
+          |}
 
       method variables = `Assoc [ ("maxLength", `Int max_length) ]
     end
