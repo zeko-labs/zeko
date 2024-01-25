@@ -519,7 +519,9 @@ let step_main :
                 go prevs datas messages_for_next_wrap_proofs unfinalized_proofs
                   previous_proof_statements proofs_verified ~actual_wrap_domains
               in
-              Boolean.Assert.all vs ; chalss )
+              with_label "Verifying proofs in previous_proof_statements are correct" (fun () ->
+                  Boolean.Assert.all vs ) ;
+              chalss )
         in
         [%log internal] "Step_compute_bulletproof_challenges_done" ;
         let messages_for_next_step_proof =
