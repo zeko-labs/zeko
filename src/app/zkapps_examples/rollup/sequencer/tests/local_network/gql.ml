@@ -8,6 +8,12 @@ open Signature_lib
 open Currency
 module Schema = Graphql_wrapper.Make (Schema)
 
+type t =
+  { db : Ledger.Db.t
+  ; slot : Mina_numbers.Global_slot_since_genesis.t
+  ; commands : (string, User_command.t * Transaction_status.t) Hashtbl.t
+  }
+
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
 let genesis_constants = Genesis_constants.compiled
@@ -92,7 +98,7 @@ module Types = struct
               match x with `Left _ -> None | `Right h -> Some h )
         ] )
 
-  let account_timing : (Ledger.Db.t, Account_timing.t option) typ =
+  let account_timing : (t, Account_timing.t option) typ =
     obj "AccountTiming" ~fields:(fun _ ->
         [ field "initialMinimumBalance" ~typ:balance
             ~doc:"The initial minimum balance for a time-locked account"
@@ -776,7 +782,7 @@ module Types = struct
           resolve c uc.With_status.data )
 
     let user_command_shared_fields :
-        ( Ledger.Db.t
+        ( t
         , (Signed_command.t, Transaction_hash.t) With_hash.t With_status.t )
         field
         list =
@@ -796,19 +802,19 @@ module Types = struct
             |> Account.Nonce.to_int )
       ; field_no_status "source" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command is sent from"
-          ~resolve:(fun { ctx = db; _ } cmd ->
-            AccountObj.get_best_ledger_account (Ledger.of_database db)
+          ~resolve:(fun { ctx = t; _ } cmd ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "receiver" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command applies to"
-          ~resolve:(fun { ctx = db; _ } cmd ->
-            AccountObj.get_best_ledger_account (Ledger.of_database db)
+          ~resolve:(fun { ctx = t; _ } cmd ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
               (Signed_command.receiver cmd.With_hash.data) )
       ; field_no_status "feePayer" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that pays the fees for the command"
           ~deprecated:(Deprecated (Some "use source field instead"))
-          ~resolve:(fun { ctx = db; _ } cmd ->
-            AccountObj.get_best_ledger_account (Ledger.of_database db)
+          ~resolve:(fun { ctx = t; _ } cmd ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "validUntil" ~typ:(non_null global_slot_since_genesis)
           ~args:[]
@@ -866,8 +872,8 @@ module Types = struct
       ; field_no_status "fromAccount" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account of the sender"
           ~deprecated:(Deprecated (Some "use feePayer field instead"))
-          ~resolve:(fun { ctx = db; _ } payment ->
-            AccountObj.get_best_ledger_account (Ledger.of_database db)
+          ~resolve:(fun { ctx = t; _ } payment ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
             @@ Signed_command.fee_payer payment.With_hash.data )
       ; field_no_status "to" ~typ:(non_null public_key) ~args:[]
           ~doc:"Public key of the receiver"
@@ -878,8 +884,8 @@ module Types = struct
           ~doc:"Account of the receiver"
           ~deprecated:(Deprecated (Some "use receiver field instead"))
           ~args:Arg.[]
-          ~resolve:(fun { ctx = db; _ } cmd ->
-            AccountObj.get_best_ledger_account (Ledger.of_database db)
+          ~resolve:(fun { ctx = t; _ } cmd ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
             @@ Signed_command.receiver cmd.With_hash.data )
       ; field "failureReason"
           ~typ:(Mina_base_unix.Graphql_scalars.TransactionStatusFailure.typ ())
@@ -914,9 +920,8 @@ module Types = struct
           resolve c cmd.With_status.data )
 
     let zkapp_command =
-      let conv
-          (x : (Ledger.Db.t, Zkapp_command.t) Fields_derivers_graphql.Schema.typ)
-          : (Ledger.Db.t, Zkapp_command.t) typ =
+      let conv (x : (t, Zkapp_command.t) Fields_derivers_graphql.Schema.typ) :
+          (t, Zkapp_command.t) typ =
         Obj.magic x
       in
       obj "ZkappCommandResult" ~fields:(fun _ ->
@@ -1229,7 +1234,7 @@ module Mutations = struct
           [ arg "input" ~typ:(non_null Types.Input.SendPaymentInput.arg_typ)
           ; Types.Input.Fields.signature
           ]
-      ~resolve:(fun { ctx = db; _ } ()
+      ~resolve:(fun { ctx = t; _ } ()
                     (from, to_, amount, fee, valid_until, memo, nonce_opt)
                     signature ->
         let payload =
@@ -1260,31 +1265,39 @@ module Mutations = struct
                   payload
               with
               | Some command ->
-                  return (Ok command)
+                  return (Ok (Signed_command.forget_check command))
               | None ->
                   return (Error "Signature verification failed") )
         in
-        let l = Ledger.of_database db in
+        let l = Ledger.of_database t.db in
         match
           Result.( >>= )
             (Ledger.apply_transaction_first_pass ~constraint_constants
                ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
                ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-               l
-               (Command (Signed_command (Signed_command.forget_check command))) )
+               l (Command (Signed_command command)) )
             (Ledger.apply_transaction_second_pass l)
         with
         | Error err ->
             return (Error (Error.to_string_mach err))
         | Ok txn_applied ->
             Ledger.Mask.Attached.commit l ;
-            print_endline @@ "applied payment: " ^ Yojson.Safe.pretty_to_string
-            @@ Transaction_status.to_yojson
+
+            let txn_hash =
+              Transaction_hash.to_base58_check
+              @@ Transaction_hash.hash_command (Signed_command command)
+            in
+            Hashtbl.add_exn t.commands ~key:txn_hash
+              ~data:
+                ( Signed_command command
+                , Ledger.Transaction_applied.transaction_status txn_applied ) ;
+
+            print_endline @@ "applied payment: " ^ txn_hash ^ " "
+            ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
             @@ Ledger.Transaction_applied.transaction_status txn_applied ;
 
             let cmd =
-              { Types.User_command.With_status.data =
-                  Signed_command.forget_check command
+              { Types.User_command.With_status.data = command
               ; status = Applied
               }
             in
@@ -1302,8 +1315,8 @@ module Mutations = struct
       ~typ:(non_null Types.Payload.send_zkapp)
       ~args:
         Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
-      ~resolve:(fun { ctx = db; _ } () zkapp_command ->
-        let l = Ledger.of_database db in
+      ~resolve:(fun { ctx = t; _ } () zkapp_command ->
+        let l = Ledger.of_database t.db in
         let%bind.Deferred.Result partialy_applied_txn =
           match
             Ledger.apply_transaction_first_pass ~constraint_constants
@@ -1327,7 +1340,16 @@ module Mutations = struct
 
         Ledger.Mask.Attached.commit l ;
 
-        print_endline @@ "applied zkapp command: "
+        let txn_hash =
+          Transaction_hash.to_base58_check
+          @@ Transaction_hash.hash_command (Zkapp_command zkapp_command)
+        in
+        Hashtbl.add_exn t.commands ~key:txn_hash
+          ~data:
+            ( Zkapp_command zkapp_command
+            , Ledger.Transaction_applied.transaction_status txn_applied ) ;
+
+        print_endline @@ "applied zkapp command: " ^ txn_hash ^ " "
         ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
         @@ Ledger.Transaction_applied.transaction_status txn_applied ;
 
@@ -1348,14 +1370,14 @@ module Mutations = struct
     io_field "createAccount" ~doc:"Create test account" ~typ:(non_null string)
       ~args:
         Arg.[ arg "publicKey" ~typ:(non_null Types.Input.PublicKey.arg_typ) ]
-      ~resolve:(fun { ctx = db; _ } () pk ->
+      ~resolve:(fun { ctx = t; _ } () pk ->
         let account_id = Account_id.create pk Token_id.default in
         let account =
           Account.create account_id
             (Currency.Balance.of_uint64
                (Unsigned.UInt64.of_int64 1_000_000_000_000L) )
         in
-        match Ledger.Db.get_or_create_account db account_id account with
+        match Ledger.Db.get_or_create_account t.db account_id account with
         | Ok (`Added, _) ->
             return (Ok "Added")
         | Ok (`Existed, _) ->
@@ -1391,16 +1413,85 @@ module Queries = struct
               ~doc:"Token of account being retrieved (defaults to MINA)"
               ~typ:Types.Input.TokenId.arg_typ ~default:Token_id.default
           ]
-      ~resolve:(fun { ctx = db; _ } () public_key token_id ->
+      ~resolve:(fun { ctx = t; _ } () public_key token_id ->
         let%bind.Option location =
-          Ledger.Db.location_of_account db
+          Ledger.Db.location_of_account t.db
             (Account_id.create public_key token_id)
         in
-        let%map.Option account = Ledger.Db.get db location in
+        let%map.Option account = Ledger.Db.get t.db location in
         Types.AccountObj.Partial_account.of_full_account account
         |> Types.AccountObj.lift )
 
-  let commands = [ sync_status; daemon_status; account ]
+  let user_command =
+    field "userCommand" ~doc:"Get applied command"
+      ~typ:Types.User_command.user_command
+      ~args:
+        Arg.
+          [ arg "hash" ~doc:"Hash of command being retrieved"
+              ~typ:(non_null string)
+          ]
+      ~resolve:(fun { ctx = t; _ } () hash ->
+        let%bind.Option command, status =
+          match Hashtbl.find t.commands hash with
+          | Some (Signed_command command, status) ->
+              Some (command, status)
+          | _ ->
+              None
+        in
+        let cmd =
+          { Types.User_command.With_status.data = command
+          ; status =
+              ( match status with
+              | Applied ->
+                  Applied
+              | Failed reason ->
+                  Included_but_failed reason )
+          }
+        in
+        let cmd_with_hash =
+          Types.User_command.With_status.map cmd ~f:(fun cmd ->
+              { With_hash.data = cmd
+              ; hash = Transaction_hash.hash_command (Signed_command cmd)
+              } )
+        in
+        Some (Types.User_command.mk_payment cmd_with_hash) )
+
+  let zkapp_command =
+    field "zkappCommand" ~doc:"Get applied command"
+      ~typ:Types.Zkapp_command.zkapp_command
+      ~args:
+        Arg.
+          [ arg "hash" ~doc:"Hash of command being retrieved"
+              ~typ:(non_null string)
+          ]
+      ~resolve:(fun { ctx = t; _ } () hash ->
+        let%bind.Option command, status =
+          match Hashtbl.find t.commands hash with
+          | Some (Zkapp_command command, status) ->
+              Some (command, status)
+          | _ ->
+              None
+        in
+        let cmd =
+          { Types.Zkapp_command.With_status.data = command
+          ; status =
+              ( match status with
+              | Applied ->
+                  Applied
+              | Failed reason ->
+                  Included_but_failed reason )
+          }
+        in
+        let cmd_with_hash =
+          Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
+              { With_hash.data = cmd
+              ; hash = Transaction_hash.hash_command (Zkapp_command cmd)
+              } )
+        in
+        Some cmd_with_hash )
+
+  let commands =
+    [ sync_status; daemon_status; account; user_command; zkapp_command ]
 end
 
 let schema =
