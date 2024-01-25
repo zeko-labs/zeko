@@ -1,4 +1,5 @@
 open Core
+open Base
 open Async
 open Mina_ledger
 open Mina_base
@@ -7,10 +8,14 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 
 let run port db_dir genesis_account () =
-  let db =
-    ref
-    @@ Ledger.Db.create ~directory_name:db_dir
-         ~depth:Gql.constraint_constants.ledger_depth ()
+  let t =
+    Gql.
+      { db =
+          Ledger.Db.create ~directory_name:db_dir
+            ~depth:Gql.constraint_constants.ledger_depth ()
+      ; slot = Mina_numbers.Global_slot_since_genesis.zero
+      ; commands = Hashtbl.create (module String)
+      }
   in
 
   ( if Option.is_some genesis_account then
@@ -25,14 +30,12 @@ let run port db_dir genesis_account () =
         (Currency.Balance.of_uint64
            (Unsigned.UInt64.of_int64 1_000_000_000_000L) )
     in
-    ( Ledger.Db.get_or_create_account !db account_id account
+    ( Ledger.Db.get_or_create_account t.db account_id account
       : ([ `Added | `Existed ] * Ledger.Db.Location.t) Or_error.t )
     |> ignore ) ;
 
   let graphql_callback =
-    Graphql_cohttp_async.make_callback
-      (fun ~with_seq_no:_ _req -> !db)
-      Gql.schema
+    Graphql_cohttp_async.make_callback (fun ~with_seq_no:_ _req -> t) Gql.schema
   in
   let () =
     Cohttp_async.Server.create_expert
