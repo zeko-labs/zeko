@@ -9,8 +9,8 @@ DUNE_PROFILE=devnet dune build
 ## Tests
 
 ```bash
-# Run lightnet to imitate L1
-zk lightnet start
+# Run local network to imitate L1
+DUNE_PROFILE=devnet dune exec ./tests/local_network/run.exe -- --db-dir l1_db
 
 DUNE_PROFILE=devnet dune runtest
 ```

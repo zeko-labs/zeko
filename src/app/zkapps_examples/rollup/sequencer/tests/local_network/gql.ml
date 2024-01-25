@@ -1277,6 +1277,7 @@ module Mutations = struct
         | Error err ->
             return (Error (Error.to_string_mach err))
         | Ok txn_applied ->
+            Ledger.Mask.Attached.commit l ;
             print_endline @@ "applied payment: " ^ Yojson.Safe.pretty_to_string
             @@ Transaction_status.to_yojson
             @@ Ledger.Transaction_applied.transaction_status txn_applied ;
@@ -1324,6 +1325,8 @@ module Mutations = struct
               return (Ok txn_applied)
         in
 
+        Ledger.Mask.Attached.commit l ;
+
         print_endline @@ "applied zkapp command: "
         ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
         @@ Ledger.Transaction_applied.transaction_status txn_applied ;
@@ -1341,7 +1344,26 @@ module Mutations = struct
         in
         return (Ok cmd_with_hash) )
 
-  let commands = [ send_payment; send_zkapp ]
+  let create_account =
+    io_field "createAccount" ~doc:"Create test account" ~typ:(non_null string)
+      ~args:
+        Arg.[ arg "publicKey" ~typ:(non_null Types.Input.PublicKey.arg_typ) ]
+      ~resolve:(fun { ctx = db; _ } () pk ->
+        let account_id = Account_id.create pk Token_id.default in
+        let account =
+          Account.create account_id
+            (Currency.Balance.of_uint64
+               (Unsigned.UInt64.of_int64 1_000_000_000_000L) )
+        in
+        match Ledger.Db.get_or_create_account db account_id account with
+        | Ok (`Added, _) ->
+            return (Ok "Added")
+        | Ok (`Existed, _) ->
+            return (Ok "Existed")
+        | Error err ->
+            return (Error (Error.to_string_mach err)) )
+
+  let commands = [ send_payment; send_zkapp; create_account ]
 end
 
 module Queries = struct

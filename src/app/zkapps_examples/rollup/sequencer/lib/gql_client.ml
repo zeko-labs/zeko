@@ -133,3 +133,27 @@ let fetch_best_chain ?(max_length = 10) uri =
     result |> member "bestChain"
     |> map (member "stateHash")
     |> to_list |> List.map ~f:to_string)
+
+module For_tests = struct
+  let create_account uri pk =
+    let q =
+      object
+        method query =
+          String.substr_replace_all ~pattern:"\n" ~with_:" "
+            {|
+              mutation ($publicKey: PublicKey!) {
+                createAccount(publicKey: $publicKey)
+              } 
+            |}
+
+        method variables =
+          `Assoc
+            [ ( "publicKey"
+              , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
+              )
+            ]
+      end
+    in
+    let%map result = Graphql_client.query_json_exn q uri in
+    Yojson.Safe.(to_string result)
+end

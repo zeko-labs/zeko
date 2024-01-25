@@ -666,6 +666,11 @@ module Sequencer = struct
           return ()
     in
     t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
+    t.snark_q.previous_committed_ledger <-
+      Some
+        (Mina_ledger.Sparse_ledger.of_ledger_subset_exn
+           L.(of_database t.db)
+           [ M.Inner.account_id ] ) ;
     return t
 end
 
@@ -679,39 +684,15 @@ let%test_unit "apply commands and commit" =
     ; name = "gql-uri"
     }
   in
-  let wait_for_new_block () =
-    let rec wait_for_new_block' old_block_height =
-      let%bind block_height = Gql_client.fetch_block_height gql_uri in
-      match block_height > old_block_height with
-      | true ->
-          Deferred.unit
-      | false ->
-          let%bind () = after (Time_ns.Span.of_sec 0.5) in
-          wait_for_new_block' old_block_height
-    in
-    let%bind block_height = Gql_client.fetch_block_height gql_uri in
-    wait_for_new_block' block_height
-  in
 
-  (* Fetch signer *)
-  let signer =
-    Thread_safe.block_on_async_exn (fun () ->
-        let open Cohttp_async in
-        let%bind _, body =
-          Client.get
-            (Uri.of_string
-               "http://localhost:8181/acquire-account?unlockAccount=true" )
-        in
-        let%bind json =
-          Deferred.map ~f:Yojson.Safe.from_string (Body.to_string body)
-        in
-        let sk = Yojson.Safe.Util.(member "sk" json |> to_string) in
-        let signer =
-          Signature_lib.(
-            Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk)
-        in
-        return signer )
-  in
+  (* Create signer *)
+  let signer = Signature_lib.Keypair.create () in
+  Thread_safe.block_on_async_exn (fun () ->
+      let%bind _res =
+        Gql_client.For_tests.create_account gql_uri
+          (Signature_lib.Public_key.compress signer.public_key)
+      in
+      return () ) ;
 
   let open Mina_transaction_logic.For_tests in
   Quickcheck.test ~trials:1
@@ -767,10 +748,10 @@ let%test_unit "apply commands and commit" =
                   ~initial_ledger:expected_ledger
               in
               let%bind _ = Gql_client.send_zkapp gql_uri command in
-              wait_for_new_block () ) ;
+              return () ) ;
 
           (* Apply commands *)
-          let target_ledger_hash =
+          let () =
             Thread_safe.block_on_async_exn (fun () ->
                 List.iteri specs ~f:(fun i spec ->
                     let result =
@@ -842,18 +823,18 @@ let%test_unit "apply commands and commit" =
                 let%bind res = M.Wrapper.verify snark in
                 [%test_eq: Bool.t] true (Or_error.is_ok res) ;
 
-                return target_ledger_hash )
+                return () )
           in
 
           (* Commit *)
           Thread_safe.block_on_async_exn (fun () ->
               let%bind () = commit sequencer in
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-              let%bind () = wait_for_new_block () in
               let%bind commited_ledger_hash =
                 Gql_client.fetch_commited_state gql_uri
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
               in
+              let target_ledger_hash = get_root sequencer in
               [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash
                 target_ledger_hash ;
 
