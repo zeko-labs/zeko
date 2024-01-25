@@ -64,7 +64,7 @@ let () =
          ~doc:"string Optional public key of genesis account"
      and db_dir =
        flag "--db-dir"
-         (optional_with_default "db" string)
+         (optional_with_default "l1_db" string)
          ~doc:"string Directory to store the database"
      in
      run port db_dir genesis_account )
