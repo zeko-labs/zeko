@@ -677,6 +677,7 @@ end
 include Sequencer
 
 let%test_unit "apply commands and commit" =
+  Base.Backtrace.elide := false ;
   let number_of_transactions = 5 in
   let zkapp_keypair = Signature_lib.Keypair.create () in
   let gql_uri =
