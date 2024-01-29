@@ -160,4 +160,49 @@ await txn.sign([sender]).send();
 
 ### Fetching pending/completed transfers
 
-TODO
+All of the transfer requests both ways (deposits/withdrawals) are submitted as actions.
+Both inner and outer smart contract handling transfers hold action states to keep track of the pending/completed transfers.
+
+The layout of state is following:
+
+Outer account (deployed on L1):
+
+- 0 - `ledger_hash`: rollup ledger hash
+- 1 - `all_withdrawals`: withdrawals action state that has been updated with last commit
+- 2 - `withdrawals_processed`: withdrawals that has been processed so far
+- action state: all deposits action state.
+
+Inner account (deployed on L2):
+
+- 0 - `all_deposits`: deposits action state that has been updated right before last commit by sequencer
+- 1 - `deposits_processed`: deposits that has been processed so far
+- action state: all withdrawals action state.
+
+You can fetch any interval of actions through graphql api or o1js tooling from both layers.
+
+#### Fetching actions from graphql
+
+```graphql
+query {
+  actions(
+    input: {
+      address: "address of the smart contract"
+      fromActionState: "action state to start from"
+      endActionState: "action state to end with"
+    }
+  ) {
+    actionData {
+      data
+    }
+  }
+}
+```
+
+Here are some common intervals to fetch:
+
+- Processed deposits: `[initialActionState, inner.state[1]]`
+- Processed withdrawals: `[initialActionState, outer.state[2]]`
+- Deposits in process: `[inner.state[1], inner.state[0]]`
+- Withdrawals in process: `[outer.state[2], outer.state[1]]`
+- Pending deposits: `[inner.state[0], outer.actionState]`
+- Pending withdrawals: `[outer.state[1], inner.actionState]`
