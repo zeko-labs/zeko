@@ -1345,10 +1345,18 @@ struct
           ; public_key
           ; old_inner_acc = SL.get_exn source_ledger 0
           ; old_inner_acc_path =
-              List.map ~f:Obj.magic (SL.path_exn source_ledger 0)
+              List.map (SL.path_exn source_ledger 0) ~f:(function
+                | `Left x ->
+                    x
+                | `Right _ ->
+                    failwith "Impossible" )
           ; new_inner_acc = SL.get_exn target_ledger 0
           ; new_inner_acc_path =
-              List.map ~f:Obj.magic (SL.path_exn target_ledger 0)
+              List.map (SL.path_exn target_ledger 0) ~f:(function
+                | `Left x ->
+                    x
+                | `Right _ ->
+                    failwith "Impossible" )
           }
         in
         step_ ~handler:(Outer_rules.Step.handler w) ()
