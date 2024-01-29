@@ -1590,10 +1590,10 @@ module Make (L : Ledger_intf.S) :
            arguments. For that reason the risk of this function misbehaving is
            minimal and can probably be safely ignored.
 
-           ^ not true, you can create negative zero with `negate zero`
+           ZEKO NOTE: ^ not true, you can create negative zero with `negate zero`
+           we fix it in the zkapp command logic where it's called
         *)
-        let is_non_neg (t : t) =
-          if_ (equal t zero) ~then_:true ~else_:(Sgn.equal t.sgn Pos)
+        let is_non_neg (t : t) = Sgn.equal t.sgn Pos
 
         let is_neg (t : t) = Sgn.equal t.sgn Neg
       end

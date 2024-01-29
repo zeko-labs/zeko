@@ -725,6 +725,7 @@ module Make_str (A : Wire_types.Concrete) = struct
           end
 
           let display _b ~label =
+            (* ZEKO NOTE: just implemented for debugging purposes *)
             label ^ ": " ^ Bool.to_string (As_prover.read Boolean.typ _b)
 
           type failure_status = unit
