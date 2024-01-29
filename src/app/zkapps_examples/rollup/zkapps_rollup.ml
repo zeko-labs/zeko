@@ -864,6 +864,22 @@ module Outer_rules = struct
 
     include MkHandler (Witness)
 
+    let check_incl_proof root path account =
+      let account_hash = run @@ Mina_base.Account.Checked.digest account in
+      let implied_root =
+        List.foldi path ~init:account_hash ~f:(fun height acc h ->
+            (* To constrain `index` being 0, we are counting on the path being fully on left *)
+            (* Normally we would need also `bool list` specifying the path from leaf to the root *)
+            (* The code would be adding on few constraints with the `if_` *)
+            (*
+               let l = Field.if_ b ~then_:h ~else_:acc
+               and r = Field.if_ b ~then_:acc ~else_:h in
+               Ledger_hash.merge_var ~height l r
+            *)
+            Ledger_hash.merge_var ~height acc h )
+      in
+      Field.Assert.equal (Ledger_hash.var_to_hash_packed root) implied_root
+
     let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
       let ({ stmt
            ; prf
@@ -882,16 +898,6 @@ module Outer_rules = struct
         exists_witness ()
       in
 
-      let check_incl_proof root path account =
-        let account_hash = run @@ Mina_base.Account.Checked.digest account in
-        let implied_root =
-          List.foldi path ~init:account_hash ~f:(fun height acc h ->
-              (* To constrain `index` being 0, we are counting on the path being fully on left *)
-              (* Normally we would need also `bool list` specifying the path from leaf to the root *)
-              Ledger_hash.merge_var ~height acc h )
-        in
-        Field.Assert.equal (Ledger_hash.var_to_hash_packed root) implied_root
-      in
       check_incl_proof stmt.source_ledger old_inner_acc_path old_inner_acc ;
       check_incl_proof stmt.target_ledger new_inner_acc_path new_inner_acc ;
 
@@ -905,7 +911,6 @@ module Outer_rules = struct
       (* FIXME: shouldn't be necessary but who knows whether an account index is reliable.
          We use `old_acc` instead of `new_acc`, because _possibly_ old_acc could be PC.empty while new_acc is not.
          Maybe this isn't the case though. *)
-      (* FIXME: public key is not constrained to be the near 123456789 *)
       let () =
         run
         @@ PC.Checked.Assert.equal old_inner_acc.public_key
