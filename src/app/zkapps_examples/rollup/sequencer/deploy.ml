@@ -1,6 +1,7 @@
 open Core
 open Mina_base
 open Async
+module L = Mina_ledger.Ledger
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -14,7 +15,7 @@ module M = Zkapps_rollup.Make (struct
   let tag = T.tag
 end)
 
-let run uri init_state sk () =
+let run uri sk () =
   let sender_keypair =
     Signature_lib.(
       Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk)
@@ -32,12 +33,14 @@ let run uri init_state sk () =
           (Signature_lib.Public_key.compress sender_keypair.public_key) )
   in
   let command =
-    Zkapps_rollup.Mocked_zkapp.Deploy.deploy ~signer:sender_keypair
-      ~zkapp:zkapp_keypair
-      ~fee:(Currency.Fee.of_mina_int_exn 1)
-      ~nonce:(Account.Nonce.of_int nonce)
-      ~vk:M.Mocked.vk
-      ~initial_state:(Frozen_ledger_hash.of_decimal_string init_state)
+    L.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
+        L.create_new_account_exn ledger M.Inner.account_id
+          M.Inner.initial_account ;
+
+        M.Outer.deploy_command_exn ~signer:sender_keypair ~zkapp:zkapp_keypair
+          ~fee:(Currency.Fee.of_mina_int_exn 1)
+          ~nonce:(Account.Nonce.of_int nonce)
+          ~initial_ledger:ledger )
   in
   Thread_safe.block_on_async_exn (fun () ->
       let%map result = Sequencer_lib.Gql_client.send_zkapp uri command in
@@ -47,9 +50,7 @@ let () =
   Command_unix.run
   @@ Command.basic ~summary:"Deploy zeko zkapp"
        (let%map_open.Command uri = Cli_lib.Flag.Uri.Client.rest_graphql
-        and init_state =
-          flag "--initial-state" (required string) ~doc:"string Ledger hash"
         and sk =
           flag "--signer" (required string) ~doc:"string Signer private key"
         in
-        run uri init_state sk )
+        run uri sk )

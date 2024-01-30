@@ -9,8 +9,8 @@ DUNE_PROFILE=devnet dune build
 ## Tests
 
 ```bash
-# Run lightnet to imitate L1
-zk lightnet start
+# Run local network to imitate L1
+DUNE_PROFILE=devnet dune exec ./tests/local_network/run.exe -- --db-dir l1_db
 
 DUNE_PROFILE=devnet dune runtest
 ```
@@ -44,7 +44,6 @@ The following script deploys the rollup contract on the L1 with the initial stat
 ```bash
 DUNE_PROFILE=devnet dune exec ./deploy.exe -- \
     --rest-server <string> \
-    --init-state <int> \
     --signer <string>
 ```
 
@@ -70,7 +69,7 @@ mutation {
   proveTransfer(input: {
     "address": "recipient base58 address",
     "amount": "uint64 amount to transfer",
-    "direction": WRAP | UNWRAP
+    "direction": DEPOSIT | WITHDRAW
   }) {
     key
   }

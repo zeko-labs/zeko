@@ -12,6 +12,7 @@ module Local_state = Mina_state.Local_state
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
 module L = Mina_ledger.Ledger
+module SL = Mina_ledger.Sparse_ledger
 
 (** Converts a variable to its constituent fields *)
 let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :
@@ -836,6 +837,12 @@ module Outer_rules = struct
 
     module List_TR_8 = SnarkList (TR_8)
 
+    module Ledger_path = SnarkList (struct
+      module T = F
+
+      let length = constraint_constants.ledger_depth
+    end)
+
     module Witness = struct
       type t =
         { stmt : S.t  (** The ledger transition we are performing. *)
@@ -847,11 +854,31 @@ module Outer_rules = struct
         ; withdrawals_processed : F.t
         ; new_withdrawals : List_TR_8.t
               (** Withdrawals to be processed this time *)
+        ; old_inner_acc : Account.t
+        ; old_inner_acc_path : Ledger_path.t
+        ; new_inner_acc : Account.t
+        ; new_inner_acc_path : Ledger_path.t
         }
       [@@deriving snarky]
     end
 
     include MkHandler (Witness)
+
+    let check_incl_proof root path account =
+      let account_hash = run @@ Mina_base.Account.Checked.digest account in
+      let implied_root =
+        List.foldi path ~init:account_hash ~f:(fun height acc h ->
+            (* To constrain `index` being 0, we are counting on the path being fully on left *)
+            (* Normally we would need also `bool list` specifying the path from leaf to the root *)
+            (* The code would be adding on few constraints with the `if_` *)
+            (*
+               let l = Field.if_ b ~then_:h ~else_:acc
+               and r = Field.if_ b ~then_:acc ~else_:h in
+               Ledger_hash.merge_var ~height l r
+            *)
+            Ledger_hash.merge_var ~height acc h )
+      in
+      Field.Assert.equal (Ledger_hash.var_to_hash_packed root) implied_root
 
     let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
       let ({ stmt
@@ -862,38 +889,35 @@ module Outer_rules = struct
            ; all_deposits
            ; withdrawals_processed
            ; new_withdrawals
+           ; old_inner_acc
+           ; old_inner_acc_path
+           ; new_inner_acc
+           ; new_inner_acc_path
            }
             : Witness.var ) =
         exists_witness ()
       in
-      let depth = constraint_constants.ledger_depth in
-      (* inner account should be first account *)
-      let acc = constant (Account.Index.Unpacked.typ depth) 0 in
-      (* Fetch old account state *)
-      let old_acc =
-        run @@ Frozen_ledger_hash.get depth stmt.source_ledger acc
-      in
-      (* Fetch new account state *)
-      let new_acc =
-        run @@ Frozen_ledger_hash.get depth stmt.target_ledger acc
-      in
+
+      check_incl_proof stmt.source_ledger old_inner_acc_path old_inner_acc ;
+      check_incl_proof stmt.target_ledger new_inner_acc_path new_inner_acc ;
+
       (* There must have been exactly one "step" in the inner account, checked by checking nonce *)
       let () =
         run
         @@ Nonce.Checked.Assert.equal
-             (run @@ Nonce.Checked.succ old_acc.nonce)
-             new_acc.nonce
+             (run @@ Nonce.Checked.succ old_inner_acc.nonce)
+             new_inner_acc.nonce
       in
       (* FIXME: shouldn't be necessary but who knows whether an account index is reliable.
          We use `old_acc` instead of `new_acc`, because _possibly_ old_acc could be PC.empty while new_acc is not.
          Maybe this isn't the case though. *)
       let () =
         run
-        @@ PC.Checked.Assert.equal old_acc.public_key
+        @@ PC.Checked.Assert.equal old_inner_acc.public_key
              (constant PC.typ Inner_rules.public_key)
       in
       (* We get the old & new zkapp state, a bit complicated to get because field is actually hash of contents *)
-      let old_zkapp_hash, old_zkapp = old_acc.zkapp in
+      let old_zkapp_hash, old_zkapp = old_inner_acc.zkapp in
       let old_zkapp =
         exists Zkapp_account.typ ~compute:(fun () ->
             Option.value_exn @@ As_prover.Ref.get old_zkapp )
@@ -901,7 +925,7 @@ module Outer_rules = struct
       (* We check that witness old zkapp is correct *)
       Field.Assert.equal old_zkapp_hash
       @@ Zkapp_account.Checked.digest old_zkapp ;
-      let zkapp_hash, zkapp = new_acc.zkapp in
+      let zkapp_hash, zkapp = new_inner_acc.zkapp in
       let zkapp =
         exists Zkapp_account.typ ~compute:(fun () ->
             Option.value_exn @@ As_prover.Ref.get zkapp )
@@ -1034,215 +1058,6 @@ type t = Wrapper_rules.t
 let source_ledger (t : t) = t.stmt.source_ledger
 
 let target_ledger (t : t) = t.stmt.target_ledger
-
-(* Only for testing purposes *)
-module Mocked_zkapp = struct
-  module Deploy = struct
-    let deploy ~(signer : Signature_lib.Keypair.t) ~(fee : Currency.Fee.t)
-        ~(nonce : Account.Nonce.t) ~(zkapp : Signature_lib.Keypair.t)
-        ~(vk : Side_loaded_verification_key.t)
-        ~(initial_state : Frozen_ledger_hash.t) : Zkapp_command.t =
-      let zkapp_update =
-        { body =
-            { Body.dummy with
-              public_key = Public_key.compress zkapp.public_key
-            ; implicit_account_creation_fee = false
-            ; update =
-                { Update.dummy with
-                  app_state =
-                    [ Set (Frozen_ledger_hash.to_field initial_state)
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ]
-                ; verification_key =
-                    Set { data = vk; hash = Zkapp_account.digest_vk vk }
-                ; permissions = Set proof_permissions
-                }
-            ; use_full_commitment = true
-            ; authorization_kind = Signature
-            }
-        ; authorization = Signature Signature.dummy
-        }
-      in
-      let sender_update =
-        { body =
-            { Body.dummy with
-              public_key = Public_key.compress signer.public_key
-            ; balance_change =
-                CAS.negate @@ CAS.of_unsigned
-                @@ CA.of_fee constraint_constants.account_creation_fee
-            ; use_full_commitment = true
-            ; authorization_kind = Signature
-            }
-        ; authorization = Signature Signature.dummy
-        }
-      in
-      let command : Zkapp_command.t =
-        { fee_payer =
-            { Account_update.Fee_payer.body =
-                { public_key = Public_key.compress signer.public_key
-                ; fee
-                ; valid_until = None
-                ; nonce
-                }
-            ; authorization = Signature.dummy
-            }
-        ; account_updates =
-            Zkapp_command.Call_forest.accumulate_hashes'
-            @@ Zkapp_command.Call_forest.of_account_updates
-                 ~account_update_depth:(fun _ -> 0)
-                 [ zkapp_update; sender_update ]
-        ; memo = Signed_command_memo.empty
-        }
-      in
-      let commitment = Zkapp_command.commitment command in
-      let full_commitment =
-        Zkapp_command.Transaction_commitment.create_complete
-          (Zkapp_command.commitment command)
-          ~memo_hash:(Signed_command_memo.hash command.memo)
-          ~fee_payer_hash:
-            (Zkapp_command.Digest.Account_update.create
-               (Account_update.of_fee_payer command.fee_payer) )
-      in
-      let sender_signature =
-        Signature_lib.Schnorr.Chunked.sign
-          ~signature_kind:Mina_signature_kind.Testnet signer.private_key
-          (Random_oracle.Input.Chunked.field full_commitment)
-      in
-      let zkapp_signature =
-        Signature_lib.Schnorr.Chunked.sign
-          ~signature_kind:Mina_signature_kind.Testnet zkapp.private_key
-          (Random_oracle.Input.Chunked.field full_commitment)
-      in
-      { command with
-        fee_payer = { command.fee_payer with authorization = sender_signature }
-      ; account_updates =
-          Zkapp_command.Call_forest.accumulate_hashes
-            ~hash_account_update:(fun p ->
-              Zkapp_command.Digest.Account_update.create p )
-          @@ Zkapp_command.Call_forest.of_account_updates
-               ~account_update_depth:(fun _ -> 0)
-               [ { zkapp_update with
-                   authorization = Control.Signature zkapp_signature
-                 }
-               ; { sender_update with
-                   authorization = Control.Signature sender_signature
-                 }
-               ]
-      }
-  end
-
-  module Step = struct
-    include struct
-      open Snarky_backendless.Request
-
-      type _ t +=
-        | Public_key : PC.t t
-        | Vk_hash : field t
-        | Statement : Wrapper_rules.S.t t
-        | Proof : Proof.t t
-    end
-
-    let handler (pk : PC.t) (vk_hash : field) (stmt : Wrapper_rules.S.t)
-        (prf : Proof.t) (Snarky_backendless.Request.With { request; respond }) =
-      match request with
-      | Public_key ->
-          respond (Provide pk)
-      | Vk_hash ->
-          respond (Provide vk_hash)
-      | Statement ->
-          respond (Provide stmt)
-      | Proof ->
-          respond (Provide prf)
-      | _ ->
-          respond Unhandled
-
-    let main Pickles.Inductive_rule.{ public_input = () } =
-      let public_key = exists PC.typ ~request:(fun () -> Public_key) in
-      let vk_hash = exists Field.typ ~request:(fun () -> Vk_hash) in
-      let stmt = exists Wrapper_rules.S.typ ~request:(fun () -> Statement) in
-      let proof = exists (Typ.Internal.ref ()) ~request:(fun () -> Proof) in
-
-      let calls = Zkapp_call_forest.Checked.empty () in
-      let account_update = constant (Body.typ ()) Body.dummy in
-      let authorization_kind : Authorization_kind.Checked.t =
-        { is_signed = Boolean.false_
-        ; is_proved = Boolean.true_
-        ; verification_key_hash = vk_hash
-        }
-      in
-      let update = account_update.update in
-      let update =
-        { update with
-          app_state =
-            [ Set_or_keep.Checked.set
-              @@ Frozen_ledger_hash.var_to_field stmt.target_ledger
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ]
-        }
-      in
-      let account_precondition =
-        constant
-          (Zkapp_precondition.Account.typ ())
-          Zkapp_precondition.Account.accept
-      in
-      let account_precondition =
-        { account_precondition with
-          state =
-            [ Or_ignore.Checked.make_unsafe Boolean.true_
-                (Frozen_ledger_hash.var_to_field stmt.source_ledger)
-            ; ignore
-            ; ignore
-            ; ignore
-            ; ignore
-            ; ignore
-            ; ignore
-            ; ignore
-            ]
-        }
-      in
-      let preconditions =
-        constant (Preconditions.typ ()) Preconditions.accept
-      in
-      let preconditions =
-        { preconditions with account = account_precondition }
-      in
-      let account_update =
-        { account_update with
-          public_key
-        ; authorization_kind
-        ; update
-        ; preconditions
-        }
-      in
-      let public_output, auxiliary_output = make_outputs account_update calls in
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            [ { public_input = stmt; proof_must_verify = Boolean.true_; proof }
-            ]
-        ; public_output
-        ; auxiliary_output
-        }
-
-    let rule tag : _ Pickles.Inductive_rule.t =
-      { identifier = "Mocked rollup step"
-      ; prevs = [ tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
-  end
-end
 
 (** Compile the circuits *)
 module Make (T : sig
@@ -1445,27 +1260,6 @@ struct
       }
   end
 
-  module Mocked = struct
-    let tag, cache_handle, p, Pickles.Provers.[ step_ ] =
-      time "Mocked_zkapp.compile" (fun () ->
-          Pickles.compile () ~cache:Cache_dir.cache
-            ~public_input:(Output Zkapp_statement.typ)
-            ~auxiliary_typ:Typ.(Prover_value.typ ())
-            ~branches:(module Nat.N1)
-            ~max_proofs_verified:(module Nat.N1)
-            ~name:"mocked rollup"
-            ~constraint_constants:
-              (Genesis_constants.Constraint_constants.to_snark_keys_header
-                 constraint_constants )
-            ~choices:(fun ~self:_ -> [ Mocked_zkapp.Step.rule Wrapper.tag ]) )
-
-    let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
-
-    let step (snark : t) pk vk_hash =
-      step_
-        ~handler:(Mocked_zkapp.Step.handler pk vk_hash snark.stmt snark.proof)
-  end
-
   module Outer = struct
     let tag, cache_handle, p, Pickles.Provers.[ step_; action_ ] =
       time "Zkapp.compile" (fun () ->
@@ -1500,7 +1294,8 @@ struct
 
     let step (t : t) ~(public_key : PC.t) ~(old_action_state : field)
         ~(new_actions : TR.t list) ~(withdrawals_processed : field)
-        ~(remaining_withdrawals : TR.t list) :
+        ~(remaining_withdrawals : TR.t list) ~(source_ledger : SL.t)
+        ~(target_ledger : SL.t) :
         ( ( Account_update.t
           , Zkapp_command.Digest.Account_update.t
           , Zkapp_command.Digest.Forest.t )
@@ -1548,6 +1343,20 @@ struct
           ; stmt = t.stmt
           ; prf = t.proof
           ; public_key
+          ; old_inner_acc = SL.get_exn source_ledger 0
+          ; old_inner_acc_path =
+              List.map (SL.path_exn source_ledger 0) ~f:(function
+                | `Left x ->
+                    x
+                | `Right _ ->
+                    failwith "Impossible" )
+          ; new_inner_acc = SL.get_exn target_ledger 0
+          ; new_inner_acc_path =
+              List.map (SL.path_exn target_ledger 0) ~f:(function
+                | `Left x ->
+                    x
+                | `Right _ ->
+                    failwith "Impossible" )
           }
         in
         step_ ~handler:(Outer_rules.Step.handler w) ()
@@ -1555,7 +1364,7 @@ struct
       let tree = mkforest tree proof in
       return (tree, withdrawals_processed', remaining_withdrawals)
 
-    let unsafe_deploy (ledger_hash : Ledger_hash.t) =
+    let unsafe_deploy_update (ledger_hash : Ledger_hash.t) =
       let update =
         { Update.dummy with
           app_state =
@@ -1573,12 +1382,95 @@ struct
       in
       update
 
-    let deploy_exn (l : L.t) =
+    let deploy_update_exn (l : L.t) =
       if
         not
           (PC.equal Inner_rules.public_key (L.get_at_index_exn l 0).public_key)
       then failwith "zeko outer deploy: ledger invalid"
       else () ;
-      unsafe_deploy (L.merkle_root l)
+      unsafe_deploy_update (L.merkle_root l)
+
+    let deploy_command_exn ~(signer : Signature_lib.Keypair.t)
+        ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)
+        ~(zkapp : Signature_lib.Keypair.t) ~(initial_ledger : L.t) :
+        Zkapp_command.t =
+      let zkapp_update =
+        { body =
+            { Body.dummy with
+              public_key = Public_key.compress zkapp.public_key
+            ; implicit_account_creation_fee = false
+            ; update = deploy_update_exn initial_ledger
+            ; use_full_commitment = true
+            ; authorization_kind = Signature
+            }
+        ; authorization = Signature Signature.dummy
+        }
+      in
+      let sender_update =
+        { body =
+            { Body.dummy with
+              public_key = Public_key.compress signer.public_key
+            ; balance_change =
+                CAS.negate @@ CAS.of_unsigned
+                @@ CA.of_fee constraint_constants.account_creation_fee
+            ; use_full_commitment = true
+            ; authorization_kind = Signature
+            }
+        ; authorization = Signature Signature.dummy
+        }
+      in
+      let command : Zkapp_command.t =
+        { fee_payer =
+            { Account_update.Fee_payer.body =
+                { public_key = Public_key.compress signer.public_key
+                ; fee
+                ; valid_until = None
+                ; nonce
+                }
+            ; authorization = Signature.dummy
+            }
+        ; account_updates =
+            Zkapp_command.Call_forest.accumulate_hashes'
+            @@ Zkapp_command.Call_forest.of_account_updates
+                 ~account_update_depth:(fun _ -> 0)
+                 [ zkapp_update; sender_update ]
+        ; memo = Signed_command_memo.empty
+        }
+      in
+      let commitment = Zkapp_command.commitment command in
+      let full_commitment =
+        Zkapp_command.Transaction_commitment.create_complete
+          (Zkapp_command.commitment command)
+          ~memo_hash:(Signed_command_memo.hash command.memo)
+          ~fee_payer_hash:
+            (Zkapp_command.Digest.Account_update.create
+               (Account_update.of_fee_payer command.fee_payer) )
+      in
+      let sender_signature =
+        Signature_lib.Schnorr.Chunked.sign
+          ~signature_kind:Mina_signature_kind.Testnet signer.private_key
+          (Random_oracle.Input.Chunked.field full_commitment)
+      in
+      let zkapp_signature =
+        Signature_lib.Schnorr.Chunked.sign
+          ~signature_kind:Mina_signature_kind.Testnet zkapp.private_key
+          (Random_oracle.Input.Chunked.field full_commitment)
+      in
+      { command with
+        fee_payer = { command.fee_payer with authorization = sender_signature }
+      ; account_updates =
+          Zkapp_command.Call_forest.accumulate_hashes
+            ~hash_account_update:(fun p ->
+              Zkapp_command.Digest.Account_update.create p )
+          @@ Zkapp_command.Call_forest.of_account_updates
+               ~account_update_depth:(fun _ -> 0)
+               [ { zkapp_update with
+                   authorization = Control.Signature zkapp_signature
+                 }
+               ; { sender_update with
+                   authorization = Control.Signature sender_signature
+                 }
+               ]
+      }
   end
 end

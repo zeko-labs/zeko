@@ -8,6 +8,30 @@ open Signature_lib
 open Currency
 module Schema = Graphql_wrapper.Make (Schema)
 
+type t =
+  { db : Ledger.Db.t
+  ; slot : Mina_numbers.Global_slot_since_genesis.t
+  ; commands : (string, User_command.t * Transaction_status.t) Hashtbl.t
+  }
+
+let constraint_constants = Genesis_constants.Constraint_constants.compiled
+
+let genesis_constants = Genesis_constants.compiled
+
+let consensus_constants =
+  Consensus.Constants.create ~constraint_constants
+    ~protocol_constants:genesis_constants.protocol
+
+let state_body =
+  let compile_time_genesis =
+    Mina_state.Genesis_protocol_state.t
+      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+      ~constraint_constants ~consensus_constants
+      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+  in
+  Mina_state.Protocol_state.body compile_time_genesis.data
+
 module Types = struct
   open Schema
 
@@ -74,7 +98,7 @@ module Types = struct
               match x with `Left _ -> None | `Right h -> Some h )
         ] )
 
-  let account_timing : (Zeko_sequencer.t, Account_timing.t option) typ =
+  let account_timing : (t, Account_timing.t option) typ =
     obj "AccountTiming" ~fields:(fun _ ->
         [ field "initialMinimumBalance" ~typ:balance
             ~doc:"The initial minimum balance for a time-locked account"
@@ -758,7 +782,7 @@ module Types = struct
           resolve c uc.With_status.data )
 
     let user_command_shared_fields :
-        ( Zeko_sequencer.t
+        ( t
         , (Signed_command.t, Transaction_hash.t) With_hash.t With_status.t )
         field
         list =
@@ -778,22 +802,19 @@ module Types = struct
             |> Account.Nonce.to_int )
       ; field_no_status "source" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command is sent from"
-          ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+          ~resolve:(fun { ctx = t; _ } cmd ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "receiver" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command applies to"
-          ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+          ~resolve:(fun { ctx = t; _ } cmd ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
               (Signed_command.receiver cmd.With_hash.data) )
       ; field_no_status "feePayer" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that pays the fees for the command"
           ~deprecated:(Deprecated (Some "use source field instead"))
-          ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+          ~resolve:(fun { ctx = t; _ } cmd ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "validUntil" ~typ:(non_null global_slot_since_genesis)
           ~args:[]
@@ -851,8 +872,8 @@ module Types = struct
       ; field_no_status "fromAccount" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account of the sender"
           ~deprecated:(Deprecated (Some "use feePayer field instead"))
-          ~resolve:(fun { ctx = sequencer; _ } payment ->
-            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
+          ~resolve:(fun { ctx = t; _ } payment ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
             @@ Signed_command.fee_payer payment.With_hash.data )
       ; field_no_status "to" ~typ:(non_null public_key) ~args:[]
           ~doc:"Public key of the receiver"
@@ -863,8 +884,8 @@ module Types = struct
           ~doc:"Account of the receiver"
           ~deprecated:(Deprecated (Some "use receiver field instead"))
           ~args:Arg.[]
-          ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
+          ~resolve:(fun { ctx = t; _ } cmd ->
+            AccountObj.get_best_ledger_account (Ledger.of_database t.db)
             @@ Signed_command.receiver cmd.With_hash.data )
       ; field "failureReason"
           ~typ:(Mina_base_unix.Graphql_scalars.TransactionStatusFailure.typ ())
@@ -899,12 +920,8 @@ module Types = struct
           resolve c cmd.With_status.data )
 
     let zkapp_command =
-      let conv
-          (x :
-            ( Zeko_sequencer.t
-            , Zkapp_command.t )
-            Fields_derivers_graphql.Schema.typ ) :
-          (Zeko_sequencer.t, Zkapp_command.t) typ =
+      let conv (x : (t, Zkapp_command.t) Fields_derivers_graphql.Schema.typ) :
+          (t, Zkapp_command.t) typ =
         Obj.magic x
       in
       obj "ZkappCommandResult" ~fields:(fun _ ->
@@ -953,14 +970,6 @@ module Types = struct
           [ field "zkapp"
               ~typ:(non_null Zkapp_command.zkapp_command)
               ~doc:"zkApp transaction that was sent"
-              ~args:Arg.[]
-              ~resolve:(fun _ -> Fn.id)
-          ] )
-
-    let prove_transfer =
-      obj "ProveTransferPayload" ~fields:(fun _ ->
-          [ field "accountUpdateKey" ~typ:(non_null string)
-              ~doc:"Key for querying the account update"
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
           ] )
@@ -1211,259 +1220,6 @@ module Types = struct
                 ~typ:arg_typ
             ]
     end
-
-    module Transfer = struct
-      type input = Zeko_sequencer.Transfer.t
-
-      let arg_typ =
-        obj "TransferInput"
-          ~coerce:(fun address amount direction -> (address, amount, direction))
-          ~split:(fun f (x : input) -> f x.address x.amount x.direction)
-          ~fields:
-            [ arg "address" ~typ:(non_null PublicKey.arg_typ)
-            ; arg "amount" ~typ:(non_null UInt64.arg_typ)
-            ; arg "direction"
-                ~typ:
-                  ( non_null
-                  @@ enum "TransferDirection"
-                       ~values:
-                         [ enum_value "DEPOSIT"
-                             ~value:Zeko_sequencer.Transfer.Deposit
-                         ; enum_value "WITHDRAW"
-                             ~value:Zeko_sequencer.Transfer.Withdraw
-                         ] )
-            ]
-    end
-
-    module Archive = struct
-      module ActionFilterOptionsInput = struct
-        module Field = Snark_params.Tick.Field
-
-        type input =
-          { address : Account.key
-          ; token_id : Token_id.t option
-          ; from_action_state : Field.t option
-          ; end_action_state : Field.t option
-          }
-
-        let arg_typ =
-          obj "ActionFilterOptionsInput"
-            ~coerce:(fun address token_id from_action_state end_action_state ->
-              ( address
-              , token_id
-              , Option.map from_action_state ~f:Field.of_string
-              , Option.map end_action_state ~f:Field.of_string ) )
-            ~split:(fun f (x : input) ->
-              f x.address x.token_id
-                (Option.map x.from_action_state ~f:Field.to_string)
-                (Option.map x.end_action_state ~f:Field.to_string) )
-            ~fields:
-              [ arg "address" ~typ:(non_null PublicKey.arg_typ)
-              ; arg "tokenId" ~typ:TokenId.arg_typ
-              ; arg "fromActionState" ~typ:string
-              ; arg "endActionState" ~typ:string
-              ]
-      end
-
-      module EventFilterOptionsInput = struct
-        module Field = Snark_params.Tick.Field
-
-        type input = { address : Account.key; token_id : Token_id.t option }
-
-        let arg_typ =
-          obj "EventFilterOptionsInput"
-            ~coerce:(fun address token_id -> (address, token_id))
-            ~split:(fun f (x : input) -> f x.address x.token_id)
-            ~fields:
-              [ arg "address" ~typ:(non_null PublicKey.arg_typ)
-              ; arg "tokenId" ~typ:TokenId.arg_typ
-              ]
-      end
-    end
-  end
-
-  module Archive = struct
-    module BlockInfo = struct
-      type t = Archive.Block_info.t
-
-      let t : ('context, t option) typ =
-        let open Archive.Block_info in
-        obj "BlockInfo" ~fields:(fun _ ->
-            [ field "height" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.height)
-            ; field "stateHash" ~typ:(non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.state_hash)
-            ; field "parentHash" ~typ:(non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.parent_hash)
-            ; field "ledgerHash" ~typ:(non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.ledger_hash)
-            ; field "chainStatus" ~typ:(non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.chain_status)
-            ; field "timestamp" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.timestamp)
-            ; field "globalSlotSinceHardfork" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.global_slot_since_hardfork)
-            ; field "globalSlotSinceGenesis" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.global_slot_since_genesis)
-            ; field "distanceFromMaxBlockHeight" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.distance_from_max_block_height)
-            ] )
-    end
-
-    module TransactionInfo = struct
-      type t = Archive.Transaction_info.t
-
-      let t : ('context, t option) typ =
-        let open Archive.Transaction_info in
-        obj "TransactionInfo" ~fields:(fun _ ->
-            [ field "status" ~typ:(non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ v ->
-                  Yojson.Safe.to_string @@ Transaction_status.to_yojson v.status
-                  )
-            ; field "hash"
-                ~typ:(non_null transaction_hash)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.hash)
-            ; field "memo" ~typ:(non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> Signed_command_memo.to_string_hum v.memo)
-            ; field "authorizationKind" ~typ:(non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ v ->
-                  Yojson.Safe.to_string
-                  @@ Account_update.Authorization_kind.to_yojson
-                       v.authorization_kind )
-            ] )
-    end
-
-    module StupidActionState = struct
-      type t = Snark_params.Tick.Field.t Pickles_types.Vector.Vector_5.t
-
-      (* Who thought it would be better to not use array like normal node, but rather enumerate fields by word *)
-      let t : ('context, t option) typ =
-        obj "ActionStates" ~fields:(fun _ ->
-            [ field "actionStateOne" ~typ:string
-                ~args:Arg.[]
-                ~resolve:(fun _ action_state ->
-                  Option.map
-                    (Pickles_types.Vector.nth action_state 0)
-                    ~f:Snark_params.Tick.Field.to_string )
-            ; field "actionStateTwo" ~typ:string
-                ~args:Arg.[]
-                ~resolve:(fun _ action_state ->
-                  Option.map
-                    (Pickles_types.Vector.nth action_state 1)
-                    ~f:Snark_params.Tick.Field.to_string )
-            ; field "actionStateThree" ~typ:string
-                ~args:Arg.[]
-                ~resolve:(fun _ action_state ->
-                  Option.map
-                    (Pickles_types.Vector.nth action_state 2)
-                    ~f:Snark_params.Tick.Field.to_string )
-            ; field "actionStateFour" ~typ:string
-                ~args:Arg.[]
-                ~resolve:(fun _ action_state ->
-                  Option.map
-                    (Pickles_types.Vector.nth action_state 3)
-                    ~f:Snark_params.Tick.Field.to_string )
-            ; field "actionStateFive" ~typ:string
-                ~args:Arg.[]
-                ~resolve:(fun _ action_state ->
-                  Option.map
-                    (Pickles_types.Vector.nth action_state 4)
-                    ~f:Snark_params.Tick.Field.to_string )
-            ] )
-    end
-
-    module ActionData = struct
-      type t = Archive.Action.t * int * Archive.Transaction_info.t option
-
-      let t : ('context, t option) typ =
-        obj "ActionData" ~fields:(fun _ ->
-            [ field "accountUpdateId" ~typ:(non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ (_, account_update_id, _) ->
-                  Int.to_string account_update_id )
-            ; field "data"
-                ~typ:(non_null @@ list @@ non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ (action, _, _) ->
-                  Array.to_list
-                  @@ Array.map action ~f:Snark_params.Tick.Field.to_string )
-            ; field "transactionInfo" ~typ:TransactionInfo.t
-                ~args:Arg.[]
-                ~resolve:(fun _ (_, _, transaction_info) -> transaction_info)
-            ] )
-    end
-
-    module EventData = struct
-      type t = Archive.Event.t * Archive.Transaction_info.t option
-
-      let t : ('context, t option) typ =
-        obj "EventData" ~fields:(fun _ ->
-            [ field "data"
-                ~typ:(non_null @@ list @@ non_null string)
-                ~args:Arg.[]
-                ~resolve:(fun _ (event, _) ->
-                  Array.to_list
-                  @@ Array.map event ~f:Snark_params.Tick.Field.to_string )
-            ; field "transactionInfo" ~typ:TransactionInfo.t
-                ~args:Arg.[]
-                ~resolve:(fun _ (_, transaction_info) -> transaction_info)
-            ] )
-    end
-
-    module ActionOutput = struct
-      type t = Archive.Account_update_actions.t
-
-      let t : ('context, t option) typ =
-        obj "ActionOutput" ~fields:(fun _ ->
-            let open Archive.Account_update_actions in
-            [ field "blockInfo" ~typ:BlockInfo.t
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.block_info)
-            ; field "transactionInfo" ~typ:TransactionInfo.t
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.transaction_info)
-            ; field "actionState"
-                ~typ:(non_null StupidActionState.t)
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.action_state)
-            ; field "actionData"
-                ~typ:(non_null @@ list @@ non_null ActionData.t)
-                ~args:Arg.[]
-                ~resolve:(fun _ v ->
-                  List.map v.actions ~f:(fun x ->
-                      (x, v.account_update_id, v.transaction_info) ) )
-            ] )
-    end
-
-    module EventOutput = struct
-      type t = Archive.Account_update_events.t
-
-      let t : ('context, t option) typ =
-        obj "EventOutput" ~fields:(fun _ ->
-            let open Archive.Account_update_events in
-            [ field "blockInfo" ~typ:BlockInfo.t
-                ~args:Arg.[]
-                ~resolve:(fun _ v -> v.block_info)
-            ; field "eventData"
-                ~typ:(non_null @@ list @@ non_null EventData.t)
-                ~args:Arg.[]
-                ~resolve:(fun _ v ->
-                  List.map v.events ~f:(fun x -> (x, v.transaction_info)) )
-            ] )
-    end
   end
 end
 
@@ -1478,16 +1234,13 @@ module Mutations = struct
           [ arg "input" ~typ:(non_null Types.Input.SendPaymentInput.arg_typ)
           ; Types.Input.Fields.signature
           ]
-      ~resolve:(fun { ctx = sequencer; _ } ()
+      ~resolve:(fun { ctx = t; _ } ()
                     (from, to_, amount, fee, valid_until, memo, nonce_opt)
                     signature ->
         let payload =
           Signed_command.Payload.create ~fee:(Fee.of_uint64 fee)
             ~fee_payer_pk:from
-            ~nonce:
-              (Option.value
-                 ~default:(Zeko_sequencer.inferr_nonce sequencer from)
-                 nonce_opt )
+            ~nonce:(Option.value ~default:Unsigned.UInt32.zero nonce_opt)
             ~valid_until:
               (Option.map valid_until
                  ~f:Mina_numbers.Global_slot_since_genesis.of_uint32 )
@@ -1512,23 +1265,39 @@ module Mutations = struct
                   payload
               with
               | Some command ->
-                  return (Ok command)
+                  return (Ok (Signed_command.forget_check command))
               | None ->
                   return (Error "Signature verification failed") )
         in
+        let l = Ledger.of_database t.db in
         match
-          Zeko_sequencer.apply_signed_command sequencer
-            (Signed_command.forget_check command)
+          Result.( >>= )
+            (Ledger.apply_transaction_first_pass ~constraint_constants
+               ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
+               ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
+               l (Command (Signed_command command)) )
+            (Ledger.apply_transaction_second_pass l)
         with
         | Error err ->
             return (Error (Error.to_string_mach err))
-        | Ok (_, command_witness) ->
-            don't_wait_for
-            @@ Zeko_sequencer.Snark_queue.enqueue_prove_command
-                 sequencer.snark_q command_witness ;
+        | Ok txn_applied ->
+            Ledger.Mask.Attached.commit l ;
+
+            let txn_hash =
+              Transaction_hash.to_base58_check
+              @@ Transaction_hash.hash_command (Signed_command command)
+            in
+            Hashtbl.add_exn t.commands ~key:txn_hash
+              ~data:
+                ( Signed_command command
+                , Ledger.Transaction_applied.transaction_status txn_applied ) ;
+
+            print_endline @@ "applied payment: " ^ txn_hash ^ " "
+            ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
+            @@ Ledger.Transaction_applied.transaction_status txn_applied ;
+
             let cmd =
-              { Types.User_command.With_status.data =
-                  Signed_command.forget_check command
+              { Types.User_command.With_status.data = command
               ; status = Applied
               }
             in
@@ -1546,42 +1315,77 @@ module Mutations = struct
       ~typ:(non_null Types.Payload.send_zkapp)
       ~args:
         Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
-      ~resolve:(fun { ctx = sequencer; _ } () zkapp_command ->
-        match Zeko_sequencer.apply_zkapp_command sequencer zkapp_command with
+      ~resolve:(fun { ctx = t; _ } () zkapp_command ->
+        let l = Ledger.of_database t.db in
+        let%bind.Deferred.Result partialy_applied_txn =
+          match
+            Ledger.apply_transaction_first_pass ~constraint_constants
+              ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
+              ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
+              l (Command (Zkapp_command zkapp_command))
+          with
+          | Error err ->
+              return (Error (Error.to_string_mach err))
+          | Ok partialy_applied_txn ->
+              return (Ok partialy_applied_txn)
+        in
+
+        let%bind.Deferred.Result txn_applied =
+          match Ledger.apply_transaction_second_pass l partialy_applied_txn with
+          | Error err ->
+              return (Error (Error.to_string_mach err))
+          | Ok txn_applied ->
+              return (Ok txn_applied)
+        in
+
+        Ledger.Mask.Attached.commit l ;
+
+        let txn_hash =
+          Transaction_hash.to_base58_check
+          @@ Transaction_hash.hash_command (Zkapp_command zkapp_command)
+        in
+        Hashtbl.add_exn t.commands ~key:txn_hash
+          ~data:
+            ( Zkapp_command zkapp_command
+            , Ledger.Transaction_applied.transaction_status txn_applied ) ;
+
+        print_endline @@ "applied zkapp command: " ^ txn_hash ^ " "
+        ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
+        @@ Ledger.Transaction_applied.transaction_status txn_applied ;
+
+        let cmd =
+          { Types.Zkapp_command.With_status.data = zkapp_command
+          ; status = Applied
+          }
+        in
+        let cmd_with_hash =
+          Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
+              { With_hash.data = cmd
+              ; hash = Transaction_hash.hash_command (Zkapp_command cmd)
+              } )
+        in
+        return (Ok cmd_with_hash) )
+
+  let create_account =
+    io_field "createAccount" ~doc:"Create test account" ~typ:(non_null string)
+      ~args:
+        Arg.[ arg "publicKey" ~typ:(non_null Types.Input.PublicKey.arg_typ) ]
+      ~resolve:(fun { ctx = t; _ } () pk ->
+        let account_id = Account_id.create pk Token_id.default in
+        let account =
+          Account.create account_id
+            (Currency.Balance.of_uint64
+               (Unsigned.UInt64.of_int64 1_000_000_000_000L) )
+        in
+        match Ledger.Db.get_or_create_account t.db account_id account with
+        | Ok (`Added, _) ->
+            return (Ok "Added")
+        | Ok (`Existed, _) ->
+            return (Ok "Existed")
         | Error err ->
-            return (Error (Error.to_string_mach err))
-        | Ok (_, command_witness) ->
-            don't_wait_for
-            @@ Zeko_sequencer.Snark_queue.enqueue_prove_command
-                 sequencer.snark_q command_witness ;
+            return (Error (Error.to_string_mach err)) )
 
-            let cmd =
-              { Types.Zkapp_command.With_status.data = zkapp_command
-              ; status = Applied
-              }
-            in
-            let cmd_with_hash =
-              Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
-                  { With_hash.data = cmd
-                  ; hash = Transaction_hash.hash_command (Zkapp_command cmd)
-                  } )
-            in
-            return (Ok cmd_with_hash) )
-
-  let prove_transfer =
-    io_field "proveTransfer" ~doc:"Prove rollup transfer"
-      ~typ:(non_null Types.Payload.prove_transfer)
-      ~args:Arg.[ arg "input" ~typ:(non_null Types.Input.Transfer.arg_typ) ]
-      ~resolve:(fun { ctx = sequencer; _ } () (address, amount, direction) ->
-        let key = Int.to_string @@ Random.int Int.max_value in
-        don't_wait_for
-        @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer
-             Zeko_sequencer.(sequencer.snark_q)
-             ~key
-             ~transfer:Zeko_sequencer.Transfer.{ address; amount; direction } ;
-        return (Ok key) )
-
-  let commands = [ send_payment; send_zkapp; prove_transfer ]
+  let commands = [ send_payment; send_zkapp; create_account ]
 end
 
 module Queries = struct
@@ -1609,79 +1413,85 @@ module Queries = struct
               ~doc:"Token of account being retrieved (defaults to MINA)"
               ~typ:Types.Input.TokenId.arg_typ ~default:Token_id.default
           ]
-      ~resolve:(fun { ctx = sequencer; _ } () public_key token_id ->
-        let%map.Option account =
-          Zeko_sequencer.get_account sequencer public_key token_id
+      ~resolve:(fun { ctx = t; _ } () public_key token_id ->
+        let%bind.Option location =
+          Ledger.Db.location_of_account t.db
+            (Account_id.create public_key token_id)
         in
+        let%map.Option account = Ledger.Db.get t.db location in
         Types.AccountObj.Partial_account.of_full_account account
         |> Types.AccountObj.lift )
 
-  (* TODO *)
-  let accounts_for_pk =
-    field "accounts" ~doc:"Find all accounts for a public key"
-      ~typ:(non_null (list (non_null Types.AccountObj.account)))
+  let user_command =
+    field "userCommand" ~doc:"Get applied command"
+      ~typ:Types.User_command.user_command
       ~args:
         Arg.
-          [ arg "publicKey" ~doc:"Public key to find accounts for"
-              ~typ:(non_null Types.Input.PublicKey.arg_typ)
+          [ arg "hash" ~doc:"Hash of command being retrieved"
+              ~typ:(non_null string)
           ]
-      ~resolve:(fun _ () _ -> [])
+      ~resolve:(fun { ctx = t; _ } () hash ->
+        let%bind.Option command, status =
+          match Hashtbl.find t.commands hash with
+          | Some (Signed_command command, status) ->
+              Some (command, status)
+          | _ ->
+              None
+        in
+        let cmd =
+          { Types.User_command.With_status.data = command
+          ; status =
+              ( match status with
+              | Applied ->
+                  Applied
+              | Failed reason ->
+                  Included_but_failed reason )
+          }
+        in
+        let cmd_with_hash =
+          Types.User_command.With_status.map cmd ~f:(fun cmd ->
+              { With_hash.data = cmd
+              ; hash = Transaction_hash.hash_command (Signed_command cmd)
+              } )
+        in
+        Some (Types.User_command.mk_payment cmd_with_hash) )
 
-  let transfer =
-    field "transfer"
-      ~doc:"Query proved account update for transfer in a JSON format"
-      ~typ:string
-      ~args:Arg.[ arg "key" ~typ:(non_null string) ]
-      ~resolve:(fun { ctx = sequencer; _ } () key ->
-        match
-          Transfers_memory.get
-            Zeko_sequencer.(sequencer.snark_q.transfers_memory)
-            key
-        with
-        | None ->
-            None
-        | Some (_, account_update) ->
-            Some
-              ( Yojson.Safe.to_string
-              @@ Zkapp_command.account_updates_to_json account_update ) )
-
-  module Archive = struct
-    let actions =
-      field "actions"
-        ~typ:(non_null @@ list @@ non_null Types.Archive.ActionOutput.t)
-        ~args:
-          Arg.
-            [ arg "input"
-                ~typ:
-                  (non_null Types.Input.Archive.ActionFilterOptionsInput.arg_typ)
-            ]
-        ~resolve:(fun { ctx = sequencer; _ } ()
-                      (public_key, token_id, from_action_state, _) ->
-          let token_id = Option.value ~default:Token_id.default token_id in
-          Archive.get_actions sequencer.archive
-            (Account_id.create public_key token_id)
-            from_action_state )
-
-    let events =
-      field "events"
-        ~typ:(non_null @@ list @@ non_null Types.Archive.EventOutput.t)
-        ~args:
-          Arg.
-            [ arg "input"
-                ~typ:
-                  (non_null Types.Input.Archive.EventFilterOptionsInput.arg_typ)
-            ]
-        ~resolve:(fun { ctx = sequencer; _ } () (public_key, token_id) ->
-          let token_id = Option.value ~default:Token_id.default token_id in
-          Archive.get_events sequencer.archive
-            (Account_id.create public_key token_id) )
-
-    let commands = [ actions; events ]
-  end
+  let zkapp_command =
+    field "zkappCommand" ~doc:"Get applied command"
+      ~typ:Types.Zkapp_command.zkapp_command
+      ~args:
+        Arg.
+          [ arg "hash" ~doc:"Hash of command being retrieved"
+              ~typ:(non_null string)
+          ]
+      ~resolve:(fun { ctx = t; _ } () hash ->
+        let%bind.Option command, status =
+          match Hashtbl.find t.commands hash with
+          | Some (Zkapp_command command, status) ->
+              Some (command, status)
+          | _ ->
+              None
+        in
+        let cmd =
+          { Types.Zkapp_command.With_status.data = command
+          ; status =
+              ( match status with
+              | Applied ->
+                  Applied
+              | Failed reason ->
+                  Included_but_failed reason )
+          }
+        in
+        let cmd_with_hash =
+          Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
+              { With_hash.data = cmd
+              ; hash = Transaction_hash.hash_command (Zkapp_command cmd)
+              } )
+        in
+        Some cmd_with_hash )
 
   let commands =
-    [ sync_status; daemon_status; account; accounts_for_pk; transfer ]
-    @ Archive.commands
+    [ sync_status; daemon_status; account; user_command; zkapp_command ]
 end
 
 let schema =

@@ -3,7 +3,9 @@ open Mina_base
 open Async
 
 module Da_layer = struct
-  type config_t = { da_contract_address : string option }
+  module Config = struct
+    type t = { da_contract_address : string option }
+  end
 
   let command_to_yojson command =
     match command with
@@ -21,7 +23,7 @@ module Da_layer = struct
           ; ("data", `String (Zkapp_command.to_base64 zkapp_command))
           ]
 
-  let post_batch config ~commands ~batch_id ~previous_batch_id =
+  let post_batch (config : Config.t) ~commands ~batch_id ~previous_batch_id =
     match config.da_contract_address with
     | None ->
         print_endline "No da contract address provided. Skipping batch posting" ;
@@ -46,7 +48,7 @@ module Da_layer = struct
         Out_channel.close stdin ;
         Unix.waitpid_exn (Pid.of_int pid)
 
-  let get_batches config ~to_ =
+  let get_batches (config : Config.t) ~to_ =
     match config.da_contract_address with
     | None ->
         print_endline "No da contract address provided. Skipping bootstrapping" ;

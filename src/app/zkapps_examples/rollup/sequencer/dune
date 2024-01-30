@@ -29,6 +29,7 @@
   ;; mina ;;
   mina_base
   mina_numbers
+  mina_ledger
   pickles
   pickles_types
   init
