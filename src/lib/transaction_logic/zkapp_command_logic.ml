@@ -1744,7 +1744,7 @@ module Make (Inputs : Inputs_intf) = struct
 
     (* ZEKO NOTE: we need to ensure zkapp has receive set to None, otherwise rollup can get stuck on deposit *)
     let local_state =
-      Local_state.add_check local_state Zeko_zkapp_receive_auth_changed
+      Local_state.add_check local_state Zeko_account_receive_auth_changed
         (Controller.check ~proof_verifies:Bool.false_
            ~signature_verifies:Bool.false_
            (Account.Permissions.receive a) )

@@ -953,7 +953,5 @@ let%test_unit "can't create zkapp with changed receive auth" =
   let result = apply_zkapp_command sequencer zkapp_command in
   [%test_eq: Bool.t] true (Or_error.is_error result) ;
   [%test_eq: String.t]
-    "[[],[[\"Zeko_zkapp_receive_auth_changed\"]],[[\"Cancelled\"]]]"
-    (Error.to_string_hum @@ Option.value_exn @@ Result.error result) ;
-
-  ()
+    "[[],[[\"Zeko_account_receive_auth_changed\"]],[[\"Cancelled\"]]]"
+    (Error.to_string_hum @@ Option.value_exn @@ Result.error result)

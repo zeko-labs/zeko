@@ -52,7 +52,7 @@ module Failure = struct
         | Incorrect_nonce
         | Invalid_fee_excess
         | Cancelled
-        | Zeko_zkapp_receive_auth_changed
+        | Zeko_account_receive_auth_changed
       [@@deriving sexp, yojson, equal, compare, variants, hash]
 
       let to_latest = Fn.id
@@ -135,7 +135,7 @@ module Failure = struct
       ~valid_while_precondition_unsatisfied:add
       ~unexpected_verification_key_hash:add ~incorrect_nonce:add
       ~invalid_fee_excess:add ~cancelled:add
-      ~zeko_zkapp_receive_auth_changed:add
+      ~zeko_account_receive_auth_changed:add
 
   let gen = Quickcheck.Generator.of_list all
 
@@ -230,8 +230,8 @@ module Failure = struct
         "Invalid_fee_excess"
     | Cancelled ->
         "Cancelled"
-    | Zeko_zkapp_receive_auth_changed ->
-        "Zeko_zkapp_receive_auth_changed"
+    | Zeko_account_receive_auth_changed ->
+        "Zeko_account_receive_auth_changed"
 
   let of_string = function
     | "Predicate" ->
@@ -472,7 +472,7 @@ module Failure = struct
     | Cancelled ->
         "The account update is cancelled because there's a failure in the \
          zkApp transaction"
-    | Zeko_zkapp_receive_auth_changed ->
+    | Zeko_account_receive_auth_changed ->
         "The account can't have receive permission to set Proof or Signature"
 end
 
