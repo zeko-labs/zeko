@@ -357,7 +357,7 @@ module Failure = struct
 
   let describe = function
     | Predicate ->
-        "A predicate failed"
+        "A predicate failed (Reused by Zeko: will_succeed was false)"
     | Source_not_present ->
         "The source account does not exist"
     | Receiver_not_present ->
