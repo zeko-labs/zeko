@@ -19,26 +19,21 @@ module Rollback_checker = struct
     return { last_state_hash; last_rollup_state; zkapp_pk; interval; uri }
 
   let check t =
-    let%bind chain = Gql_client.fetch_best_chain t.uri in
+    let%bind chain = Gql_client.fetch_best_chain t.uri
+    and last_rollup_state = Gql_client.fetch_commited_state t.uri t.zkapp_pk in
+
     let last_state_hash = List.last_exn chain in
-    let rollback_happened =
+    let chain_rollback_happened =
       not @@ List.mem chain t.last_state_hash ~equal:String.equal
     in
     t.last_state_hash <- last_state_hash ;
 
-    match rollback_happened with
-    | false ->
-        return false
-    | true ->
-        (* Rebootstrap only if also the zkapp state rolled back *)
-        let%bind last_rollup_state =
-          Gql_client.fetch_commited_state t.uri t.zkapp_pk
-        in
-        let rollup_rollback_happened =
-          not @@ Frozen_ledger_hash.equal t.last_rollup_state last_rollup_state
-        in
-        t.last_rollup_state <- last_rollup_state ;
-        return rollup_rollback_happened
+    let rollup_state_changed =
+      not @@ Frozen_ledger_hash.equal t.last_rollup_state last_rollup_state
+    in
+    t.last_rollup_state <- last_rollup_state ;
+
+    return (chain_rollback_happened && rollup_state_changed)
 
   let run_checker t ~on_rollback =
     every ~start:(after t.interval) t.interval (fun () ->
