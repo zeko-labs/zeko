@@ -840,3 +840,120 @@ let%test_unit "apply commands and commit" =
                 target_ledger_hash ;
 
               Deferred.unit ) ) )
+
+let%test_unit "can't create zkapp with changed receive auth" =
+  Base.Backtrace.elide := false ;
+  let signer = Signature_lib.Keypair.create () in
+  let zkapp = Signature_lib.Keypair.create () in
+  let sequencer =
+    Sequencer.create ~zkapp_pk:Signature_lib.Public_key.Compressed.empty
+      ~max_pool_size:10 ~commitment_period_sec:0. ~da_contract_address:None
+      ~db_dir:None ~l1_uri:None ~signer
+  in
+
+  (* Create signer account *)
+  let pk = Signature_lib.Public_key.compress signer.public_key in
+  let account_id = Account_id.create pk Token_id.default in
+  let balance = Unsigned.UInt64.of_int64 1_000_000_000_000L in
+  let account =
+    Account.create account_id (Currency.Balance.of_uint64 balance)
+  in
+  add_account sequencer account_id account ;
+
+  (* Create deployment zkapp command *)
+  let zkapp_update =
+    Account_update.
+      { body =
+          { Body.dummy with
+            public_key = Signature_lib.Public_key.compress zkapp.public_key
+          ; implicit_account_creation_fee = false
+          ; update =
+              { Account_update.Update.dummy with
+                permissions =
+                  Set { Permissions.user_default with receive = Proof }
+              }
+          ; use_full_commitment = true
+          ; authorization_kind = Signature
+          }
+      ; authorization = Signature Signature.dummy
+      }
+  in
+  let sender_update =
+    Account_update.
+      { body =
+          { Body.dummy with
+            public_key = Signature_lib.Public_key.compress signer.public_key
+          ; balance_change =
+              Currency.Amount.(
+                Signed.negate @@ Signed.of_unsigned
+                @@ of_fee constraint_constants.account_creation_fee)
+          ; use_full_commitment = true
+          ; authorization_kind = Signature
+          }
+      ; authorization = Signature Signature.dummy
+      }
+  in
+  let command : Zkapp_command.t =
+    { fee_payer =
+        { Account_update.Fee_payer.body =
+            { public_key = Signature_lib.Public_key.compress signer.public_key
+            ; fee = Currency.Fee.of_mina_int_exn 1
+            ; valid_until = None
+            ; nonce = Account.Nonce.zero
+            }
+        ; authorization = Signature.dummy
+        }
+    ; account_updates =
+        Zkapp_command.Call_forest.accumulate_hashes'
+        @@ Zkapp_command.Call_forest.of_account_updates
+             ~account_update_depth:(fun _ -> 0)
+             [ zkapp_update; sender_update ]
+    ; memo = Signed_command_memo.empty
+    }
+  in
+  let full_commitment =
+    Zkapp_command.Transaction_commitment.create_complete
+      (Zkapp_command.commitment command)
+      ~memo_hash:(Signed_command_memo.hash command.memo)
+      ~fee_payer_hash:
+        (Zkapp_command.Digest.Account_update.create
+           (Account_update.of_fee_payer command.fee_payer) )
+  in
+  let sender_signature =
+    Signature_lib.Schnorr.Chunked.sign
+      ~signature_kind:Mina_signature_kind.Testnet signer.private_key
+      (Random_oracle.Input.Chunked.field full_commitment)
+  in
+  let zkapp_signature =
+    Signature_lib.Schnorr.Chunked.sign
+      ~signature_kind:Mina_signature_kind.Testnet zkapp.private_key
+      (Random_oracle.Input.Chunked.field full_commitment)
+  in
+  let zkapp_command =
+    Zkapp_command.
+      { command with
+        fee_payer = { command.fee_payer with authorization = sender_signature }
+      ; account_updates =
+          Zkapp_command.Call_forest.accumulate_hashes
+            ~hash_account_update:(fun p ->
+              Zkapp_command.Digest.Account_update.create p )
+          @@ Zkapp_command.Call_forest.of_account_updates
+               ~account_update_depth:(fun _ -> 0)
+               [ { zkapp_update with
+                   authorization = Control.Signature zkapp_signature
+                 }
+               ; { sender_update with
+                   authorization = Control.Signature sender_signature
+                 }
+               ]
+      }
+  in
+
+  (* Apply zkapp command should fail *)
+  let result = apply_zkapp_command sequencer zkapp_command in
+  [%test_eq: Bool.t] true (Or_error.is_error result) ;
+  [%test_eq: String.t]
+    "[[],[[\"Zeko_zkapp_receive_auth_changed\"]],[[\"Cancelled\"]]]"
+    (Error.to_string_hum @@ Option.value_exn @@ Result.error result) ;
+
+  ()

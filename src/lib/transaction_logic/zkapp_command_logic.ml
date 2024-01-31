@@ -1741,6 +1741,15 @@ module Make (Inputs : Inputs_intf) = struct
       let a = Account.set_permissions permissions a in
       (a, local_state)
     in
+
+    (* ZEKO NOTE: we need to ensure zkapp has receive set to None, otherwise rollup can get stuck on deposit *)
+    let local_state =
+      Local_state.add_check local_state Zeko_zkapp_receive_auth_changed
+        (Controller.check ~proof_verifies:Bool.false_
+           ~signature_verifies:Bool.false_
+           (Account.Permissions.receive a) )
+    in
+
     (* Initialize account's pk, in case it is new. *)
     let a = h.perform (Init_account { account_update; account = a }) in
     (* DO NOT ADD ANY UPDATES HERE. They must be earlier in the code.

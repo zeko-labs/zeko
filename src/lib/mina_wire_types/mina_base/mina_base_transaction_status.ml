@@ -46,6 +46,7 @@ module Failure = struct
       | Incorrect_nonce
       | Invalid_fee_excess
       | Cancelled
+      | Zeko_zkapp_receive_auth_changed
   end
 
   module Collection = struct

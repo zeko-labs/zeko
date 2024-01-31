@@ -1437,7 +1437,6 @@ struct
         ; memo = Signed_command_memo.empty
         }
       in
-      let commitment = Zkapp_command.commitment command in
       let full_commitment =
         Zkapp_command.Transaction_commitment.create_complete
           (Zkapp_command.commitment command)
