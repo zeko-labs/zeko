@@ -6,7 +6,7 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 
 let run port zkapp_pk max_pool_size commitment_period da_contract_address db_dir
-    l1_uri signer rollback_checker_interval () =
+    l1_uri signer rollback_checker_interval test_accounts_path () =
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
@@ -16,7 +16,7 @@ let run port zkapp_pk max_pool_size commitment_period da_contract_address db_dir
     let%bind sequencer =
       Zeko_sequencer.bootstrap ~zkapp_pk ~max_pool_size
         ~commitment_period_sec:commitment_period ~da_contract_address ~db_dir
-        ~l1_uri
+        ~l1_uri ~test_accounts_path
         ~signer:
           Signature_lib.(
             Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn signer)
@@ -29,10 +29,9 @@ let run port zkapp_pk max_pool_size commitment_period da_contract_address db_dir
     ref @@ Thread_safe.block_on_async_exn (fun () -> bootstrap ())
   in
 
-  ( match l1_uri with
-  | None ->
-      print_endline "No L1 URI provided, not checking for rollbacks"
-  | Some l1_uri ->
+  ( match (l1_uri, rollback_checker_interval) with
+  | Some l1_uri, rollback_checker_interval
+    when Stdlib.(rollback_checker_interval > 0.) ->
       let rollback_checker =
         Thread_safe.block_on_async_exn (fun () ->
             Rollback_checker.create zkapp_pk
@@ -42,7 +41,9 @@ let run port zkapp_pk max_pool_size commitment_period da_contract_address db_dir
       Rollback_checker.run_checker rollback_checker ~on_rollback:(fun () ->
           Zeko_sequencer.close !sequencer ;
           let%bind new_sequencer = bootstrap () in
-          return (sequencer := new_sequencer) ) ) ;
+          return (sequencer := new_sequencer) )
+  | _ ->
+      print_endline "No L1 URI provided, not checking for rollbacks" ) ;
 
   let graphql_callback =
     Graphql_cohttp_async.make_callback
@@ -98,7 +99,10 @@ let () =
        flag "--rollback-checker-interval"
          (optional_with_default 60. float)
          ~doc:"float Interval in seconds to check for rollbacks"
+     and test_accounts_path =
+       flag "--test-accounts-path" (optional string)
+         ~doc:"string Path to the test genesis accounts file"
      in
      run port zkapp_pk max_pool_size commitment_period da_contract_address
-       db_dir l1_uri signer rollback_checker_interval )
+       db_dir l1_uri signer rollback_checker_interval test_accounts_path )
   |> Command_unix.run

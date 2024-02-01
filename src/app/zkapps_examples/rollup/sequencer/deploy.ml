@@ -15,7 +15,7 @@ module M = Zkapps_rollup.Make (struct
   let tag = T.tag
 end)
 
-let run uri sk () =
+let run uri sk test_accounts_path () =
   let sender_keypair =
     Signature_lib.(
       Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk)
@@ -37,6 +37,15 @@ let run uri sk () =
         L.create_new_account_exn ledger M.Inner.account_id
           M.Inner.initial_account ;
 
+        ( match test_accounts_path with
+        | None ->
+            ()
+        | Some test_accounts_path ->
+            List.iter
+              (Sequencer_lib.Zeko_sequencer.Test_accounts.parse_accounts_exn
+                 ~test_accounts_path ) ~f:(fun (account_id, account) ->
+                L.create_new_account_exn ledger account_id account ) ) ;
+
         M.Outer.deploy_command_exn ~signer:sender_keypair ~zkapp:zkapp_keypair
           ~fee:(Currency.Fee.of_mina_int_exn 1)
           ~nonce:(Account.Nonce.of_int nonce)
@@ -52,5 +61,8 @@ let () =
        (let%map_open.Command uri = Cli_lib.Flag.Uri.Client.rest_graphql
         and sk =
           flag "--signer" (required string) ~doc:"string Signer private key"
+        and test_accounts_path =
+          flag "--test-accounts-path" (optional string)
+            ~doc:"string Path to the test genesis accounts file"
         in
-        run uri sk )
+        run uri sk test_accounts_path )
