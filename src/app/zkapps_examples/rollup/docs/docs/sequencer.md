@@ -28,7 +28,8 @@ DUNE_PROFILE=devnet dune exec ./run.exe -- \
     --max-pool-size <int?> \
     --commitment-period <float?> \
     --da-contract-address <string?> \
-    --db-dir <string?>
+    --db-dir <string?> \
+    --test-accounts-path <string?>
 ```
 
 Run help to see the options:
@@ -44,7 +45,8 @@ The following script deploys the rollup contract on the L1 with the initial stat
 ```bash
 DUNE_PROFILE=devnet dune exec ./deploy.exe -- \
     --rest-server <string> \
-    --signer <string>
+    --signer <string> \
+    --test-accounts-path <string?>
 ```
 
 Run help to see the options:

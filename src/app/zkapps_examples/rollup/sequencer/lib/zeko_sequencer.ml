@@ -575,29 +575,42 @@ module Sequencer = struct
         (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
           don't_wait_for @@ commit t )
 
-  let add_test_accounts t =
-    (* Only for testing *)
-    List.iter
-      [ "B62qrrytZmo8SraqYfJMZ8E3QcK77uAGZhsGJGKmVF5E598E8KX9j6a"
-      ; "B62qkAdonbeqcuVwQJtHbcqMbb4fbuFHJpqvNCfCBt194xSQ1o3i5rt"
-      ] ~f:(fun pk ->
-        let account_id =
-          Account_id.create
-            (Signature_lib.Public_key.Compressed.of_base58_check_exn pk)
-            Token_id.default
-        in
-        let account =
-          Account.create account_id
-            (Currency.Balance.of_uint64
-               (Unsigned.UInt64.of_int64 1_000_000_000_000L) )
-        in
-        add_account t account_id account ) ;
+  module Test_accounts = struct
+    type t = { pk : string; balance : int64 } [@@deriving yojson]
 
-    print_endline
-      ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t)))
+    let parse_accounts_exn ~test_accounts_path : (Account_id.t * Account.t) list
+        =
+      let accounts =
+        Yojson.Safe.(
+          from_file test_accounts_path
+          |> Util.to_list
+          |> List.map ~f:(fun t ->
+                 match of_yojson t with
+                 | Ppx_deriving_yojson_runtime.Result.Ok t ->
+                     t
+                 | Ppx_deriving_yojson_runtime.Result.Error e ->
+                     failwith e ))
+      in
+      List.map accounts ~f:(fun { pk; balance } ->
+          let account_id =
+            Account_id.create
+              (Signature_lib.Public_key.Compressed.of_base58_check_exn pk)
+              Token_id.default
+          in
+          let account =
+            Account.create account_id
+              (Currency.Balance.of_uint64 (Unsigned.UInt64.of_int64 balance))
+          in
+          (account_id, account) )
+
+    let add_accounts_exn sequencer ~test_accounts_path =
+      let accounts = parse_accounts_exn ~test_accounts_path in
+      List.iter accounts ~f:(fun (account_id, account) ->
+          add_account sequencer account_id account )
+  end
 
   let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer =
+      ~da_contract_address ~db_dir ~l1_uri ~signer ~test_accounts_path =
     let%bind commited_ledger_hash =
       match l1_uri with
       | Some uri ->
@@ -642,7 +655,15 @@ module Sequencer = struct
       add_account t M.Inner.account_id M.Inner.initial_account ;
 
       (* Only for testing *)
-      add_test_accounts t ) ;
+      ( match test_accounts_path with
+      | Some test_accounts_path ->
+          print_endline "Adding test accounts" ;
+          Test_accounts.add_accounts_exn t ~test_accounts_path
+      | None ->
+          print_endline "No test accounts" ) ;
+
+      print_endline
+        ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ) ;
 
     let%bind () =
       match (found_checkpoint, commited_ledger_hash) with
