@@ -645,7 +645,12 @@ module Sequencer = struct
       | true, Some commit_dir -> (
           print_endline "Found checkpoint, skipping bootstrap" ;
           let commit_files = FileUtil.ls commit_dir in
+          let old_files =
+            List.filter (FileUtil.ls db_dir) ~f:(fun file ->
+                not @@ String.is_prefix ~prefix:"db/commit-" file )
+          in
           try
+            FileUtil.rm ~force:Force old_files ;
             FileUtil.cp ~force:FileUtil.Force ~recurse:true commit_files db_dir
           with err -> print_endline (Exn.to_string err) )
       | _ -> (

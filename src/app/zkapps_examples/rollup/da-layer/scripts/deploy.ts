@@ -30,7 +30,9 @@ const main = async () => {
         y: fieldToHex(y),
       };
     }),
-    "0xd78C987031B0256C9EA6289185E151C25EFD0e36"
+    (
+      await ethers.getSigners()
+    )[0].address
   );
 
   console.log(proxy.address);
