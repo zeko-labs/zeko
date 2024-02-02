@@ -1050,6 +1050,108 @@ module Outer_rules = struct
       ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
       }
   end
+
+  module Step_without_transfers = struct
+    (* Version for internal MVP release without transfers *)
+    module Witness = struct
+      type t =
+        { stmt : S.t  (** The ledger transition we are performing. *)
+        ; prf : RefProof.t  (** Proof of ledger transition being valid. *)
+        ; public_key : PC.t  (** Our public key on the L2 *)
+        ; vk_hash : F.t  (** Our vk hash *)
+        }
+      [@@deriving snarky]
+    end
+
+    include MkHandler (Witness)
+
+    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
+      let ({ stmt; prf; public_key; vk_hash } : Witness.var) =
+        exists_witness ()
+      in
+
+      (* Init account update *)
+      let account_update = Body.(constant (typ ()) dummy) in
+      (* Declare that we're authorized by a proof *)
+      let authorization_kind : Authorization_kind.Checked.t =
+        { is_signed = Boolean.false_
+        ; is_proved = Boolean.true_
+        ; verification_key_hash = vk_hash
+        }
+      in
+
+      (* Finalize update  *)
+      let update =
+        { account_update.update with
+          app_state =
+            State.(
+              var_to_app_state typ
+                ( { ledger_hash = stmt.target_ledger
+                  ; all_withdrawals = Field.constant Actions.empty_hash
+                  ; withdrawals_processed = Field.constant Actions.empty_hash
+                  }
+                  : var ))
+        }
+      in
+      (* Init account state precondition *)
+      let account_precondition =
+        constant
+          (Zkapp_precondition.Account.typ ())
+          Zkapp_precondition.Account.accept
+      in
+      let account_precondition =
+        { account_precondition with
+          state =
+            [ Or_ignore.Checked.make_unsafe Boolean.true_
+                (Frozen_ledger_hash.var_to_field stmt.source_ledger)
+              (* Our previous ledger must be this *)
+            ; ignore
+            ; ignore
+            ; ignore
+            ; ignore
+            ; ignore
+            ; ignore
+            ; ignore
+            ]
+        }
+      in
+      let preconditions =
+        { Preconditions.(constant (typ ()) accept) with
+          account = account_precondition
+        }
+      in
+      (* Our account update is assembled, specifying our state update, our preconditions, our pk, and our authorization *)
+      let account_update =
+        { account_update with
+          public_key
+        ; authorization_kind
+        ; update
+        ; preconditions
+        }
+      in
+      (* Assemble some stuff to help the prover and calculate public output *)
+      let public_output, auxiliary_output =
+        make_outputs account_update (Zkapp_call_forest.Checked.empty ())
+      in
+      Pickles.Inductive_rule.
+        { previous_proof_statements =
+            [ { public_input = stmt
+              ; proof_must_verify = Boolean.true_
+              ; proof = prf
+              }
+              (* Proof for Wrapper_rules showing there is a valid transition from source to target *)
+            ]
+        ; public_output
+        ; auxiliary_output
+        }
+
+    let rule tag : _ Pickles.Inductive_rule.t =
+      { identifier = "Rollup step without transfers"
+      ; prevs = [ tag ]
+      ; main
+      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
+      }
+  end
 end
 
 (* What we expose from this module *)
@@ -1261,13 +1363,16 @@ struct
   end
 
   module Outer = struct
-    let tag, cache_handle, p, Pickles.Provers.[ step_; action_ ] =
+    let ( tag
+        , cache_handle
+        , p
+        , Pickles.Provers.[ step_; action_; step_without_transfers_ ] ) =
       time "Zkapp.compile" (fun () ->
           Pickles.compile ()
             ~override_wrap_domain:Pickles_base.Proofs_verified.N1
             ~cache:Cache_dir.cache ~public_input:(Output Zkapp_statement.typ)
             ~auxiliary_typ:Typ.(Prover_value.typ ())
-            ~branches:(module Nat.N2)
+            ~branches:(module Nat.N3)
             ~max_proofs_verified:(module Nat.N2)
             ~name:"rollup"
             ~constraint_constants:
@@ -1276,6 +1381,7 @@ struct
             ~choices:(fun ~self:_ ->
               [ Outer_rules.Step.rule Wrapper.tag Action_state_extension.tag
               ; Transfer_action_rule.rule
+              ; Outer_rules.Step_without_transfers.rule Wrapper.tag
               ] ) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
@@ -1363,6 +1469,23 @@ struct
       in
       let tree = mkforest tree proof in
       return (tree, withdrawals_processed', remaining_withdrawals)
+
+    let step_without_transfers (t : t) ~(public_key : PC.t) :
+        ( Account_update.t
+        , Zkapp_command.Digest.Account_update.t
+        , Zkapp_command.Digest.Forest.t )
+        Zkapp_command.Call_forest.t
+        Deferred.t =
+      let%bind _, tree, proof =
+        let w : Outer_rules.Step_without_transfers.Witness.t =
+          { vk_hash; stmt = t.stmt; prf = t.proof; public_key }
+        in
+        step_without_transfers_
+          ~handler:(Outer_rules.Step_without_transfers.handler w)
+          ()
+      in
+      let tree = mkforest tree proof in
+      return tree
 
     let unsafe_deploy_update (ledger_hash : Ledger_hash.t) =
       let update =

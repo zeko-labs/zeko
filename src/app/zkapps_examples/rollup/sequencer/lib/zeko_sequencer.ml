@@ -220,16 +220,22 @@ module Sequencer = struct
               in
               print_endline ("Posted batch " ^ batch_id) ;
 
-              let%bind account_update, _, _ =
-                time "Outer.step"
-                  (M.Outer.step (Option.value_exn t.last) ~public_key:t.zkapp_pk
-                     ~old_action_state:Zkapp_account.Actions.empty_hash
-                     ~new_actions:[]
-                     ~withdrawals_processed:Zkapp_account.Actions.empty_hash
-                     ~remaining_withdrawals:[]
-                     ~source_ledger:
-                       (Option.value_exn t.previous_committed_ledger)
-                     ~target_ledger )
+              (* FIXME: disable only for internal MVP *)
+              (* let%bind account_update, _, _ =
+                   time "Outer.step"
+                     (M.Outer.step (Option.value_exn t.last) ~public_key:t.zkapp_pk
+                        ~old_action_state:Zkapp_account.Actions.empty_hash
+                        ~new_actions:[]
+                        ~withdrawals_processed:Zkapp_account.Actions.empty_hash
+                        ~remaining_withdrawals:[]
+                        ~source_ledger:
+                          (Option.value_exn t.previous_committed_ledger)
+                        ~target_ledger )
+                 in *)
+              let%bind account_update =
+                time "Outer.step_without_transfers"
+                  (M.Outer.step_without_transfers (Option.value_exn t.last)
+                     ~public_key:t.zkapp_pk )
               in
               let%bind () =
                 match t.l1_uri with
@@ -546,7 +552,8 @@ module Sequencer = struct
     Snark_queue.enqueue_prove_command t.snark_q command_witness
 
   let commit t =
-    let%bind () = apply_deposits t in
+    (* FIXME: disable only for internal MVP *)
+    (* let%bind () = apply_deposits t in *)
     let () =
       match t.config.db_dir with
       | None ->
