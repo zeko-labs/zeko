@@ -99,6 +99,15 @@ end) : sig
          * TR.t list )
          Deferred.t
 
+    val step_without_transfers :
+         t
+      -> public_key:Public_key.Compressed.t
+      -> ( Account_update.t
+         , Zkapp_command.Digest.Account_update.t
+         , Zkapp_command.Digest.Forest.t )
+         Zkapp_command.Call_forest.t
+         Deferred.t
+
     (* Create an account update update for deploying the zkapp, given a valid ledger for it. *)
     val deploy_update_exn : Mina_ledger.Ledger.t -> Account_update.Update.t
 
