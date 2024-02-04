@@ -3,8 +3,7 @@
 # - Installs all compilers/interpreters, tools, and OS packages on the given debian or ubuntu image
 #################################################################################################
 # Supports debian:buster-slim, debian:bullseye-slim, and ubuntu:focal
-ARG image=ubuntu:focal
-FROM --platform=linux/amd64 ${image} AS build-deps
+FROM --platform=linux/amd64 ubuntu:focal AS build-deps
 
 # Ocaml Version
 ARG OCAML_VERSION=4.14
@@ -119,8 +118,8 @@ RUN git clone https://github.com/facebook/rocksdb \
     --depth 1 --shallow-submodules \
     -b "${ROCKSDB_VERSION}" /rocksdb \
     && test $(g++ -dumpversion | cut -c 1 -) -lt 9 \
-    && CXXFLAGS='' make -C /rocksdb static_lib PORTABLE=1 \
-    || make -C /rocksdb static_lib PORTABLE=1 \
+    && CXXFLAGS='' make -C /rocksdb static_lib PORTABLE=1 -j$(nproc) 2>/dev/null \
+    || make -C /rocksdb static_lib PORTABLE=1 -j$(nproc) 2>/dev/null \
     && cp /rocksdb/librocksdb.a /usr/local/lib/librocksdb_coda.a \
     && rm -rf /rocksdb \
     && strip -S /usr/local/lib/librocksdb_coda.a
@@ -180,7 +179,7 @@ RUN mkdir go-tmp \
 # - Includes the entire mina codebase and submodules in "${MINA_DIR}" (must be writable by opam user)
 # - Largely mirrors/replaces ./scripts/setup-opam.sh
 #################################################################################################
-FROM build-deps AS opam-deps
+FROM build-deps AS builder
 
 # location of repo used for pins and external package commits
 ARG MINA_DIR=zeko
@@ -198,14 +197,18 @@ ENV OPAMERRLOGLEN 20
 
 WORKDIR $HOME/$MINA_DIR
 
-# --- Copy the entire zeko repo into the image
-COPY . .
-
 ENV OPAMYES 1
 
 # --- Import Opam Switch
 # TODO: handle this opam work without cloning the full repository (directly pull opam.export)
+COPY ./opam.export .
 RUN opam switch import opam.export --quiet
+
+RUN eval $(opam config env) \
+    && opam install fileutils
+
+# --- Copy the entire zeko repo into the image
+COPY . .
 
 # --- Pin external packages / submodules
 # TODO: Would be really nice to pull this script, the git submodules, and opam.export exclusively in this stage
@@ -214,8 +217,58 @@ RUN eval $(opam config env) \
     && scripts/pin-external-packages.sh \
     && opam clean --logs -cs --quiet
 
+RUN git config --global --add safe.directory /home/opam/zeko \
+    && git config --global --add safe.directory /home/opam/zeko/src/lib/crypto/proof-systems
+
 # --- Build zeko binaries
 RUN eval $(opam config env) \
-    && dune build --profile=${DUNE_PROFILE} \
-    src/app/zkapp_examples/rollup/sequencer/run.exe \
-    src/app/zkapp_examples/rollup/sequencer/deploy.exe
+    && dune build --profile=devnet \
+    src/app/zkapps_examples/rollup/sequencer/run.exe \
+    src/app/zkapps_examples/rollup/sequencer/deploy.exe
+
+
+
+#################################################################################################
+# The "zeko" Stage
+# - final stage
+#################################################################################################
+FROM --platform=linux/amd64 ubuntu:focal AS zeko
+
+ENV DEBIAN_FRONTEND noninteractive
+
+# --- Dependencies across many platforms
+RUN apt-get update --quiet --yes \
+    && apt-get upgrade --quiet --yes \
+    && apt-get install --quiet --yes --no-install-recommends \
+    apt-utils \
+    apt-transport-https \
+    curl \
+    ca-certificates \
+    dnsutils \
+    dumb-init \
+    gettext \
+    gnupg2 \
+    libgmp10 \
+    libgomp1 \
+    libssl1.1 \
+    tzdata \
+    jq \
+    sudo \
+    libjemalloc2 \
+    libprocps8 \
+    libffi7 \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sL https://deb.nodesource.com/setup_18.x | bash \
+    && apt-get update --quiet --yes \
+    && apt-get install --quiet --yes nodejs
+
+WORKDIR /zeko
+
+COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/run.exe /zeko/sequencer/run.exe
+COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/deploy.exe /zeko/sequencer/deploy.exe
+COPY --from=builder /home/opam/zeko/src/app/zkapps_examples/rollup/da-layer /zeko/da-layer
+COPY --from=builder /home/opam/zeko/src/app/zkapps_examples/rollup/sequencer/tests/testing_accounts.json /zeko/testing_accounts.json
+
+RUN cd /zeko/da-layer && npm install && npm run compile
