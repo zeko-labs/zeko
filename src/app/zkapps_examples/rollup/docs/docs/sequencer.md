@@ -58,6 +58,29 @@ Run help to see the options:
 dune exec ./deploy.exe -- --help
 ```
 
+## Use with docker
+
+Build:
+
+```bash
+make docker
+```
+
+Run:
+
+```bash
+docker run -p <port>:<port> \
+           -e DA_PROVIDER=<da-evm-provider> \
+           -e DA_PRIVATE_KEY=<da-private-key> \
+           -e MINA_PRIVATE_KEY=<mina-private-key> \
+           dcspark/zeko -p <port> \
+           --zkapp-pk <zkapp-pk> \
+           --rest-server <mina-node-graphql> \
+           --commitment-period <int> \
+           --rollback-checker-interval <int> \
+           --da-contract-address <da-layer-contract>
+```
+
 ## Transfers
 
 To transfer funds from L1 to L2 and vice versa, you need to send a zkapp command to the bridge contract which dispatches an action representing the transfer.

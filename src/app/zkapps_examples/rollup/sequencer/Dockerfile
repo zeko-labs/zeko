@@ -264,11 +264,13 @@ RUN curl -sL https://deb.nodesource.com/setup_18.x | bash \
     && apt-get update --quiet --yes \
     && apt-get install --quiet --yes nodejs
 
-WORKDIR /zeko
+WORKDIR /zeko/sequencer
 
 COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/run.exe /zeko/sequencer/run.exe
-COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/deploy.exe /zeko/sequencer/deploy.exe
+# COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/deploy.exe /zeko/sequencer/deploy.exe
 COPY --from=builder /home/opam/zeko/src/app/zkapps_examples/rollup/da-layer /zeko/da-layer
 COPY --from=builder /home/opam/zeko/src/app/zkapps_examples/rollup/sequencer/tests/testing_accounts.json /zeko/testing_accounts.json
 
 RUN cd /zeko/da-layer && npm install && npm run compile
+
+ENTRYPOINT [ "./run.exe", "--test-accounts-path", "../testing_accounts.json" ]
