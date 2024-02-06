@@ -70,6 +70,7 @@ Run:
 
 ```bash
 docker run -p <port>:<port> \
+           -v <local-db-path>:<container-db-path> \
            -e DA_PROVIDER=<da-evm-provider> \
            -e DA_PRIVATE_KEY=<da-private-key> \
            -e MINA_PRIVATE_KEY=<mina-private-key> \
@@ -78,7 +79,8 @@ docker run -p <port>:<port> \
            --rest-server <mina-node-graphql> \
            --commitment-period <int> \
            --rollback-checker-interval <int> \
-           --da-contract-address <da-layer-contract>
+           --da-contract-address <da-layer-contract> \
+           --db-dir <container-db-path>
 ```
 
 ## Transfers
