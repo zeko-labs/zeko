@@ -23,7 +23,7 @@ let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :
 (** Default permissions for deployments *)
 let proof_permissions : Permissions.t =
   { edit_state = Proof
-  ; send = None
+  ; send = Proof
   ; receive = None
   ; set_delegate = Proof
   ; set_permissions = Proof
@@ -922,7 +922,7 @@ module Outer_rules = struct
         ; action_prf : RefProof.t  (** Proof that actions moved forward. *)
         ; public_key : PC.t  (** Our public key on the L2 *)
         ; vk_hash : F.t  (** Our vk hash *)
-        ; all_deposits : F.t  (** Action state on the L1 *)
+        ; new_all_deposits : F.t  (** Action state on the L1 *)
         ; withdrawals_processed : F.t
         ; new_withdrawals : List_TR_8.t
         ; old_inner_acc : Account.t
@@ -968,7 +968,7 @@ module Outer_rules = struct
            ; action_prf
            ; public_key
            ; vk_hash
-           ; all_deposits
+           ; new_all_deposits
            ; withdrawals_processed
            ; new_withdrawals
            ; old_inner_acc_path
@@ -1017,10 +1017,10 @@ module Outer_rules = struct
          so you could set the action state precondition to an old state and go backwards.
          I haven't considered whether it's problematic to go backwards, but we disallow it anyway. *)
       let (old_all_deposits :: _) = old_inner_zkapp.app_state in
-      let (new_all_deposits :: _) = new_inner_zkapp.app_state in
-      (* Check that it matches all_deposits witness *)
+      let (should_be_new_all_deposits :: _) = new_inner_zkapp.app_state in
+      (* Check that it matches new_all_deposits witness *)
       with_label __LOC__ (fun () ->
-          Field.Assert.equal new_all_deposits all_deposits ) ;
+          Field.Assert.equal new_all_deposits should_be_new_all_deposits ) ;
       (* Init account update *)
       let account_update = Body.(constant (typ ()) dummy) in
       (* Declare that we're authorized by a proof *)
@@ -1073,7 +1073,7 @@ module Outer_rules = struct
                 ; withdrawals_processed = Some withdrawals_processed
                 })
         ; action_state =
-            Or_ignore.Checked.make_unsafe Boolean.true_ all_deposits
+            Or_ignore.Checked.make_unsafe Boolean.true_ new_all_deposits
             (* Our action state must match *)
         }
       in
@@ -1102,12 +1102,16 @@ module Outer_rules = struct
               }
               (* Proof for Wrapper_rules showing there is a valid transition from source to target *)
             ; { public_input =
-                  (* The inner account's tracking of our action state must only go forward.
+                  (* The inner account's tracking of our action state (deposits) must only go forward.
+                     We need to check this explicitly because each account has 5 action states.
+                     We don't need to check it the opposite way around because we can explicitly
+                     choose the latest action state.
+
                      To check that the withdrawals we processed were valid and not forged, we check
                      that there is some sequence of withdrawals after it that result in the action state
                      of the inner account. *)
                   ({ source0 = old_all_deposits
-                   ; target0 = all_deposits
+                   ; target0 = new_all_deposits
                    ; source1 = new_withdrawals_processed
                    ; target1 = new_all_withdrawals
                    } : Action_state_extension_rule.Stmt.var)
@@ -1368,6 +1372,7 @@ struct
     printf "%s: %s\n%!" label (Time.Span.to_string_hum (Time.diff stop start)) ;
     x
 
+  (* Maybe there's a better way of doing this function, or perhaps a built-in way *)
   let time_async : string -> (unit -> 'a Deferred.t) -> 'a Deferred.t =
    fun label f ->
     let start = Time.now () in
@@ -1631,11 +1636,11 @@ struct
           in
           mktree tree proof )
 
-    let step (t : t) ~(public_key : PC.t) ~(old_action_state : field)
-        ~(new_actions : TR.t list) ~(withdrawals_processed : field)
+    let step (t : t) ~(outer_public_key : PC.t) ~(old_all_deposits : field)
+        ~(new_deposits : TR.t list) ~(withdrawals_processed : field)
         ~(remaining_withdrawals : TR.t list)
-        ~(old_ledger : Mina_ledger.Sparse_ledger.t)
-        ~(new_ledger : Mina_ledger.Sparse_ledger.t) :
+        ~(old_inner_ledger : Mina_ledger.Sparse_ledger.t)
+        ~(new_inner_ledger : Mina_ledger.Sparse_ledger.t) :
         ( ( Account_update.t
           , Zkapp_command.Digest.Account_update.t
           , Zkapp_command.Digest.Forest.t )
@@ -1644,8 +1649,38 @@ struct
         * TR.t list )
         Deferred.t =
       time "Outer.step" (fun () ->
-          let%bind stmt_deposits, action_prf_deposits =
-            Inner.extend_action_state old_action_state new_actions
+          let old_idx =
+            Mina_ledger.Sparse_ledger.find_index_exn old_inner_ledger
+              Inner.account_id
+          in
+          let old_inner_acc =
+            Mina_ledger.Sparse_ledger.get_exn old_inner_ledger old_idx
+          in
+          let old_inner_acc_path =
+            List.map ~f:(function
+              | `Left other ->
+                  ({ is_right = false; other } : Step.PathElt.t)
+              | `Right other ->
+                  ({ is_right = true; other } : Step.PathElt.t) )
+            @@ Mina_ledger.Sparse_ledger.path_exn old_inner_ledger old_idx
+          in
+          let new_idx =
+            Mina_ledger.Sparse_ledger.find_index_exn new_inner_ledger
+              Inner.account_id
+          in
+          let new_inner_acc =
+            Mina_ledger.Sparse_ledger.get_exn new_inner_ledger new_idx
+          in
+          let new_inner_acc_path =
+            List.map ~f:(function
+              | `Left other ->
+                  ({ is_right = false; other } : Step.PathElt.t)
+              | `Right other ->
+                  ({ is_right = true; other } : Step.PathElt.t) )
+            @@ Mina_ledger.Sparse_ledger.path_exn new_inner_ledger new_idx
+          in
+          let%bind old_to_new_all_deposits, old_to_new_all_deposits_proof =
+            Inner.extend_action_state old_all_deposits new_deposits
           in
           let withdrawals_length = Step.TR_8.length in
           let new_withdrawals =
@@ -1663,56 +1698,29 @@ struct
           let%bind { target0 = withdrawals_processed' }, _ =
             Inner.extend_action_state withdrawals_processed new_withdrawals
           in
-          let%bind stmt_withdrawals, action_prf_withdrawals =
+          let%bind ( withdrawals_processed'_to_all_withdrawals
+                   , withdrawals_processed'_to_all_withdrawals_proof ) =
             Inner.extend_action_state withdrawals_processed'
               remaining_withdrawals
           in
           let%bind _, (), action_prf =
             Action_state_extension.merge
-              { left = stmt_deposits
-              ; right = stmt_withdrawals
-              ; left_proof = action_prf_deposits
-              ; right_proof = action_prf_withdrawals
+              { left = old_to_new_all_deposits
+              ; right = withdrawals_processed'_to_all_withdrawals
+              ; left_proof = old_to_new_all_deposits_proof
+              ; right_proof = withdrawals_processed'_to_all_withdrawals_proof
               }
-          in
-          let old_idx =
-            Mina_ledger.Sparse_ledger.find_index_exn old_ledger Inner.account_id
-          in
-          let old_inner_acc =
-            Mina_ledger.Sparse_ledger.get_exn old_ledger old_idx
-          in
-          let old_inner_acc_path =
-            List.map ~f:(function
-              | `Left other ->
-                  ({ is_right = false; other } : Step.PathElt.t)
-              | `Right other ->
-                  ({ is_right = true; other } : Step.PathElt.t) )
-            @@ Mina_ledger.Sparse_ledger.path_exn old_ledger old_idx
-          in
-          let new_idx =
-            Mina_ledger.Sparse_ledger.find_index_exn new_ledger Inner.account_id
-          in
-          let new_inner_acc =
-            Mina_ledger.Sparse_ledger.get_exn new_ledger new_idx
-          in
-          let new_inner_acc_path =
-            List.map ~f:(function
-              | `Left other ->
-                  ({ is_right = false; other } : Step.PathElt.t)
-              | `Right other ->
-                  ({ is_right = true; other } : Step.PathElt.t) )
-            @@ Mina_ledger.Sparse_ledger.path_exn new_ledger new_idx
           in
           let%bind _, tree, proof =
             let w : Step.Witness.t =
               { vk_hash
-              ; all_deposits = stmt_deposits.target0
+              ; new_all_deposits = old_to_new_all_deposits.target0
               ; withdrawals_processed
               ; new_withdrawals
               ; action_prf
               ; stmt = t.stmt
               ; prf = t.proof
-              ; public_key
+              ; public_key = outer_public_key
               ; old_inner_acc
               ; old_inner_acc_path
               ; new_inner_acc

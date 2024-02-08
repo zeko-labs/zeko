@@ -46,14 +46,12 @@ module type S = sig
          Zkapp_command.Call_forest.Tree.t
          Deferred.t
 
-    (** Given the old state,
-     a list of deposits,
-     calculates a new account update for the inner,
-     the new state (deposits_processed), and the list of deposits to be processed
-     in the future *)
+    (** Tuple of account update tree, new deposits_processed, new remaining_deposits *)
     val step :
          deposits_processed:field
+           (** The deposits processed at the time of the last step *)
       -> remaining_deposits:TR.t list
+           (** The deposits yet to be processed, including new ones *)
       -> ( ( Account_update.t
            , Zkapp_command.Digest.Account_update.t
            , Zkapp_command.Digest.Forest.t )
@@ -105,20 +103,23 @@ module type S = sig
          Zkapp_command.Call_forest.Tree.t
          Deferred.t
 
-    (** Given the old state,
-     a list of deposits to be made,
-     a list of withdrawals to be made,
-     a ledger transition,
-     calculates a new account update for the outer account *)
+    (** Given a transition that includes an inner step made using
+        the matching arguments (for deposits), produce a L1 account update for the rollup. *)
     val step :
-         t
-      -> public_key:Public_key.Compressed.t
-      -> old_action_state:field
-      -> new_actions:TR.t list
+         t (** The transition, must include Inner.step account update *)
+      -> outer_public_key:Public_key.Compressed.t
+           (** The public key on the outside *)
+      -> old_all_deposits:field
+           (** The deposits that were recorded at the last step *)
+      -> new_deposits:TR.t list (** The new deposits since then *)
       -> withdrawals_processed:field
+           (** The withdrawals processed at the last step *)
       -> remaining_withdrawals:TR.t list
-      -> old_ledger:Mina_ledger.Sparse_ledger.t
-      -> new_ledger:Mina_ledger.Sparse_ledger.t
+           (** The remaining withdrawals, including new ones *)
+      -> old_inner_ledger:Mina_ledger.Sparse_ledger.t
+           (** Old sparse inner ledger including inner account *)
+      -> new_inner_ledger:Mina_ledger.Sparse_ledger.t
+           (** New sparse inner ledger including inner account *)
       -> ( ( Account_update.t
            , Zkapp_command.Digest.Account_update.t
            , Zkapp_command.Digest.Forest.t )
@@ -126,6 +127,7 @@ module type S = sig
          * field
          * TR.t list )
          Deferred.t
+    (** Tuple of account update tree, new withdrawals_processed, new remaining_withdrawals *)
 
     (** Create an account update update for deploying the zkapp, given a valid ledger for it. *)
     val deploy_exn : Mina_ledger.Ledger.t -> Account_update.Update.t

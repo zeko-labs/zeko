@@ -2033,17 +2033,6 @@ module Make_str (A : Wire_types.Concrete) = struct
             ~else_:statement.target.local_state.stack_frame
         in
         with_label __LOC__ (fun () ->
-            let _dkj =
-              Prover_value.create (fun () ->
-                  printf "Should succeed: %b\n"
-                    (As_prover.read Boolean.typ
-                       statement.target.local_state.success ) )
-            in
-            let _dkjj =
-              Prover_value.create (fun () ->
-                  printf "Did succeed: %b\n"
-                    (As_prover.read Boolean.typ local.success) )
-            in
             Local_state.Checked.assert_equal statement.target.local_state
               { local with
                 stack_frame = local_state_ledger

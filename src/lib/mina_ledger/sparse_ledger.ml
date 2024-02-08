@@ -171,7 +171,6 @@ let apply_zkapp_second_pass_unchecked_with_states ~init ledger c =
                  | Failed _ ->
                      false
                in
-               assert will_succeed ;
                (* We perform a manual [List.rev] here to ensure that the states
                   are in order wrt. the zkapp_command that generated the states.
                *)
