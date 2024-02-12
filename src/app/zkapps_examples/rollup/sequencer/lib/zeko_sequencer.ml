@@ -647,7 +647,7 @@ module Sequencer = struct
           let commit_files = FileUtil.ls commit_dir in
           let old_files =
             List.filter (FileUtil.ls db_dir) ~f:(fun file ->
-                not @@ String.is_prefix ~prefix:"db/commit-" file )
+                not @@ String.is_substring ~substring:"commit-" file )
           in
           try
             FileUtil.rm ~force:Force old_files ;
