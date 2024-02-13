@@ -29,9 +29,8 @@ let run port zkapp_pk max_pool_size commitment_period da_contract_address db_dir
     ref @@ Thread_safe.block_on_async_exn (fun () -> bootstrap ())
   in
 
-  ( match (l1_uri, rollback_checker_interval) with
-  | Some l1_uri, rollback_checker_interval
-    when Stdlib.(rollback_checker_interval > 0.) ->
+  ( match rollback_checker_interval with
+  | rollback_checker_interval when Stdlib.(rollback_checker_interval > 0.) ->
       let rollback_checker =
         Thread_safe.block_on_async_exn (fun () ->
             Rollback_checker.create zkapp_pk
@@ -77,7 +76,7 @@ let () =
        flag "-p" (optional_with_default 8080 int) ~doc:"int Port to listen on"
      and zkapp_pk =
        flag "--zkapp-pk" (optional string) ~doc:"string ZkApp public key"
-     and l1_uri = Cli_lib.Flag.Uri.Client.rest_graphql_opt
+     and l1_uri = Cli_lib.Flag.Uri.Client.rest_graphql
      and commitment_period =
        flag "--commitment-period"
          (optional_with_default 120. float)
