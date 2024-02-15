@@ -208,7 +208,7 @@ module Sequencer = struct
           Transfers_memory.add t.transfers_memory key call_forest ;
           return () )
 
-    let enqueue_prove_commit t ~target_ledger =
+    let enqueue_prove_commit t ~target_ledger ~l1_genesis_timestamp =
       Throttle.enqueue t.q (fun () ->
           match List.is_empty t.staged_commands with
           | true ->
@@ -268,7 +268,13 @@ module Sequencer = struct
                                   Signature_lib.Public_key.compress
                                     t.signer.public_key
                               ; fee = Currency.Fee.of_mina_int_exn 1
-                              ; valid_until = None
+                              ; valid_until =
+                                  Some
+                                    (Mina_numbers.Global_slot_since_genesis.add
+                                       (l1_global_slot
+                                          ~genesis_timestamp:
+                                            l1_genesis_timestamp )
+                                       M.Outer.acceptable_global_slot_difference )
                               ; nonce = Unsigned.UInt32.of_int nonce
                               }
                           ; authorization = Signature.dummy
@@ -601,6 +607,7 @@ module Sequencer = struct
         [ M.Inner.account_id ]
     in
     Snark_queue.enqueue_prove_commit t.snark_q ~target_ledger
+      ~l1_genesis_timestamp:t.l1_genesis_timestamp
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()

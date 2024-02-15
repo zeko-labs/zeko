@@ -1599,6 +1599,10 @@ struct
       let tree = mkforest tree proof in
       return tree
 
+    let acceptable_global_slot_difference =
+      Mina_numbers.Global_slot_span.of_int
+        Outer_rules.Step.acceptable_global_slot_difference
+
     let unsafe_deploy_update (ledger_hash : Ledger_hash.t) =
       let update =
         { Update.dummy with

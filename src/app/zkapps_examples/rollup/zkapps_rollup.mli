@@ -113,6 +113,8 @@ end) : sig
          Zkapp_command.Call_forest.t
          Deferred.t
 
+    val acceptable_global_slot_difference : Mina_numbers.Global_slot_span.t
+
     (* Create an account update update for deploying the zkapp, given a valid ledger for it. *)
     val deploy_update_exn : Mina_ledger.Ledger.t -> Account_update.Update.t
 
