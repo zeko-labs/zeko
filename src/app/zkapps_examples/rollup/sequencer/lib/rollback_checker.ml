@@ -19,8 +19,12 @@ module Rollback_checker = struct
     return { last_state_hash; last_rollup_state; zkapp_pk; interval; uri }
 
   let check t =
-    let%bind chain = Gql_client.fetch_best_chain t.uri
-    and last_rollup_state = Gql_client.fetch_commited_state t.uri t.zkapp_pk in
+    let%bind.Deferred.Result chain =
+      try_with (fun () -> Gql_client.fetch_best_chain t.uri)
+    in
+    let%bind.Deferred.Result last_rollup_state =
+      try_with (fun () -> Gql_client.fetch_commited_state t.uri t.zkapp_pk)
+    in
 
     let last_state_hash = List.last_exn chain in
     let chain_rollback_happened =
@@ -33,12 +37,19 @@ module Rollback_checker = struct
     in
     t.last_rollup_state <- last_rollup_state ;
 
-    return (chain_rollback_happened && rollup_state_changed)
+    return (Ok (chain_rollback_happened && rollup_state_changed))
 
   let run_checker t ~on_rollback =
     every ~start:(after t.interval) t.interval (fun () ->
         don't_wait_for
-          (let%bind rollback_happened = check t in
+          (let%bind rollback_happened =
+             match%bind check t with
+             | Ok rollback_happened ->
+                 return rollback_happened
+             | Error err ->
+                 print_endline (Exn.to_string err) ;
+                 return false
+           in
            print_endline
              ("Rollback happened: " ^ Bool.to_string rollback_happened) ;
            if rollback_happened then on_rollback () else Deferred.unit ) )

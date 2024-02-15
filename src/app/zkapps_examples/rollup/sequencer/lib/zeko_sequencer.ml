@@ -81,7 +81,7 @@ module Sequencer = struct
       ; mutable previous_committed_ledger : Mina_ledger.Sparse_ledger.t option
       ; zkapp_pk : Signature_lib.Public_key.Compressed.t
       ; signer : Signature_lib.Keypair.t
-      ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name option
+      ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; transfers_memory : Transfers_memory.t
       }
 
@@ -198,7 +198,7 @@ module Sequencer = struct
           | true ->
               print_endline "Nothing to commit" ;
               return ()
-          | false ->
+          | false -> (
               print_endline "Committing..." ;
 
               let ledger_hash =
@@ -214,28 +214,33 @@ module Sequencer = struct
                      t.previous_committed_ledger_hash )
               in
 
-              let%bind () =
-                Da_layer.post_batch t.da_config ~commands:t.staged_commands
-                  ~batch_id ~previous_batch_id
-              in
-              print_endline ("Posted batch " ^ batch_id) ;
+              match%bind
+                try_with (fun () ->
+                    let%bind () =
+                      Da_layer.post_batch t.da_config
+                        ~commands:t.staged_commands ~batch_id ~previous_batch_id
+                    in
+                    print_endline ("Posted batch " ^ batch_id) ;
 
-              let%bind account_update, _, _ =
-                time "Outer.step"
-                  (M.Outer.step (Option.value_exn t.last) ~public_key:t.zkapp_pk
-                     ~old_action_state:Zkapp_account.Actions.empty_hash
-                     ~new_actions:[]
-                     ~withdrawals_processed:Zkapp_account.Actions.empty_hash
-                     ~remaining_withdrawals:[]
-                     ~source_ledger:
-                       (Option.value_exn t.previous_committed_ledger)
-                     ~target_ledger )
-              in
-              let%bind () =
-                match t.l1_uri with
-                | Some uri ->
+                    (* FIXME: disable only for internal MVP *)
+                    (* let%bind account_update, _, _ =
+                         time "Outer.step"
+                           (M.Outer.step (Option.value_exn t.last) ~public_key:t.zkapp_pk
+                              ~old_action_state:Zkapp_account.Actions.empty_hash
+                              ~new_actions:[]
+                              ~withdrawals_processed:Zkapp_account.Actions.empty_hash
+                              ~remaining_withdrawals:[]
+                              ~source_ledger:
+                                (Option.value_exn t.previous_committed_ledger)
+                              ~target_ledger )
+                       in *)
+                    let%bind account_update =
+                      time "Outer.step_without_transfers"
+                        (M.Outer.step_without_transfers
+                           (Option.value_exn t.last) ~public_key:t.zkapp_pk )
+                    in
                     let%bind nonce =
-                      Gql_client.fetch_nonce uri
+                      Gql_client.fetch_nonce t.l1_uri
                         (Signature_lib.Public_key.compress t.signer.public_key)
                     in
                     let command : Zkapp_command.t =
@@ -274,16 +279,18 @@ module Sequencer = struct
                           { command.fee_payer with authorization = signature }
                       }
                     in
-                    let%bind _result = Gql_client.send_zkapp uri command in
-                    Deferred.unit
-                | None ->
-                    Deferred.unit
-              in
-              t.staged_commands <- [] ;
-              t.last <- None ;
-              t.previous_committed_ledger_hash <- Some ledger_hash ;
-              t.previous_committed_ledger <- Some target_ledger ;
-              return () )
+                    Gql_client.send_zkapp t.l1_uri command )
+              with
+              | Ok _ ->
+                  t.staged_commands <- [] ;
+                  t.last <- None ;
+                  t.previous_committed_ledger_hash <- Some ledger_hash ;
+                  t.previous_committed_ledger <- Some target_ledger ;
+                  return ()
+              | Error e ->
+                  (* Continue expanding batch if commit failed *)
+                  print_endline ("Commit failed: " ^ Exn.to_string e) ;
+                  return () ) )
 
     let wait_to_finish t = Throttle.capacity_available t.q
   end
@@ -546,7 +553,8 @@ module Sequencer = struct
     Snark_queue.enqueue_prove_command t.snark_q command_witness
 
   let commit t =
-    let%bind () = apply_deposits t in
+    (* FIXME: disable only for internal MVP *)
+    (* let%bind () = apply_deposits t in *)
     let () =
       match t.config.db_dir with
       | None ->
@@ -612,45 +620,43 @@ module Sequencer = struct
   let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
       ~da_contract_address ~db_dir ~l1_uri ~signer ~test_accounts_path =
     let%bind commited_ledger_hash =
-      match l1_uri with
-      | Some uri ->
-          let%map hash = Gql_client.fetch_commited_state uri zkapp_pk in
-          Some hash
-      | None ->
-          return None
+      Gql_client.fetch_commited_state l1_uri zkapp_pk
     in
     let commit_dir =
-      Option.map
-        ~f:(fun ledger_hash ->
-          Filename.concat db_dir
-            ("commit-" ^ Frozen_ledger_hash.to_decimal_string ledger_hash) )
-        commited_ledger_hash
+      Filename.concat db_dir
+        ("commit-" ^ Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
     in
-    let%bind found_checkpoint =
-      match commit_dir with
-      | Some commit_dir ->
-          return @@ FileUtil.test Exists commit_dir
-      | None ->
-          return false
-    in
+    let found_checkpoint = FileUtil.test Exists commit_dir in
+
+    (* prepare db *)
     let () =
-      match (found_checkpoint, commit_dir) with
-      | true, Some commit_dir -> (
+      match found_checkpoint with
+      | true -> (
           print_endline "Found checkpoint, skipping bootstrap" ;
           let commit_files = FileUtil.ls commit_dir in
+          let old_files =
+            List.filter (FileUtil.ls db_dir) ~f:(fun file ->
+                not @@ String.is_substring ~substring:"commit-" file )
+          in
+          (* restore checkpoint *)
           try
+            FileUtil.rm ~force:Force old_files ;
             FileUtil.cp ~force:FileUtil.Force ~recurse:true commit_files db_dir
           with err -> print_endline (Exn.to_string err) )
-      | _ -> (
+      | false -> (
           print_endline "No checkpoint found, bootstrapping from genesis" ;
+          (* remove present db *)
           try FileUtil.rm ~force:Force ~recurse:true [ db_dir ]
           with err -> print_endline (Exn.to_string err) )
     in
+
+    (* create sequencer state *)
     let t =
       create ~zkapp_pk ~max_pool_size ~commitment_period_sec
         ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
     in
 
+    (* add initial accounts *)
     if not found_checkpoint then (
       add_account t M.Inner.account_id M.Inner.initial_account ;
 
@@ -665,12 +671,13 @@ module Sequencer = struct
       print_endline
         ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ) ;
 
+    (* apply command from DA layer *)
     let%bind () =
-      match (found_checkpoint, commited_ledger_hash) with
-      | false, Some ledger_hash ->
+      match found_checkpoint with
+      | false ->
           let%bind commands =
             Da_layer.get_batches t.da_config
-              ~to_:(Frozen_ledger_hash.to_decimal_string ledger_hash)
+              ~to_:(Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
           in
           return
           @@ List.iter commands ~f:(fun command ->
@@ -683,7 +690,7 @@ module Sequencer = struct
                      ( apply_zkapp_command t zkapp_command |> Or_error.ok_exn
                        : L.Transaction_applied.t * _ )
                      |> ignore )
-      | _ ->
+      | true ->
           return ()
     in
     t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
@@ -724,7 +731,7 @@ let%test_unit "apply commands and commit" =
         Sequencer.create
           ~zkapp_pk:Signature_lib.Public_key.(compress zkapp_keypair.public_key)
           ~max_pool_size:10 ~commitment_period_sec:0. ~da_contract_address:None
-          ~db_dir:None ~l1_uri:(Some gql_uri) ~signer
+          ~db_dir:None ~l1_uri:gql_uri ~signer
       in
       L.with_ledger ~depth:constraint_constants.ledger_depth
         ~f:(fun expected_ledger ->

@@ -59,10 +59,9 @@ let () =
   Command_unix.run
   @@ Command.basic ~summary:"Deploy zeko zkapp"
        (let%map_open.Command uri = Cli_lib.Flag.Uri.Client.rest_graphql
-        and sk =
-          flag "--signer" (required string) ~doc:"string Signer private key"
         and test_accounts_path =
           flag "--test-accounts-path" (optional string)
             ~doc:"string Path to the test genesis accounts file"
         in
+        let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
         run uri sk test_accounts_path )

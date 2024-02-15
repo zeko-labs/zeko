@@ -14,10 +14,15 @@ const config: HardhatUserConfig = {
     },
   },
 
+  defaultNetwork: "dev",
   networks: {
     dev: {
-      url: "http://localhost:8545",
-      accounts: [TESTING_PRIVATE_KEY],
+      url: process.env.DA_PROVIDER ?? "http://localhost:8545",
+      accounts: [process.env.DA_PRIVATE_KEY ?? TESTING_PRIVATE_KEY],
+    },
+    testnet: {
+      url: "https://evm-rpc-zeko-dev.dcspark.io/",
+      accounts: [process.env.DA_PRIVATE_KEY ?? TESTING_PRIVATE_KEY],
     },
   },
 };

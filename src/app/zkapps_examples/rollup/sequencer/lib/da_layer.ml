@@ -40,8 +40,7 @@ module Da_layer = struct
         in
         let stdin =
           Core.Unix.open_process_out
-            "cd ../da-layer && npx hardhat run scripts/postBatch.ts --network \
-             dev"
+            "cd ../da-layer && npx hardhat run scripts/postBatch.ts"
         in
         let pid = UnixLabels.process_out_pid stdin in
         Out_channel.output_string stdin payload ;
@@ -62,8 +61,7 @@ module Da_layer = struct
         in
         let stdout, stdin =
           Core.Unix.open_process
-            "cd ../da-layer && npx hardhat run scripts/getBatches.ts  \
-             --network dev"
+            "cd ../da-layer && npx hardhat run scripts/getBatches.ts"
         in
         let pid = UnixLabels.process_pid (stdout, stdin) in
         Out_channel.output_string stdin payload ;

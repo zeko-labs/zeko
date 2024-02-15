@@ -1,0 +1,11 @@
+.graphql_ppx_cache/
+.vscode/
+_build/
+src/app/zkapps_examples/rollup/da-layer/.DS_Store
+src/app/zkapps_examples/rollup/da-layer/artifacts/
+src/app/zkapps_examples/rollup/da-layer/cache/
+src/app/zkapps_examples/rollup/da-layer/container.log
+src/app/zkapps_examples/rollup/da-layer/geth_db/geth/
+src/app/zkapps_examples/rollup/da-layer/node_modules/
+src/app/zkapps_examples/rollup/da-layer/typechain-types/
+src/app/zkapps_examples/rollup/sequencer/db/

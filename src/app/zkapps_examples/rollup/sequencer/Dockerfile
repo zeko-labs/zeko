@@ -1,0 +1,276 @@
+#################################################################################################
+# The "build-deps" stage
+# - Installs all compilers/interpreters, tools, and OS packages on the given debian or ubuntu image
+#################################################################################################
+# Supports debian:buster-slim, debian:bullseye-slim, and ubuntu:focal
+FROM --platform=linux/amd64 ubuntu:focal AS build-deps
+
+# Ocaml Version
+ARG OCAML_VERSION=4.14
+ARG OCAML_REVISION=.0
+ARG OCAML_VARIANT=
+ARG OCAML_PACKAGE=
+ARG OPAM_VERSION=2.0.7
+
+# Golang version number used to detemine tarball name
+ARG GO_VERSION=1.18.2
+
+# Go Capnp Version (for capnpc dependency)
+ARG GO_CAPNP_VERSION=v3.0.0-alpha.5
+
+# Rust Version passed into rustup-init, can also be "stable", "nightly" or similar
+ARG RUST_VERSION=1.63.0
+# Nightly Rust Version used for WebAssembly builds
+ARG RUST_NIGHTLY=2022-09-12
+# wasm-pack version
+ARG WASM_PACK_VERSION=v0.10.3
+
+# Rocksdb commit tag/branch to clone
+ARG ROCKSDB_VERSION=v5.18.4
+
+# --- OS package dependencies
+# Organized as two alphabetized lists, first libraries and then tools/other packages
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update --quiet \
+    && apt-get upgrade --quiet --yes \
+    && apt-get install --no-install-recommends --quiet --yes \
+    libboost-dev \
+    libboost-program-options-dev \
+    libbz2-dev \
+    libcap-dev \
+    libffi-dev \
+    libgflags-dev \
+    libgmp-dev \
+    libgmp3-dev \
+    libjemalloc-dev \
+    liblmdb-dev \
+    liblmdb0 \
+    libpq-dev \
+    libprocps-dev \
+    libsodium-dev \
+    libssl-dev \
+    build-essential \
+    ca-certificates \
+    capnproto \
+    cmake \
+    curl \
+    file \
+    git \
+    '(^lld-10$|^lld-11$)' \
+    m4 \
+    pkg-config \
+    rsync \
+    sudo \
+    unzip \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Symlink image-specific lld version to a single lld executable
+RUN if command -v ld.lld-10 &> /dev/null; then ln -sf $(which ld.lld-10) /usr/bin/ld.lld; fi
+RUN if command -v ld.lld-11 &> /dev/null; then ln -sf $(which ld.lld-11) /usr/bin/ld.lld; fi
+
+# --- Create opam user (for later) and give sudo to make opam happy
+RUN adduser --uid 65533 --disabled-password --gecos '' opam \
+    && passwd -l opam \
+    && chown -R opam:opam /home/opam \
+    && echo 'opam ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opam \
+    && chmod 440 /etc/sudoers.d/opam \
+    && chown root:root /etc/sudoers.d/opam \
+    && chmod 777 /tmp
+
+# --- Quiet git warnings about detatched head states, which are used frequently in later stages
+RUN git config --global advice.detachedHead false
+
+# --- Opam install of a given OPAM_VERSION from github release
+RUN curl -sL \
+    "https://github.com/ocaml/opam/releases/download/${OPAM_VERSION}/opam-${OPAM_VERSION}-x86_64-linux" \
+    -o /usr/bin/opam \
+    && chmod +x /usr/bin/opam
+
+# --- Golang install of a given GO_VERSION (add -v for spam output of each file from the go dist)
+RUN curl -s "https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz" | tar -xz -C /usr/lib/
+
+# --- Rust install via rustup-init to a given RUST_VERSION
+# --- Additionally, install RUST_NIGHTLY via rustup
+# For more about rustup-init see: https://github.com/rust-lang/rustup/blob/master/README.md
+# As opposed to introducing another shell script here (that mostly just determines the platform)
+# we just download the binary for the only platform we care about in this docker environment
+USER opam
+RUN curl --proto '=https' --tlsv1.2 -sSf -o /tmp/rustup-init \
+    https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y --default-toolchain "${RUST_VERSION}" --profile minimal --component rust-src --target wasm32-unknown-unknown \
+    && $HOME/.cargo/bin/rustup toolchain install "nightly-${RUST_NIGHTLY}" --profile minimal --component rust-src --target wasm32-unknown-unknown --no-self-update \
+    && rm /tmp/rustup-init
+USER root
+
+# --- Install rust wasm-pack version WASM_PACK_VERSION manually via curl/tar
+RUN curl -sL https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz \
+    | tar --extract --gzip --strip-components=1 --directory=/usr/bin --file=-
+
+# --- RocksDB Installation of a given ROCKSDB_VERSION
+# These flags turn some errors into warnings for running with G++ 9 or higher
+# The build command below checks for the g++ major version and removes CXXFLAGS if its less than 9
+ENV CXXFLAGS '-Wno-error=deprecated-copy -Wno-error=pessimizing-move -Wno-error=class-memaccess -Wno-error'
+# This builds and installs just the rocksdb static lib for us, and cleans up after itself
+# Send error output to /dev/null as its noisy with compiler warnings
+RUN git clone https://github.com/facebook/rocksdb \
+    --depth 1 --shallow-submodules \
+    -b "${ROCKSDB_VERSION}" /rocksdb \
+    && test $(g++ -dumpversion | cut -c 1 -) -lt 9 \
+    && CXXFLAGS='' make -C /rocksdb static_lib PORTABLE=1 -j$(nproc) 2>/dev/null \
+    || make -C /rocksdb static_lib PORTABLE=1 -j$(nproc) 2>/dev/null \
+    && cp /rocksdb/librocksdb.a /usr/local/lib/librocksdb_coda.a \
+    && rm -rf /rocksdb \
+    && strip -S /usr/local/lib/librocksdb_coda.a
+# Clear CXXFLAGS afterwards to avoid affecting other code
+ENV CXXFLAGS=""
+
+###########################################################################################
+# Initialize opam in a minimal fashion
+###########################################################################################
+
+# Set up environment for running as opam user
+WORKDIR /home/opam
+USER opam
+ENV HOME=/home/opam
+
+# --- Create the following user directory configs as the Opam user:
+## Add go + rust to the path, unlimit the opam user,
+## unlimit stack for future shells that might use spacetime,
+## disable ipv6
+## disable sandboxing to allow unprivledged builds
+RUN mkdir --mode=700 ~/.gnupg \
+    && echo 'export PATH="$PATH:/usr/lib/go/bin:$HOME/.cargo/bin"' >> ~/.bashrc \
+    && echo 'ulimit -s unlimited' >> ~/.bashrc \
+    && echo "disable-ipv6" >> ~/.gnupg/dirmngr.conf
+
+ENV PATH="$PATH:/usr/lib/go/bin:$HOME/.cargo/bin"
+
+# --- Ocaml install of a given OCAML_VERSION via opam switch
+# additionally initializes opam with sandboxing disabled, as we did not install bubblewrap above.
+RUN git clone \
+    https://github.com/ocaml/opam-repository.git \
+    --depth 1 \
+    /home/opam/opam-repository \
+    && opam init --disable-sandboxing -k git -a ~/opam-repository --bare \
+    && opam repository add --yes --all --set-default o1-labs https://github.com/o1-labs/opam-repository.git \
+    && opam switch create "${OCAML_VERSION}${OCAML_REVISION}" "${OCAML_PACKAGE}${OCAML_VERSION}${OCAML_REVISION}${OCAML_VARIANT}" \
+    && opam switch "${OCAML_VERSION}${OCAML_REVISION}"
+
+# --- Build and install capnproto go compiler
+# This package was particularly tricky to get to install correctly because of how the package's source code is structured.
+# To work around this, we install it as a dependency for a local go module and build the binary from the GOPATH.
+RUN mkdir go-tmp \
+    && cd go-tmp \
+    && /usr/lib/go/bin/go mod init local/build \
+    && /usr/lib/go/bin/go get capnproto.org/go/capnp/v3@$GO_CAPNP_VERSION \
+    && /usr/lib/go/bin/go build -o capnpc-go capnproto.org/go/capnp/v3/capnpc-go \
+    && sudo mv capnpc-go /usr/local/bin \
+    && cd - \
+    && sudo rm -rf go-tmp
+
+
+
+#################################################################################################
+# The "opam-deps" Stage
+# - Continues from the build-deps image
+# - Installs all opam dependencies and pins from mina's github
+# - Includes the entire mina codebase and submodules in "${MINA_DIR}" (must be writable by opam user)
+# - Largely mirrors/replaces ./scripts/setup-opam.sh
+#################################################################################################
+FROM build-deps AS builder
+
+# location of repo used for pins and external package commits
+ARG MINA_DIR=zeko
+
+# location of external packages
+ARG EXTERNAL_PKG_DIR=$MINA_DIR/src/external
+
+# don't keep build directories
+# to force reinstall of pinned packages from Mina sources
+# and to keep Docker image reasonable size
+ENV OPAMKEEPBUILDDIR false
+ENV OPAMREUSEBUILDDIR false
+# Limit logs for opam install errors to 20 lines per error
+ENV OPAMERRLOGLEN 20
+
+WORKDIR $HOME/$MINA_DIR
+
+ENV OPAMYES 1
+
+# --- Import Opam Switch
+# TODO: handle this opam work without cloning the full repository (directly pull opam.export)
+COPY ./opam.export .
+RUN opam switch import opam.export --quiet
+
+RUN eval $(opam config env) \
+    && opam install fileutils
+
+# --- Copy the entire zeko repo into the image
+COPY . .
+
+# --- Pin external packages / submodules
+# TODO: Would be really nice to pull this script, the git submodules, and opam.export exclusively in this stage
+# Remove .ppx and the .ppx-cache so they can be built on each run
+RUN eval $(opam config env) \
+    && scripts/pin-external-packages.sh \
+    && opam clean --logs -cs --quiet
+
+RUN git config --global --add safe.directory /home/opam/zeko \
+    && git config --global --add safe.directory /home/opam/zeko/src/lib/crypto/proof-systems
+
+# --- Build zeko binaries
+RUN eval $(opam config env) \
+    && dune build --profile=devnet \
+    src/app/zkapps_examples/rollup/sequencer/run.exe \
+    src/app/zkapps_examples/rollup/sequencer/deploy.exe
+
+
+
+#################################################################################################
+# The "zeko" Stage
+# - final stage
+#################################################################################################
+FROM --platform=linux/amd64 ubuntu:focal AS zeko
+
+ENV DEBIAN_FRONTEND noninteractive
+
+# --- Dependencies across many platforms
+RUN apt-get update --quiet --yes \
+    && apt-get upgrade --quiet --yes \
+    && apt-get install --quiet --yes --no-install-recommends \
+    apt-utils \
+    apt-transport-https \
+    curl \
+    ca-certificates \
+    dnsutils \
+    dumb-init \
+    gettext \
+    gnupg2 \
+    libgmp10 \
+    libgomp1 \
+    libssl1.1 \
+    tzdata \
+    jq \
+    sudo \
+    libjemalloc2 \
+    libprocps8 \
+    libffi7 \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sL https://deb.nodesource.com/setup_18.x | bash \
+    && apt-get update --quiet --yes \
+    && apt-get install --quiet --yes nodejs
+
+WORKDIR /zeko/sequencer
+
+COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/run.exe /zeko/sequencer/run.exe
+# COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/deploy.exe /zeko/sequencer/deploy.exe
+COPY --from=builder /home/opam/zeko/src/app/zkapps_examples/rollup/da-layer /zeko/da-layer
+COPY --from=builder /home/opam/zeko/src/app/zkapps_examples/rollup/sequencer/tests/testing_accounts.json /zeko/testing_accounts.json
+
+RUN cd /zeko/da-layer && npm install && npm run compile
+
+ENTRYPOINT [ "./run.exe", "--test-accounts-path", "../testing_accounts.json" ]

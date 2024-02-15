@@ -20,11 +20,13 @@ DUNE_PROFILE=devnet dune runtest
 Running the sequencer exposes the Graphql API on the port `-p`. The Graphql schema is a subset of the L1 Graphql API joined with the L1 Graphql API for fetching of actions/events.
 
 ```bash
-DUNE_PROFILE=devnet dune exec ./run.exe -- \
+export DA_PRIVATE_KEY="da layer private key"
+export MINA_PRIVATE_KEY="base58 signer private key"
+export DUNE_PROFILE=devnet
+dune exec ./run.exe -- \
     -p <int?> \
     --rest-server <string> \
     --zkapp-pk <string> \
-    --signer <string> \
     --max-pool-size <int?> \
     --commitment-period <float?> \
     --da-contract-address <string?> \
@@ -43,9 +45,10 @@ dune exec ./run.exe -- --help
 The following script deploys the rollup contract on the L1 with the initial state, which is the genesis ledger of the rollup.
 
 ```bash
-DUNE_PROFILE=devnet dune exec ./deploy.exe -- \
-    --rest-server <string> \
-    --signer <string> \
+export MINA_PRIVATE_KEY="base58 signer private key"
+export DUNE_PROFILE=devnet
+dune exec ./deploy.exe -- \
+    --rest-server <string>
     --test-accounts-path <string?>
 ```
 
@@ -53,6 +56,31 @@ Run help to see the options:
 
 ```bash
 dune exec ./deploy.exe -- --help
+```
+
+## Use with docker
+
+Build:
+
+```bash
+make docker
+```
+
+Run:
+
+```bash
+docker run -p <port>:<port> \
+           -v <local-db-path>:<container-db-path> \
+           -e DA_PROVIDER=<da-evm-provider> \
+           -e DA_PRIVATE_KEY=<da-private-key> \
+           -e MINA_PRIVATE_KEY=<mina-private-key> \
+           dcspark/zeko -p <port> \
+           --zkapp-pk <zkapp-pk> \
+           --rest-server <mina-node-graphql> \
+           --commitment-period <int> \
+           --rollback-checker-interval <int> \
+           --da-contract-address <da-layer-contract> \
+           --db-dir <container-db-path>
 ```
 
 ## Transfers
