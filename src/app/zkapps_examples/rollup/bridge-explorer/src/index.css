@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-800;
+    font-family: "Manrope", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+@layer components {
+  .primary-btn {
+    @apply h-[32px] min-w-[100px] rounded-sm bg-orange-600 py-2 px-5 text-xs font-semibold text-white transition duration-100 ease-in hover:bg-orange-800 focus:bg-orange-800 active:bg-orange-800;
+  }
+  .input {
+    @apply block h-[32px] w-full rounded-sm px-2 hover:border-orange-600 hover:ring-2 hover:ring-inset hover:ring-orange-600 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-orange-600;
+  }
+}
+@layer utilities {
+  .bg-gradient-primary {
+    background-image: linear-gradient(45deg, #a2bbff36, #ffa13d3f);
+  }
+  .bg-gradient-secondary {
+    background-image: linear-gradient(81.73deg, #313238 2.41%, #4d3b29 100%);
+  }
+  .bg-gradient-none {
+    background-image: none;
+  }
+  .detail-section {
+  }
+  .detail-title {
+    @apply mb-6 text-base font-bold capitalize text-white;
+  }
+}
+/* Token table */
+.table :where(th, td) {
+  @apply whitespace-nowrap py-4 px-6 text-center align-middle;
+}
+.table :where(thead, tfoot) :where(th, td) {
+  @apply whitespace-normal bg-[#413830] text-center text-xs font-bold uppercase text-white;
+}
+.table :where(thead, tfoot) :where(th, td).left {
+  @apply text-left;
+}
+.table :where(tbody th, tbody td) {
+  @apply break-words bg-gray-600 text-sm text-gray-100;
+}
+.table :where(tbody th, tbody td).left {
+  @apply text-left;
+}
+.table :where(thead, tbody, tfoot) :where(tr:not(:last-child) :where(th, td)) {
+  @apply border-b-[1px] border-[#383534];
+}
+:where(.table *:first-child) :where(*:first-child) :where(th, td):first-child {
+  border-top-left-radius: 6px;
+}
+:where(.table *:first-child) :where(*:first-child) :where(th, td):last-child {
+  border-top-right-radius: 6px;
+}
+:where(.table *:last-child) :where(*:last-child) :where(th, td):last-child {
+  border-bottom-right-radius: 6px;
+}
+:where(.table *:last-child) :where(*:last-child) :where(th, td):first-child {
+  border-bottom-left-radius: 6px;
+}
+
+.tab {
+  @apply px-10 py-2 text-base font-semibold capitalize text-gray-200 hover:text-[#a08b7c] md:px-8 md:py-4;
+}
+.detail-section {
+  @apply mt-8 rounded-[6px]  px-1 shadow-sm md:mt-14;
+}
+.tab-list {
+  @apply mb-4 flex flex-col overflow-auto sm:mb-0 sm:flex-row sm:flex-nowrap;
+}
+.tab[data-state="active"] {
+  color: #a08b7c;
+  /* box-shadow: inset 0 -1px 0 0 currentColor, 0 1px 0 0 currentColor; */
+  @apply bg-gray-600 font-bold;
+}
+.tab-content {
+  @apply min-h-[250px] bg-gray-600 px-4 py-6 md:min-h-[200px] md:py-9 md:px-7;
+}
