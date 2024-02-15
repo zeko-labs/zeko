@@ -13,8 +13,8 @@ let run port db_dir genesis_account () =
       { db =
           Ledger.Db.create ~directory_name:db_dir
             ~depth:Gql.constraint_constants.ledger_depth ()
-      ; slot = Mina_numbers.Global_slot_since_genesis.zero
       ; commands = Hashtbl.create (module String)
+      ; genesis_timestamp = Block_time.(to_int64 @@ of_time @@ Core.Time.now ())
       }
   in
 

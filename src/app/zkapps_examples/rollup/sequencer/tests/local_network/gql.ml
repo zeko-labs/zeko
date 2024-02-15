@@ -10,9 +10,18 @@ module Schema = Graphql_wrapper.Make (Schema)
 
 type t =
   { db : Ledger.Db.t
-  ; slot : Mina_numbers.Global_slot_since_genesis.t
   ; commands : (string, User_command.t * Transaction_status.t) Hashtbl.t
+  ; genesis_timestamp : int64
   }
+
+let current_slot t =
+  let slot =
+    Int64.(
+      Block_time.(
+        ((to_int64 @@ of_time @@ Core.Time.now ()) - t.genesis_timestamp)
+        / 1000L / 60L / 3L))
+  in
+  Mina_numbers.Global_slot_since_genesis.of_int @@ Int64.to_int_exn slot
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -145,6 +154,20 @@ module Types = struct
                   None
               | Timed timing_info ->
                   Some timing_info.vesting_increment )
+        ] )
+
+  let genesis_constants =
+    obj "GenesisConstants" ~fields:(fun _ ->
+        [ field "accountCreationFee" ~typ:(non_null fee)
+            ~doc:"The fee charged to create a new account"
+            ~args:Arg.[]
+            ~resolve:(fun _ () -> constraint_constants.account_creation_fee)
+        ; field "genesisTimestamp" ~typ:(non_null string)
+            ~doc:"The genesis timestamp in ISO 8601 format"
+            ~args:Arg.[]
+            ~resolve:(fun { ctx = t; _ } () ->
+              Genesis_constants.genesis_timestamp_to_string t.genesis_timestamp
+              )
         ] )
 
   module AccountObj = struct
@@ -1288,7 +1311,7 @@ module Mutations = struct
         match
           Result.( >>= )
             (Ledger.apply_transaction_first_pass ~constraint_constants
-               ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
+               ~global_slot:(current_slot t)
                ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
                l (Command (Signed_command command)) )
             (Ledger.apply_transaction_second_pass l)
@@ -1335,7 +1358,7 @@ module Mutations = struct
         let%bind.Deferred.Result partialy_applied_txn =
           match
             Ledger.apply_transaction_first_pass ~constraint_constants
-              ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
+              ~global_slot:(current_slot t)
               ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
               l (Command (Zkapp_command zkapp_command))
           with
@@ -1416,6 +1439,15 @@ module Queries = struct
       ~typ:(non_null Types.DaemonStatus.t) ~resolve:(fun { ctx = _; _ } () ->
         let open Types.DaemonStatus in
         return (Ok { chain_id = "69420" }) )
+
+  let genesis_constants =
+    field "genesisConstants"
+      ~doc:
+        "The constants used to determine the configuration of the genesis \
+         block and all of its transitive dependencies"
+      ~args:Arg.[]
+      ~typ:(non_null Types.genesis_constants)
+      ~resolve:(fun _ () -> ())
 
   let account =
     field "account" ~doc:"Find any account via a public key and token"
@@ -1506,7 +1538,13 @@ module Queries = struct
         Some cmd_with_hash )
 
   let commands =
-    [ sync_status; daemon_status; account; user_command; zkapp_command ]
+    [ sync_status
+    ; daemon_status
+    ; genesis_constants
+    ; account
+    ; user_command
+    ; zkapp_command
+    ]
 end
 
 let schema =
