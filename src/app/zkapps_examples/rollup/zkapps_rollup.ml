@@ -358,12 +358,14 @@ module Wrapper_rules = struct
     type t =
       { source_ledger : Frozen_ledger_hash.t
       ; target_ledger : Frozen_ledger_hash.t
+      ; global_slot : F.t
       }
     [@@deriving snarky]
 
-    let of_txn_snark_statement (txn_snark : With_sok.t) : t =
+    let of_txn_snark_statement global_slot (txn_snark : With_sok.t) : t =
       { source_ledger = txn_snark.source.first_pass_ledger
       ; target_ledger = txn_snark.target.second_pass_ledger
+      ; global_slot
       }
   end
 
@@ -379,7 +381,7 @@ module Wrapper_rules = struct
     module Witness = struct
       module R = MkRef (Transaction_snark)
 
-      type t = { txn_snark : R.t } [@@deriving snarky]
+      type t = { txn_snark : R.t; global_slot : F.t } [@@deriving snarky]
     end
 
     include MkHandler (Witness)
@@ -403,13 +405,8 @@ module Wrapper_rules = struct
       in
       Mina_state.Protocol_state.body compile_time_genesis.data
 
-    let dummy_pc =
-      Pending_coinbase.Stack.push_state
-        (Mina_state.Protocol_state.Body.hash dummy_state_body)
-        Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
-
     let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let Witness.{ txn_snark } = exists_witness () in
+      let Witness.{ txn_snark; global_slot } = exists_witness () in
       let istmt =
         Transaction_snark.(
           exists With_sok.typ ~compute:(fun () ->
@@ -418,7 +415,9 @@ module Wrapper_rules = struct
       let stmt =
         S.(
           exists typ ~compute:(fun () ->
-              of_txn_snark_statement @@ As_prover.read With_sok.typ istmt ))
+              of_txn_snark_statement
+                (As_prover.read_var global_slot)
+                (As_prover.read With_sok.typ istmt) ))
       in
       (* Check that istmt and stmt match *)
       run
@@ -429,12 +428,27 @@ module Wrapper_rules = struct
            istmt.target.second_pass_ledger ;
 
       (* Check that pending_coinbase_stack is correctly set *)
-      let dummy_pc = constant Pending_coinbase.Stack.typ dummy_pc in
+      let dummy_state_body =
+        constant
+          (Mina_state.Protocol_state.Body.typ constraint_constants)
+          dummy_state_body
+      in
+      let dummy_pc_init = constant Pending_coinbase.Stack.typ dummy_pc_init in
+      let state_body_hash =
+        run @@ Mina_state.Protocol_state.Body.hash_checked dummy_state_body
+      in
+      let computed_pc =
+        run
+        @@ Pending_coinbase.Stack.Checked.push_state state_body_hash
+             (Mina_numbers.Global_slot_since_genesis.Checked.Unsafe.of_field
+                global_slot )
+             dummy_pc_init
+      in
       Boolean.Assert.is_true @@ run
-      @@ Pending_coinbase.Stack.equal_var dummy_pc
+      @@ Pending_coinbase.Stack.equal_var computed_pc
            istmt.source.pending_coinbase_stack ;
       Boolean.Assert.is_true @@ run
-      @@ Pending_coinbase.Stack.equal_var dummy_pc
+      @@ Pending_coinbase.Stack.equal_var computed_pc
            istmt.target.pending_coinbase_stack ;
 
       (* Check that transactions have been completely applied *)
@@ -504,11 +518,16 @@ module Wrapper_rules = struct
         S.
           { source_ledger = s1.stmt.source_ledger
           ; target_ledger = s2.stmt.target_ledger
+          ; global_slot = s2.stmt.global_slot
           }
       in
       run
       @@ Frozen_ledger_hash.assert_equal s1.stmt.target_ledger
            s2.stmt.source_ledger ;
+
+      (* Check that global slot goes up *)
+      Field.Assert.lte ~bit_length:32 s1.stmt.global_slot s2.stmt.global_slot ;
+
       Pickles.Inductive_rule.
         { previous_proof_statements =
             [ { public_input = s1.stmt
@@ -1222,8 +1241,17 @@ struct
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
-    let wrap txn_snark =
-      let%map stmt, _, proof = wrap_ ~handler:(Wrap.handler { txn_snark }) () in
+    let wrap txn_snark global_slot =
+      let%map stmt, _, proof =
+        wrap_
+          ~handler:
+            (Wrap.handler
+               { txn_snark
+               ; global_slot =
+                   Mina_numbers.Global_slot_since_genesis.to_field global_slot
+               } )
+          ()
+      in
       ({ stmt; proof } : t)
 
     let merge (s1 : t) (s2 : t) =

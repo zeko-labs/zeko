@@ -18,7 +18,10 @@ module Make (T : sig
   val tag : Transaction_snark.tag
 end) : sig
   module Wrapper : sig
-    val wrap : Transaction_snark.t -> t Deferred.t
+    val wrap :
+         Transaction_snark.t
+      -> Mina_numbers.Global_slot_since_genesis.t
+      -> t Deferred.t
 
     val merge : t -> t -> t Deferred.t
 

@@ -12,6 +12,11 @@ let time label (d : 'a Deferred.t) =
   printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
+let l1_global_slot ~(genesis_timestamp : Time.t) =
+  let d = Time.diff (Time.now ()) genesis_timestamp in
+  let slot = Time.Span.to_min d /. 3. in
+  Mina_numbers.Global_slot_since_genesis.of_int @@ Float.to_int slot
+
 module Sequencer = struct
   module Config = struct
     type t =
@@ -100,8 +105,10 @@ module Sequencer = struct
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
-    let wrap_and_merge t txn_snark command =
-      let%bind wrapped = time "Wrapper.wrap" (M.Wrapper.wrap txn_snark) in
+    let wrap_and_merge t txn_snark command global_slot =
+      let%bind wrapped =
+        time "Wrapper.wrap" (M.Wrapper.wrap txn_snark global_slot)
+      in
       let%bind final_snark =
         match t.last with
         | Some last' ->
@@ -119,16 +126,18 @@ module Sequencer = struct
             Mina_ledger.Sparse_ledger.t
             * Signed_command.With_valid_signature.t Transaction_protocol_state.t
             * Transaction_snark.Statement.With_sok.t
+            * Mina_numbers.Global_slot_since_genesis.t
         | Zkapp_command of
             ( Transaction_witness.Zkapp_command_segment_witness.t
             * Transaction_snark.Zkapp_command_segment.Basic.t
             * Mina_state.Snarked_ledger_state.With_sok.t )
             list
             * Zkapp_command.t
+            * Mina_numbers.Global_slot_since_genesis.t
     end
 
     let prove_signed_command t ~sparse_ledger ~user_command_in_block ~statement
-        =
+        ~global_slot =
       let handler =
         unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
       in
@@ -139,8 +148,9 @@ module Sequencer = struct
       in
       wrap_and_merge t txn_snark
         (User_command.Signed_command user_command_in_block.transaction)
+        global_slot
 
-    let prove_zkapp_command t ~witnesses ~zkapp_command =
+    let prove_zkapp_command t ~witnesses ~zkapp_command ~global_slot =
       let%bind txn_snark =
         match witnesses with
         | [] ->
@@ -163,16 +173,18 @@ module Sequencer = struct
                 return (Or_error.ok_exn merged) )
       in
       wrap_and_merge t txn_snark (User_command.Zkapp_command zkapp_command)
+        global_slot
 
     let enqueue_prove_command t command_witness =
       Throttle.enqueue t.q (fun () ->
           match command_witness with
           | Command_witness.Signed_command
-              (sparse_ledger, user_command_in_block, statement) ->
+              (sparse_ledger, user_command_in_block, statement, global_slot) ->
               prove_signed_command t ~sparse_ledger ~user_command_in_block
-                ~statement
-          | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
-              prove_zkapp_command t ~witnesses ~zkapp_command )
+                ~statement ~global_slot
+          | Command_witness.Zkapp_command (witnesses, zkapp_command, global_slot)
+            ->
+              prove_zkapp_command t ~witnesses ~zkapp_command ~global_slot )
 
     let enqueue_prove_transfer t ~key ~(transfer : Transfer.t) =
       Throttle.enqueue t.q (fun () ->
@@ -298,15 +310,15 @@ module Sequencer = struct
   type t =
     { db : L.Db.t
     ; archive : Archive.t
-    ; mutable slot : int
     ; config : Config.t
     ; da_config : Da_layer.Config.t
     ; snark_q : Snark_queue.t
     ; stop : unit Ivar.t
+    ; l1_genesis_timestamp : Time.t
     }
 
   let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer =
+      ~da_contract_address ~db_dir ~l1_uri ~signer ~l1_genesis_timestamp =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -314,11 +326,11 @@ module Sequencer = struct
     let da_config : Da_layer.Config.t = { da_contract_address } in
     { db
     ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
-    ; slot = 0
     ; config = { max_pool_size; commitment_period_sec; db_dir }
     ; da_config
     ; snark_q = Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
     ; stop = Ivar.create ()
+    ; l1_genesis_timestamp
     }
 
   let close t =
@@ -363,7 +375,9 @@ module Sequencer = struct
       Mina_transaction.Transaction.Command
         (User_command.Signed_command signed_command)
     in
-    let global_slot = Mina_numbers.Global_slot_since_genesis.of_int t.slot in
+    let global_slot =
+      l1_global_slot ~genesis_timestamp:t.l1_genesis_timestamp
+    in
     let l = L.of_database t.db in
     let source_ledger_hash = L.merkle_root l in
     let sparse_ledger =
@@ -425,7 +439,7 @@ module Sequencer = struct
     Result.return
       ( txn_applied
       , Snark_queue.Command_witness.Signed_command
-          (sparse_ledger, user_command_in_block, statement) )
+          (sparse_ledger, user_command_in_block, statement, global_slot) )
 
   let apply_zkapp_command t (zkapp_command : Zkapp_command.t) =
     let%bind.Result () =
@@ -433,7 +447,9 @@ module Sequencer = struct
         Error (Error.of_string "Maximum pool size reached, try later")
       else Ok ()
     in
-    let global_slot = Mina_numbers.Global_slot_since_genesis.of_int t.slot in
+    let global_slot =
+      l1_global_slot ~genesis_timestamp:t.l1_genesis_timestamp
+    in
     let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
       let l = L.of_database t.db in
       let accounts_referenced =
@@ -520,7 +536,8 @@ module Sequencer = struct
 
     Result.return
       ( txn_applied
-      , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command) )
+      , Snark_queue.Command_witness.Zkapp_command
+          (witnesses, zkapp_command, global_slot) )
 
   let apply_deposits t =
     let%bind inner_account_update, _, _ =
@@ -650,10 +667,13 @@ module Sequencer = struct
           with err -> print_endline (Exn.to_string err) )
     in
 
+    let%bind l1_genesis_timestamp = Gql_client.fetch_genesis_timestamp l1_uri in
+
     (* create sequencer state *)
     let t =
       create ~zkapp_pk ~max_pool_size ~commitment_period_sec
         ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
+        ~l1_genesis_timestamp
     in
 
     (* add initial accounts *)
@@ -723,6 +743,12 @@ let%test_unit "apply commands and commit" =
       in
       return () ) ;
 
+  (* Fetch L1 genesis timestamp *)
+  let l1_genesis_timestamp =
+    Thread_safe.block_on_async_exn (fun () ->
+        Gql_client.fetch_genesis_timestamp gql_uri )
+  in
+
   let open Mina_transaction_logic.For_tests in
   Quickcheck.test ~trials:1
     (Test_spec.mk_gen ~num_transactions:number_of_transactions ())
@@ -731,7 +757,7 @@ let%test_unit "apply commands and commit" =
         Sequencer.create
           ~zkapp_pk:Signature_lib.Public_key.(compress zkapp_keypair.public_key)
           ~max_pool_size:10 ~commitment_period_sec:0. ~da_contract_address:None
-          ~db_dir:None ~l1_uri:gql_uri ~signer
+          ~db_dir:None ~l1_uri:gql_uri ~signer ~l1_genesis_timestamp
       in
       L.with_ledger ~depth:constraint_constants.ledger_depth
         ~f:(fun expected_ledger ->
@@ -791,8 +817,9 @@ let%test_unit "apply commands and commit" =
                               L.apply_zkapp_command_unchecked expected_ledger
                                 command ~constraint_constants
                                 ~global_slot:
-                                  (Mina_numbers.Global_slot_since_genesis.of_int
-                                     sequencer.slot )
+                                  (l1_global_slot
+                                     ~genesis_timestamp:
+                                       sequencer.l1_genesis_timestamp )
                                 ~state_view:
                                   (Mina_state.Protocol_state.Body.view
                                      state_body )
@@ -809,8 +836,9 @@ let%test_unit "apply commands and commit" =
                               L.apply_user_command_unchecked expected_ledger
                                 command ~constraint_constants
                                 ~txn_global_slot:
-                                  (Mina_numbers.Global_slot_since_genesis.of_int
-                                     sequencer.slot )
+                                  (l1_global_slot
+                                     ~genesis_timestamp:
+                                       sequencer.l1_genesis_timestamp )
                             with
                           | Ok _ ->
                               ()

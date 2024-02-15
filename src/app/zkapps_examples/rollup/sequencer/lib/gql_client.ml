@@ -134,6 +134,28 @@ let fetch_best_chain ?(max_length = 10) uri =
     |> map (member "stateHash")
     |> to_list |> List.map ~f:to_string)
 
+let fetch_genesis_timestamp uri =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query {
+              genesisConstants {
+                genesisTimestamp
+              }
+            } 
+          |}
+
+      method variables = `Assoc []
+    end
+  in
+  let%map result = Graphql_client.query_json_exn q uri in
+  Yojson.Safe.Util.(
+    result |> member "genesisConstants" |> member "genesisTimestamp"
+    |> to_string)
+  |> Time.of_string
+
 module For_tests = struct
   let create_account uri pk =
     let q =
