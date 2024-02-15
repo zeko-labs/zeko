@@ -94,6 +94,7 @@ end) : sig
       -> remaining_withdrawals:TR.t list
       -> source_ledger:Mina_ledger.Sparse_ledger.t
       -> target_ledger:Mina_ledger.Sparse_ledger.t
+      -> previous_global_slot_update:Mina_numbers.Global_slot_since_genesis.t
       -> ( ( Account_update.t
            , Zkapp_command.Digest.Account_update.t
            , Zkapp_command.Digest.Forest.t )
@@ -105,6 +106,7 @@ end) : sig
     val step_without_transfers :
          t
       -> public_key:Public_key.Compressed.t
+      -> previous_global_slot_update:Mina_numbers.Global_slot_since_genesis.t
       -> ( Account_update.t
          , Zkapp_command.Digest.Account_update.t
          , Zkapp_command.Digest.Forest.t )

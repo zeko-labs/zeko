@@ -358,14 +358,16 @@ module Wrapper_rules = struct
     type t =
       { source_ledger : Frozen_ledger_hash.t
       ; target_ledger : Frozen_ledger_hash.t
-      ; global_slot : F.t
+      ; source_global_slot : F.t
+      ; target_global_slot : F.t
       }
     [@@deriving snarky]
 
     let of_txn_snark_statement global_slot (txn_snark : With_sok.t) : t =
       { source_ledger = txn_snark.source.first_pass_ledger
       ; target_ledger = txn_snark.target.second_pass_ledger
-      ; global_slot
+      ; source_global_slot = global_slot
+      ; target_global_slot = global_slot
       }
   end
 
@@ -518,7 +520,8 @@ module Wrapper_rules = struct
         S.
           { source_ledger = s1.stmt.source_ledger
           ; target_ledger = s2.stmt.target_ledger
-          ; global_slot = s2.stmt.global_slot
+          ; source_global_slot = s1.stmt.source_global_slot
+          ; target_global_slot = s2.stmt.target_global_slot
           }
       in
       run
@@ -526,7 +529,8 @@ module Wrapper_rules = struct
            s2.stmt.source_ledger ;
 
       (* Check that global slot goes up *)
-      Field.Assert.lte ~bit_length:32 s1.stmt.global_slot s2.stmt.global_slot ;
+      Field.Assert.lte ~bit_length:32 s1.stmt.target_global_slot
+        s2.stmt.source_global_slot ;
 
       Pickles.Inductive_rule.
         { previous_proof_statements =
@@ -843,6 +847,8 @@ module Outer_rules = struct
             (** All withdrawals registered on the L2. We must pay them out on the L1. *)
       ; withdrawals_processed : F.t
             (** All withdrawals successfully processed. *)
+      ; last_global_slot : F.t
+            (** The global slot when we last updated the state *)
       }
     [@@deriving snarky]
   end
@@ -877,11 +883,14 @@ module Outer_rules = struct
         ; old_inner_acc_path : Ledger_path.t
         ; new_inner_acc : Account.t
         ; new_inner_acc_path : Ledger_path.t
+        ; previous_global_slot_update : F.t
         }
       [@@deriving snarky]
     end
 
     include MkHandler (Witness)
+
+    let acceptable_global_slot_difference = 2
 
     let check_incl_proof root path account =
       let account_hash = run @@ Mina_base.Account.Checked.digest account in
@@ -912,10 +921,15 @@ module Outer_rules = struct
            ; old_inner_acc_path
            ; new_inner_acc
            ; new_inner_acc_path
+           ; previous_global_slot_update
            }
             : Witness.var ) =
         exists_witness ()
       in
+
+      (* First txn in batch can have higher slot than the precondition *)
+      Field.Assert.lte ~bit_length:32 previous_global_slot_update
+        stmt.source_global_slot ;
 
       check_incl_proof stmt.source_ledger old_inner_acc_path old_inner_acc ;
       check_incl_proof stmt.target_ledger new_inner_acc_path new_inner_acc ;
@@ -992,6 +1006,7 @@ module Outer_rules = struct
                 ( { ledger_hash = stmt.target_ledger
                   ; all_withdrawals
                   ; withdrawals_processed = withdrawals_processed'
+                  ; last_global_slot = stmt.target_global_slot
                   }
                   : var ))
         }
@@ -1012,7 +1027,8 @@ module Outer_rules = struct
               (* This is the old all_withdrawals, we don't need to check this *)
             ; Or_ignore.Checked.make_unsafe Boolean.true_ withdrawals_processed
               (* The list of withdrawals processed before the current update *)
-            ; ignore
+            ; Or_ignore.Checked.make_unsafe Boolean.true_
+                previous_global_slot_update
             ; ignore
             ; ignore
             ; ignore
@@ -1023,9 +1039,31 @@ module Outer_rules = struct
             (* Our action state must match *)
         }
       in
+      (* Init network state precondition *)
+      let network_precondition =
+        constant Zkapp_precondition.Protocol_state.typ
+          Zkapp_precondition.Protocol_state.accept
+      in
+      let network_precondition =
+        { network_precondition with
+          global_slot_since_genesis =
+            Or_ignore.Checked.make_unsafe Boolean.true_
+              Zkapp_precondition.Closed_interval.
+                { lower =
+                    Mina_numbers.Global_slot_since_genesis.Checked.Unsafe
+                    .of_field stmt.source_global_slot
+                ; upper =
+                    Mina_numbers.Global_slot_since_genesis.Checked.Unsafe
+                    .of_field
+                      (Field.add stmt.target_global_slot
+                         (Field.of_int acceptable_global_slot_difference) )
+                }
+        }
+      in
       let preconditions =
         { Preconditions.(constant (typ ()) accept) with
           account = account_precondition
+        ; network = network_precondition
         }
       in
       (* Our account update is assembled, specifying our state update, our preconditions, our pk, and our authorization *)
@@ -1078,16 +1116,24 @@ module Outer_rules = struct
         ; prf : RefProof.t  (** Proof of ledger transition being valid. *)
         ; public_key : PC.t  (** Our public key on the L2 *)
         ; vk_hash : F.t  (** Our vk hash *)
+        ; previous_global_slot_update : F.t
         }
       [@@deriving snarky]
     end
 
     include MkHandler (Witness)
 
+    let acceptable_global_slot_difference = 2
+
     let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let ({ stmt; prf; public_key; vk_hash } : Witness.var) =
+      let ({ stmt; prf; public_key; vk_hash; previous_global_slot_update }
+            : Witness.var ) =
         exists_witness ()
       in
+
+      (* First txn in batch can have higher slot than the precondition *)
+      Field.Assert.lte ~bit_length:32 previous_global_slot_update
+        stmt.source_global_slot ;
 
       (* Init account update *)
       let account_update = Body.(constant (typ ()) dummy) in
@@ -1108,6 +1154,7 @@ module Outer_rules = struct
                 ( { ledger_hash = stmt.target_ledger
                   ; all_withdrawals = Field.constant Actions.empty_hash
                   ; withdrawals_processed = Field.constant Actions.empty_hash
+                  ; last_global_slot = stmt.target_global_slot
                   }
                   : var ))
         }
@@ -1126,7 +1173,8 @@ module Outer_rules = struct
               (* Our previous ledger must be this *)
             ; ignore
             ; ignore
-            ; ignore
+            ; Or_ignore.Checked.make_unsafe Boolean.true_
+                previous_global_slot_update
             ; ignore
             ; ignore
             ; ignore
@@ -1134,9 +1182,31 @@ module Outer_rules = struct
             ]
         }
       in
+      (* Init network state precondition *)
+      let network_precondition =
+        constant Zkapp_precondition.Protocol_state.typ
+          Zkapp_precondition.Protocol_state.accept
+      in
+      let network_precondition =
+        { network_precondition with
+          global_slot_since_genesis =
+            Or_ignore.Checked.make_unsafe Boolean.true_
+              Zkapp_precondition.Closed_interval.
+                { lower =
+                    Mina_numbers.Global_slot_since_genesis.Checked.Unsafe
+                    .of_field stmt.source_global_slot
+                ; upper =
+                    Mina_numbers.Global_slot_since_genesis.Checked.Unsafe
+                    .of_field
+                      (Field.add stmt.target_global_slot
+                         (Field.of_int acceptable_global_slot_difference) )
+                }
+        }
+      in
       let preconditions =
         { Preconditions.(constant (typ ()) accept) with
           account = account_precondition
+        ; network = network_precondition
         }
       in
       (* Our account update is assembled, specifying our state update, our preconditions, our pk, and our authorization *)
@@ -1429,7 +1499,9 @@ struct
     let step (t : t) ~(public_key : PC.t) ~(old_action_state : field)
         ~(new_actions : TR.t list) ~(withdrawals_processed : field)
         ~(remaining_withdrawals : TR.t list) ~(source_ledger : SL.t)
-        ~(target_ledger : SL.t) :
+        ~(target_ledger : SL.t)
+        ~(previous_global_slot_update : Mina_numbers.Global_slot_since_genesis.t)
+        :
         ( ( Account_update.t
           , Zkapp_command.Digest.Account_update.t
           , Zkapp_command.Digest.Forest.t )
@@ -1491,6 +1563,9 @@ struct
                     x
                 | `Right _ ->
                     failwith "Impossible" )
+          ; previous_global_slot_update =
+              Mina_numbers.Global_slot_since_genesis.to_field
+                previous_global_slot_update
           }
         in
         step_ ~handler:(Outer_rules.Step.handler w) ()
@@ -1498,7 +1573,9 @@ struct
       let tree = mkforest tree proof in
       return (tree, withdrawals_processed', remaining_withdrawals)
 
-    let step_without_transfers (t : t) ~(public_key : PC.t) :
+    let step_without_transfers (t : t) ~(public_key : PC.t)
+        ~(previous_global_slot_update : Mina_numbers.Global_slot_since_genesis.t)
+        :
         ( Account_update.t
         , Zkapp_command.Digest.Account_update.t
         , Zkapp_command.Digest.Forest.t )
@@ -1506,7 +1583,14 @@ struct
         Deferred.t =
       let%bind _, tree, proof =
         let w : Outer_rules.Step_without_transfers.Witness.t =
-          { vk_hash; stmt = t.stmt; prf = t.proof; public_key }
+          { vk_hash
+          ; stmt = t.stmt
+          ; prf = t.proof
+          ; public_key
+          ; previous_global_slot_update =
+              Mina_numbers.Global_slot_since_genesis.to_field
+                previous_global_slot_update
+          }
         in
         step_without_transfers_
           ~handler:(Outer_rules.Step_without_transfers.handler w)
@@ -1524,6 +1608,8 @@ struct
                 ( { ledger_hash
                   ; all_withdrawals = Actions.empty_hash
                   ; withdrawals_processed = Actions.empty_hash
+                  ; last_global_slot =
+                      Mina_numbers.Global_slot_since_genesis.(to_field zero)
                   }
                   : t ))
         ; verification_key =

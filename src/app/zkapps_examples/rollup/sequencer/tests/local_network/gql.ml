@@ -31,7 +31,7 @@ let consensus_constants =
   Consensus.Constants.create ~constraint_constants
     ~protocol_constants:genesis_constants.protocol
 
-let state_body =
+let state_body global_slot =
   let compile_time_genesis =
     Mina_state.Genesis_protocol_state.t
       ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
@@ -39,7 +39,16 @@ let state_body =
       ~constraint_constants ~consensus_constants
       ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
   in
-  Mina_state.Protocol_state.body compile_time_genesis.data
+  let consensus_state =
+    Mina_state.Protocol_state.consensus_state compile_time_genesis.data
+  in
+  let consensus_state =
+    Consensus.Proof_of_stake.Data.Consensus_state.Value.For_tests
+    .with_global_slot_since_genesis consensus_state global_slot
+  in
+  let state_body = Mina_state.Protocol_state.body compile_time_genesis.data in
+  Mina_state.Protocol_state.Body.For_tests.with_consensus_state state_body
+    consensus_state
 
 module Types = struct
   open Schema
@@ -1308,11 +1317,13 @@ module Mutations = struct
                   return (Error "Signature verification failed") )
         in
         let l = Ledger.of_database t.db in
+        let global_slot = current_slot t in
         match
           Result.( >>= )
             (Ledger.apply_transaction_first_pass ~constraint_constants
-               ~global_slot:(current_slot t)
-               ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
+               ~global_slot
+               ~txn_state_view:
+                 (Mina_state.Protocol_state.Body.view (state_body global_slot))
                l (Command (Signed_command command)) )
             (Ledger.apply_transaction_second_pass l)
         with
@@ -1355,11 +1366,13 @@ module Mutations = struct
         Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
       ~resolve:(fun { ctx = t; _ } () zkapp_command ->
         let l = Ledger.of_database t.db in
+        let global_slot = current_slot t in
         let%bind.Deferred.Result partialy_applied_txn =
           match
             Ledger.apply_transaction_first_pass ~constraint_constants
-              ~global_slot:(current_slot t)
-              ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
+              ~global_slot
+              ~txn_state_view:
+                (Mina_state.Protocol_state.Body.view (state_body global_slot))
               l (Command (Zkapp_command zkapp_command))
           with
           | Error err ->

@@ -84,19 +84,23 @@ module Sequencer = struct
           list
       ; mutable previous_committed_ledger_hash : Frozen_ledger_hash0.t option
       ; mutable previous_committed_ledger : Mina_ledger.Sparse_ledger.t option
+      ; mutable previous_committed_global_slot :
+          Mina_numbers.Global_slot_since_genesis.t
       ; zkapp_pk : Signature_lib.Public_key.Compressed.t
       ; signer : Signature_lib.Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; transfers_memory : Transfers_memory.t
       }
 
-    let create ~da_config ~zkapp_pk ~l1_uri ~signer =
+    let create ~da_config ~zkapp_pk ~l1_uri ~signer
+        ~previous_committed_global_slot =
       { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
       ; da_config
       ; last = None
       ; staged_commands = []
       ; previous_committed_ledger_hash = None
       ; previous_committed_ledger = None
+      ; previous_committed_global_slot
       ; zkapp_pk
       ; signer
       ; l1_uri
@@ -249,7 +253,9 @@ module Sequencer = struct
                     let%bind account_update =
                       time "Outer.step_without_transfers"
                         (M.Outer.step_without_transfers
-                           (Option.value_exn t.last) ~public_key:t.zkapp_pk )
+                           (Option.value_exn t.last) ~public_key:t.zkapp_pk
+                           ~previous_global_slot_update:
+                             t.previous_committed_global_slot )
                     in
                     let%bind nonce =
                       Gql_client.fetch_nonce t.l1_uri
@@ -318,7 +324,8 @@ module Sequencer = struct
     }
 
   let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer ~l1_genesis_timestamp =
+      ~da_contract_address ~db_dir ~l1_uri ~signer ~l1_genesis_timestamp
+      ~previous_committed_global_slot =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -328,7 +335,9 @@ module Sequencer = struct
     ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
     ; config = { max_pool_size; commitment_period_sec; db_dir }
     ; da_config
-    ; snark_q = Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
+    ; snark_q =
+        Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
+          ~previous_committed_global_slot
     ; stop = Ivar.create ()
     ; l1_genesis_timestamp
     }
@@ -636,8 +645,13 @@ module Sequencer = struct
 
   let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
       ~da_contract_address ~db_dir ~l1_uri ~signer ~test_accounts_path =
-    let%bind commited_ledger_hash =
-      Gql_client.fetch_commited_state l1_uri zkapp_pk
+    let%bind commited_state = Gql_client.fetch_commited_state l1_uri zkapp_pk in
+    let commited_ledger_hash =
+      Frozen_ledger_hash.of_decimal_string @@ List.nth_exn commited_state 0
+    in
+    let previous_committed_global_slot =
+      Mina_numbers.Global_slot_since_genesis.of_string
+        (List.nth_exn commited_state 3)
     in
     let commit_dir =
       Filename.concat db_dir
@@ -673,7 +687,7 @@ module Sequencer = struct
     let t =
       create ~zkapp_pk ~max_pool_size ~commitment_period_sec
         ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
-        ~l1_genesis_timestamp
+        ~l1_genesis_timestamp ~previous_committed_global_slot
     in
 
     (* add initial accounts *)
@@ -758,6 +772,8 @@ let%test_unit "apply commands and commit" =
           ~zkapp_pk:Signature_lib.Public_key.(compress zkapp_keypair.public_key)
           ~max_pool_size:10 ~commitment_period_sec:0. ~da_contract_address:None
           ~db_dir:None ~l1_uri:gql_uri ~signer ~l1_genesis_timestamp
+          ~previous_committed_global_slot:
+            Mina_numbers.Global_slot_since_genesis.zero
       in
       L.with_ledger ~depth:constraint_constants.ledger_depth
         ~f:(fun expected_ledger ->
@@ -887,9 +903,13 @@ let%test_unit "apply commands and commit" =
           Thread_safe.block_on_async_exn (fun () ->
               let%bind () = commit sequencer in
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-              let%bind commited_ledger_hash =
+              let%bind commited_state =
                 Gql_client.fetch_commited_state gql_uri
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              in
+              let commited_ledger_hash =
+                Frozen_ledger_hash.of_decimal_string
+                @@ List.nth_exn commited_state 0
               in
               let target_ledger_hash = get_root sequencer in
               [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash

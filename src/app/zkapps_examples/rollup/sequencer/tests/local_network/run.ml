@@ -14,7 +14,9 @@ let run port db_dir genesis_account () =
           Ledger.Db.create ~directory_name:db_dir
             ~depth:Gql.constraint_constants.ledger_depth ()
       ; commands = Hashtbl.create (module String)
-      ; genesis_timestamp = Block_time.(to_int64 @@ of_time @@ Core.Time.now ())
+      ; genesis_timestamp =
+          Block_time.(
+            to_int64 @@ of_time @@ Core.Time.(sub (now ()) (Span.of_day 1.)))
       }
   in
 

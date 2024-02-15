@@ -51,8 +51,8 @@ let fetch_commited_state uri pk =
   in
   let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.Util.(
-    result |> member "account" |> member "zkappState" |> index 0 |> to_string)
-  |> Frozen_ledger_hash.of_decimal_string
+    result |> member "account" |> member "zkappState" |> to_list
+    |> List.map ~f:to_string)
 
 let send_zkapp uri command =
   let q =

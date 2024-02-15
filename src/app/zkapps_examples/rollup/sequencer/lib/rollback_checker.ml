@@ -15,6 +15,9 @@ module Rollback_checker = struct
   let create zkapp_pk interval uri =
     let%bind chain = Gql_client.fetch_best_chain uri in
     let%bind last_rollup_state = Gql_client.fetch_commited_state uri zkapp_pk in
+    let last_rollup_state =
+      Frozen_ledger_hash.of_decimal_string @@ List.nth_exn last_rollup_state 0
+    in
     let last_state_hash = List.last_exn chain in
     return { last_state_hash; last_rollup_state; zkapp_pk; interval; uri }
 
@@ -24,6 +27,9 @@ module Rollback_checker = struct
     in
     let%bind.Deferred.Result last_rollup_state =
       try_with (fun () -> Gql_client.fetch_commited_state t.uri t.zkapp_pk)
+    in
+    let last_rollup_state =
+      Frozen_ledger_hash.of_decimal_string @@ List.nth_exn last_rollup_state 0
     in
 
     let last_state_hash = List.last_exn chain in
