@@ -1,0 +1,6 @@
+(library
+ (name parallel_merge)
+ (inline_tests)
+ (libraries core_kernel yojson sexplib sexplib0)
+ (preprocess
+  (pps ppx_jane ppx_mina)))
