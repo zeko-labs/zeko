@@ -36,28 +36,33 @@ module type S = sig
     val vk : Pickles.Side_loaded.Verification_key.t
 
     (** Account update for withdrawing *)
-    val withdraw :
-         public_key:Public_key.Compressed.t
-      -> amount:Currency.Amount.t
-      -> recipient:Public_key.Compressed.t
+    val submit_withdrawal :
+         withdrawal:TR.t
       -> ( Account_update.t
          , Zkapp_command.Digest.Account_update.t
          , Zkapp_command.Digest.Forest.t )
          Zkapp_command.Call_forest.Tree.t
          Deferred.t
 
-    (** Tuple of account update tree, new deposits_processed, new remaining_deposits *)
-    val step :
-         deposits_processed:field
-           (** The deposits processed at the time of the last step *)
-      -> remaining_deposits:TR.t list
-           (** The deposits yet to be processed, including new ones *)
-      -> ( ( Account_update.t
+    val process_deposit :
+         is_new:bool
+      -> pointer:field option
+      -> before:TR.t list
+      -> after:TR.t list
+      -> deposit:TR.t
+      -> ( [ `Pointer of field ]
+         * ( Account_update.t
            , Zkapp_command.Digest.Account_update.t
            , Zkapp_command.Digest.Forest.t )
-           Zkapp_command.Call_forest.Tree.t
-         * field
-         * TR.t list )
+           Zkapp_command.Call_forest.t )
+         Deferred.t
+
+    val step :
+         all_deposits:field
+      -> ( Account_update.t
+         , Zkapp_command.Digest.Account_update.t
+         , Zkapp_command.Digest.Forest.t )
+         Zkapp_command.Call_forest.Tree.t
          Deferred.t
 
     (** Public key of inner account, closest point to 123456789 *)
@@ -93,41 +98,43 @@ module type S = sig
     val vk : Verification_key_wire.t
 
     (** Account update for depositing *)
-    val deposit :
-         public_key:Public_key.Compressed.t
-      -> amount:Currency.Amount.t
-      -> recipient:Public_key.Compressed.t
+    val submit_deposit :
+         outer_public_key:Public_key.Compressed.t
+      -> deposit:TR.t
       -> ( Account_update.t
          , Zkapp_command.Digest.Account_update.t
          , Zkapp_command.Digest.Forest.t )
          Zkapp_command.Call_forest.Tree.t
          Deferred.t
 
-    (** Given a transition that includes an inner step made using
-        the matching arguments (for deposits), produce a L1 account update for the rollup. *)
+    val process_withdrawal :
+         is_new:bool
+      -> outer_public_key:Public_key.Compressed.t
+      -> pointer:field option
+      -> before:TR.t list
+      -> after:TR.t list
+      -> withdrawal:TR.t
+      -> ( [ `Pointer of field ]
+         * ( Account_update.t
+           , Zkapp_command.Digest.Account_update.t
+           , Zkapp_command.Digest.Forest.t )
+           Zkapp_command.Call_forest.t )
+         Deferred.t
+
     val step :
          t (** The transition, must include Inner.step account update *)
       -> outer_public_key:Public_key.Compressed.t
-           (** The public key on the outside *)
-      -> old_all_deposits:field
-           (** The deposits that were recorded at the last step *)
-      -> new_deposits:TR.t list (** The new deposits since then *)
-      -> withdrawals_processed:field
-           (** The withdrawals processed at the last step *)
-      -> remaining_withdrawals:TR.t list
-           (** The remaining withdrawals, including new ones *)
+      -> new_deposits:TR.t list
+           (** The new deposits between the old inner account and new inner account *)
       -> old_inner_ledger:Mina_ledger.Sparse_ledger.t
            (** Old sparse inner ledger including inner account *)
       -> new_inner_ledger:Mina_ledger.Sparse_ledger.t
            (** New sparse inner ledger including inner account *)
-      -> ( ( Account_update.t
-           , Zkapp_command.Digest.Account_update.t
-           , Zkapp_command.Digest.Forest.t )
-           Zkapp_command.Call_forest.Tree.t
-         * field
-         * TR.t list )
+      -> ( Account_update.t
+         , Zkapp_command.Digest.Account_update.t
+         , Zkapp_command.Digest.Forest.t )
+         Zkapp_command.Call_forest.Tree.t
          Deferred.t
-    (** Tuple of account update tree, new withdrawals_processed, new remaining_withdrawals *)
 
     (** Create an account update update for deploying the zkapp, given a valid ledger for it. *)
     val deploy_exn : Mina_ledger.Ledger.t -> Account_update.Update.t
@@ -172,9 +179,7 @@ module type Intf = sig
   module type S = S with type t := t and module TR := TR
 
   (** Compiles circuits *)
-  module Make (T : sig
-    val tag : Transaction_snark.tag
-  end) : S
+  module Make (T : Transaction_snark.S) : S
 
   (** Public key of inner account, closest point to 123456789 *)
   val inner_public_key : Public_key.Compressed.t

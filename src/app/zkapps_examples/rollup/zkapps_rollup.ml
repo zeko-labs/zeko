@@ -1,3 +1,4 @@
+module Util_ = Util
 open Core_kernel
 open Mina_base
 open Snark_params.Tick.Run
@@ -8,536 +9,36 @@ open Account_update
 module Nat = Pickles_types.Nat
 module Nonce = Mina_numbers.Account_nonce
 module Local_state = Mina_state.Local_state
-
-let constraint_constants = Genesis_constants.Constraint_constants.compiled
-
 module L = Mina_ledger.Ledger
-
-(** Converts a variable to its constituent fields *)
-let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :
-    Field.t array =
-  let (Typ typ) = typ in
-  let fields, aux = typ.var_to_fields x in
-  fields
-
-(** Default permissions for deployments *)
-let proof_permissions : Permissions.t =
-  { edit_state = Proof
-  ; send = Proof
-  ; receive = None
-  ; set_delegate = Proof
-  ; set_permissions = Proof
-  ; set_verification_key = Either
-  ; set_zkapp_uri = Proof
-  ; edit_action_state = Proof
-  ; set_token_symbol = Proof
-  ; increment_nonce = None
-  ; set_voting_for = Proof
-  ; set_timing = Proof
-  ; access = None
-  }
-
-(** Given calls the zkapp wishes to make, constructs output that can be used to construct a full account update *)
-let make_outputs account_update calls =
-  let account_update_digest =
-    Zkapp_command.Call_forest.Digest.Account_update.Checked.create
-      account_update
-  in
-  let public_output : Zkapp_statement.Checked.t =
-    { account_update = (account_update_digest :> Field.t)
-    ; calls = (Zkapp_call_forest.Checked.hash calls :> Field.t)
-    }
-  in
-  let auxiliary_output =
-    Prover_value.create (fun () ->
-        let account_update = As_prover.read (Body.typ ()) account_update in
-        let account_update_digest =
-          As_prover.read Zkapp_command.Call_forest.Digest.Account_update.typ
-            account_update_digest
-        in
-        let calls = Prover_value.get calls.data in
-        (account_update, account_update_digest, calls) )
-  in
-  (public_output, auxiliary_output)
-
-(** Takes output from make_outputs and makes it usable *)
-let mktree (account_update, account_update_digest, calls) proof =
-  let account_update : Account_update.t =
-    { body = account_update
-    ; authorization = Proof (Pickles.Side_loaded.Proof.of_proof proof)
-    }
-  in
-  Zkapp_command.Call_forest.Tree.
-    { account_update; account_update_digest; calls }
-
-(** A shorthand function to keep a field in the update for the app state *)
-let keep = Set_or_keep.Checked.keep ~dummy:Field.zero
-
-(** A shorthand function to ignore a field in the precondition for the app state *)
-let ignore = Or_ignore.Checked.make_unsafe Boolean.false_ Field.zero
-
-(** Generic function for turning variables into 8 of something  *)
-let var_to_state (some : Field.t -> 'option) (none : 'option)
-    (typ : ('var, 'value) Typ.t) (x : 'var) : 'option Zkapp_state.V.t =
-  let fields = var_to_fields typ x in
-  assert (Array.length fields <= 8) ;
-  let missing = 8 - Array.length fields in
-  Zkapp_state.V.of_list_exn
-  @@ List.append
-       (List.map ~f:(fun f -> some f) @@ Array.to_list fields)
-       (List.init missing ~f:(fun _ -> none))
-
-(** Used for turning variables into app state for updates *)
-let var_to_app_state typ x =
-  var_to_state Set_or_keep.Checked.set
-    (Set_or_keep.Checked.keep ~dummy:Field.zero)
-    typ x
-
-(** Used for turning variables into preconditions *)
-let var_to_precondition_state typ x =
-  var_to_state
-    (Or_ignore.Checked.make_unsafe Boolean.true_)
-    (Or_ignore.Checked.make_unsafe Boolean.false_ Field.zero)
-    typ x
-
-(** Same as var_to_state but for values *)
-let value_to_state (some : field -> 'option) (none : 'option)
-    (typ : ('var, 'value) Typ.t) (x : 'value) : 'option Zkapp_state.V.t =
-  let (Typ typ) = typ in
-  let fields, aux = typ.value_to_fields x in
-  assert (Array.length fields <= 8) ;
-  let missing = 8 - Array.length fields in
-  Zkapp_state.V.of_list_exn
-  @@ List.append
-       (List.map ~f:(fun f -> some f) @@ Array.to_list fields)
-       (List.init missing ~f:(fun _ -> none))
-
-(** "id" transformation, but if less than 8 fields, rest are turned into zero *)
-let value_to_init_state typ x =
-  value_to_state (fun f -> f) Field.Constant.zero typ x
-
-let value_to_app_state typ x =
-  value_to_state (fun f -> Set_or_keep.Set f) Set_or_keep.Keep typ x
-
-let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) : Actions.var =
-  let empty_actions = Zkapp_account.Actions.(constant typ []) in
-  let actions =
-    Actions.push_to_data_as_hash empty_actions (var_to_fields typ x)
-  in
-  actions
-
-let value_to_actions (typ : ('var, 'value) Typ.t) (x : 'value) : Actions.t =
-  let (Typ typ) = typ in
-  let fields, _ = typ.value_to_fields x in
-  [ fields ]
-
-(** FIXME: Very commonly used, but should be replaced by monadic style *)
-let run = run_checked
-
-(** To be used with deriving snarky, a simple field *)
-module F = struct
-  type t = field
-
-  type var = Field.t
-
-  let typ : (var, t) Typ.t = Field.typ
-
-  let pp : Format.formatter -> field -> unit =
-   fun fmt f -> Format.pp_print_string fmt @@ Field.Constant.to_string f
-end
-
-(** To be used with deriving snarky, a reference to T with no in-circuit representation *)
-module MkRef (T : sig
-  type t
-end) =
-struct
-  type t = T.t
-
-  type var = T.t As_prover.Ref.t
-
-  let typ : (var, t) Typ.t = Typ.Internal.ref ()
-end
-
-(** A list of `length` `t`s *)
-module SnarkList (T : sig
-  module T : sig
-    type t
-
-    type var
-
-    val typ : (var, t) Typ.t
-  end
-
-  val length : int
-end) =
-struct
-  type t = T.T.t list
-
-  type var = T.T.var list
-
-  let typ : (var, t) Typ.t = Typ.list ~length:T.length T.T.typ
-end
-
-(** Reference to Proof  *)
-module RefProof = MkRef (Proof)
-
-(** Boolean but monkey-patched to have `t`*)
-module Boolean = struct
-  include Boolean
-
-  type t = bool
-end
-
-(** Helper to construct snarky handler from type *)
-module MkHandler (Witness : sig
-  type t
-
-  type var
-
-  val typ : (var, t) Typ.t
-end) =
-struct
-  open Snarky_backendless.Request
-
-  type _ t += Witness : Witness.t t
-
-  let handler (w : Witness.t) (With { request; respond }) =
-    match request with Witness -> respond (Provide w) | _ -> respond Unhandled
-
-  let exists_witness () : Witness.var =
-    exists Witness.typ ~request:(fun () -> Witness)
-end
-
 module Public_key = Signature_lib.Public_key
 module PC = Public_key.Compressed
 module CAS = Currency.Amount.Signed
 module CA = Currency.Amount
+open Util_
 
-(** A proof for source0, target0, source1, target1, means the targets are
-action states that originate from the sources *)
-module Action_state_extension_rule = struct
-  module Stmt = struct
-    type t = { source0 : F.t; target0 : F.t; source1 : F.t; target1 : F.t }
-    [@@deriving show, snarky]
+module Helper_state = struct
+  type t = { transfers_processed : F.t } [@@deriving snarky]
 
-    let zero : t =
-      { source0 = Field.Constant.zero
-      ; source1 = Field.Constant.zero
-      ; target0 = Field.Constant.zero
-      ; target1 = Field.Constant.zero
-      }
-  end
+  (* FIXME: Define through HKD *)
+  module Precondition = struct
+    type t = { transfers_processed : F.var option }
 
-  (** Base case, source equal to target *)
-  module Base = struct
-    module Witness = struct
-      type t = { source0 : F.t; source1 : F.t } [@@deriving snarky]
-    end
-
-    include MkHandler (Witness)
-
-    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let Witness.{ source0; source1 } = exists_witness () in
-      Pickles.Inductive_rule.
-        { previous_proof_statements = []
-        ; public_output =
-            ({ source0; target0 = source0; source1; target1 = source1 } : Stmt
-                                                                          .var)
-        ; auxiliary_output = ()
-        }
-
-    let rule : _ Pickles.Inductive_rule.t =
-      { identifier = "action state extension base"
-      ; prevs = []
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
-  end
-
-  (** Step case, can step once forward in either, both, or neither fields *)
-  module StepBoth = struct
-    module Witness = struct
-      type t =
-        { actions0 : Actions.t
-        ; actions1 : Actions.t
-        ; step0 : Boolean.t
-        ; step1 : Boolean.t
-        ; prev : Stmt.t
-        ; proof : RefProof.t
-        }
-      [@@deriving snarky]
-    end
-
-    include MkHandler (Witness)
-
-    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let Witness.{ actions0; actions1; step0; step1; prev; proof } =
-        exists_witness ()
-      in
-      let target0 =
-        Field.if_ step0
-          (Actions.push_events_checked prev.target0 actions0)
-          prev.target0
-      in
-      let target1 =
-        Field.if_ step1
-          (Actions.push_events_checked prev.target1 actions1)
-          prev.target1
-      in
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            [ { public_input = prev; proof_must_verify = Boolean.true_; proof }
-            ]
-        ; public_output = { prev with target0; target1 }
-        ; auxiliary_output = ()
-        }
-
-    let rule tag : _ Pickles.Inductive_rule.t =
-      { identifier = "action state extension step"
-      ; prevs = [ tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
-  end
-
-  module Merge = struct
-    module Witness = struct
-      type t =
-        { left : Stmt.t
-        ; right : Stmt.t
-        ; left_proof : RefProof.t
-        ; right_proof : RefProof.t
-        }
-      [@@deriving snarky]
-    end
-
-    include MkHandler (Witness)
-
-    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let Witness.{ left; right; left_proof; right_proof } =
-        exists_witness ()
-      in
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            [ { public_input = left
-              ; proof_must_verify = Boolean.true_
-              ; proof = left_proof
-              }
-            ; { public_input = right
-              ; proof_must_verify = Boolean.true_
-              ; proof = right_proof
-              }
-            ]
-        ; public_output =
-            ({ source0 = left.source0
-             ; source1 = right.source1
-             ; target0 = left.target0
-             ; target1 = right.target1
-             } : Stmt.var)
-        ; auxiliary_output = ()
-        }
-
-    let rule tag : _ Pickles.Inductive_rule.t =
-      { identifier = "action state extension step"
-      ; prevs = [ tag; tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
+    let to_precondition (t : t) : F.var Or_ignore.Checked.t Zkapp_state.V.t =
+      [ ( match t.transfers_processed with
+        | Some x ->
+            Or_ignore.Checked.make_unsafe Boolean.true_ x
+        | None ->
+            ignore )
+      ; ignore
+      ; ignore
+      ; ignore
+      ; ignore
+      ; ignore
+      ; ignore
+      ; ignore
+      ]
   end
 end
-
-(** Rules for wrapping txn snarks, necessary because we don't use passes
- TODO: Use Zkapp_command_logic here and bypass transaction snark and two pass system *)
-module Wrapper_rules = struct
-  module With_sok = Transaction_snark.Statement.With_sok
-
-  (** Statement for this *)
-  module S = struct
-    type t = { source_ledger : Ledger_hash.t; target_ledger : Ledger_hash.t }
-    [@@deriving snarky, yojson]
-
-    let of_txn_snark_statement (txn_snark : With_sok.t) : t =
-      { source_ledger = txn_snark.source.first_pass_ledger
-      ; target_ledger = txn_snark.target.second_pass_ledger
-      }
-  end
-
-  module Snark = struct
-    (** Akin to Transaction_snark.t  *)
-    type t = { stmt : S.t; proof : RefProof.t } [@@deriving snarky]
-  end
-
-  include Snark
-
-  (** Base case, wraps a complete txn snark, morally wraps a block *)
-  module Wrap = struct
-    module Witness = struct
-      module R = MkRef (Transaction_snark)
-
-      type t = { txn_snark : R.t } [@@deriving snarky]
-    end
-
-    include MkHandler (Witness)
-
-    let dummy_pc_init = Pending_coinbase.Stack.empty
-
-    let genesis_constants = Genesis_constants.compiled
-
-    let consensus_constants =
-      Consensus.Constants.create ~constraint_constants
-        ~protocol_constants:genesis_constants.protocol
-
-    (** Dummy state body, network preconditions are disabled anyway *)
-    let dummy_state_body =
-      let compile_time_genesis =
-        Mina_state.Genesis_protocol_state.t
-          ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-          ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-          ~constraint_constants ~consensus_constants
-          ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-      in
-      Mina_state.Protocol_state.body compile_time_genesis.data
-
-    let dummy_pc =
-      Pending_coinbase.Stack.push_state
-        (Mina_state.Protocol_state.Body.hash dummy_state_body)
-        Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
-
-    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let Witness.{ txn_snark } = exists_witness () in
-      let istmt =
-        Transaction_snark.(
-          exists With_sok.typ ~compute:(fun () ->
-              statement_with_sok @@ As_prover.Ref.get txn_snark ))
-      in
-      let stmt =
-        S.(
-          exists typ ~compute:(fun () ->
-              of_txn_snark_statement @@ As_prover.read With_sok.typ istmt ))
-      in
-      (* Check that istmt and stmt match *)
-      with_label __LOC__ (fun () ->
-          run
-          @@ Ledger_hash.assert_equal stmt.source_ledger
-               istmt.source.first_pass_ledger ) ;
-      with_label __LOC__ (fun () ->
-          run
-          @@ Ledger_hash.assert_equal stmt.target_ledger
-               istmt.target.second_pass_ledger ) ;
-
-      (* Check that pending_coinbase_stack is correctly set *)
-      let dummy_pc = constant Pending_coinbase.Stack.typ dummy_pc in
-      with_label __LOC__ (fun () ->
-          Boolean.Assert.is_true @@ run
-          @@ Pending_coinbase.Stack.equal_var dummy_pc
-               istmt.source.pending_coinbase_stack ) ;
-      with_label __LOC__ (fun () ->
-          Boolean.Assert.is_true @@ run
-          @@ Pending_coinbase.Stack.equal_var dummy_pc
-               istmt.target.pending_coinbase_stack ) ;
-
-      (* Check that transactions have been completely applied *)
-      let empty_state = Local_state.(constant typ @@ empty ()) in
-      with_label __LOC__ (fun () ->
-          Local_state.Checked.assert_equal empty_state istmt.source.local_state ) ;
-      with_label __LOC__ (fun () ->
-          Local_state.Checked.assert_equal empty_state istmt.target.local_state ) ;
-
-      (* Check that first and second passes are connected *)
-      with_label __LOC__ (fun () ->
-          run
-          @@ Ledger_hash.assert_equal istmt.target.first_pass_ledger
-               istmt.source.second_pass_ledger ) ;
-
-      (* Check that it's a complete transaction (a "block") *)
-      with_label __LOC__ (fun () ->
-          run
-          @@ Ledger_hash.assert_equal istmt.target.first_pass_ledger
-               istmt.connecting_ledger_right ) ;
-      with_label __LOC__ (fun () ->
-          run
-          @@ Ledger_hash.assert_equal istmt.source.second_pass_ledger
-               istmt.connecting_ledger_left ) ;
-
-      (* We don't check fee_excess because it's up to the sequencer what they do with it. *)
-      (* The supply however must not increase. *)
-      let is_neg =
-        Sgn.Checked.is_neg @@ run @@ CAS.Checked.sgn istmt.supply_increase
-      in
-      let is_zero =
-        run
-        @@ CA.Checked.equal (constant CA.typ CA.zero)
-        @@ run
-        @@ CAS.Checked.magnitude istmt.supply_increase
-      in
-      with_label __LOC__ (fun () ->
-          Boolean.Assert.is_true Boolean.(is_neg || is_zero) ) ;
-
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            (* Proof for istmt using normal txn snark *)
-            [ { public_input = istmt
-              ; proof_must_verify = Boolean.true_
-              ; proof =
-                  As_prover.Ref.create (fun () ->
-                      Transaction_snark.proof @@ As_prover.Ref.get txn_snark )
-              }
-            ]
-        ; public_output = stmt
-        ; auxiliary_output = ()
-        }
-
-    let rule txn_snark_tag : _ Pickles.Inductive_rule.t =
-      { identifier = "zeko wrap"
-      ; prevs = [ txn_snark_tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
-  end
-
-  (** Merges two statements that line up *)
-  module Merge = struct
-    module Witness = struct
-      type t = { s1 : Snark.t; s2 : Snark.t } [@@deriving snarky]
-    end
-
-    include MkHandler (Witness)
-
-    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let Witness.{ s1; s2 } = exists_witness () in
-      let s =
-        S.
-          { source_ledger = s1.stmt.source_ledger
-          ; target_ledger = s2.stmt.target_ledger
-          }
-      in
-      run
-      @@ Ledger_hash.assert_equal s1.stmt.target_ledger s2.stmt.source_ledger ;
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            [ { public_input = s1.stmt
-              ; proof_must_verify = Boolean.true_
-              ; proof = s1.proof
-              }
-            ; { public_input = s2.stmt
-              ; proof_must_verify = Boolean.true_
-              ; proof = s2.proof
-              }
-            ]
-        ; public_output = s
-        ; auxiliary_output = ()
-        }
-
-    let rule self : _ Pickles.Inductive_rule.t =
-      { identifier = "zeko merge"
-      ; prevs = [ self; self ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
-  end
-end
-
-module S = Wrapper_rules.S
 
 (** The type for "transfer requests" put in actions *)
 module TR = struct
@@ -548,67 +49,167 @@ module TR = struct
   let is_dummy (t : t) = CA.(equal t.amount zero)
 end
 
-(** Partial circuit for processing a single transfer request *)
+(** Rule used by both inner and outer accounts to process transfers posted to them *)
 module Process_transfer = struct
-  let%snarkydef_ process_transfer (transfer : TR.var) (transfers : Field.t)
-      (calls : Zkapp_call_forest.Checked.t) (balance_change : CAS.var) :
-      Field.t * (Zkapp_call_forest.Checked.t * CAS.var) =
-    (* Transfers including our new transfer *)
-    let transfers' =
-      Actions.push_events_checked transfers TR.(var_to_actions typ transfer)
+  module A = struct
+    type t = Zkapp_call_forest.account_update
+
+    type var = Zkapp_call_forest.Checked.account_update
+
+    let typ = Zkapp_call_forest.Checked.account_update_typ ()
+  end
+
+  module Witness = struct
+    type t =
+      { transfer : TR.t
+      ; child : A.t
+      ; vk_hash : F.t
+      ; public_key : PC.t
+      ; trans1 : Action_state_extension.t
+            (** From transfers_processed to transfer we are to process *)
+      ; trans2 : Action_state_extension.t
+            (** From transfer we are to process + 1 to all_transfers *)
+      ; is_new : Boolean.t
+      }
+    [@@deriving snarky]
+  end
+
+  include MkHandler (Witness)
+
+  type to_precondition =
+    all_transfers:F.var option -> F.var Or_ignore.Checked.t Zkapp_state.V.t
+
+  let%snarkydef_ main (to_precondition : to_precondition)
+      Pickles.Inductive_rule.{ public_input = () } =
+    let Witness.{ transfer; child; vk_hash; public_key; trans1; trans2; is_new }
+        =
+      exists_witness ()
     in
-    (* Init child account update *)
-    let account_update = Body.(constant (typ ()) dummy) in
+    let child' = child.account_update.data in
+
+    (* The recipient must match *)
+    with_label __LOC__ (fun () ->
+        run @@ PC.Checked.Assert.equal child'.public_key transfer.recipient ) ;
+    (* It must be a recipient using the default token (MINA), otherwise it's the wrong account *)
+    with_label __LOC__ (fun () ->
+        Token_id.(Checked.Assert.equal child'.token_id (constant typ default)) ) ;
+    (* The amount must match *)
+    with_label __LOC__ (fun () ->
+        run
+        @@ CAS.Checked.(
+             assert_equal child'.balance_change (of_unsigned transfer.amount)) ) ;
+
+    (* Check the connection between trans1 and trans2 *)
+    with_label __LOC__ (fun () ->
+        Field.Assert.equal (Action_state_extension.statement_var trans2).source
+        @@ Actions.push_events_checked
+             (Action_state_extension.statement_var trans1).target
+             (var_to_actions TR.typ transfer) ) ;
+
+    let transfers_processed =
+      (Action_state_extension.statement_var trans1).source
+    in
+    (* If it's a new account, then the value is zero rather than empty_state_element.
+       Conversely, if it's zero, or what should be empty_state_element,
+       then it must be a new account. *)
+    let transfers_processed =
+      Field.(
+        if_
+          (equal transfers_processed (constant Actions.empty_state_element))
+          ~then_:zero ~else_:transfers_processed)
+    in
+    let child_helper = Body.(constant (typ ()) dummy) in
+    let child_helper =
+      { child_helper with
+        public_key = transfer.recipient
+      ; token_id = public_key_to_token_id_var public_key
+      ; use_full_commitment = Boolean.true_
+      ; authorization_kind = authorization_signed ()
+      ; preconditions =
+          { Preconditions.(constant (typ ()) accept) with
+            account =
+              { Zkapp_precondition.Account.(constant (typ ()) accept) with
+                state =
+                  Helper_state.Precondition.(
+                    to_precondition
+                      { transfers_processed =
+                          Some
+                            Field.(
+                              if_ is_new ~then_:zero ~else_:transfers_processed)
+                      })
+                  (* If the account is new, we know that no transfers can have been processed,
+                     logically letting the user "set" the field beforehand to an arbitrary value.
+                     It however must still be a valid action state, as witnessed
+                     by trans2. *)
+              ; is_new = Or_ignore.Checked.make_unsafe Boolean.true_ is_new
+              }
+          }
+      ; update =
+          { child_helper.update with
+            app_state =
+              Helper_state.(
+                var_to_app_state typ
+                  { transfers_processed =
+                      (Action_state_extension.statement_var trans2).source
+                  })
+          }
+      ; may_use_token = May_use_token.Checked.constant Parents_own_token
+      ; implicit_account_creation_fee = Boolean.false_
+      }
+    in
+    let child_helper : Zkapp_call_forest.Checked.account_update =
+      attach_control_var child_helper
+    in
+
+    (* Recipient can't have children *)
+    let calls =
+      Zkapp_call_forest.Checked.(
+        push ~account_update:child ~calls:(empty ())
+          (push ~account_update:child_helper ~calls:(empty ()) @@ empty ()))
+    in
+    (* We check that the transfer has been submitted *)
+    let preconditions =
+      { Preconditions.(constant (typ ()) accept) with
+        account =
+          { Zkapp_precondition.Account.(constant (typ ()) accept) with
+            state =
+              to_precondition
+                ~all_transfers:
+                  (Some (Action_state_extension.statement_var trans2).target)
+          }
+      }
+    in
     let account_update =
-      { account_update with
-        (* Send amount money *)
-        balance_change =
-          CAS.Checked.of_unsigned transfer.amount (* to public_key *)
-      ; public_key =
-          transfer.recipient (* and take creation fee implicitly if necessary *)
-      ; implicit_account_creation_fee = Boolean.true_
+      { Body.(constant (typ ()) dummy) with
+        public_key
+      ; authorization_kind = authorization_vk_hash vk_hash
+      ; preconditions
+      ; balance_change =
+          CAS.Checked.(negate @@ of_unsigned transfer.amount)
+          (* We pay out the amount *)
       }
     in
-    (* Digest child account update *)
-    let digest =
-      Zkapp_command.Call_forest.Digest.Account_update.Checked.create
-        account_update
-    in
-    (* Attach digest to body *)
-    let account_update : Zkapp_call_forest.Checked.account_update =
-      { account_update = { data = account_update; hash = digest }
-      ; control = Prover_value.create (fun () -> Control.None_given)
+    let public_output, auxiliary_output = make_outputs account_update calls in
+    Pickles.Inductive_rule.
+      { previous_proof_statements =
+          [ Action_state_extension.verify ~check:(Boolean.not is_new) trans1
+          ; Action_state_extension.verify trans2
+          ]
+      ; public_output
+      ; auxiliary_output
       }
-    in
-    (* Update calls to child account updates *)
-    let calls' =
-      Zkapp_call_forest.Checked.push ~account_update
-        ~calls:(Zkapp_call_forest.Checked.empty ())
-        calls
-    in
-    let balance_change' =
-      run
-      @@ CAS.Checked.(
-           add balance_change @@ negate @@ of_unsigned transfer.amount)
-    in
-    let account_creation_fee =
-      CA.(constant typ @@ of_fee constraint_constants.account_creation_fee)
-    in
-    (* Only do all of this if TR isn't the dummy TR and it's enough to pay
-       account creation fee. Similar check in Transfer_action_rule. *)
-    let is_invalid =
-      Boolean.(
-        (run @@ CA.Checked.equal transfer.amount CA.(constant typ zero))
-        || (run @@ CA.Checked.(transfer.amount < account_creation_fee)))
-    in
-    if_ is_invalid
-      ~typ:Typ.(Field.typ * (Zkapp_call_forest.typ * CAS.typ))
-      ~then_:(transfers, (calls, balance_change))
-      ~else_:(transfers', (calls', balance_change'))
+
+  let rule (to_precondition : to_precondition) action_state_extension_tag :
+      _ Pickles.Inductive_rule.t =
+    { identifier = "zeko process transfer"
+    ; prevs = [ action_state_extension_tag; action_state_extension_tag ]
+    ; main = main to_precondition
+    ; feature_flags
+    }
 end
 
 (** Rule used by both inner and outer accounts to validate actions posted to account *)
-module Transfer_action_rule = struct
+module Submit_transfer = struct
   module Witness = struct
     type t =
       { public_key : PC.t; vk_hash : F.t; amount : CA.t; recipient : PC.t }
@@ -621,28 +222,7 @@ module Transfer_action_rule = struct
     let Witness.{ public_key; vk_hash; amount; recipient } =
       exists_witness ()
     in
-    (* The amount and the recipient must not be zero, because then it's a dummy *)
-    ( Boolean.Assert.is_true @@ Boolean.not @@ run
-    @@ CA.(Checked.equal amount (constant typ zero)) ) ;
-    ( Boolean.Assert.is_true @@ Boolean.not @@ run
-    @@ PC.(Checked.equal recipient (constant typ empty)) ) ;
-    let account_creation_fee =
-      CA.(constant typ @@ of_fee constraint_constants.account_creation_fee)
-    in
-    (* The amount must at least be the account creation fee to ensure the account
-       can be created if it doesn't exist.
-       Similar check also in Process_transfer. *)
-    let () =
-      Boolean.Assert.is_true @@ run
-      @@ CA.Checked.(account_creation_fee <= amount)
-    in
     let account_update = Body.(constant (typ ()) dummy) in
-    let authorization_kind : Authorization_kind.Checked.t =
-      { is_signed = Boolean.false_
-      ; is_proved = Boolean.true_
-      ; verification_key_hash = vk_hash
-      }
-    in
     (* The amount will go the recipient on the other side *)
     let tr : TR.var = { amount; recipient } in
     (* We add a single action which is the above amount and recipient *)
@@ -653,7 +233,7 @@ module Transfer_action_rule = struct
     let account_update =
       { account_update with
         public_key
-      ; authorization_kind
+      ; authorization_kind = authorization_vk_hash vk_hash
       ; balance_change = CAS.Checked.of_unsigned @@ amount
       ; actions
       }
@@ -665,15 +245,11 @@ module Transfer_action_rule = struct
       { previous_proof_statements = []; public_output; auxiliary_output }
 
   let rule : _ Pickles.Inductive_rule.t =
-    { identifier = "Rollup step"
-    ; prevs = []
-    ; main
-    ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-    }
+    { identifier = "zeko submit transfer"; prevs = []; main; feature_flags }
 end
 
 (** The rules for the inner account zkapp, that controls the money supply and transfers on the rollup *)
-module Inner_rules = struct
+module Inner = struct
   let public_key =
     let pk =
       Snark_params.Tick.Inner_curve.(
@@ -684,16 +260,22 @@ module Inner_rules = struct
   module State = struct
     type t =
       { all_deposits : F.t
-            (** All deposits that have been made on the L1. We must pay them out on the L2. *)
-      ; deposits_processed : F.t
-            (** All deposits that have been processed successfully. *)
+            (** All deposits that have been made on the L1. They are paid out on the L2. *)
       }
     [@@deriving snarky]
 
+    let default : t = { all_deposits = Actions.empty_state_element }
+
+    (* FIXME: add prover-time check to ensure all other fields are zero for safety *)
+    let var_of_app_state (all_deposits :: _ : F.var Zkapp_state.V.t) : var =
+      { all_deposits }
+
+    let value_of_app_state (all_deposits :: _ : F.t Zkapp_state.V.t) : t =
+      { all_deposits }
+
     (* FIXME: Define through HKD *)
     module Precondition = struct
-      type t =
-        { all_deposits : F.var option; deposits_processed : F.var option }
+      type t = { all_deposits : F.var option }
 
       let to_precondition (t : t) : F.var Or_ignore.Checked.t Zkapp_state.V.t =
         [ ( match t.all_deposits with
@@ -701,11 +283,7 @@ module Inner_rules = struct
               Or_ignore.Checked.make_unsafe Boolean.true_ x
           | None ->
               ignore )
-        ; ( match t.deposits_processed with
-          | Some x ->
-              Or_ignore.Checked.make_unsafe Boolean.true_ x
-          | None ->
-              ignore )
+        ; ignore
         ; ignore
         ; ignore
         ; ignore
@@ -716,156 +294,69 @@ module Inner_rules = struct
     end
   end
 
-  module Step = struct
-    module TR_8 = struct
-      module T = TR
-
-      let length = 8
-    end
-
-    module List_TR_8 = SnarkList (TR_8)
-
-    module Witness = struct
-      type t =
-        { vk_hash : F.t
-        ; action_prf : RefProof.t
-              (** action_prf is a proof for Action_state_extension_rule that all_deposits
-           is an extension of deposits_processed + new_deposits *)
-        ; all_deposits : F.t
-        ; deposits_processed : F.t
-        ; new_deposits : List_TR_8.t
-              (** Deposits that have yet to be processed *)
-        }
-      [@@deriving snarky]
-    end
-
-    include MkHandler (Witness)
-
-    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let Witness.
-            { vk_hash
-            ; action_prf
-            ; all_deposits
-            ; deposits_processed
-            ; new_deposits
-            } =
-        exists_witness ()
-      in
-      (* Init account update *)
-      let account_update = Body.(constant (typ ()) dummy) in
-      (* We are authorized by a proof *)
-      let authorization_kind : Authorization_kind.Checked.t =
-        { is_signed = Boolean.false_
-        ; is_proved = Boolean.true_
-        ; verification_key_hash = vk_hash
-        }
-      in
-      (* Init calls *)
-      let calls = Zkapp_call_forest.Checked.empty () in
-      let balance_change = CAS.(constant typ zero) in
-      (* Process deposits, add a call per deposit *)
-      (* For every transfer, we add a "call", i.e. an account update as child where we inc balance *)
-      let deposits_processed', (calls, balance_change) =
-        List.fold new_deposits
-          ~init:(deposits_processed, (calls, balance_change))
-          ~f:(fun (deposits, (calls, balance_change)) tr ->
-            Process_transfer.process_transfer tr deposits calls balance_change
-            )
-      in
-      (* Set all_deposits and deposits_processed' *)
-      let update =
-        { account_update.update with
-          app_state =
-            State.(
-              var_to_app_state typ
-                ( { all_deposits; deposits_processed = deposits_processed' }
-                  : var ))
-        }
-      in
-      (* Set account precondition such that deposits_processed must be correct.
-         We don't care about the previous all_deposits. *)
-      let account_precondition =
-        { Zkapp_precondition.Account.(constant (typ ()) accept) with
-          state =
-            State.Precondition.(
-              to_precondition
-                { all_deposits = None
-                ; deposits_processed = Some deposits_processed
-                })
-        }
-      in
-      let preconditions =
-        { Preconditions.(constant (typ ()) accept) with
-          account = account_precondition
-        }
-      in
-      let account_update =
-        { account_update with
-          public_key = constant PC.typ public_key
-        ; balance_change
-        ; authorization_kind
-        ; update
-        ; preconditions
-        ; increment_nonce =
-            Boolean.true_
-            (* We increment the nonce to signal that a step has been performed to the outer account *)
-        }
-      in
-      let public_output, auxiliary_output = make_outputs account_update calls in
-      (* deposits_processed' must be a prefix of all_deposits, proving that
-         the deposits we processed weren't forget *)
-      let stmt =
-        ( { source0 = deposits_processed'
-          ; target0 = all_deposits
-          ; source1 = deposits_processed'
-          ; target1 = all_deposits
-          }
-          : Action_state_extension_rule.Stmt.var )
-      in
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            [ { public_input = stmt
-              ; proof_must_verify = Boolean.true_
-              ; proof = action_prf
-              }
-              (* We check that all_deposits is an extension of deposits_processed',
-                 which inherently must be an extension of deposits_processed,
-                 ensuring continuity and soundness.
-                 We duplicate the check since the proof checks two at the same time. *)
-            ]
-        ; public_output
-        ; auxiliary_output
-        }
-
-    let rule tag : _ Pickles.Inductive_rule.t =
-      { identifier = "Rollup inner account step"
-      ; prevs = [ tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
+  module Witness = struct
+    type t =
+      { vk_hash : F.t
+            (* We update all_deposits to what the outer account tells us *)
+            (* This _can't_ go wrong; if an incorrect one is chosen, the account will
+               have an incorrect value in the app state, and the outer step will fail.
+               Do note that outer step also checks the nonce. *)
+      ; all_deposits : F.t
       }
+    [@@deriving snarky]
   end
+
+  include MkHandler (Witness)
+
+  let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
+    let Witness.{ vk_hash; all_deposits } = exists_witness () in
+    let account_update = Body.(constant (typ ()) dummy) in
+    (* Set all_deposits *)
+    let update =
+      { account_update.update with
+        (* FIXME: Check Action_state_extension.var from previous to this *)
+        app_state = State.(var_to_app_state typ { all_deposits })
+      }
+    in
+    let account_update =
+      { account_update with
+        public_key = constant PC.typ public_key
+      ; authorization_kind = authorization_vk_hash vk_hash
+      ; update
+      ; increment_nonce =
+          Boolean.true_
+          (* We increment the nonce to signal that a step has been performed to the outer account *)
+      }
+    in
+    let public_output, auxiliary_output =
+      make_outputs account_update (Zkapp_call_forest.Checked.empty ())
+    in
+    Pickles.Inductive_rule.
+      { previous_proof_statements = []; public_output; auxiliary_output }
+
+  let rule : _ Pickles.Inductive_rule.t =
+    { identifier = "Rollup inner account step"
+    ; prevs = []
+    ; main
+    ; feature_flags
+    }
 end
 
 (** Rules for outer account zkapp *)
-module Outer_rules = struct
+module Outer = struct
   module State = struct
     (* NB! Don't change this, code depends on the layout, sorry *)
     type t =
       { ledger_hash : Ledger_hash.t  (** The ledger hash of the rollup *)
       ; all_withdrawals : F.t
-            (** All withdrawals registered on the L2. We must pay them out on the L1. *)
-      ; withdrawals_processed : F.t
-            (** All withdrawals successfully processed. *)
+            (** All withdrawals registered on the L2. They are paid out on the L1. *)
       }
     [@@deriving snarky]
 
     (* FIXME: Define through HKD *)
     module Precondition = struct
       type t =
-        { ledger_hash : Ledger_hash.var option
-        ; all_withdrawals : F.var option
-        ; withdrawals_processed : F.var option
-        }
+        { ledger_hash : Ledger_hash.var option; all_withdrawals : F.var option }
 
       let to_precondition (t : t) : F.var Or_ignore.Checked.t Zkapp_state.V.t =
         [ ( match t.ledger_hash with
@@ -879,11 +370,7 @@ module Outer_rules = struct
               Or_ignore.Checked.make_unsafe Boolean.true_ x
           | None ->
               ignore )
-        ; ( match t.withdrawals_processed with
-          | Some x ->
-              Or_ignore.Checked.make_unsafe Boolean.true_ x
-          | None ->
-              ignore )
+        ; ignore
         ; ignore
         ; ignore
         ; ignore
@@ -893,666 +380,353 @@ module Outer_rules = struct
     end
   end
 
-  module Step = struct
-    module TR_8 = struct
-      module T = TR
+  module PathElt = struct
+    type t = { is_right : Boolean.t; other : F.t } [@@deriving snarky]
+  end
 
-      let length = 8
-    end
+  module Path' = struct
+    module T = PathElt
 
-    module List_TR_8 = SnarkList (TR_8)
+    let length = constraint_constants.ledger_depth
+  end
 
-    module PathElt = struct
-      type t = { is_right : Boolean.t; other : F.t } [@@deriving snarky]
-    end
+  module Path = SnarkList (Path')
+  module Sparse_ledger_ref = MkRef (Mina_ledger.Sparse_ledger)
 
-    module Path' = struct
-      module T = PathElt
-
-      let length = constraint_constants.ledger_depth
-    end
-
-    module Path = SnarkList (Path')
-    module Sparse_ledger_ref = MkRef (Mina_ledger.Sparse_ledger)
-
-    module Witness = struct
-      type t =
-        { stmt : S.t  (** The ledger transition we are performing. *)
-        ; prf : RefProof.t  (** Proof of ledger transition being valid. *)
-        ; action_prf : RefProof.t  (** Proof that actions moved forward. *)
-        ; public_key : PC.t  (** Our public key on the L2 *)
-        ; vk_hash : F.t  (** Our vk hash *)
-        ; new_all_deposits : F.t  (** Action state on the L1 *)
-        ; withdrawals_processed : F.t
-        ; new_withdrawals : List_TR_8.t
-        ; old_inner_acc : Account.t
-        ; new_inner_acc : Account.t
-              (** Withdrawals to be processed this time *)
-        ; old_inner_acc_path : Path.t  (** Old path to inner account *)
-        ; new_inner_acc_path : Path.t  (** New path to inner account *)
-        }
-      [@@deriving snarky]
-    end
-
-    include MkHandler (Witness)
-
-    (* Copied from transaction_snark/transaction_snark.ml. There's
-       similar code in snarky's merkle tree code, but I(Las)'m too lazy to check
-       if it's correct for our purposes. *)
-    let implied_root account (path : Path.var) : F.var =
-      let open Impl in
-      List.foldi path
-        ~init:(run @@ Account.Checked.digest account)
-        ~f:(fun height acc PathElt.{ is_right; other } ->
-          let l = Field.if_ is_right ~then_:other ~else_:acc
-          and r = Field.if_ is_right ~then_:acc ~else_:other in
-          let acc' = Ledger_hash.merge_var ~height l r in
-          acc' )
-
-    let get_zkapp (a : Account.var) : Zkapp_account.Checked.t =
-      let hash, content = a.zkapp in
-      let content =
-        exists Zkapp_account.typ ~compute:(fun () ->
-            match As_prover.Ref.get content with
-            | Some content ->
-                content
-            | None ->
-                Zkapp_account.default )
-      in
-      Field.Assert.equal hash @@ Zkapp_account.Checked.digest content ;
-      content
-
-    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-      let ({ stmt
-           ; prf
-           ; action_prf
-           ; public_key
-           ; vk_hash
-           ; new_all_deposits
-           ; withdrawals_processed
-           ; new_withdrawals
-           ; old_inner_acc_path
-           ; old_inner_acc
-           ; new_inner_acc_path
-           ; new_inner_acc
-           }
-            : Witness.var ) =
-        exists_witness ()
-      in
-      let implied_root_old = implied_root old_inner_acc old_inner_acc_path in
-      let implied_root_new = implied_root new_inner_acc new_inner_acc_path in
-      (* We check that the paths provided for the inner account are correct. *)
-      with_label __LOC__ (fun () ->
-          Field.Assert.equal
-            (Ledger_hash.var_to_hash_packed stmt.source_ledger)
-            implied_root_old ) ;
-      with_label __LOC__ (fun () ->
-          Field.Assert.equal
-            (Ledger_hash.var_to_hash_packed stmt.target_ledger)
-            implied_root_new ) ;
-      (* There must have been exactly one "step" in the inner account, checked by checking nonce *)
-      with_label __LOC__ (fun () ->
-          run
-          @@ Nonce.Checked.Assert.equal
-               (run @@ Nonce.Checked.succ old_inner_acc.nonce)
-               new_inner_acc.nonce ) ;
-      (* We check that we're dealing with the correct account. *)
-      with_label __LOC__ (fun () ->
-          run
-          @@ PC.Checked.Assert.equal old_inner_acc.public_key
-               (constant PC.typ Inner_rules.public_key) ) ;
-      (* We repeat the above check for the new account. *)
-      with_label __LOC__ (fun () ->
-          run
-          @@ PC.Checked.Assert.equal new_inner_acc.public_key
-               (constant PC.typ Inner_rules.public_key) ) ;
-      let old_inner_zkapp = get_zkapp old_inner_acc in
-      let new_inner_zkapp = get_zkapp new_inner_acc in
-      (* The inner account keeps track of _our_ action state, that's how it knows
-         what transfer requests have been logged on the L1 to the L2.
-         We check that it's been set to our current app state,
-         and seemingly redundantly, that it's also an extension of the old one.
-         It's in fact possible to go _backwards_ if we're not careful, since
-         what we think is our action state is in fact just a recent one,
-         so you could set the action state precondition to an old state and go backwards.
-         I haven't considered whether it's problematic to go backwards, but we disallow it anyway. *)
-      let (old_all_deposits :: _) = old_inner_zkapp.app_state in
-      let (should_be_new_all_deposits :: _) = new_inner_zkapp.app_state in
-      (* Check that it matches new_all_deposits witness *)
-      with_label __LOC__ (fun () ->
-          Field.Assert.equal new_all_deposits should_be_new_all_deposits ) ;
-      (* Init account update *)
-      let account_update = Body.(constant (typ ()) dummy) in
-      (* Declare that we're authorized by a proof *)
-      let authorization_kind : Authorization_kind.Checked.t =
-        { is_signed = Boolean.false_
-        ; is_proved = Boolean.true_
-        ; verification_key_hash = vk_hash
-        }
-      in
-      (* Withdrawals are registered in the inner account's action state *)
-      let (new_all_withdrawals :: _) = new_inner_zkapp.action_state in
-      (* Init calls *)
-      let calls = Zkapp_call_forest.Checked.empty () in
-      (* NOTE: new_withdrawals_processed must be a prefix of all_transfers, checked also using action_prf. *)
-      (* For every transfer, we add a "call", i.e. an account update as child where we inc balance *)
-      let balance_change = CAS.(constant typ zero) in
-      let new_withdrawals_processed, (calls, balance_change) =
-        List.fold new_withdrawals
-          ~init:(withdrawals_processed, (calls, balance_change))
-          ~f:(fun (withdrawals, (calls, balance_change)) withdrawal ->
-            Process_transfer.process_transfer withdrawal withdrawals calls
-              balance_change )
-      in
-      (* Finalize update  *)
-      let update =
-        { account_update.update with
-          app_state =
-            State.(
-              var_to_app_state typ
-                ( { ledger_hash = stmt.target_ledger
-                  ; all_withdrawals = new_all_withdrawals
-                  ; withdrawals_processed = new_withdrawals_processed
-                  }
-                  : var ))
-        }
-      in
-      (* Init account state precondition *)
-      let account_precondition =
-        constant
-          (Zkapp_precondition.Account.typ ())
-          Zkapp_precondition.Account.accept
-      in
-      let account_precondition =
-        { account_precondition with
-          state =
-            State.Precondition.(
-              to_precondition
-                { ledger_hash = Some stmt.source_ledger
-                ; all_withdrawals = None
-                ; withdrawals_processed = Some withdrawals_processed
-                })
-        ; action_state =
-            Or_ignore.Checked.make_unsafe Boolean.true_ new_all_deposits
-            (* Our action state must match *)
-        }
-      in
-      let preconditions =
-        { Preconditions.(constant (typ ()) accept) with
-          account = account_precondition
-        }
-      in
-      (* Our account update is assembled, specifying our state update, our preconditions, our pk, and our authorization *)
-      let account_update =
-        { account_update with
-          public_key
-        ; balance_change
-        ; authorization_kind
-        ; update
-        ; preconditions
-        }
-      in
-      (* Assemble some stuff to help the prover and calculate public output *)
-      let public_output, auxiliary_output = make_outputs account_update calls in
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            [ { public_input = stmt
-              ; proof_must_verify = Boolean.true_
-              ; proof = prf
-              }
-              (* Proof for Wrapper_rules showing there is a valid transition from source to target *)
-            ; { public_input =
-                  (* The inner account's tracking of our action state (deposits) must only go forward.
-                     We need to check this explicitly because each account has 5 action states.
-                     We don't need to check it the opposite way around because we can explicitly
-                     choose the latest action state.
-
-                     To check that the withdrawals we processed were valid and not forged, we check
-                     that there is some sequence of withdrawals after it that result in the action state
-                     of the inner account. *)
-                  ({ source0 = old_all_deposits
-                   ; target0 = new_all_deposits
-                   ; source1 = new_withdrawals_processed
-                   ; target1 = new_all_withdrawals
-                   } : Action_state_extension_rule.Stmt.var)
-              ; proof_must_verify = Boolean.true_
-              ; proof = action_prf
-              }
-              (* Proof that _our_ outer action state, as recorded in the inner account, stepped forward, along
-                 with the _inner_ action state, as recorded in the outer account, is an extension of our processed transfers *)
-            ]
-        ; public_output
-        ; auxiliary_output
-        }
-
-    let rule tag action_tag : _ Pickles.Inductive_rule.t =
-      { identifier = "Rollup step"
-      ; prevs = [ tag; action_tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
+  module Witness = struct
+    type t =
+      { t : Wrapper.t  (** The ledger transition we are performing. *)
+      ; public_key : PC.t  (** Our public key on the L2 *)
+      ; vk_hash : F.t  (** Our vk hash *)
+      ; all_deposits : Action_state_extension.t  (** Action state on the L1 *)
+      ; old_inner_acc : Account.t
+      ; new_inner_acc : Account.t  (** Withdrawals to be processed this time *)
+      ; old_inner_acc_path : Path.t  (** Old path to inner account *)
+      ; new_inner_acc_path : Path.t  (** New path to inner account *)
       }
+    [@@deriving snarky]
+  end
+
+  include MkHandler (Witness)
+
+  (* Copied from transaction_snark/transaction_snark.ml. There's
+     similar code in snarky's merkle tree code, but I(Las)'m too lazy to check
+     if it's correct for our purposes. *)
+  let implied_root account (path : Path.var) : F.var =
+    let open Impl in
+    List.foldi path
+      ~init:(run @@ Account.Checked.digest account)
+      ~f:(fun height acc PathElt.{ is_right; other } ->
+        let l = Field.if_ is_right ~then_:other ~else_:acc
+        and r = Field.if_ is_right ~then_:acc ~else_:other in
+        let acc' = Ledger_hash.merge_var ~height l r in
+        acc' )
+
+  let get_zkapp (a : Account.var) : Zkapp_account.Checked.t =
+    let hash, content = a.zkapp in
+    let content =
+      exists Zkapp_account.typ ~compute:(fun () ->
+          match As_prover.Ref.get content with
+          | Some content ->
+              content
+          | None ->
+              Zkapp_account.default )
+    in
+    with_label __LOC__ (fun () ->
+        Field.Assert.equal hash @@ Zkapp_account.Checked.digest content ) ;
+    content
+
+  let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
+    let ({ t
+         ; public_key
+         ; vk_hash
+         ; all_deposits
+         ; old_inner_acc_path
+         ; old_inner_acc
+         ; new_inner_acc_path
+         ; new_inner_acc
+         }
+          : Witness.var ) =
+      exists_witness ()
+    in
+    let implied_root_old = implied_root old_inner_acc old_inner_acc_path in
+    let implied_root_new = implied_root new_inner_acc new_inner_acc_path in
+    (* We check that the paths provided for the inner account are correct. *)
+    with_label __LOC__ (fun () ->
+        Field.Assert.equal
+          (Ledger_hash.var_to_hash_packed
+             (Wrapper.statement_var t).source_ledger )
+          implied_root_old ) ;
+    with_label __LOC__ (fun () ->
+        Field.Assert.equal
+          (Ledger_hash.var_to_hash_packed
+             (Wrapper.statement_var t).target_ledger )
+          implied_root_new ) ;
+    (* FIXME: allow more than one *)
+    (* There must have been exactly one or zero "steps" in the inner account, checked by checking nonce *)
+    assert_var __LOC__ (fun () ->
+        Boolean.(
+          run
+          @@ Nonce.Checked.equal
+               (run @@ Nonce.Checked.succ old_inner_acc.nonce)
+               new_inner_acc.nonce
+          ||| run @@ Nonce.Checked.equal old_inner_acc.nonce new_inner_acc.nonce) ) ;
+    (* We check that we're dealing with the correct account. *)
+    with_label __LOC__ (fun () ->
+        run
+        @@ PC.Checked.Assert.equal old_inner_acc.public_key
+             (constant PC.typ Inner.public_key) ) ;
+    (* We repeat the above check for the new account. *)
+    with_label __LOC__ (fun () ->
+        run
+        @@ PC.Checked.Assert.equal new_inner_acc.public_key
+             (constant PC.typ Inner.public_key) ) ;
+    let old_inner_zkapp = get_zkapp old_inner_acc in
+    let new_inner_zkapp = get_zkapp new_inner_acc in
+    (* The inner account keeps track of _our_ action state, that's how it knows
+       what transfer requests have been logged on the L1 to the L2.
+       We check that it's been set to our current app state,
+       and seemingly redundantly, that it's also an extension of the old one.
+       It's in fact possible to go _backwards_ if we're not careful, since
+       what we think is our action state is in fact just a recent one,
+       so you could set the action state precondition to an old state and go backwards.
+       I haven't considered whether it's problematic to go backwards, but we disallow it anyway. *)
+    let ({ all_deposits = old_all_deposits } : Inner.State.var) =
+      Inner.State.var_of_app_state old_inner_zkapp.app_state
+    in
+    let ({ all_deposits = new_all_deposits } : Inner.State.var) =
+      Inner.State.var_of_app_state new_inner_zkapp.app_state
+    in
+    (* Check that it matches all_deposits witness *)
+    with_label __LOC__ (fun () ->
+        Field.Assert.equal
+          (Action_state_extension.statement_var all_deposits).source
+          old_all_deposits ) ;
+    with_label __LOC__ (fun () ->
+        Field.Assert.equal
+          (Action_state_extension.statement_var all_deposits).target
+          new_all_deposits ) ;
+    (* Init account update *)
+    let account_update = Body.(constant (typ ()) dummy) in
+    (* Withdrawals are registered in the inner account's action state *)
+    let (new_all_withdrawals :: _) = new_inner_zkapp.action_state in
+    (* Finalize update  *)
+    let update =
+      { account_update.update with
+        app_state =
+          State.(
+            var_to_app_state typ
+              ( { ledger_hash = (Wrapper.statement_var t).target_ledger
+                ; all_withdrawals = new_all_withdrawals
+                }
+                : var ))
+      }
+    in
+    let preconditions =
+      { Preconditions.(constant (typ ()) accept) with
+        account =
+          { Zkapp_precondition.Account.(constant (typ ()) accept) with
+            state =
+              State.Precondition.(
+                to_precondition
+                  { ledger_hash = Some (Wrapper.statement_var t).source_ledger
+                  ; all_withdrawals = None
+                  })
+          ; action_state =
+              Or_ignore.Checked.make_unsafe Boolean.true_ new_all_deposits
+              (* Our action state must match *)
+          }
+      }
+    in
+    (* Our account update is assembled, specifying our state update, our preconditions, our pk, and our authorization *)
+    let account_update =
+      { account_update with
+        public_key
+      ; authorization_kind = authorization_vk_hash vk_hash
+      ; update
+      ; preconditions
+      }
+    in
+    (* Assemble some stuff to help the prover and calculate public output *)
+    let public_output, auxiliary_output =
+      make_outputs account_update (Zkapp_call_forest.Checked.empty ())
+    in
+    Pickles.Inductive_rule.
+      { previous_proof_statements =
+          [ Wrapper.verify t
+            (* Proof for Wrapper showing there is a valid transition from source to target *)
+          ; Action_state_extension.verify all_deposits
+            (* Proof that deposits as recorded on L1 went forward, otherwise it could go backwards *)
+          ]
+      ; public_output
+      ; auxiliary_output
+      }
+
+  let rule tag action_state_extension_tag : _ Pickles.Inductive_rule.t =
+    { identifier = "Rollup step"
+    ; prevs = [ tag; action_state_extension_tag ]
+    ; main
+    ; feature_flags
+    }
+end
+
+module Mocked_zkapp = struct
+  module Deploy = struct
+    let deploy ~signer:_ = failwith "deprecated"
   end
 end
 
 (* What we expose from this module *)
-type t = Wrapper_rules.t
+type t = Wrapper.t
 
-let source_ledger (t : t) = t.stmt.source_ledger
+let source_ledger (t : t) = (Wrapper.statement t).source_ledger
 
-let target_ledger (t : t) = t.stmt.target_ledger
+let target_ledger (t : t) = (Wrapper.statement t).target_ledger
 
-(* Only for testing purposes *)
-module Mocked_zkapp = struct
-  module Deploy = struct
-    let deploy ~(signer : Signature_lib.Keypair.t) ~(fee : Currency.Fee.t)
-        ~(nonce : Account.Nonce.t) ~(zkapp : Signature_lib.Keypair.t)
-        ~(vk : Side_loaded_verification_key.t) ~(initial_state : Ledger_hash.t)
-        : Zkapp_command.t =
-      let zkapp_update =
-        { body =
-            { Body.dummy with
-              public_key = Public_key.compress zkapp.public_key
-            ; implicit_account_creation_fee = false
-            ; update =
-                { Update.dummy with
-                  app_state =
-                    [ Set (Ledger_hash.to_field initial_state)
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ; Set Field.Constant.zero
-                    ]
-                ; verification_key =
-                    Set { data = vk; hash = Zkapp_account.digest_vk vk }
-                ; permissions = Set proof_permissions
-                }
-            ; use_full_commitment = true
-            ; authorization_kind = Signature
-            }
-        ; authorization = Signature Signature.dummy
-        }
-      in
-      let sender_update =
-        { body =
-            { Body.dummy with
-              public_key = Public_key.compress signer.public_key
-            ; balance_change =
-                CAS.negate @@ CAS.of_unsigned
-                @@ CA.of_fee constraint_constants.account_creation_fee
-            ; use_full_commitment = true
-            ; authorization_kind = Signature
-            }
-        ; authorization = Signature Signature.dummy
-        }
-      in
-      let command : Zkapp_command.t =
-        { fee_payer =
-            { Account_update.Fee_payer.body =
-                { public_key = Public_key.compress signer.public_key
-                ; fee
-                ; valid_until = None
-                ; nonce
-                }
-            ; authorization = Signature.dummy
-            }
-        ; account_updates =
-            Zkapp_command.Call_forest.accumulate_hashes'
-            @@ Zkapp_command.Call_forest.of_account_updates
-                 ~account_update_depth:(fun _ -> 0)
-                 [ zkapp_update; sender_update ]
-        ; memo = Signed_command_memo.empty
-        }
-      in
-      let commitment = Zkapp_command.commitment command in
-      let full_commitment =
-        Zkapp_command.Transaction_commitment.create_complete
-          (Zkapp_command.commitment command)
-          ~memo_hash:(Signed_command_memo.hash command.memo)
-          ~fee_payer_hash:
-            (Zkapp_command.Digest.Account_update.create
-               (Account_update.of_fee_payer command.fee_payer) )
-      in
-      let sender_signature =
-        Signature_lib.Schnorr.Chunked.sign
-          ~signature_kind:Mina_signature_kind.Testnet signer.private_key
-          (Random_oracle.Input.Chunked.field full_commitment)
-      in
-      let zkapp_signature =
-        Signature_lib.Schnorr.Chunked.sign
-          ~signature_kind:Mina_signature_kind.Testnet zkapp.private_key
-          (Random_oracle.Input.Chunked.field full_commitment)
-      in
-      { command with
-        fee_payer = { command.fee_payer with authorization = sender_signature }
-      ; account_updates =
-          Zkapp_command.Call_forest.accumulate_hashes
-            ~hash_account_update:(fun p ->
-              Zkapp_command.Digest.Account_update.create p )
-          @@ Zkapp_command.Call_forest.of_account_updates
-               ~account_update_depth:(fun _ -> 0)
-               [ { zkapp_update with
-                   authorization = Control.Signature zkapp_signature
-                 }
-               ; { sender_update with
-                   authorization = Control.Signature sender_signature
-                 }
-               ]
-      }
-  end
+let inner_pending_coinbase_init = Wrapper.dummy_pc_init
 
-  module Step = struct
-    include struct
-      open Snarky_backendless.Request
+let inner_pending_coinbase = Wrapper.dummy_pc
 
-      type _ t +=
-        | Public_key : PC.t t
-        | Vk_hash : field t
-        | Statement : Wrapper_rules.S.t t
-        | Proof : Proof.t t
-    end
-
-    let handler (pk : PC.t) (vk_hash : field) (stmt : Wrapper_rules.S.t)
-        (prf : Proof.t) (Snarky_backendless.Request.With { request; respond }) =
-      match request with
-      | Public_key ->
-          respond (Provide pk)
-      | Vk_hash ->
-          respond (Provide vk_hash)
-      | Statement ->
-          respond (Provide stmt)
-      | Proof ->
-          respond (Provide prf)
-      | _ ->
-          respond Unhandled
-
-    let main Pickles.Inductive_rule.{ public_input = () } =
-      let public_key = exists PC.typ ~request:(fun () -> Public_key) in
-      let vk_hash = exists Field.typ ~request:(fun () -> Vk_hash) in
-      let stmt = exists Wrapper_rules.S.typ ~request:(fun () -> Statement) in
-      let proof = exists (Typ.Internal.ref ()) ~request:(fun () -> Proof) in
-
-      let calls = Zkapp_call_forest.Checked.empty () in
-      let account_update = constant (Body.typ ()) Body.dummy in
-      let authorization_kind : Authorization_kind.Checked.t =
-        { is_signed = Boolean.false_
-        ; is_proved = Boolean.true_
-        ; verification_key_hash = vk_hash
-        }
-      in
-      let update = account_update.update in
-      let update =
-        { update with
-          app_state =
-            [ Set_or_keep.Checked.set
-              @@ Ledger_hash.var_to_field stmt.target_ledger
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ; keep
-            ]
-        }
-      in
-      let account_precondition =
-        constant
-          (Zkapp_precondition.Account.typ ())
-          Zkapp_precondition.Account.accept
-      in
-      let account_precondition =
-        { account_precondition with
-          state =
-            [ Or_ignore.Checked.make_unsafe Boolean.true_
-                (Ledger_hash.var_to_field stmt.source_ledger)
-            ; ignore
-            ; ignore
-            ; ignore
-            ; ignore
-            ; ignore
-            ; ignore
-            ; ignore
-            ]
-        }
-      in
-      let preconditions =
-        constant (Preconditions.typ ()) Preconditions.accept
-      in
-      let preconditions =
-        { preconditions with account = account_precondition }
-      in
-      let account_update =
-        { account_update with
-          public_key
-        ; authorization_kind
-        ; update
-        ; preconditions
-        }
-      in
-      let public_output, auxiliary_output = make_outputs account_update calls in
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            [ { public_input = stmt; proof_must_verify = Boolean.true_; proof }
-            ]
-        ; public_output
-        ; auxiliary_output
-        }
-
-    let rule tag : _ Pickles.Inductive_rule.t =
-      { identifier = "Mocked rollup step"
-      ; prevs = [ tag ]
-      ; main
-      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-      }
-  end
-end
-
-let inner_pending_coinbase_init = Wrapper_rules.Wrap.dummy_pc_init
-
-let inner_pending_coinbase = Wrapper_rules.Wrap.dummy_pc
-
-let inner_state_body = Wrapper_rules.Wrap.dummy_state_body
+let inner_state_body = Wrapper.dummy_state_body
 
 (** Compile the circuits *)
-module Make (T : sig
-  (** Tag for transaction snark rules *)
-  val tag : Transaction_snark.tag
-end) =
-struct
+module Make (T' : Transaction_snark.S) = struct
   open Async_kernel
+  module Wrapper = Wrapper.Make (T')
 
-  let time : string -> (unit -> 'a) -> 'a =
-   fun label f ->
-    let start = Time.now () in
-    let x = f () in
-    let stop = Time.now () in
-    printf "%s: %s\n%!" label (Time.Span.to_string_hum (Time.diff stop start)) ;
-    x
+  type transfer_prover =
+    ( Action_state_extension.Stmt.t * (Action_state_extension.Stmt.t * unit)
+    , Nat.N2.n * (Nat.N2.n * unit)
+    , Nat.N2.n * (Nat.N2.n * unit)
+    , unit
+    , ( field Zkapp_statement.Poly.t
+      * ( Body.t
+        * Zkapp_command.Digest.Account_update.t
+        * ( T.t
+          , Zkapp_command.Digest.Account_update.t
+          , Zkapp_command.Digest.Forest.t )
+          Zkapp_command.Call_forest.t )
+      * (Nat.N2.n, Nat.N2.n) Pickles.Proof.t )
+      Deferred.t )
+    Pickles.Prover.t
 
-  (* Maybe there's a better way of doing this function, or perhaps a built-in way *)
-  let time_async : string -> (unit -> 'a Deferred.t) -> 'a Deferred.t =
-   fun label f ->
-    let start = Time.now () in
-    let%map x = f () in
-    let stop = Time.now () in
-    printf "%s: %s\n%!" label (Time.Span.to_string_hum (Time.diff stop start)) ;
-    x
-
-  module Action_state_extension = struct
-    open Action_state_extension_rule
-
-    let tag, cache_handle, p, Pickles.Provers.[ base_; step_both_; merge_ ] =
-      time "Action_state_extension.compile" (fun () ->
-          Pickles.compile ()
-            ~override_wrap_domain:Pickles_base.Proofs_verified.N1
-            ~cache:Cache_dir.cache ~public_input:(Output Stmt.typ)
-            ~auxiliary_typ:Typ.unit
-            ~branches:(module Nat.N3)
-            ~max_proofs_verified:(module Nat.N2)
-            ~name:"action state extension"
-            ~constraint_constants:
-              (Genesis_constants.Constraint_constants.to_snark_keys_header
-                 constraint_constants )
-            ~choices:(fun ~self ->
-              [ Base.rule; StepBoth.rule self; Merge.rule self ] ) )
-
-    let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
-
-    let base w =
-      time_async "Action_state_extension.base" (fun () ->
-          base_ ~handler:(Base.handler w) () )
-
-    let step_both w =
-      time_async "Action_state_extension_rule.step_both" (fun () ->
-          step_both_ ~handler:(StepBoth.handler w) () )
-
-    let merge w = merge_ ~handler:(Merge.handler w) ()
-  end
-
-  module Wrapper = struct
-    open Wrapper_rules
-
-    let tag, cache_handle, p, Pickles.Provers.[ wrap_; merge_ ] =
-      time "Wrapper.compile" (fun () ->
-          Pickles.compile ()
-            ~override_wrap_domain:Pickles_base.Proofs_verified.N1
-            ~cache:Cache_dir.cache ~public_input:(Output S.typ)
-            ~auxiliary_typ:Typ.unit
-            ~branches:(module Nat.N2)
-            ~max_proofs_verified:(module Nat.N2)
-            ~name:"zeko wrapper"
-            ~constraint_constants:
-              (Genesis_constants.Constraint_constants.to_snark_keys_header
-                 constraint_constants )
-            ~choices:(fun ~self -> [ Wrap.rule T.tag; Merge.rule self ]) )
-
-    let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
-
-    let wrap txn_snark =
-      time_async "Wrapper.wrap" (fun () ->
-          let%map stmt, _, proof =
-            wrap_ ~handler:(Wrap.handler { txn_snark }) ()
-          in
-          ({ stmt; proof } : t) )
-
-    let merge (s1 : t) (s2 : t) =
-      time_async "Wrapper.merge" (fun () ->
-          let%map stmt, _, proof =
-            merge_ ~handler:(Merge.handler { s1; s2 }) ()
-          in
-          ({ stmt; proof } : t) )
-
-    module Proof = (val p)
-
-    let verify (s : t) = Proof.verify [ (s.stmt, s.proof) ]
-  end
+  let process_transfer ~is_new ~pointer ~before ~after ~transfer ~vk_hash
+      ~public_key (prover : transfer_prover) =
+    let pointer = Option.value pointer ~default:Actions.empty_state_element in
+    let before = List.map ~f:(value_to_actions TR.typ) before in
+    let after = List.map ~f:(value_to_actions TR.typ) after in
+    let%bind trans1 =
+      Action_state_extension.prove ~dummy:is_new ~source:pointer before
+    in
+    let pointer' =
+      Actions.push_events (Action_state_extension.statement trans1).target
+        (value_to_actions TR.typ transfer)
+    in
+    let%bind trans2 = Action_state_extension.prove ~source:pointer' after in
+    let child =
+      { Body.dummy with
+        public_key = transfer.recipient
+      ; balance_change = CAS.of_unsigned transfer.amount
+      ; use_full_commitment = true
+      ; authorization_kind = Signature
+      }
+    in
+    let child = attach_control child in
+    let%map _, tree, proof =
+      prover
+        ~handler:
+          (Process_transfer.handler
+             { vk_hash; public_key; transfer; child; trans1; trans2; is_new } )
+        ()
+    in
+    (* If the account is new, we must pay out the account creation fee for the helper account.
+       We accomplish that by paying the fee _after_ receiving our funds.
+       After all, there may not be enough fees before then.
+       The account holding the MINA received pays its own fees using implicit_account_creation_fee. *)
+    let account_creation_fee = constraint_constants.account_creation_fee in
+    let account_creation_fee_payer : Account_update.t =
+      { body =
+          { Body.dummy with
+            public_key = transfer.recipient
+          ; balance_change =
+              CA.of_fee account_creation_fee |> CAS.of_unsigned |> CAS.negate
+          ; use_full_commitment = true
+          ; authorization_kind = Signature
+          }
+      ; authorization = None_given
+      }
+    in
+    ( `Pointer pointer'
+    , Zkapp_command.Call_forest.(
+        cons_tree (mktree tree proof)
+          ( if is_new then
+            accumulate_hashes'
+            @@ of_account_updates
+                 ~account_update_depth:(fun _ -> 0)
+                 [ account_creation_fee_payer ]
+          else [] )) )
 
   module Inner = struct
-    let tag, cache_handle, p, Pickles.Provers.[ step_; action_ ] =
+    include Inner
+
+    let to_precondition : Process_transfer.to_precondition =
+     fun ~all_transfers ->
+      State.Precondition.(to_precondition { all_deposits = all_transfers })
+
+    let ( tag
+        , cache_handle
+        , p
+        , Pickles.Provers.[ step_; submit_withdrawal_; process_deposit_ ] ) =
       time "Inner.compile" (fun () ->
           Pickles.compile () ~cache:Cache_dir.cache
+            ~override_wrap_domain:Pickles_base.Proofs_verified.N1
             ~public_input:(Output Zkapp_statement.typ)
             ~auxiliary_typ:Typ.(Prover_value.typ ())
-            ~branches:(module Nat.N2)
-            ~max_proofs_verified:(module Nat.N1)
+            ~branches:(module Nat.N3)
+            ~max_proofs_verified:(module Nat.N2)
             ~name:"rollup inner account"
             ~constraint_constants:
               (Genesis_constants.Constraint_constants.to_snark_keys_header
                  constraint_constants )
             ~choices:(fun ~self:_ ->
-              [ Inner_rules.Step.rule Action_state_extension.tag
-              ; Transfer_action_rule.rule
+              [ Inner.rule
+              ; Submit_transfer.rule
+              ; Process_transfer.rule to_precondition
+                  (force Action_state_extension.tag)
               ] ) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
 
     let vk_hash = Zkapp_account.digest_vk vk
 
-    let withdraw ~public_key ~amount ~recipient =
-      time "Inner.withdraw" (fun () ->
+    let submit_withdrawal ~withdrawal:({ amount; recipient } : TR.t) =
+      time "Inner.submit_withdrawal" (fun () ->
           let%map _, tree, proof =
-            action_
+            submit_withdrawal_
               ~handler:
-                (Transfer_action_rule.handler
+                (Submit_transfer.handler
                    { vk_hash; public_key; amount; recipient } )
               ()
           in
           mktree tree proof )
 
-    let extend_action_state (action_state : field) (trs : TR.t list) :
-        (Action_state_extension_rule.Stmt.t * Proof.t) Deferred.t =
-      let%bind stmt, (), proof =
-        Action_state_extension.base
-          ( { source0 = action_state; source1 = action_state }
-            : Action_state_extension_rule.Base.Witness.t )
-      in
-      let%bind stmt, proof =
-        List.fold trs
-          ~init:(return (stmt, proof))
-          ~f:(fun stmt_proof tr ->
-            if TR.is_dummy tr then stmt_proof
-            else
-              let%bind stmt, proof = stmt_proof in
-              let action = TR.(value_to_actions typ tr) in
-              let%map stmt, (), proof =
-                Action_state_extension.step_both
-                  ( { actions0 = action
-                    ; actions1 = action
-                    ; step0 = true
-                    ; step1 = true
-                    ; prev = stmt
-                    ; proof
-                    }
-                    : Action_state_extension_rule.StepBoth.Witness.t )
-              in
-              (stmt, proof) )
-      in
-      return (stmt, proof)
+    let process_deposit ~is_new ~pointer ~before ~after ~deposit =
+      time "Inner.process_deposit" (fun () ->
+          process_transfer ~is_new ~pointer ~before ~after ~transfer:deposit
+            ~vk_hash ~public_key process_deposit_ )
 
-    let step ~(deposits_processed : field) ~(remaining_deposits : TR.t list) :
-        ( ( Account_update.t
-          , Zkapp_command.Digest.Account_update.t
-          , Zkapp_command.Digest.Forest.t )
-          Zkapp_command.Call_forest.Tree.t
-        * field
-        * TR.t list )
+    let step ~all_deposits :
+        ( Account_update.t
+        , Zkapp_command.Digest.Account_update.t
+        , Zkapp_command.Digest.Forest.t )
+        Zkapp_command.Call_forest.Tree.t
         Deferred.t =
       time "Inner.step" (fun () ->
-          let new_deposits =
-            List.take remaining_deposits Inner_rules.Step.TR_8.length
+          let%map _, tree, proof =
+            let w : Inner.Witness.t = { vk_hash; all_deposits } in
+            step_ ~handler:(Inner.handler w) ()
           in
-          let new_deposits =
-            List.append new_deposits
-              (List.init (8 - List.length new_deposits) ~f:(fun _ -> TR.dummy))
-          in
-          let remaining_deposits = List.drop remaining_deposits 8 in
-          let remaining_deposits =
-            List.drop remaining_deposits Inner_rules.Step.TR_8.length
-          in
-          let%bind { target0 = deposits_processed' }, _ =
-            extend_action_state deposits_processed new_deposits
-          in
-          let%bind { target0 = all_deposits }, action_prf =
-            extend_action_state deposits_processed' remaining_deposits
-          in
-          let%bind _, tree, proof =
-            let w : Inner_rules.Step.Witness.t =
-              { vk_hash
-              ; deposits_processed
-              ; new_deposits
-              ; all_deposits
-              ; action_prf
-              }
-            in
-            step_ ~handler:(Inner_rules.Step.handler w) ()
-          in
-          let tree = mktree tree proof in
-          return (tree, deposits_processed', remaining_deposits) )
-
-    let public_key = Inner_rules.public_key
+          mktree tree proof )
 
     let account_id =
       Account_id.of_public_key @@ Public_key.decompress_exn public_key
@@ -1565,13 +739,7 @@ struct
       ; zkapp =
           Some
             { Zkapp_account.default with
-              app_state =
-                Inner_rules.State.(
-                  value_to_init_state typ
-                    ( { all_deposits = Actions.empty_state_element
-                      ; deposits_processed = Actions.empty_state_element
-                      }
-                      : t ))
+              app_state = Inner.State.(value_to_init_state typ default)
             ; verification_key =
                 Some (Verification_key_wire.Stable.Latest.M.of_binable vk)
             }
@@ -1579,44 +747,39 @@ struct
   end
 
   module Mocked = struct
-    let tag, cache_handle, p, Pickles.Provers.[ step_ ] =
-      time "Mocked_zkapp.compile" (fun () ->
-          Pickles.compile () ~cache:Cache_dir.cache
-            ~public_input:(Output Zkapp_statement.typ)
-            ~auxiliary_typ:Typ.(Prover_value.typ ())
-            ~branches:(module Nat.N1)
-            ~max_proofs_verified:(module Nat.N1)
-            ~name:"mocked rollup"
-            ~constraint_constants:
-              (Genesis_constants.Constraint_constants.to_snark_keys_header
-                 constraint_constants )
-            ~choices:(fun ~self:_ -> [ Mocked_zkapp.Step.rule Wrapper.tag ]) )
+    let vk = Pickles.Side_loaded.Verification_key.dummy
 
-    let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
-
-    let step (snark : t) pk vk_hash =
-      step_
-        ~handler:(Mocked_zkapp.Step.handler pk vk_hash snark.stmt snark.proof)
+    let step _ _ _ = failwith "deprecated"
   end
 
   module Outer = struct
-    open Outer_rules
+    include Outer
 
-    let tag, cache_handle, p, Pickles.Provers.[ step_; action_ ] =
-      time "Zkapp.compile" (fun () ->
+    let to_precondition : Process_transfer.to_precondition =
+     fun ~all_transfers ->
+      State.Precondition.(
+        to_precondition { all_withdrawals = all_transfers; ledger_hash = None })
+
+    let ( tag
+        , cache_handle
+        , p
+        , Pickles.Provers.[ step_; submit_deposit_; process_withdrawal_ ] ) =
+      time "Outer.compile" (fun () ->
           Pickles.compile ()
             ~override_wrap_domain:Pickles_base.Proofs_verified.N1
             ~cache:Cache_dir.cache ~public_input:(Output Zkapp_statement.typ)
             ~auxiliary_typ:Typ.(Prover_value.typ ())
-            ~branches:(module Nat.N2)
+            ~branches:(module Nat.N3)
             ~max_proofs_verified:(module Nat.N2)
             ~name:"rollup"
             ~constraint_constants:
               (Genesis_constants.Constraint_constants.to_snark_keys_header
                  constraint_constants )
             ~choices:(fun ~self:_ ->
-              [ Step.rule Wrapper.tag Action_state_extension.tag
-              ; Transfer_action_rule.rule
+              [ rule Wrapper.tag (force Action_state_extension.tag)
+              ; Submit_transfer.rule
+              ; Process_transfer.rule to_precondition
+                  (force Action_state_extension.tag)
               ] ) )
 
     let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
@@ -1625,28 +788,31 @@ struct
 
     let vk : Verification_key_wire.t = { data = vk; hash = vk_hash }
 
-    let deposit ~public_key ~amount ~recipient =
-      time "Outer.deposit" (fun () ->
+    let submit_deposit ~outer_public_key ~deposit:({ amount; recipient } : TR.t)
+        =
+      time "Outer.submit_deposit" (fun () ->
           let%map _, tree, proof =
-            action_
+            submit_deposit_
               ~handler:
-                (Transfer_action_rule.handler
-                   { vk_hash; public_key; amount; recipient } )
+                (Submit_transfer.handler
+                   { vk_hash; public_key = outer_public_key; amount; recipient } )
               ()
           in
           mktree tree proof )
 
-    let step (t : t) ~(outer_public_key : PC.t) ~(old_all_deposits : field)
-        ~(new_deposits : TR.t list) ~(withdrawals_processed : field)
-        ~(remaining_withdrawals : TR.t list)
+    let process_withdrawal ~is_new ~outer_public_key ~pointer ~before ~after
+        ~withdrawal =
+      time "Inner.process_withdrawal" (fun () ->
+          process_transfer ~is_new ~public_key:outer_public_key ~pointer ~before
+            ~after ~vk_hash ~transfer:withdrawal process_withdrawal_ )
+
+    let step (t : t) ~(outer_public_key : PC.t) ~(new_deposits : TR.t list)
         ~(old_inner_ledger : Mina_ledger.Sparse_ledger.t)
         ~(new_inner_ledger : Mina_ledger.Sparse_ledger.t) :
-        ( ( Account_update.t
-          , Zkapp_command.Digest.Account_update.t
-          , Zkapp_command.Digest.Forest.t )
-          Zkapp_command.Call_forest.Tree.t
-        * field
-        * TR.t list )
+        ( Account_update.t
+        , Zkapp_command.Digest.Account_update.t
+        , Zkapp_command.Digest.Forest.t )
+        Zkapp_command.Call_forest.Tree.t
         Deferred.t =
       time "Outer.step" (fun () ->
           let old_idx =
@@ -1659,9 +825,9 @@ struct
           let old_inner_acc_path =
             List.map ~f:(function
               | `Left other ->
-                  ({ is_right = false; other } : Step.PathElt.t)
+                  ({ is_right = false; other } : PathElt.t)
               | `Right other ->
-                  ({ is_right = true; other } : Step.PathElt.t) )
+                  ({ is_right = true; other } : PathElt.t) )
             @@ Mina_ledger.Sparse_ledger.path_exn old_inner_ledger old_idx
           in
           let new_idx =
@@ -1674,52 +840,32 @@ struct
           let new_inner_acc_path =
             List.map ~f:(function
               | `Left other ->
-                  ({ is_right = false; other } : Step.PathElt.t)
+                  ({ is_right = false; other } : PathElt.t)
               | `Right other ->
-                  ({ is_right = true; other } : Step.PathElt.t) )
+                  ({ is_right = true; other } : PathElt.t) )
             @@ Mina_ledger.Sparse_ledger.path_exn new_inner_ledger new_idx
           in
-          let%bind old_to_new_all_deposits, old_to_new_all_deposits_proof =
-            Inner.extend_action_state old_all_deposits new_deposits
+          let ({ all_deposits = old_all_deposits } : Inner.State.t) =
+            Inner.State.value_of_app_state
+              (Option.value_exn old_inner_acc.zkapp).app_state
           in
-          let withdrawals_length = Step.TR_8.length in
-          let new_withdrawals =
-            List.take remaining_withdrawals withdrawals_length
+          let ({ all_deposits = new_all_deposits } : Inner.State.t) =
+            Inner.State.value_of_app_state
+              (Option.value_exn new_inner_acc.zkapp).app_state
           in
-          let new_withdrawals =
-            List.append new_withdrawals
-              (List.init
-                 (withdrawals_length - List.length new_withdrawals)
-                 ~f:(fun _ -> TR.dummy) )
+          let%bind all_deposits =
+            Action_state_extension.prove ~source:old_all_deposits
+              (List.map ~f:(value_to_actions TR.typ) new_deposits)
           in
-          let remaining_withdrawals =
-            List.drop remaining_withdrawals withdrawals_length
-          in
-          let%bind { target0 = withdrawals_processed' }, _ =
-            Inner.extend_action_state withdrawals_processed new_withdrawals
-          in
-          let%bind ( withdrawals_processed'_to_all_withdrawals
-                   , withdrawals_processed'_to_all_withdrawals_proof ) =
-            Inner.extend_action_state withdrawals_processed'
-              remaining_withdrawals
-          in
-          let%bind _, (), action_prf =
-            Action_state_extension.merge
-              { left = old_to_new_all_deposits
-              ; right = withdrawals_processed'_to_all_withdrawals
-              ; left_proof = old_to_new_all_deposits_proof
-              ; right_proof = withdrawals_processed'_to_all_withdrawals_proof
-              }
-          in
-          let%bind _, tree, proof =
-            let w : Step.Witness.t =
+          assert (
+            Field.Constant.equal
+              (Action_state_extension.statement all_deposits).target
+              new_all_deposits ) ;
+          let%map _, tree, proof =
+            let w : Witness.t =
               { vk_hash
-              ; new_all_deposits = old_to_new_all_deposits.target0
-              ; withdrawals_processed
-              ; new_withdrawals
-              ; action_prf
-              ; stmt = t.stmt
-              ; prf = t.proof
+              ; t
+              ; all_deposits
               ; public_key = outer_public_key
               ; old_inner_acc
               ; old_inner_acc_path
@@ -1727,10 +873,9 @@ struct
               ; new_inner_acc_path
               }
             in
-            step_ ~handler:(Step.handler w) ()
+            step_ ~handler:(handler w) ()
           in
-          let tree = mktree tree proof in
-          return (tree, withdrawals_processed', remaining_withdrawals) )
+          mktree tree proof )
 
     let unsafe_deploy (ledger_hash : Ledger_hash.t) =
       let update =
@@ -1738,10 +883,7 @@ struct
           app_state =
             State.(
               value_to_app_state typ
-                ( { ledger_hash
-                  ; all_withdrawals = Actions.empty_state_element
-                  ; withdrawals_processed = Actions.empty_state_element
-                  }
+                ( { ledger_hash; all_withdrawals = Actions.empty_state_element }
                   : t ))
         ; verification_key = Set vk
         ; permissions = Set proof_permissions
@@ -1750,9 +892,7 @@ struct
       update
 
     let deploy_exn (l : L.t) =
-      if
-        not
-          (PC.equal Inner_rules.public_key (L.get_at_index_exn l 0).public_key)
+      if not (PC.equal Inner.public_key (L.get_at_index_exn l 0).public_key)
       then failwith "zeko outer deploy: ledger invalid"
       else () ;
       unsafe_deploy (L.merkle_root l)
@@ -1761,4 +901,4 @@ end
 
 module type S = Zkapps_rollup_intf.S with type t := t and module TR := TR
 
-let inner_public_key = Inner_rules.public_key
+let inner_public_key = Inner.public_key

@@ -52,9 +52,7 @@ module Sequencer = struct
     let proof_level = Genesis_constants.Proof_level.Full
   end)
 
-  module M = Zkapps_rollup.Make (struct
-    let tag = T.tag
-  end)
+  module M = Zkapps_rollup.Make (T)
 
   let keypair = Signature_lib.Keypair.create ()
 
@@ -260,14 +258,18 @@ module Sequencer = struct
                match transfer.direction with
                | Wrap ->
                    time "Outer.deposit"
-                     (M.Outer.deposit ~public_key:t.zkapp_pk
-                        ~amount:(Currency.Amount.of_uint64 transfer.amount)
-                        ~recipient:transfer.address )
+                     (M.Outer.submit_deposit ~outer_public_key:t.zkapp_pk
+                        ~deposit:
+                          { amount = Currency.Amount.of_uint64 transfer.amount
+                          ; recipient = transfer.address
+                          } )
                | Unwrap ->
                    time "Inner.withdraw"
-                     (M.Inner.withdraw ~public_key:t.zkapp_pk
-                        ~amount:(Currency.Amount.of_uint64 transfer.amount)
-                        ~recipient:transfer.address )
+                     (M.Inner.submit_withdrawal
+                        ~withdrawal:
+                          { amount = Currency.Amount.of_uint64 transfer.amount
+                          ; recipient = transfer.address
+                          } )
              in
              let call_forest = Zkapp_command.Call_forest.cons_tree tree [] in
              Transfers_memory.add t.transfers_memory key call_forest ;

@@ -59,15 +59,15 @@
   tuple_lib
   unsigned_extended
   with_hash
+  outside_hash_image
   zkapps_examples)
  (inline_tests)
  (instrumentation
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
-  (modules zkapps_rollup zkapps_rollup_intf)
- (flags
-  (:standard -w a -warn-error +a)))
+ (modules util action_state_extension wrapper zkapps_rollup zkapps_rollup_intf)
+ (flags -warn-error -22+34+33+27))
 
 (executable
  (name test)

@@ -14,11 +14,11 @@ necessary to operate on the zkApp are available in the network.
 
 ## Circuits
 
-There are 4 circuits in total:
 - Outer circuit (for L1 zkApp)
 - Inner circuit (for handling transfers on the L2 side cleanly)
 - Transaction wrapper circuit (for wrapping transaction snarks)
 - Action state extension circuit (for proving one action state is an extension of another)
+- Helper token owner circuit for recording transfers processed
 
 ## zkApp design
 
@@ -60,3 +60,29 @@ We can do it through token accounts, with a token owner that only allows storing
 We can do it by checking `receipt_chain_hash` at transfer-processing time.
 We can also use simpler indicators, such as `is_new`, after all, a new account can
 not have processed any transfers before!
+
+#### Token approach
+
+A transfer has two stages:
+- Submission (add action)
+- Processing (move funds from Zeko account to user account)
+
+During the processing, we must prove that we haven't processed the transfer already,
+by including a helper account specific to the recipient.
+The helper account tracks the action state at the time of the last transfer processing.
+The account update for the inner/outer account includes this as a child,
+and updates the action state to the current one.
+A proof that the actions between these two action states,
+filtered by recipient, total to the amount, must be included.
+If the account is new, the action state is regarded as being the empty action state.
+
+In essence, we are tracking per-recipient what transfers have been processed.
+We delegate the responsibility of this to the recipient themself.
+How do we prevent them from tampering with the data?
+We make the account have a special token id, which circuit _only_ allows transactions
+in which they are subordinate to the inner/outer account.
+
+Thus, they can never make an update which isn't also underneath the inner/outer account.
+
+To simplify this, we make the inner/outer account the token owner, removing
+the need for tracking the public key of the token owner.

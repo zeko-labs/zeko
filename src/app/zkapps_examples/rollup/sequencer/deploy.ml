@@ -10,9 +10,7 @@ module T = Transaction_snark.Make (struct
   let proof_level = Genesis_constants.Proof_level.Full
 end)
 
-module M = Zkapps_rollup.Make (struct
-  let tag = T.tag
-end)
+module M = Zkapps_rollup.Make (T)
 
 let run uri init_state sk () =
   let sender_keypair =

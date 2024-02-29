@@ -1,3 +1,4 @@
+module Util_ = Util
 open Core
 open Mina_ledger
 open Currency
@@ -8,13 +9,9 @@ open Mina_base
 module For_tests = Mina_transaction_logic.For_tests
 open Async_kernel
 module Field = Snark_params.Tick.Field
+module Util = Util_
 
-let wait d =
-  match Async_unix.Thread_safe.block_on_async d with
-  | Ok r ->
-      r
-  | Error e ->
-      printf "wait failed\n" ; raise e
+let wait d = Async_unix.Thread_safe.block_on_async_exn d
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -47,8 +44,38 @@ let zeko_module =
 
 let num_transactions = 2
 
+type call_forest =
+  ( Account_update.t
+  , Zkapp_command.Digest.Account_update.t
+  , Zkapp_command.Digest.Forest.t )
+  Zkapp_command.Call_forest.t
+
+type call_forest_tree =
+  ( Account_update.t
+  , Zkapp_command.Digest.Account_update.t
+  , Zkapp_command.Digest.Forest.t )
+  Zkapp_command.Call_forest.Tree.t
+
+let pretty_print_cmd (cmd : Zkapp_command.t) : unit =
+  let rec strip_tree (tree : call_forest_tree) : call_forest_tree =
+    { tree with
+      account_update = { tree.account_update with authorization = None_given }
+    ; calls = strip_forest tree.calls
+    }
+  and strip_forest (forest : call_forest) : call_forest =
+    List.map ~f:(fun tree -> { tree with elt = strip_tree tree.elt }) forest
+  in
+
+  let cmd =
+    { cmd with
+      fee_payer = { cmd.fee_payer with authorization = Signature.dummy }
+    ; account_updates = strip_forest cmd.account_updates
+    }
+  in
+  printf "%s\n" @@ Sexp.to_string_hum (Zkapp_command.sexp_of_t cmd)
+
 let check_no_failure
-    (applied : Ledger.Transaction_applied.Zkapp_command_applied.t) =
+    (applied : Ledger.Transaction_applied.Zkapp_command_applied.t) cmd =
   match applied.command.status with
   | Applied ->
       ()
@@ -62,7 +89,18 @@ let check_no_failure
                 fun failure ->
                   printf "%s: %s\n" (to_string failure) (describe failure)) )
         failuress ;
+      pretty_print_cmd cmd ;
       failwith "check_no_failure failed"
+
+let ledger_apply ~global_slot ~state_view ledger cmd : unit =
+  match
+    Ledger.apply_zkapp_command_unchecked ~constraint_constants ~global_slot
+      ~state_view ledger cmd
+  with
+  | Ok (applied, _) ->
+      check_no_failure applied cmd
+  | Error e ->
+      pretty_print_cmd cmd ; Error.raise e
 
 let with_mask (type a) (ledger : Ledger.t) ~(f : Ledger.t -> a) : a =
   let mask = Ledger.Mask.create ~depth:(Ledger.depth ledger) () in
@@ -88,7 +126,13 @@ let to_sparse ledger cmd =
   Sparse_ledger.of_ledger_subset_exn ledger
     (Zkapp_command.accounts_referenced cmd)
 
+let take_from_sparse ledger sparse =
+  Sparse_ledger.iteri sparse ~f:(fun i a -> Ledger.set_at_index_exn ledger i a) ;
+  assert (
+    Field.equal (Ledger.merkle_root ledger) (Sparse_ledger.merkle_root sparse) )
+
 (* Adapted from Transaction_snark_tests.Util.check_zkapp_command_with_merges_exn *)
+(* FIXME: fix support for fee_excess that isn't 0 *)
 let prove_zeko_command ~fee_excess ledger cmd :
     (Zkapps_rollup.t * Sparse_ledger.t) Deferred.t =
   let state_body = Zkapps_rollup.inner_state_body in
@@ -108,6 +152,7 @@ let prove_zeko_command ~fee_excess ledger cmd :
         ledger partial_txn
       |> Or_error.ok_exn
     in
+    check_no_failure txn cmd ;
     let last_global, _ = List.last_exn states in
     (last_global.first_pass_ledger, last_global.second_pass_ledger)
   in
@@ -160,18 +205,6 @@ let prove_zeko_command ~fee_excess ledger cmd :
   printf "prove_zeko_command done\n" ;
   (stmt, new_ledger)
 
-type call_forest =
-  ( Account_update.t
-  , Zkapp_command.Digest.Account_update.t
-  , Zkapp_command.Digest.Forest.t )
-  Zkapp_command.Call_forest.t
-
-type call_forest_tree =
-  ( Account_update.t
-  , Zkapp_command.Digest.Account_update.t
-  , Zkapp_command.Digest.Forest.t )
-  Zkapp_command.Call_forest.Tree.t
-
 (* Only supports use_full_commitment for simplicity *)
 let sign_cmd (cmd : Zkapp_command.t) (keys : Keypair.t list) : Zkapp_command.t =
   let full_commitment =
@@ -183,17 +216,25 @@ let sign_cmd (cmd : Zkapp_command.t) (keys : Keypair.t list) : Zkapp_command.t =
            (Account_update.of_fee_payer cmd.fee_payer) )
   in
   let sign_raw (pk : Public_key.Compressed.t) msg =
+    printf "Signing for %s\n" (Public_key.Compressed.to_base58_check pk) ;
     let rec go (keys : Keypair.t list) msg =
       match keys with
       | (kp : Keypair.t) :: keys ->
           if Public_key.Compressed.equal (Public_key.compress kp.public_key) pk
-          then
+          then (
+            printf "key found\n" ;
             Signature_lib.Schnorr.Chunked.sign
               ~signature_kind:Mina_signature_kind.Testnet kp.private_key
-              (Random_oracle.Input.Chunked.field msg)
-          else go keys msg
+              (Random_oracle.Input.Chunked.field msg) )
+          else (
+            printf "not equal to %s\n"
+              Public_key.(
+                kp.public_key |> compress |> Compressed.to_base58_check) ;
+            go keys msg )
       | [] ->
-          failwith "key not found"
+          failwithf "key not found: %s\n"
+            (Public_key.Compressed.to_base58_check pk)
+            ()
     in
     go keys msg
   in
@@ -219,32 +260,35 @@ let sign_cmd (cmd : Zkapp_command.t) (keys : Keypair.t list) : Zkapp_command.t =
   { cmd with
     fee_payer =
       { cmd.fee_payer with
-        authorization = sign_raw cmd.fee_payer.body.public_key full_commitment
+        authorization =
+          ( if Public_key.Compressed.(equal empty cmd.fee_payer.body.public_key)
+          then cmd.fee_payer.authorization
+          else sign_raw cmd.fee_payer.body.public_key full_commitment )
       }
   ; account_updates = sign_forest cmd.account_updates
   }
 
-let pretty_print_cmd (cmd : Zkapp_command.t) : unit =
-  let rec strip_tree (tree : call_forest_tree) : call_forest_tree =
-    { tree with
-      account_update = { tree.account_update with authorization = None_given }
-    ; calls = strip_forest tree.calls
-    }
-  and strip_forest (forest : call_forest) : call_forest =
-    List.map ~f:(fun tree -> { tree with elt = strip_tree tree.elt }) forest
-  in
-
-  let cmd =
-    { cmd with
-      fee_payer = { cmd.fee_payer with authorization = Signature.dummy }
-    ; account_updates = strip_forest cmd.account_updates
-    }
-  in
-  printf "%s\n" @@ Sexp.to_string_hum (Zkapp_command.sexp_of_t cmd)
-
 let dummy_update : Account_update.Body.t =
   { Account_update.Body.dummy with use_full_commitment = true }
 
+let get_account ledger (kp : Keypair.t) =
+  let account_id = Account_id.of_public_key kp.public_key in
+  let (`Existed : [ `Added | `Existed ]), loc =
+    Or_error.ok_exn
+    @@ Ledger.get_or_create_account ledger account_id
+         (Account.initialize account_id)
+  in
+  let account = Option.value_exn @@ Ledger.get ledger loc in
+  account
+
+(* Test to be done:
+   Given a list of accounts and intra-ledger-transfers,
+   deposit all of the funds over two inter-ledger-transfers
+   per account, in a random order.
+   Then do all intra-ledger-transfers,
+   and withdraw all the funds back in the same random manner, two withdrawals
+   per account.
+*)
 let main () =
   let module T = (val Lazy.force U.snark_module) in
   let module Z = (val Lazy.force zeko_module) in
@@ -269,6 +313,13 @@ let main () =
     (module Ledger.Ledger_inner)
     init_ledger outer_ledger ;
   let fee_payer_kp = Quickcheck.random_value Keypair.gen in
+  let zero_fee_payer =
+    let nonce = ref 0 in
+    fun () ->
+      let r = zero_fee_payer !nonce fee_payer_kp in
+      nonce := !nonce + 1 ;
+      r
+  in
   For_tests.Init_ledger.init
     (module Ledger.Ledger_inner)
     [| (fee_payer_kp, Int64.max_value) |]
@@ -296,7 +347,7 @@ let main () =
     }
   in
   let deploy_cmd : Zkapp_command.t =
-    { fee_payer = zero_fee_payer 0 fee_payer_kp
+    { fee_payer = zero_fee_payer ()
     ; account_updates =
         Zkapp_command.Call_forest.(
           accumulate_hashes'
@@ -304,105 +355,146 @@ let main () =
     ; memo = Signed_command_memo.empty
     }
   in
-  let state_body = U.genesis_state_body in
-  let state_view = Mina_state.Protocol_state.Body.view state_body in
+  let state_view = Mina_state.Protocol_state.Body.view U.genesis_state_body in
   let global_slot = state_view.global_slot_since_genesis in
-  let applied, _ =
-    Or_error.ok_exn
-    @@ Ledger.apply_zkapp_command_unchecked ~constraint_constants ~global_slot
-         ~state_view outer_ledger deploy_cmd
-  in
-  check_no_failure applied ;
-  (let kp, amount = init_ledger.(0) in
-   let amount = Amount.of_uint64 @@ Unsigned_extended.UInt64.of_int64 amount in
-   let deposit_update =
-     Async_unix.Thread_safe.block_on_async_exn (fun () ->
-         Z.Outer.deposit
-           ~public_key:(Public_key.compress zeko_kp.public_key)
-           ~amount
-           ~recipient:(Public_key.compress kp.public_key) )
-   in
-   let depositer_update : Account_update.t =
-     { body =
-         { Account_update.Body.dummy with
-           public_key = Public_key.compress kp.public_key
-         ; balance_change = Amount.Signed.(negate @@ of_unsigned amount)
-         ; use_full_commitment = true
-         ; authorization_kind = Signature
-         }
-     ; authorization = Signature Signature.dummy
-     }
-   in
-   let deposit_cmd : Zkapp_command.t =
-     { fee_payer = zero_fee_payer 1 fee_payer_kp
-     ; account_updates =
-         Zkapp_command.Call_forest.(
-           cons_tree deposit_update @@ accumulate_hashes'
-           @@ of_account_updates (fun _ -> 0) [ depositer_update ])
-     ; memo = Signed_command_memo.empty
-     }
-   in
-   let applied, _ =
-     Or_error.ok_exn
-     @@ Ledger.apply_zkapp_command_unchecked ~constraint_constants ~global_slot
-          ~state_view outer_ledger deposit_cmd
-   in
-   check_no_failure applied ;
+  ledger_apply ~global_slot ~state_view outer_ledger deploy_cmd ;
+  List.iter [ true ] ~f:(fun first_half ->
+      Array.iter init_ledger ~f:(fun (kp, amount) ->
+          let (old_all_deposits :: _) =
+            (Option.value_exn (get_account outer_ledger zeko_kp).zkapp)
+              .action_state
+          in
 
-   let old_action_state = Zkapp_account.Actions.empty_state_element in
-   let new_actions =
-     [ Zkapps_rollup.TR.
-         { recipient = Public_key.compress kp.public_key; amount }
-     ]
-   in
-   let withdrawals_processed = Zkapp_account.Actions.empty_state_element in
-   let remaining_withdrawals = [] in
+          (* First time we take half, second time we take rest *)
+          let amount =
+            if first_half then
+              Amount.of_uint64
+              @@ Unsigned_extended.UInt64.(div (of_int64 amount) (of_int 2))
+            else
+              Amount.of_uint64
+              @@ Unsigned_extended.UInt64.(
+                   sub (of_int64 amount) (div (of_int64 amount) (of_int 2)))
+          in
+          let deposit : Zkapps_rollup.TR.t =
+            { amount; recipient = Public_key.compress kp.public_key }
+          in
+          (let deposit_update =
+             wait (fun () ->
+                 Z.Outer.submit_deposit
+                   ~outer_public_key:(Public_key.compress zeko_kp.public_key)
+                   ~deposit )
+           in
+           let depositer_update : Account_update.t =
+             { body =
+                 { Account_update.Body.dummy with
+                   public_key = Public_key.compress kp.public_key
+                 ; balance_change = Amount.Signed.(negate @@ of_unsigned amount)
+                 ; use_full_commitment = true
+                 ; authorization_kind = Signature
+                 }
+             ; authorization = Signature Signature.dummy
+             }
+           in
+           let deposit_cmd : Zkapp_command.t =
+             { fee_payer = zero_fee_payer ()
+             ; account_updates =
+                 Zkapp_command.Call_forest.(
+                   cons_tree deposit_update @@ accumulate_hashes'
+                   @@ of_account_updates (fun _ -> 0) [ depositer_update ])
+             ; memo = Signed_command_memo.empty
+             }
+           in
+           ledger_apply ~global_slot ~state_view outer_ledger deposit_cmd ) ;
 
-   let deposits_processed = Zkapp_account.Actions.empty_state_element in
-   let remaining_deposits =
-     [ Zkapps_rollup.TR.
-         { recipient = Public_key.compress kp.public_key; amount }
-     ]
-   in
-   () ) ;
+          let (all_deposits :: _) =
+            (Option.value_exn (get_account outer_ledger zeko_kp).zkapp)
+              .action_state
+          in
+
+          (let inner_step_update =
+             wait (fun () -> Z.Inner.step ~all_deposits)
+           in
+           let inner_step_cmd : Zkapp_command.t =
+             { fee_payer = dummy_fee_payer
+             ; account_updates =
+                 Zkapp_command.Call_forest.(cons_tree inner_step_update [])
+             ; memo = Signed_command_memo.empty
+             }
+           in
+           let inner_step_transition, new_inner_ledger =
+             wait (fun () ->
+                 prove_zeko_command ~fee_excess:Amount.Signed.zero
+                   (to_sparse inner_ledger inner_step_cmd)
+                   inner_step_cmd )
+           in
+           let outer_step_update =
+             wait (fun () ->
+                 Z.Outer.step inner_step_transition
+                   ~outer_public_key:(Public_key.compress zeko_kp.public_key)
+                   ~new_deposits:[ deposit ] ~new_inner_ledger
+                   ~old_inner_ledger:(to_sparse inner_ledger inner_step_cmd) )
+           in
+           let outer_step_cmd : Zkapp_command.t =
+             { fee_payer = zero_fee_payer ()
+             ; account_updates =
+                 Zkapp_command.Call_forest.(cons_tree outer_step_update [])
+             ; memo = Signed_command_memo.empty
+             }
+           in
+           ledger_apply ~global_slot ~state_view outer_ledger outer_step_cmd ;
+
+           take_from_sparse inner_ledger new_inner_ledger ) ;
+
+          let pointer =
+            if first_half then Some old_all_deposits
+            else
+              let account_id = Account_id.of_public_key kp.public_key in
+              let (`Existed : [ `Added | `Existed ]), loc =
+                Or_error.ok_exn
+                @@ Ledger.get_or_create_account inner_ledger account_id
+                     (Account.initialize account_id)
+              in
+              let account = Option.value_exn @@ Ledger.get inner_ledger loc in
+              let (Some zkapp) = account.zkapp in
+              let (transfers_processed :: _) = zkapp.app_state in
+              Some transfers_processed
+          in
+          let `Pointer _, process_updates =
+            wait (fun () ->
+                Z.Inner.process_deposit ~is_new:first_half ~pointer ~after:[]
+                  ~before:[] ~deposit )
+          in
+          let process_cmd : Zkapp_command.t =
+            { fee_payer = dummy_fee_payer
+            ; account_updates = process_updates
+            ; memo = Signed_command_memo.empty
+            }
+          in
+          let process_cmd = sign_cmd process_cmd [ kp ] in
+          let process_transition, new_inner_ledger =
+            wait (fun () ->
+                prove_zeko_command ~fee_excess:Amount.Signed.zero
+                  (to_sparse inner_ledger process_cmd)
+                  process_cmd )
+          in
+          let outer_step_update =
+            wait (fun () ->
+                Z.Outer.step process_transition
+                  ~outer_public_key:(Public_key.compress zeko_kp.public_key)
+                  ~new_deposits:[] ~new_inner_ledger
+                  ~old_inner_ledger:(to_sparse inner_ledger process_cmd) )
+          in
+          let outer_step_cmd : Zkapp_command.t =
+            { fee_payer = zero_fee_payer ()
+            ; account_updates =
+                Zkapp_command.Call_forest.(cons_tree outer_step_update [])
+            ; memo = Signed_command_memo.empty
+            }
+          in
+          ledger_apply ~global_slot ~state_view outer_ledger outer_step_cmd ;
+          take_from_sparse inner_ledger new_inner_ledger ) ) ;
 
   (*
-  let inner_step_update, _, _ =
-    wait (fun () -> Z.Inner.step ~deposits_processed ~remaining_deposits)
-  in
-  let inner_step_cmd : Zkapp_command.t =
-    { fee_payer = dummy_fee_payer
-    ; account_updates =
-        Zkapp_command.Call_forest.(cons_tree inner_step_update [])
-    ; memo = Signed_command_memo.empty
-    }
-  in
-  let inner_step_transition, new_inner_ledger =
-    wait (fun () ->
-        prove_zeko_command ~fee_excess:Amount.Signed.zero (to_sparse inner_ledger inner_step_cmd)
-          inner_step_cmd )
-  in
-  let outer_step_update, _, _ =
-    wait (fun () ->
-        Z.Outer.step inner_step_transition
-          ~public_key:(Public_key.compress zeko_kp.public_key)
-          ~old_action_state ~new_actions ~withdrawals_processed
-          ~remaining_withdrawals ~new_ledger:new_inner_ledger
-          ~old_ledger:(to_sparse inner_ledger inner_step_cmd) )
-  in
-  let outer_step_cmd : Zkapp_command.t =
-    { fee_payer = zero_fee_payer 2 fee_payer_kp
-    ; account_updates =
-        Zkapp_command.Call_forest.(cons_tree outer_step_update [])
-    ; memo = Signed_command_memo.empty
-    }
-  in
-  let applied, _ =
-    Or_error.ok_exn
-    @@ Ledger.apply_zkapp_command_unchecked ~constraint_constants ~global_slot
-         ~state_view outer_ledger outer_step_cmd
-  in
-  check_no_failure applied ;
 
   let cmds = List.fold ~f:(fun spec ->
     For_tests.account_update_send spec
