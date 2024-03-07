@@ -19,6 +19,9 @@ open Util_
 module Helper_state = struct
   type t = { transfers_processed : F.t } [@@deriving snarky]
 
+  let value_of_app_state (transfers_processed :: _ : F.t Zkapp_state.V.t) : t =
+    { transfers_processed }
+
   (* FIXME: Define through HKD *)
   module Precondition = struct
     type t = { transfers_processed : F.var option }
@@ -47,6 +50,8 @@ module TR = struct
   let dummy : t = { amount = CA.zero; recipient = PC.empty }
 
   let is_dummy (t : t) = CA.(equal t.amount zero)
+
+  let to_actions (t : t) : Actions.t = value_to_actions typ t
 end
 
 (** Rule used by both inner and outer accounts to process transfers posted to them *)
@@ -109,15 +114,18 @@ module Process_transfer = struct
     let transfers_processed =
       (Action_state_extension.statement_var trans1).source
     in
-    (* If it's a new account, then the value is zero rather than empty_state_element.
-       Conversely, if it's zero, or what should be empty_state_element,
-       then it must be a new account. *)
-    let transfers_processed =
-      Field.(
-        if_
-          (equal transfers_processed (constant Actions.empty_state_element))
-          ~then_:zero ~else_:transfers_processed)
-    in
+    (* If it's a new account,
+       then trans1 must begin at the beginning.
+       We however don't use the value, so technically this is superfluous,
+       but future changes to this code might not take that into account,
+       hence we add this check just in case, to make sure it's not set to
+       an invalid value.
+    *)
+    assert_var __LOC__ (fun () ->
+        Boolean.(
+          Field.(
+            equal transfers_processed (constant Actions.empty_state_element))
+          ||| not is_new) ) ;
     let child_helper = Body.(constant (typ ()) dummy) in
     let child_helper =
       { child_helper with
@@ -136,11 +144,11 @@ module Process_transfer = struct
                           Some
                             Field.(
                               if_ is_new ~then_:zero ~else_:transfers_processed)
+                          (* This precondition is to ensure that transfers are only processed once.
+                             For a new account, the field is zero. *)
                       })
                   (* If the account is new, we know that no transfers can have been processed,
-                     logically letting the user "set" the field beforehand to an arbitrary value.
-                     It however must still be a valid action state, as witnessed
-                     by trans2. *)
+                     logically letting the user "set" the field beforehand to an arbitrary value. *)
               ; is_new = Or_ignore.Checked.make_unsafe Boolean.true_ is_new
               }
           }
@@ -193,6 +201,10 @@ module Process_transfer = struct
     Pickles.Inductive_rule.
       { previous_proof_statements =
           [ Action_state_extension.verify ~check:(Boolean.not is_new) trans1
+            (* If the account is new, then we needn't check it,
+               since source must be the empty element,
+               and we know the relation holds since the end is connected to a real action state,
+               which of course comes from the empty element. *)
           ; Action_state_extension.verify trans2
           ]
       ; public_output
@@ -352,6 +364,10 @@ module Outer = struct
             (** All withdrawals registered on the L2. They are paid out on the L1. *)
       }
     [@@deriving snarky]
+
+    let value_of_app_state
+        (ledger_hash :: all_withdrawals :: _ : F.t Zkapp_state.V.t) : t =
+      { ledger_hash; all_withdrawals }
 
     (* FIXME: Define through HKD *)
     module Precondition = struct
@@ -589,6 +605,32 @@ let inner_pending_coinbase = Wrapper.dummy_pc
 
 let inner_state_body = Wrapper.dummy_state_body
 
+let inner_public_key = Inner.public_key
+
+let inner_account_id =
+  Account_id.of_public_key @@ Public_key.decompress_exn Inner.public_key
+
+let read_inner_state (a : Account.t) =
+  let zkapp = Option.value_exn a.zkapp in
+  let ({ all_deposits } : Inner.State.t) =
+    Inner.State.value_of_app_state zkapp.app_state
+  in
+  `All_deposits all_deposits
+
+let read_outer_state (a : Account.t) =
+  let zkapp = Option.value_exn a.zkapp in
+  let ({ ledger_hash; all_withdrawals } : Outer.State.t) =
+    Outer.State.value_of_app_state zkapp.app_state
+  in
+  (`Ledger_hash ledger_hash, `All_withdrawals all_withdrawals)
+
+let read_token_account_state (a : Account.t) =
+  let zkapp = Option.value_exn a.zkapp in
+  let ({ transfers_processed } : Helper_state.t) =
+    Helper_state.value_of_app_state zkapp.app_state
+  in
+  `Transfers_processed transfers_processed
+
 (** Compile the circuits *)
 module Make (T' : Transaction_snark.S) = struct
   open Async_kernel
@@ -612,7 +654,6 @@ module Make (T' : Transaction_snark.S) = struct
 
   let process_transfer ~is_new ~pointer ~before ~after ~transfer ~vk_hash
       ~public_key (prover : transfer_prover) =
-    let pointer = Option.value pointer ~default:Actions.empty_state_element in
     let before = List.map ~f:(value_to_actions TR.typ) before in
     let after = List.map ~f:(value_to_actions TR.typ) after in
     let%bind trans1 =
@@ -728,8 +769,7 @@ module Make (T' : Transaction_snark.S) = struct
           in
           mktree tree proof )
 
-    let account_id =
-      Account_id.of_public_key @@ Public_key.decompress_exn public_key
+    let account_id = inner_account_id
 
     let initial_account =
       { Account.empty with
@@ -900,5 +940,3 @@ module Make (T' : Transaction_snark.S) = struct
 end
 
 module type S = Zkapps_rollup_intf.S with type t := t and module TR := TR
-
-let inner_public_key = Inner.public_key

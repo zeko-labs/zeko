@@ -84,7 +84,7 @@ struct
     let Witness.{ actionss; prev = { source; target; proof } as prev } =
       exists_witness ()
     in
-    let f target' actions =
+    let f actions target' =
       (* Bad unsafe use, with mismatching data and hash, but it works *)
       let actions' =
         Data_as_hash.make_unsafe actions (As_prover.Ref.create (fun () -> []))
@@ -95,8 +95,7 @@ struct
         ~then_:target'
         ~else_:(Actions.push_events_checked target' actions')
     in
-    (* TODO: maybe do fold_right if more convenient *)
-    let target' = List.fold ~init:source ~f actionss in
+    let target' = List.fold_right ~init:source ~f actionss in
     Pickles.Inductive_rule.
       { previous_proof_statements = [ verify prev ]
       ; public_output = Stmt.{ source; target = target' }
@@ -186,7 +185,9 @@ let prove ?(dummy = false) ~(source : F.t) (actionss : Actions.t list) :
   assert (List.length actionss <= N_2_8.n) (* FIXME: support *) ;
   if List.is_empty actionss then return (dummy_proof source)
   else if dummy then
-    let target = List.fold ~f:Actions.push_events ~init:source actionss in
+    let target =
+      List.fold_right ~f:(Fun.flip Actions.push_events) ~init:source actionss
+    in
     return { (dummy_proof source) with target }
   else
     let%map stmt, (), proof =

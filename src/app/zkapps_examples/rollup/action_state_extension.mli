@@ -29,7 +29,7 @@ val tag :
 val prove :
      ?dummy:bool
   -> source:F.t
-  -> Mina_base.Zkapp_account.Actions.t list (** head oldest, tail newest *)
+  -> Mina_base.Zkapp_account.Actions.t list (** head newest, tail oldest *)
   -> t Async_kernel.Deferred.t
 
 val merge : t -> t -> t Async_kernel.Deferred.t

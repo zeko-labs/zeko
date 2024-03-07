@@ -45,10 +45,10 @@ module type S = sig
          Deferred.t
 
     val process_deposit :
-         is_new:bool
-      -> pointer:field option
-      -> before:TR.t list
-      -> after:TR.t list
+         is_new:bool (** Has this recipient been deposited to before? *)
+      -> pointer:field
+      -> before:TR.t list (** deposits before last recorded from new to old *)
+      -> after:TR.t list (** deposits after last recorded from new to old *)
       -> deposit:TR.t
       -> ( [ `Pointer of field ]
          * ( Account_update.t
@@ -108,9 +108,9 @@ module type S = sig
          Deferred.t
 
     val process_withdrawal :
-         is_new:bool
+         is_new:bool (** Has this recipient been withdrawn to before? *)
       -> outer_public_key:Public_key.Compressed.t
-      -> pointer:field option
+      -> pointer:field
       -> before:TR.t list
       -> after:TR.t list
       -> withdrawal:TR.t
@@ -124,8 +124,7 @@ module type S = sig
     val step :
          t (** The transition, must include Inner.step account update *)
       -> outer_public_key:Public_key.Compressed.t
-      -> new_deposits:TR.t list
-           (** The new deposits between the old inner account and new inner account *)
+      -> new_deposits:TR.t list (** new deposits from new to old *)
       -> old_inner_ledger:Mina_ledger.Sparse_ledger.t
            (** Old sparse inner ledger including inner account *)
       -> new_inner_ledger:Mina_ledger.Sparse_ledger.t
@@ -157,9 +156,21 @@ module type Intf = sig
 
   val inner_state_body : Mina_state.Protocol_state.Body.Value.t
 
+  val inner_account_id : Account_id.t
+
+  val read_outer_state :
+       Account.t
+    -> [ `Ledger_hash of Ledger_hash.t ] * [ `All_withdrawals of field ]
+
+  val read_inner_state : Account.t -> [ `All_deposits of field ]
+
+  val read_token_account_state : Account.t -> [ `Transfers_processed of field ]
+
   (** Transfer request *)
   module TR : sig
     type t = { amount : Currency.Amount.t; recipient : Public_key.Compressed.t }
+
+    val to_actions : t -> Zkapp_account.Actions.t
   end
 
   module Mocked_zkapp : sig
