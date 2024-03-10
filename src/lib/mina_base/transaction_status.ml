@@ -357,7 +357,8 @@ module Failure = struct
 
   let describe = function
     | Predicate ->
-        "A predicate failed"
+        "A predicate failed (ZEKO NOTE: reused as, means will_succeed in zkapp \
+         command logic was false)"
     | Source_not_present ->
         "The source account does not exist"
     | Receiver_not_present ->

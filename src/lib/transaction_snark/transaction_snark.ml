@@ -1392,8 +1392,14 @@ module Make_str (A : Wire_types.Concrete) = struct
             , Bool.failure_status_tbl )
             Mina_transaction_logic.Zkapp_command_logic.Local_state.t
 
-          let add_check (t : t) _failure b =
-            { t with success = Bool.(t.success &&& b) }
+          let add_check (t : t) failure b =
+            (* ZEKO NOTE: added to ensure failure doesn't happen for good measure.
+               Quite possibly not needed, but I'm not sure. *)
+            with_label (Mina_base.Transaction_status.Failure.to_string failure)
+              (fun () ->
+                with_label __LOC__ (fun () ->
+                    Boolean.Assert.is_true b ;
+                    { t with success = Bool.(t.success &&& b) } ) )
 
           let update_failure_status_tbl (t : t) _failure_status b =
             add_check

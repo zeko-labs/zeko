@@ -1137,7 +1137,8 @@ module Make (Inputs : Inputs_intf) = struct
     in
     (* ZEKO NOTE: For Zeko we don't allow taking fees from failed transactions *)
     let local_state =
-      Local_state.add_check local_state Cancelled will_succeed
+      with_label ~label:"must succeed" (fun () ->
+          Local_state.add_check local_state Predicate will_succeed )
     in
     let ( (account_update, remaining, call_stack)
         , account_update_forest
@@ -1786,18 +1787,16 @@ module Make (Inputs : Inputs_intf) = struct
       *)
       Amount.Signed.negate (Account_update.balance_change account_update)
     in
-    (* ZEKO NOTE: `negate zero` above will create negative zero which would return false in `is_non_neg` *)
-    let is_local_delta_non_neg =
-      Bool.(
-        Amount.Signed.(
-          is_non_neg local_delta ||| equal local_delta (of_unsigned Amount.zero)))
-    in
     let new_local_fee_excess, `Overflow overflowed =
       (* We only allow the default token for fees. *)
       Bool.(
         assert_ ~pos:__POS__
           ( (not is_start')
-          ||| (account_update_token_is_default &&& is_local_delta_non_neg) )) ;
+          ||| ( account_update_token_is_default
+              (* ZEKO NOTE: We might have a zero fee. `is_non_neg` in fact means `is_pos`... What naming. *)
+              &&& Amount.Signed.(
+                    is_non_neg local_delta
+                    ||| equal (of_unsigned Amount.zero) local_delta) ) )) ;
       let new_local_fee_excess, `Overflow overflow =
         Amount.Signed.add_flagged local_state.excess local_delta
       in

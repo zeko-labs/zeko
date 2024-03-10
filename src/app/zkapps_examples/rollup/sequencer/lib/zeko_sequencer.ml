@@ -55,9 +55,7 @@ module Sequencer = struct
     let proof_level = Genesis_constants.Proof_level.Full
   end)
 
-  module M = Zkapps_rollup.Make (struct
-    let tag = T.tag
-  end)
+  module M = Zkapps_rollup.Make (T)
 
   let keypair = Signature_lib.Keypair.create ()
 
@@ -175,20 +173,25 @@ module Sequencer = struct
 
     let enqueue_prove_transfer t ~key ~(transfer : Transfer.t) =
       Throttle.enqueue t.q (fun () ->
-          let%bind call_forest =
+          let%bind tree =
             match transfer.direction with
             | Deposit ->
                 time "Outer.deposit"
-                  (M.Outer.deposit ~public_key:t.zkapp_pk
-                     ~amount:(Currency.Amount.of_uint64 transfer.amount)
-                     ~recipient:transfer.address )
+                  (M.Outer.submit_deposit ~outer_public_key:t.zkapp_pk
+                     ~deposit:
+                       { amount = Currency.Amount.of_uint64 transfer.amount
+                       ; recipient = transfer.address
+                       } )
             | Withdraw ->
                 time "Inner.withdraw"
-                  (M.Inner.withdraw ~public_key:t.zkapp_pk
-                     ~amount:(Currency.Amount.of_uint64 transfer.amount)
-                     ~recipient:transfer.address )
+                  (M.Inner.submit_withdrawal
+                     ~withdrawal:
+                       { amount = Currency.Amount.of_uint64 transfer.amount
+                       ; recipient = transfer.address
+                       } )
           in
-          Transfers_memory.add t.transfers_memory key call_forest ;
+          Transfers_memory.add t.transfers_memory key
+            (Zkapp_command.Call_forest.cons_tree tree []) ;
           return () )
 
     let enqueue_prove_commit t ~target_ledger =
@@ -240,10 +243,15 @@ module Sequencer = struct
                                 (Option.value_exn t.previous_committed_ledger)
                               ~target_ledger )
                        in *)
+                    let old_inner_ledger =
+                      Option.value_exn t.previous_committed_ledger
+                    in
+                    let new_inner_ledger = target_ledger in
                     let%bind account_update =
                       time "Outer.step_without_transfers"
-                        (M.Outer.step_without_transfers
-                           (Option.value_exn t.last) ~public_key:t.zkapp_pk )
+                        (M.Outer.step (Option.value_exn t.last)
+                           ~outer_public_key:t.zkapp_pk ~new_deposits:[]
+                           ~old_inner_ledger ~new_inner_ledger )
                     in
                     let%bind nonce =
                       Gql_client.fetch_nonce t.l1_uri
@@ -261,7 +269,8 @@ module Sequencer = struct
                               }
                           ; authorization = Signature.dummy
                           }
-                      ; account_updates = account_update
+                      ; account_updates =
+                          Zkapp_command.Call_forest.cons_tree account_update []
                       ; memo = Signed_command_memo.empty
                       }
                     in
@@ -611,10 +620,9 @@ module Sequencer = struct
       , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command) )
 
   let apply_deposits t =
-    let%bind inner_account_update, _, _ =
+    let%bind inner_account_update =
       time "Inner.step"
-        (M.Inner.step ~deposits_processed:Zkapp_account.Actions.empty_hash
-           ~remaining_deposits:[] )
+        (M.Inner.step ~all_deposits:Zkapp_account.Actions.empty_state_element)
     in
     let fee = Currency.Fee.of_mina_int_exn 0 in
     let command : Zkapp_command.t =
@@ -629,7 +637,8 @@ module Sequencer = struct
               }
           ; authorization = Signature.dummy
           }
-      ; account_updates = inner_account_update
+      ; account_updates =
+          Zkapp_command.Call_forest.cons_tree inner_account_update []
       ; memo = Signed_command_memo.empty
       }
     in
@@ -881,10 +890,11 @@ let%test_unit "apply commands and commit" =
                   (Signature_lib.Public_key.compress signer.public_key)
               in
               let command =
-                M.Outer.deploy_command_exn ~signer ~zkapp:zkapp_keypair
+                Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
                   ~fee:(Currency.Fee.of_mina_int_exn 1)
                   ~nonce:(Account.Nonce.of_int nonce)
-                  ~initial_ledger:expected_ledger
+                  ~initial_ledger:expected_ledger ~constraint_constants
+                  (module M)
               in
               let%bind _ = Gql_client.send_zkapp gql_uri command in
               return () ) ;

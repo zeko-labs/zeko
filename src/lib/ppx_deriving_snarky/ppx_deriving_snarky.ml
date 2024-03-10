@@ -7,8 +7,12 @@ let str_decl ~loc (decl : type_declaration) : structure =
   match decl with
   | { ptype_kind =
         Ptype_record fields
-        (* FIXME: If it's `type t = ...` for some reason it becomes "var"? Mutability at play? No idea. *)
     ; ptype_name = { txt = "t" | "var"; _ } as name
+      (* FIXME [name]
+         For some reason when passed to the deriver the name if `t` becomes `var`.
+         This is certainly a bug. It makes no sense to me.
+         The code otherwise seems to work correctly. It's probably a small oversight somewhere.
+      *)
     ; _
     } ->
       let modules : module_expr list =
@@ -118,7 +122,11 @@ let str_decl ~loc (decl : type_declaration) : structure =
             ~there:(fun [%p pat_record_var] -> [%e con_tuple])
             ~back:(fun [%p pat_tuple] -> [%e con_record_var])]
       in
-      pstr_type ~loc Recursive [ decl' ] :: [%str let typ = [%e typ]]
+      pstr_type ~loc Recursive [ decl' ] :: [%str
+        let typ = [%e typ]
+      (* FIXME: add this and fix it *)
+      (* module Constant = struct type nonrec t = t = {...} end *)
+      ]
   | { ptype_loc = loc; ptype_kind; ptype_name; _ } ->
       let i =
         match ptype_kind with
@@ -142,7 +150,7 @@ let sig_decl ~loc (decl : type_declaration) : signature =
   let open Ast_builder.Default in
   match decl with
   | { ptype_kind = Ptype_record fields
-    ; ptype_name = { txt = "t"; _ } as name
+    ; ptype_name = { txt = "t" | "var"; _ } as name (* FIXME: see [name] note *)
     ; _
     } ->
       let fields' =
@@ -171,12 +179,25 @@ let sig_decl ~loc (decl : type_declaration) : signature =
           ptype_name = { name with txt = "var" }
         ; ptype_kind = Ptype_record fields'
         ; ptype_loc = loc
+        ; ptype_attributes = []
+        }
+      in
+      psig_type ~loc Recursive [ decl' ] :: [%sig: val typ : (var, t) Typ.t]
+  | { ptype_kind = Ptype_abstract
+    ; ptype_name = { txt = "t" | "var"; _ } as name (* FIXME: see [name] note *)
+    ; _
+    } ->
+      let decl' =
+        { decl with
+          ptype_name = { name with txt = "var" }
+        ; ptype_loc = loc
+        ; ptype_attributes = []
         }
       in
       psig_type ~loc Recursive [ decl' ] :: [%sig: val typ : (var, t) Typ.t]
   | { ptype_loc = loc; _ } ->
       [ psig_extension ~loc
-          (Location.error_extensionf ~loc "Cannot derive %s for this type"
+          (Location.error_extensionf ~loc "Cannot derive %s signature for this type; must be record or abstract"
              deriver_name )
           []
       ]
