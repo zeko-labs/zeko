@@ -127,7 +127,8 @@ module Vrf_distribution = struct
                in
                let next_dummy_consensus_state =
                  Consensus_state.Unsafe.dummy_advance dummy_consensus_state
-                   ~increase_epoch_count ~new_global_slot
+                   ~increase_epoch_count ~increase_blockchain_length:false
+                   ~new_global_slot
                in
                (next_dummy_consensus_state, proposal_time) ) ) ;
     { start_slot; term_slot; proposal_table }

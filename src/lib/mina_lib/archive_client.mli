@@ -1,6 +1,13 @@
 open Core
 open Pipe_lib
 
+val dispatch :
+     ?max_tries:int
+  -> logger:Logger.t
+  -> Host_and_port.t Cli_lib.Flag.Types.with_name
+  -> Archive_lib.Diff.t
+  -> (unit, Error.t) result Async.Deferred.t
+
 val dispatch_precomputed_block :
      ?max_tries:int
   -> Host_and_port.t Cli_lib.Flag.Types.with_name

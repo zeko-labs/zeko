@@ -2333,7 +2333,7 @@ module Test_helpers = struct
             .dummy_advance
               (Mina_state.Protocol_state.consensus_state state)
               ~new_global_slot_since_genesis:prev_global_slot
-              ~increase_epoch_count:false
+              ~increase_epoch_count:false ~increase_blockchain_length:false
           in
           let body =
             Mina_state.Protocol_state.Body.For_tests.with_consensus_state

@@ -14,6 +14,7 @@
   mina_numbers
   mina_graphql
   mina_signature_kind
+  archive_lib
   graphql_wrapper
   transaction_snark
   transaction_protocol_state

@@ -1699,6 +1699,21 @@ module Queries = struct
     @ Archive.commands
 end
 
+module Subscriptions = struct
+  open Schema
+
+  let new_transaction =
+    subscription_field "newTransaction"
+      ~doc:"Event that triggers when a new transaction is created"
+      ~typ:(non_null string)
+      ~args:Arg.[]
+      ~resolve:(fun { ctx = sequencer; _ } ->
+        return (Ok Zeko_sequencer.(add_transactions_subscriber sequencer)) )
+
+  let commands = [ new_transaction ]
+end
+
 let schema =
   Graphql_async.Schema.(
-    schema Queries.commands ~mutations:Mutations.commands ~subscriptions:[])
+    schema Queries.commands ~mutations:Mutations.commands
+      ~subscriptions:Subscriptions.commands)
