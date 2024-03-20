@@ -356,26 +356,27 @@ module Sequencer = struct
 
   let get_root t = L.Db.merkle_root t.db
 
-  let set_protocol_state t ~previous_state_hash ~new_state_hash
-      ~new_global_slot_since_genesis ~increase_blockchain_length =
+  let set_protocol_state t ~new_state_hash ~new_global_slot_since_genesis
+      ~increase_blockchain_length =
     let old_protocol_state = t.protocol_state in
     let genesis_state_hash =
       Mina_state.Protocol_state.genesis_state_hash old_protocol_state
     in
-    let blockchain_state =
+    let previous_state_hash, blockchain_state =
       let blockchain_state =
         Mina_state.Protocol_state.blockchain_state old_protocol_state
       in
-      { blockchain_state with
-        staged_ledger_hash =
-          Staged_ledger_hash.(
-            of_aux_ledger_and_coinbase_hash
-              (aux_hash blockchain_state.staged_ledger_hash)
-              new_state_hash
-              ( Or_error.ok_exn
-              @@ Pending_coinbase.create
-                   ~depth:constraint_constants.pending_coinbase_depth () ))
-      }
+      ( Staged_ledger_hash.ledger_hash blockchain_state.staged_ledger_hash
+      , { blockchain_state with
+          staged_ledger_hash =
+            Staged_ledger_hash.(
+              of_aux_ledger_and_coinbase_hash
+                (aux_hash blockchain_state.staged_ledger_hash)
+                new_state_hash
+                ( Or_error.ok_exn
+                @@ Pending_coinbase.create
+                     ~depth:constraint_constants.pending_coinbase_depth () ))
+        } )
     in
     let consensus_state =
       let consensus_state =
@@ -415,8 +416,9 @@ module Sequencer = struct
     | Error e ->
         failwith e
 
-  let dispatch_transaction t ~protocol_state ~ledger ~accounts_created
-      ~new_state_hash ~txn =
+  let dispatch_transaction t ~ledger ~accounts_created ~new_state_hash ~txn =
+    set_protocol_state t ~new_state_hash:(L.merkle_root ledger)
+      ~new_global_slot_since_genesis:None ~increase_blockchain_length:true ;
     let diff =
       let With_status.{ data = txn; status = txn_status } = txn in
       let account_ids_accessed =
@@ -471,7 +473,7 @@ module Sequencer = struct
           (sender, receipt_chain_hash))
       in
       let header =
-        Mina_block.Header.create ~protocol_state
+        Mina_block.Header.create ~protocol_state:t.protocol_state
           ~protocol_state_proof:Proof.blockchain_dummy
           ~delta_block_chain_proof:(State_hash.dummy, []) ()
       in
@@ -533,8 +535,11 @@ module Sequencer = struct
       Mina_transaction.Transaction.Command
         (User_command.Signed_command signed_command)
     in
-    let global_slot = get_global_slot t in
-    let state_body = Mina_state.Protocol_state.body t.protocol_state in
+    (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
+    let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+    let state_body =
+      Mina_state.Protocol_state.body compile_time_genesis_state
+    in
     let l = L.of_database t.db in
     let source_ledger_hash = L.merkle_root l in
     let sparse_ledger =
@@ -593,7 +598,7 @@ module Sequencer = struct
         ~pending_coinbase_stack_state:pc
     in
 
-    dispatch_transaction t ~protocol_state:t.protocol_state ~ledger:l
+    dispatch_transaction t ~ledger:l
       ~accounts_created:(L.Transaction_applied.new_accounts txn_applied)
       ~new_state_hash:target_ledger_hash
       ~txn:(L.Transaction_applied.transaction txn_applied) ;
@@ -609,8 +614,11 @@ module Sequencer = struct
         Error (Error.of_string "Maximum pool size reached, try later")
       else Ok ()
     in
-    let global_slot = get_global_slot t in
-    let state_body = Mina_state.Protocol_state.body t.protocol_state in
+    (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
+    let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+    let state_body =
+      Mina_state.Protocol_state.body compile_time_genesis_state
+    in
     let l = L.of_database t.db in
     let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
       let accounts_referenced =
@@ -695,7 +703,7 @@ module Sequencer = struct
         ]
     in
 
-    dispatch_transaction t ~protocol_state:t.protocol_state ~ledger:l
+    dispatch_transaction t ~ledger:l
       ~accounts_created:(L.Transaction_applied.new_accounts txn_applied)
       ~new_state_hash:(L.merkle_root l)
       ~txn:(L.Transaction_applied.transaction txn_applied) ;
@@ -867,27 +875,24 @@ module Sequencer = struct
               ~to_:(Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
           in
           let _new_state_hash =
-            List.fold ~init:(get_root t) commands
-              ~f:(fun previous_state_hash command ->
+            List.iter commands ~f:(fun command ->
                 match command with
                 | User_command.Signed_command signed_command ->
                     let _res =
                       apply_signed_command t signed_command |> Or_error.ok_exn
                     in
                     let new_state_hash = get_root t in
-                    set_protocol_state t ~previous_state_hash ~new_state_hash
+                    set_protocol_state t ~new_state_hash
                       ~new_global_slot_since_genesis:None
-                      ~increase_blockchain_length:true ;
-                    new_state_hash
+                      ~increase_blockchain_length:true
                 | User_command.Zkapp_command zkapp_command ->
                     let _res =
                       apply_zkapp_command t zkapp_command |> Or_error.ok_exn
                     in
                     let new_state_hash = get_root t in
-                    set_protocol_state t ~previous_state_hash ~new_state_hash
+                    set_protocol_state t ~new_state_hash
                       ~new_global_slot_since_genesis:None
-                      ~increase_blockchain_length:true ;
-                    new_state_hash )
+                      ~increase_blockchain_length:true )
           in
           return ()
       | true ->
@@ -990,7 +995,8 @@ let%test_unit "apply commands and commit" =
                           ( match
                               L.apply_zkapp_command_unchecked expected_ledger
                                 command ~constraint_constants
-                                ~global_slot:(get_global_slot sequencer)
+                                ~global_slot:
+                                  Mina_numbers.Global_slot_since_genesis.zero
                                 ~state_view:
                                   Mina_state.Protocol_state.(
                                     Body.view @@ body sequencer.protocol_state)
@@ -1006,7 +1012,8 @@ let%test_unit "apply commands and commit" =
                           ( match
                               L.apply_user_command_unchecked expected_ledger
                                 command ~constraint_constants
-                                ~txn_global_slot:(get_global_slot sequencer)
+                                ~txn_global_slot:
+                                  Mina_numbers.Global_slot_since_genesis.zero
                             with
                           | Ok _ ->
                               ()
