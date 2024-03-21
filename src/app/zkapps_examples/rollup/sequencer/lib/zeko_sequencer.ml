@@ -295,9 +295,18 @@ module Sequencer = struct
   end
 
   module Subscriptions = struct
-    type t = { mutable transactions : string Pipe.Writer.t list }
+    type t =
+      { mutable transactions : string Pipe.Writer.t list
+      ; mutable staged_archive_diffs :
+          Archive_lib.Diff.Transition_frontier.t list
+      }
 
-    let create () = { transactions = [] }
+    let create () = { transactions = []; staged_archive_diffs = [] }
+
+    let add_staged_diff t diff =
+      t.staged_archive_diffs <- t.staged_archive_diffs @ [ diff ]
+
+    let clear_staged_diffs t = t.staged_archive_diffs <- []
   end
 
   type t =
@@ -507,6 +516,7 @@ module Sequencer = struct
             [ sender_receipt_chain_from_parent_ledger ]
         }
     in
+    Subscriptions.add_staged_diff t.subscriptions diff ;
     match
       Base64.encode
       @@ Binable.to_string (module Archive_lib.Diff.Transition_frontier) diff
@@ -750,6 +760,7 @@ module Sequencer = struct
       | None ->
           ()
       | Some db_dir -> (
+          save_protocol_state t ;
           let ledger_hash =
             Frozen_ledger_hash.to_decimal_string L.Db.(merkle_root t.db)
           in
@@ -764,6 +775,7 @@ module Sequencer = struct
         L.(of_database t.db)
         [ M.Inner.account_id ]
     in
+    Subscriptions.clear_staged_diffs t.subscriptions ;
     Snark_queue.enqueue_prove_commit t.snark_q ~target_ledger
 
   let run_committer t =
@@ -775,6 +787,17 @@ module Sequencer = struct
 
   let add_transactions_subscriber t =
     let r, w = Pipe.create () in
+    List.iter t.subscriptions.staged_archive_diffs ~f:(fun diff ->
+        match
+          Base64.encode
+          @@ Binable.to_string
+               (module Archive_lib.Diff.Transition_frontier)
+               diff
+        with
+        | Ok data ->
+            Pipe.write_without_pushback_if_open w data
+        | Error (`Msg e) ->
+            print_endline e ) ;
     t.subscriptions.transactions <- w :: t.subscriptions.transactions ;
     r
 
@@ -881,18 +904,12 @@ module Sequencer = struct
                     let _res =
                       apply_signed_command t signed_command |> Or_error.ok_exn
                     in
-                    let new_state_hash = get_root t in
-                    set_protocol_state t ~new_state_hash
-                      ~new_global_slot_since_genesis:None
-                      ~increase_blockchain_length:true
+                    ()
                 | User_command.Zkapp_command zkapp_command ->
                     let _res =
                       apply_zkapp_command t zkapp_command |> Or_error.ok_exn
                     in
-                    let new_state_hash = get_root t in
-                    set_protocol_state t ~new_state_hash
-                      ~new_global_slot_since_genesis:None
-                      ~increase_blockchain_length:true )
+                    () )
           in
           return ()
       | true ->

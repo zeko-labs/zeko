@@ -1704,7 +1704,7 @@ module Subscriptions = struct
 
   let new_transaction =
     subscription_field "newTransaction"
-      ~doc:"Event that triggers when a new transaction is created"
+      ~doc:"Event that triggers when a new transaction is applied"
       ~typ:(non_null string)
       ~args:Arg.[]
       ~resolve:(fun { ctx = sequencer; _ } ->
