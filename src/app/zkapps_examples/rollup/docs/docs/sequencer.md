@@ -20,6 +20,7 @@ DUNE_PROFILE=devnet dune runtest
 Running the sequencer exposes the Graphql API on the port `-p`. The Graphql schema is a subset of the L1 Graphql API joined with the L1 Graphql API for fetching of actions/events.
 
 ```bash
+export DA_PROVIDER="da evm provider"
 export DA_PRIVATE_KEY="da layer private key"
 export MINA_PRIVATE_KEY="base58 signer private key"
 export DUNE_PROFILE=devnet
@@ -56,6 +57,20 @@ Run help to see the options:
 
 ```bash
 dune exec ./deploy.exe -- --help
+```
+
+## Using archive node as indexer
+
+To use standard mina archive node to index the history of zeko rollup, you need to run the zeko archive relay adapter, that can subscribe to zeko sequencer for new changes and relay them to the archive node.
+You can run the adapter with the following command:
+
+```bash
+export DUNE_PROFILE=devnet
+dune exec ./archive_relay/run.exe -- \
+    --zeko-uri <string> \
+    --archive-host <string> \
+    --archive-port <int> \
+    --bootstrap
 ```
 
 ## Use with docker
