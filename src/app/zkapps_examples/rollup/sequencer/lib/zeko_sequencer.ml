@@ -316,6 +316,7 @@ module Sequencer = struct
     ; da_config : Da_layer.Config.t
     ; snark_q : Snark_queue.t
     ; stop : unit Ivar.t
+    ; mutable genesis_accounts : (Account_id.t * Account.t) list
     ; mutable protocol_state : Mina_state.Protocol_state.value
     ; mutable subscriptions : Subscriptions.t
     }
@@ -333,6 +334,7 @@ module Sequencer = struct
     ; da_config
     ; snark_q = Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
     ; stop = Ivar.create ()
+    ; genesis_accounts = []
     ; protocol_state = compile_time_genesis_state
     ; subscriptions = Subscriptions.create ()
     }
@@ -365,43 +367,6 @@ module Sequencer = struct
 
   let get_root t = L.Db.merkle_root t.db
 
-  let set_protocol_state t ~new_state_hash ~new_global_slot_since_genesis
-      ~increase_blockchain_length =
-    let old_protocol_state = t.protocol_state in
-    let genesis_state_hash =
-      Mina_state.Protocol_state.genesis_state_hash old_protocol_state
-    in
-    let previous_state_hash, blockchain_state =
-      let blockchain_state =
-        Mina_state.Protocol_state.blockchain_state old_protocol_state
-      in
-      ( Staged_ledger_hash.ledger_hash blockchain_state.staged_ledger_hash
-      , { blockchain_state with
-          staged_ledger_hash =
-            Staged_ledger_hash.(
-              of_aux_ledger_and_coinbase_hash
-                (aux_hash blockchain_state.staged_ledger_hash)
-                new_state_hash
-                ( Or_error.ok_exn
-                @@ Pending_coinbase.create
-                     ~depth:constraint_constants.pending_coinbase_depth () ))
-        } )
-    in
-    let consensus_state =
-      let consensus_state =
-        Mina_state.Protocol_state.consensus_state old_protocol_state
-      in
-      Consensus.Proof_of_stake.Exported.Consensus_state.Unsafe.dummy_advance
-        consensus_state ~increase_epoch_count:false ~increase_blockchain_length
-        ~new_global_slot_since_genesis:
-          (Option.value new_global_slot_since_genesis
-             ~default:(get_global_slot t) )
-    in
-    let constants = Mina_state.Protocol_state.constants old_protocol_state in
-    t.protocol_state <-
-      Mina_state.Protocol_state.create_value ~previous_state_hash
-        ~genesis_state_hash ~blockchain_state ~consensus_state ~constants
-
   let save_protocol_state t =
     let data =
       Bigstring.of_string @@ Yojson.Safe.to_string
@@ -426,96 +391,12 @@ module Sequencer = struct
         failwith e
 
   let dispatch_transaction t ~ledger ~accounts_created ~new_state_hash ~txn =
-    set_protocol_state t ~new_state_hash:(L.merkle_root ledger)
-      ~new_global_slot_since_genesis:None ~increase_blockchain_length:true ;
-    let diff =
-      let With_status.{ data = txn; status = txn_status } = txn in
-      let account_ids_accessed =
-        Mina_transaction.Transaction.account_access_statuses txn txn_status
-        |> List.dedup_and_sort
-             ~compare:[%compare: Account_id.t * [ `Accessed | `Not_accessed ]]
-      in
-      let accounts_accessed =
-        List.filter_map account_ids_accessed ~f:(fun (acct_id, status) ->
-            match status with
-            | `Not_accessed ->
-                None
-            | `Accessed ->
-                (* an accessed account may not be in the ledger *)
-                let%bind.Option index =
-                  Option.try_with (fun () ->
-                      Mina_ledger.Ledger.index_of_account_exn ledger acct_id )
-                in
-                let account =
-                  Mina_ledger.Ledger.get_at_index_exn ledger index
-                in
-                Some (index, account) )
-      in
-      let tokens_used =
-        let unique_tokens =
-          (* a token is used regardless of txn status *)
-          List.map account_ids_accessed ~f:(fun (acct_id, _status) ->
-              Account_id.token_id acct_id )
-          |> List.dedup_and_sort ~compare:Token_id.compare
-        in
-        List.map unique_tokens ~f:(fun token_id ->
-            let owner = Mina_ledger.Ledger.token_owner ledger token_id in
-            (token_id, owner) )
-      in
-      let command =
-        match txn with
-        | Command c ->
-            c
-        | _ ->
-            failwith "Zeko transaction has to be command"
-      in
-      let sender_receipt_chain_from_parent_ledger =
-        let sender = User_command.(fee_payer command) in
-        Option.value_exn
-          (let open Option.Let_syntax in
-          let%bind ledger_location =
-            Mina_ledger.Ledger.location_of_account ledger sender
-          in
-          let%map { receipt_chain_hash; _ } =
-            Mina_ledger.Ledger.get ledger ledger_location
-          in
-          (sender, receipt_chain_hash))
-      in
-      let header =
-        Mina_block.Header.create ~protocol_state:t.protocol_state
-          ~protocol_state_proof:Proof.blockchain_dummy
-          ~delta_block_chain_proof:(State_hash.dummy, []) ()
-      in
-      let body =
-        Mina_block.Body.create
-        @@ Staged_ledger_diff.
-             { diff =
-                 ( { completed_works = []
-                   ; commands =
-                       [ With_status.{ data = command; status = txn_status } ]
-                   ; coinbase = Zero
-                   ; internal_command_statuses = [ Transaction_status.Applied ]
-                   }
-                 , None )
-             }
-      in
-      let block =
-        With_hash.of_data ~hash_data:(fun _ ->
-            State_hash.State_hashes.
-              { state_body_hash = None; state_hash = new_state_hash } )
-        @@ Mina_block.create ~header ~body
-      in
-      Archive_lib.Diff.Transition_frontier.Breadcrumb_added
-        { block
-        ; accounts_created =
-            List.map accounts_created ~f:(fun acct_id ->
-                (acct_id, constraint_constants.account_creation_fee) )
-        ; accounts_accessed
-        ; tokens_used
-        ; sender_receipt_chains_from_parent_ledger =
-            [ sender_receipt_chain_from_parent_ledger ]
-        }
+    let new_protocol_state, diff =
+      Archive_lib.Diff.Builder.transaction_added ~constraint_constants
+        ~accounts_created ~new_state_hash ~protocol_state:t.protocol_state
+        ~ledger ~txn
     in
+    t.protocol_state <- new_protocol_state ;
     Subscriptions.add_staged_diff t.subscriptions diff ;
     match
       Base64.encode
@@ -828,11 +709,6 @@ module Sequencer = struct
               (Currency.Balance.of_uint64 (Unsigned.UInt64.of_int64 balance))
           in
           (account_id, account) )
-
-    let add_accounts_exn sequencer ~test_accounts_path =
-      let accounts = parse_accounts_exn ~test_accounts_path in
-      List.iter accounts ~f:(fun (account_id, account) ->
-          add_account sequencer account_id account )
   end
 
   let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
@@ -874,20 +750,25 @@ module Sequencer = struct
         ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
     in
 
+    t.genesis_accounts <- [ (M.Inner.account_id, M.Inner.initial_account) ] ;
+
+    (* Only for testing *)
+    ( match test_accounts_path with
+    | Some test_accounts_path ->
+        print_endline "Adding test accounts" ;
+        t.genesis_accounts <-
+          t.genesis_accounts
+          @ Test_accounts.parse_accounts_exn ~test_accounts_path
+    | None ->
+        print_endline "No test accounts" ) ;
+
     (* add initial accounts *)
-    if not found_checkpoint then (
-      add_account t M.Inner.account_id M.Inner.initial_account ;
+    if not found_checkpoint then
+      List.iter t.genesis_accounts ~f:(fun (account_id, account) ->
+          add_account t account_id account ) ;
 
-      (* Only for testing *)
-      ( match test_accounts_path with
-      | Some test_accounts_path ->
-          print_endline "Adding test accounts" ;
-          Test_accounts.add_accounts_exn t ~test_accounts_path
-      | None ->
-          print_endline "No test accounts" ) ;
-
-      print_endline
-        ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ) ;
+    print_endline
+      ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ;
 
     let%bind () =
       match found_checkpoint with
