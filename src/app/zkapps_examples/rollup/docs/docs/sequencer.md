@@ -73,6 +73,8 @@ dune exec ./archive_relay/run.exe -- \
     --bootstrap
 ```
 
+To run the adapter from docker see the section below.
+
 ## Use with docker
 
 Build:
@@ -96,6 +98,17 @@ docker run -p <port>:<port> \
            --rollback-checker-interval <int> \
            --da-contract-address <da-layer-contract> \
            --db-dir <container-db-path>
+```
+
+### Running archive relay adapter from docker
+
+```bash
+docker run --entrypoint archive_relay \
+           dcspark/zeko
+           --zeko-uri <string> \
+           --archive-host <string> \
+           --archive-port <int> \
+           --bootstrap
 ```
 
 ## Transfers
