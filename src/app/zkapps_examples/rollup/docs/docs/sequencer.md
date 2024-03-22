@@ -61,6 +61,8 @@ dune exec ./deploy.exe -- --help
 
 ## Using archive node as indexer
 
+Archive node is used for mina blockchain to index the history of the blockchain. You can optionally run the archive alongside the node's daemon, which dispatches new blocks to the archive. In zeko rollup the blockcreator is the sequencer, and since currently it's not possible to run multiple sequencers, you need to run the client that subscribes to the sequencer and dispatches the new blocks to the archive.
+
 To use standard mina archive node to index the history of zeko rollup, you need to run the zeko archive relay adapter, that can subscribe to zeko sequencer for new changes and relay them to the archive node.
 You can run the adapter with the following command:
 
