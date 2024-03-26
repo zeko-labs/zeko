@@ -216,8 +216,15 @@ module Sequencer = struct
               match%bind
                 try_with (fun () ->
                     let%bind () =
-                      Da_layer.post_batch t.da_config
-                        ~commands:t.staged_commands ~batch_id ~previous_batch_id
+                      match%bind
+                        Da_layer.post_batch t.da_config
+                          ~commands:t.staged_commands ~batch_id
+                          ~previous_batch_id
+                      with
+                      | Ok _ ->
+                          return ()
+                      | Error e ->
+                          failwith (Unix.Exit_or_signal.to_string_hum (Error e))
                     in
                     print_endline ("Posted batch " ^ batch_id) ;
 

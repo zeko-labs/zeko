@@ -24,9 +24,21 @@ const main = async () => {
 
   const contract = daFactory.attach(address);
 
-  const tx = await contract.postBatch(id, previousId, commands);
-
-  await tx.wait();
+  try {
+    const tx = await contract.postBatch(id, previousId, commands);
+    await tx.wait();
+  } catch (e) {
+    if (
+      e instanceof Object &&
+      e.hasOwnProperty("reason") &&
+      // @ts-ignore
+      e.reason.includes("Batch already exists")
+    ) {
+      process.exit(0);
+    }
+    console.error(e);
+    process.exit(1);
+  }
 };
 
 main().catch(console.error);
