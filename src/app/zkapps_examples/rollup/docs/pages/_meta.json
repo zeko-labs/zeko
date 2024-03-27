@@ -1,0 +1,34 @@
+{
+  "404": {
+    "title": "404",
+    "display": "hidden",
+    "theme": {
+      "layout": "full",
+      "breadcrumb": false,
+      "footer": true,
+      "sidebar": true,
+      "toc": false,
+      "pagination": false
+    }
+  },
+
+  "500": {
+    "title": "500",
+    "display": "hidden",
+    "theme": {
+      "layout": "full",
+      "breadcrumb": false,
+      "footer": true,
+      "sidebar": true,
+      "toc": false,
+      "pagination": false
+    }
+  },
+
+  "index": "Introduction",
+  "da-layer": "Zeko data availability contracts",
+  "for_end_users": "For end users",
+  "for_network_operators": "For network operators",
+  "for_zkapp_developers": "For zkapp developers",
+  "sequencer": "Zeko sequencer"
+}
