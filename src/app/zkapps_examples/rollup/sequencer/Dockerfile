@@ -205,7 +205,8 @@ COPY ./opam.export .
 RUN opam switch import opam.export --quiet
 
 RUN eval $(opam config env) \
-    && opam install fileutils
+    && opam install fileutils \
+    && opam install websocket-async
 
 # --- Copy the entire zeko repo into the image
 COPY . .
