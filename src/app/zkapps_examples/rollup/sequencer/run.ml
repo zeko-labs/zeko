@@ -57,14 +57,7 @@ let run port zkapp_pk max_pool_size commitment_period da_contract_address db_dir
             print_endline "Unhandled exception" ;
             print_endline (Exn.to_string exn) ) )
       (Async.Tcp.Where_to_listen.of_port port)
-      (fun ~body _sock req ->
-        let headers = Cohttp.Request.headers req in
-        match Cohttp.Header.get headers "Connection" with
-        | Some "Upgrade" ->
-            Graphql_cohttp_async.respond_string ~status:`Forbidden
-              ~body:"Websocket not supported" ()
-        | _ ->
-            graphql_callback () req body )
+      (fun ~body _sock req -> graphql_callback () req body)
     |> Deferred.ignore_m |> don't_wait_for
   in
   print_endline ("Sequencer listening on port " ^ Int.to_string port) ;

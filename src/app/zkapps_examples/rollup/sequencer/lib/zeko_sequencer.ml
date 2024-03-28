@@ -35,12 +35,11 @@ module Sequencer = struct
 
   let genesis_constants = Genesis_constants.compiled
 
-  let consensus_constants =
-    Consensus.Constants.create ~constraint_constants
-      ~protocol_constants:genesis_constants.protocol
-
-  let state_body =
-    (* FIXME: Use the correct values *)
+  let compile_time_genesis_state =
+    let consensus_constants =
+      Consensus.Constants.create ~constraint_constants
+        ~protocol_constants:genesis_constants.protocol
+    in
     let compile_time_genesis =
       Mina_state.Genesis_protocol_state.t
         ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
@@ -48,7 +47,7 @@ module Sequencer = struct
         ~constraint_constants ~consensus_constants
         ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
     in
-    Mina_state.Protocol_state.body compile_time_genesis.data
+    compile_time_genesis.data
 
   module T = Transaction_snark.Make (struct
     let constraint_constants = constraint_constants
@@ -217,8 +216,15 @@ module Sequencer = struct
               match%bind
                 try_with (fun () ->
                     let%bind () =
-                      Da_layer.post_batch t.da_config
-                        ~commands:t.staged_commands ~batch_id ~previous_batch_id
+                      match%bind
+                        Da_layer.post_batch t.da_config
+                          ~commands:t.staged_commands ~batch_id
+                          ~previous_batch_id
+                      with
+                      | Ok _ ->
+                          return ()
+                      | Error e ->
+                          failwith (Unix.Exit_or_signal.to_string_hum (Error e))
                     in
                     print_endline ("Posted batch " ^ batch_id) ;
 
@@ -295,14 +301,31 @@ module Sequencer = struct
     let wait_to_finish t = Throttle.capacity_available t.q
   end
 
+  module Subscriptions = struct
+    type t =
+      { mutable transactions : string Pipe.Writer.t list
+      ; mutable staged_archive_diffs :
+          Archive_lib.Diff.Transition_frontier.t list
+      }
+
+    let create () = { transactions = []; staged_archive_diffs = [] }
+
+    let add_staged_diff t diff =
+      t.staged_archive_diffs <- t.staged_archive_diffs @ [ diff ]
+
+    let clear_staged_diffs t = t.staged_archive_diffs <- []
+  end
+
   type t =
     { db : L.Db.t
     ; archive : Archive.t
-    ; mutable slot : int
     ; config : Config.t
     ; da_config : Da_layer.Config.t
     ; snark_q : Snark_queue.t
     ; stop : unit Ivar.t
+    ; mutable genesis_accounts : (Account_id.t * Account.t) list
+    ; mutable protocol_state : Mina_state.Protocol_state.value
+    ; mutable subscriptions : Subscriptions.t
     }
 
   let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
@@ -314,11 +337,13 @@ module Sequencer = struct
     let da_config : Da_layer.Config.t = { da_contract_address } in
     { db
     ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
-    ; slot = 0
     ; config = { max_pool_size; commitment_period_sec; db_dir }
     ; da_config
     ; snark_q = Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
     ; stop = Ivar.create ()
+    ; genesis_accounts = []
+    ; protocol_state = compile_time_genesis_state
+    ; subscriptions = Subscriptions.create ()
     }
 
   let close t =
@@ -336,6 +361,10 @@ module Sequencer = struct
     let%bind.Option location = L.Db.location_of_account t.db account_id in
     L.Db.get t.db location
 
+  let get_global_slot t =
+    Mina_state.Protocol_state.consensus_state t.protocol_state
+    |> Consensus.Data.Consensus_state.global_slot_since_genesis
+
   let inferr_nonce t public_key =
     match get_account t public_key Token_id.default with
     | Some account ->
@@ -344,6 +373,47 @@ module Sequencer = struct
         Unsigned.UInt32.zero
 
   let get_root t = L.Db.merkle_root t.db
+
+  let save_protocol_state t =
+    let data =
+      Bigstring.of_string @@ Yojson.Safe.to_string
+      @@ Mina_state.Protocol_state.value_to_yojson t.protocol_state
+    in
+    L.Kvdb.set (L.Db.kvdb t.db)
+      ~key:Bigstring.(of_string "protocol_state")
+      ~data
+
+  let load_protocol_state_exn t =
+    let data =
+      L.Kvdb.get (L.Db.kvdb t.db) ~key:Bigstring.(of_string "protocol_state")
+      |> Option.value_exn
+    in
+    match
+      Mina_state.Protocol_state.value_of_yojson @@ Yojson.Safe.from_string
+      @@ Bigstring.to_string data
+    with
+    | Ok protocol_state ->
+        t.protocol_state <- protocol_state
+    | Error e ->
+        failwith e
+
+  let dispatch_transaction t ~ledger ~accounts_created ~new_state_hash ~txn =
+    let new_protocol_state, diff =
+      Archive_lib.Diff.Builder.transaction_added ~constraint_constants
+        ~accounts_created ~new_state_hash ~protocol_state:t.protocol_state
+        ~ledger ~txn
+    in
+    t.protocol_state <- new_protocol_state ;
+    Subscriptions.add_staged_diff t.subscriptions diff ;
+    match
+      Base64.encode
+      @@ Binable.to_string (module Archive_lib.Diff.Transition_frontier) diff
+    with
+    | Ok data ->
+        List.iter t.subscriptions.transactions ~f:(fun w ->
+            Pipe.write_without_pushback_if_open w data )
+    | Error (`Msg e) ->
+        print_endline e
 
   let apply_signed_command t (signed_command : Signed_command.t) =
     let%bind.Result () =
@@ -363,7 +433,11 @@ module Sequencer = struct
       Mina_transaction.Transaction.Command
         (User_command.Signed_command signed_command)
     in
-    let global_slot = Mina_numbers.Global_slot_since_genesis.of_int t.slot in
+    (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
+    let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+    let state_body =
+      Mina_state.Protocol_state.body compile_time_genesis_state
+    in
     let l = L.of_database t.db in
     let source_ledger_hash = L.merkle_root l in
     let sparse_ledger =
@@ -422,6 +496,11 @@ module Sequencer = struct
         ~pending_coinbase_stack_state:pc
     in
 
+    dispatch_transaction t ~ledger:l
+      ~accounts_created:(L.Transaction_applied.new_accounts txn_applied)
+      ~new_state_hash:target_ledger_hash
+      ~txn:(L.Transaction_applied.transaction txn_applied) ;
+
     Result.return
       ( txn_applied
       , Snark_queue.Command_witness.Signed_command
@@ -433,9 +512,13 @@ module Sequencer = struct
         Error (Error.of_string "Maximum pool size reached, try later")
       else Ok ()
     in
-    let global_slot = Mina_numbers.Global_slot_since_genesis.of_int t.slot in
+    (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
+    let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+    let state_body =
+      Mina_state.Protocol_state.body compile_time_genesis_state
+    in
+    let l = L.of_database t.db in
     let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
-      let l = L.of_database t.db in
       let accounts_referenced =
         Zkapp_command.accounts_referenced zkapp_command
       in
@@ -518,6 +601,11 @@ module Sequencer = struct
         ]
     in
 
+    dispatch_transaction t ~ledger:l
+      ~accounts_created:(L.Transaction_applied.new_accounts txn_applied)
+      ~new_state_hash:(L.merkle_root l)
+      ~txn:(L.Transaction_applied.transaction txn_applied) ;
+
     Result.return
       ( txn_applied
       , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command) )
@@ -560,6 +648,7 @@ module Sequencer = struct
       | None ->
           ()
       | Some db_dir -> (
+          save_protocol_state t ;
           let ledger_hash =
             Frozen_ledger_hash.to_decimal_string L.Db.(merkle_root t.db)
           in
@@ -574,6 +663,7 @@ module Sequencer = struct
         L.(of_database t.db)
         [ M.Inner.account_id ]
     in
+    Subscriptions.clear_staged_diffs t.subscriptions ;
     Snark_queue.enqueue_prove_commit t.snark_q ~target_ledger
 
   let run_committer t =
@@ -582,6 +672,22 @@ module Sequencer = struct
       every ~stop:(Ivar.read t.stop)
         (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
           don't_wait_for @@ commit t )
+
+  let add_transactions_subscriber t =
+    let r, w = Pipe.create () in
+    List.iter t.subscriptions.staged_archive_diffs ~f:(fun diff ->
+        match
+          Base64.encode
+          @@ Binable.to_string
+               (module Archive_lib.Diff.Transition_frontier)
+               diff
+        with
+        | Ok data ->
+            Pipe.write_without_pushback_if_open w data
+        | Error (`Msg e) ->
+            print_endline e ) ;
+    t.subscriptions.transactions <- w :: t.subscriptions.transactions ;
+    r
 
   module Test_accounts = struct
     type t = { pk : string; balance : int64 } [@@deriving yojson]
@@ -610,11 +716,6 @@ module Sequencer = struct
               (Currency.Balance.of_uint64 (Unsigned.UInt64.of_int64 balance))
           in
           (account_id, account) )
-
-    let add_accounts_exn sequencer ~test_accounts_path =
-      let accounts = parse_accounts_exn ~test_accounts_path in
-      List.iter accounts ~f:(fun (account_id, account) ->
-          add_account sequencer account_id account )
   end
 
   let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
@@ -656,42 +757,51 @@ module Sequencer = struct
         ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
     in
 
+    t.genesis_accounts <- [ (M.Inner.account_id, M.Inner.initial_account) ] ;
+
+    (* Only for testing *)
+    ( match test_accounts_path with
+    | Some test_accounts_path ->
+        print_endline "Adding test accounts" ;
+        t.genesis_accounts <-
+          t.genesis_accounts
+          @ Test_accounts.parse_accounts_exn ~test_accounts_path
+    | None ->
+        print_endline "No test accounts" ) ;
+
     (* add initial accounts *)
-    if not found_checkpoint then (
-      add_account t M.Inner.account_id M.Inner.initial_account ;
+    if not found_checkpoint then
+      List.iter t.genesis_accounts ~f:(fun (account_id, account) ->
+          add_account t account_id account ) ;
 
-      (* Only for testing *)
-      ( match test_accounts_path with
-      | Some test_accounts_path ->
-          print_endline "Adding test accounts" ;
-          Test_accounts.add_accounts_exn t ~test_accounts_path
-      | None ->
-          print_endline "No test accounts" ) ;
+    print_endline
+      ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ;
 
-      print_endline
-        ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ) ;
-
-    (* apply command from DA layer *)
     let%bind () =
       match found_checkpoint with
       | false ->
+          (* apply commands from DA layer *)
           let%bind commands =
             Da_layer.get_batches t.da_config
               ~to_:(Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
           in
-          return
-          @@ List.iter commands ~f:(fun command ->
-                 match command with
-                 | User_command.Signed_command signed_command ->
-                     ( apply_signed_command t signed_command |> Or_error.ok_exn
-                       : L.Transaction_applied.t * _ )
-                     |> ignore
-                 | User_command.Zkapp_command zkapp_command ->
-                     ( apply_zkapp_command t zkapp_command |> Or_error.ok_exn
-                       : L.Transaction_applied.t * _ )
-                     |> ignore )
-      | true ->
+          let _new_state_hash =
+            List.iter commands ~f:(fun command ->
+                match command with
+                | User_command.Signed_command signed_command ->
+                    let _res =
+                      apply_signed_command t signed_command |> Or_error.ok_exn
+                    in
+                    ()
+                | User_command.Zkapp_command zkapp_command ->
+                    let _res =
+                      apply_zkapp_command t zkapp_command |> Or_error.ok_exn
+                    in
+                    () )
+          in
           return ()
+      | true ->
+          return @@ load_protocol_state_exn t
     in
     t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
     t.snark_q.previous_committed_ledger <-
@@ -791,11 +901,10 @@ let%test_unit "apply commands and commit" =
                               L.apply_zkapp_command_unchecked expected_ledger
                                 command ~constraint_constants
                                 ~global_slot:
-                                  (Mina_numbers.Global_slot_since_genesis.of_int
-                                     sequencer.slot )
+                                  Mina_numbers.Global_slot_since_genesis.zero
                                 ~state_view:
-                                  (Mina_state.Protocol_state.Body.view
-                                     state_body )
+                                  Mina_state.Protocol_state.(
+                                    Body.view @@ body sequencer.protocol_state)
                             with
                           | Ok _ ->
                               ()
@@ -809,8 +918,7 @@ let%test_unit "apply commands and commit" =
                               L.apply_user_command_unchecked expected_ledger
                                 command ~constraint_constants
                                 ~txn_global_slot:
-                                  (Mina_numbers.Global_slot_since_genesis.of_int
-                                     sequencer.slot )
+                                  Mina_numbers.Global_slot_since_genesis.zero
                             with
                           | Ok _ ->
                               ()

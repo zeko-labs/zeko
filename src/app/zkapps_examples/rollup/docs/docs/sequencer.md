@@ -20,6 +20,7 @@ DUNE_PROFILE=devnet dune runtest
 Running the sequencer exposes the Graphql API on the port `-p`. The Graphql schema is a subset of the L1 Graphql API joined with the L1 Graphql API for fetching of actions/events.
 
 ```bash
+export DA_PROVIDER="da evm provider"
 export DA_PRIVATE_KEY="da layer private key"
 export MINA_PRIVATE_KEY="base58 signer private key"
 export DUNE_PROFILE=devnet
@@ -58,6 +59,24 @@ Run help to see the options:
 dune exec ./deploy.exe -- --help
 ```
 
+## Using archive node as indexer
+
+Archive node is used for mina blockchain to index the history of the blockchain. You can optionally run the archive alongside the node's daemon, which dispatches new blocks to the archive. In zeko rollup the blockcreator is the sequencer, and since currently it's not possible to run multiple sequencers, you need to run the client that subscribes to the sequencer and dispatches the new blocks to the archive.
+
+To use standard mina archive node to index the history of zeko rollup, you need to run the zeko archive relay adapter, that can subscribe to zeko sequencer for new changes and relay them to the archive node.
+You can run the adapter with the following command:
+
+```bash
+export DUNE_PROFILE=devnet
+dune exec ./archive_relay/run.exe -- \
+    --zeko-uri <string> \
+    --archive-host <string> \
+    --archive-port <int> \
+    --bootstrap
+```
+
+To run the adapter from docker see the section below.
+
 ## Use with docker
 
 Build:
@@ -81,6 +100,17 @@ docker run -p <port>:<port> \
            --rollback-checker-interval <int> \
            --da-contract-address <da-layer-contract> \
            --db-dir <container-db-path>
+```
+
+### Running archive relay adapter from docker
+
+```bash
+docker run --entrypoint archive_relay \
+           dcspark/zeko
+           --zeko-uri <string> \
+           --archive-host <string> \
+           --archive-port <int> \
+           --bootstrap
 ```
 
 ## Transfers

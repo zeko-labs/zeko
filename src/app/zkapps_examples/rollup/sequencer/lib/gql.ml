@@ -953,6 +953,37 @@ module Types = struct
           ] )
   end
 
+  module Committed_transactions = struct
+    type json_account = { account_id : string; account : string }
+
+    type t =
+      { raw_committed_transactions : string list
+      ; json_genesis_accounts : json_account list
+      }
+
+    let t =
+      let json_account =
+        obj "jsonAccount" ~fields:(fun _ ->
+            [ field "accountId" ~typ:(non_null string) ~args:[]
+                ~resolve:(fun _ a -> a.account_id)
+            ; field "account" ~typ:(non_null string) ~args:[]
+                ~resolve:(fun _ a -> a.account)
+            ] )
+      in
+      obj "CommittedTransactions" ~fields:(fun _ ->
+          [ field "rawTransactions"
+              ~typ:(non_null (list (non_null string)))
+              ~doc:"List of raw committed transactions in base64 format"
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.raw_committed_transactions)
+          ; field "jsonGenesisAccounts"
+              ~typ:(non_null (list (non_null json_account)))
+              ~doc:"List of genesis accounts in json format"
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.json_genesis_accounts)
+          ] )
+  end
+
   module Payload = struct
     let send_payment =
       obj "SendPaymentPayload" ~fields:(fun _ ->
@@ -1660,6 +1691,46 @@ module Queries = struct
               ( Yojson.Safe.to_string
               @@ Zkapp_command.account_updates_to_json account_update ) )
 
+  let committed_transaction =
+    io_field "committedTransactions"
+      ~doc:
+        "Get list of raw committed transactions in base64 format. Useful for \
+         boostrapping archive node."
+      ~typ:Types.Committed_transactions.t
+      ~args:Arg.[]
+      ~resolve:(fun { ctx = sequencer; _ } () ->
+        match
+          Zeko_sequencer.(sequencer.snark_q.previous_committed_ledger_hash)
+        with
+        | None ->
+            return (Ok None)
+        | Some last_committed_ledger_hash ->
+            let%bind commands =
+              Da_layer.get_batches
+                Zeko_sequencer.(sequencer.da_config)
+                ~to_:
+                  (Frozen_ledger_hash.to_decimal_string
+                     last_committed_ledger_hash )
+            in
+            return
+              (Ok
+                 (Some
+                    Types.Committed_transactions.
+                      { raw_committed_transactions =
+                          List.map commands ~f:(fun c ->
+                              User_command.to_base64 c )
+                      ; json_genesis_accounts =
+                          List.map
+                            Zeko_sequencer.(sequencer.genesis_accounts)
+                            ~f:(fun (id, acc) ->
+                              { account_id =
+                                  Yojson.Safe.to_string
+                                  @@ Account_id.to_yojson id
+                              ; account =
+                                  Yojson.Safe.to_string @@ Account.to_yojson acc
+                              } )
+                      } ) ) )
+
   module Archive = struct
     let actions =
       field "actions"
@@ -1695,10 +1766,34 @@ module Queries = struct
   end
 
   let commands =
-    [ sync_status; daemon_status; account; accounts_for_pk; transfer ]
+    [ sync_status
+    ; daemon_status
+    ; account
+    ; accounts_for_pk
+    ; transfer
+    ; committed_transaction
+    ]
     @ Archive.commands
+end
+
+module Subscriptions = struct
+  open Schema
+
+  let new_transaction =
+    subscription_field "newTransaction"
+      ~doc:
+        "Event that triggers when a new transaction is applied, returned in a \
+         base64 encoding of block with one transaction. Useful for archive \
+         node."
+      ~typ:(non_null string)
+      ~args:Arg.[]
+      ~resolve:(fun { ctx = sequencer; _ } ->
+        return (Ok Zeko_sequencer.(add_transactions_subscriber sequencer)) )
+
+  let commands = [ new_transaction ]
 end
 
 let schema =
   Graphql_async.Schema.(
-    schema Queries.commands ~mutations:Mutations.commands ~subscriptions:[])
+    schema Queries.commands ~mutations:Mutations.commands
+      ~subscriptions:Subscriptions.commands)

@@ -2,6 +2,19 @@ open Core_kernel
 open Mina_base
 open Async
 
+let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
+  let rec go attempt =
+    match%bind f () with
+    | Ok x ->
+        return (Ok x)
+    | Error _ when attempt < max_attempts ->
+        let%bind () = after delay in
+        go (attempt + 1)
+    | Error e ->
+        return (Error e)
+  in
+  go 0
+
 module Da_layer = struct
   module Config = struct
     type t = { da_contract_address : string option }
@@ -24,28 +37,32 @@ module Da_layer = struct
           ]
 
   let post_batch (config : Config.t) ~commands ~batch_id ~previous_batch_id =
-    match config.da_contract_address with
-    | None ->
-        print_endline "No da contract address provided. Skipping batch posting" ;
-        Deferred.unit
-    | Some da_contract_address ->
-        let payload =
-          Yojson.to_string
-            (`Assoc
-              [ ("address", `String da_contract_address)
-              ; ("id", `String batch_id)
-              ; ("previousId", `String previous_batch_id)
-              ; ("commands", `List (List.map commands ~f:command_to_yojson))
-              ] )
-        in
-        let stdin =
-          Core.Unix.open_process_out
-            "cd ../da-layer && npx hardhat run scripts/postBatch.ts"
-        in
-        let pid = UnixLabels.process_out_pid stdin in
-        Out_channel.output_string stdin payload ;
-        Out_channel.close stdin ;
-        Unix.waitpid_exn (Pid.of_int pid)
+    retry
+      ~f:(fun () ->
+        match config.da_contract_address with
+        | None ->
+            print_endline
+              "No da contract address provided. Skipping batch posting" ;
+            return (Ok ())
+        | Some da_contract_address ->
+            let payload =
+              Yojson.to_string
+                (`Assoc
+                  [ ("address", `String da_contract_address)
+                  ; ("id", `String batch_id)
+                  ; ("previousId", `String previous_batch_id)
+                  ; ("commands", `List (List.map commands ~f:command_to_yojson))
+                  ] )
+            in
+            let stdin =
+              Core.Unix.open_process_out
+                "cd ../da-layer && npx hardhat run scripts/postBatch.ts"
+            in
+            let pid = UnixLabels.process_out_pid stdin in
+            Out_channel.output_string stdin payload ;
+            Out_channel.close stdin ;
+            Unix.waitpid (Pid.of_int pid) )
+      ()
 
   let get_batches (config : Config.t) ~to_ =
     match config.da_contract_address with

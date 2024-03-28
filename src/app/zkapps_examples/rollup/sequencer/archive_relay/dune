@@ -1,0 +1,15 @@
+(executable
+ (name run)
+ (libraries
+  mina_lib
+  mina_ledger
+  archive_lib
+  core_unix.command_unix
+  yojson
+  cohttp
+  cohttp-async
+  websocket-async
+  async_kernel)
+ (preprocess
+  (pps ppx_jane))
+ (modules run))

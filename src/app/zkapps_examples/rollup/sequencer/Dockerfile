@@ -205,7 +205,8 @@ COPY ./opam.export .
 RUN opam switch import opam.export --quiet
 
 RUN eval $(opam config env) \
-    && opam install fileutils
+    && opam install fileutils \
+    && opam install websocket-async
 
 # --- Copy the entire zeko repo into the image
 COPY . .
@@ -224,7 +225,7 @@ RUN git config --global --add safe.directory /home/opam/zeko \
 RUN eval $(opam config env) \
     && dune build --profile=devnet \
     src/app/zkapps_examples/rollup/sequencer/run.exe \
-    src/app/zkapps_examples/rollup/sequencer/deploy.exe
+    src/app/zkapps_examples/rollup/sequencer/archive_relay/run.exe
 
 
 
@@ -266,11 +267,13 @@ RUN curl -sL https://deb.nodesource.com/setup_18.x | bash \
 
 WORKDIR /zeko/sequencer
 
-COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/run.exe /zeko/sequencer/run.exe
-# COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/deploy.exe /zeko/sequencer/deploy.exe
+COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/run.exe /zeko/sequencer/sequencer
+COPY --from=builder /home/opam/zeko/_build/default/src/app/zkapps_examples/rollup/sequencer/archive_relay/run.exe /zeko/sequencer/archive_relay
 COPY --from=builder /home/opam/zeko/src/app/zkapps_examples/rollup/da-layer /zeko/da-layer
 COPY --from=builder /home/opam/zeko/src/app/zkapps_examples/rollup/sequencer/tests/testing_accounts.json /zeko/testing_accounts.json
 
 RUN cd /zeko/da-layer && npm install && npm run compile
 
-ENTRYPOINT [ "./run.exe", "--test-accounts-path", "../testing_accounts.json" ]
+ENV PATH="$PATH:/zeko/sequencer"
+
+ENTRYPOINT [ "sequencer", "--test-accounts-path", "../testing_accounts.json" ]

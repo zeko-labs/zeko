@@ -2420,7 +2420,8 @@ module Make_str (A : Wire_types.Concrete) = struct
       module Unsafe = struct
         (* TODO: very unsafe, do not use unless you know what you are doing *)
         let dummy_advance (t : Value.t) ?(increase_epoch_count = false)
-            ~new_global_slot_since_genesis : Value.t =
+            ?(increase_blockchain_length = false) ~new_global_slot_since_genesis
+            : Value.t =
           let new_epoch_count =
             if increase_epoch_count then Length.succ t.epoch_count
             else t.epoch_count
@@ -2435,6 +2436,10 @@ module Make_str (A : Wire_types.Concrete) = struct
           ; curr_global_slot_since_hard_fork =
               Global_slot.add t.curr_global_slot_since_hard_fork slot_diff
           ; global_slot_since_genesis = new_global_slot_since_genesis
+          ; blockchain_length =
+              ( if increase_blockchain_length then
+                Length.succ t.blockchain_length
+              else t.blockchain_length )
           }
       end
 
