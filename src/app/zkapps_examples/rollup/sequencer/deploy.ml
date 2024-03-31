@@ -11,9 +11,7 @@ module T = Transaction_snark.Make (struct
   let proof_level = Genesis_constants.Proof_level.Full
 end)
 
-module M = Zkapps_rollup.Make (struct
-  let tag = T.tag
-end)
+module M = Zkapps_rollup.Make (T)
 
 let run uri sk test_accounts_path () =
   let sender_keypair =
@@ -46,10 +44,12 @@ let run uri sk test_accounts_path () =
                  ~test_accounts_path ) ~f:(fun (account_id, account) ->
                 L.create_new_account_exn ledger account_id account ) ) ;
 
-        M.Outer.deploy_command_exn ~signer:sender_keypair ~zkapp:zkapp_keypair
+        Sequencer_lib.Deploy.deploy_command_exn ~signer:sender_keypair
+          ~zkapp:zkapp_keypair
           ~fee:(Currency.Fee.of_mina_int_exn 1)
           ~nonce:(Account.Nonce.of_int nonce)
-          ~initial_ledger:ledger )
+          ~constraint_constants ~initial_ledger:ledger
+          (module M) )
   in
   Thread_safe.block_on_async_exn (fun () ->
       let%map result = Sequencer_lib.Gql_client.send_zkapp uri command in

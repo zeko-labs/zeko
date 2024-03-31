@@ -1363,7 +1363,26 @@ module Body = struct
       |> finish "FeePayerBody" ~t_toplevel_annots
   end
 
-  let of_fee_payer (t : Fee_payer.t) : t =
+  let dummy : t =
+    { public_key = Public_key.Compressed.empty
+    ; update = Update.dummy
+    ; token_id = Token_id.default
+    ; balance_change = Amount.Signed.zero
+    ; increment_nonce = false
+    ; events = []
+    ; actions = []
+    ; call_data = Field.zero
+    ; preconditions = Preconditions.accept
+    ; use_full_commitment = false
+    ; implicit_account_creation_fee = true
+    ; may_use_token = No
+    ; authorization_kind = None_given
+    }
+
+  (* ZEKO NOTE: When we create a fee payer from a dummy fee payer that
+     has the empty public key, we ignore the existing logic and replace it with
+     a dummy account update with public key set to point near 123456789 *)
+  let of_fee_payer_original (t : Fee_payer.t) : t =
     { public_key = t.public_key
     ; token_id = Token_id.default
     ; update = Update.noop
@@ -1394,6 +1413,19 @@ module Body = struct
     ; may_use_token = No
     ; authorization_kind = Signature
     }
+
+  let key_123456789 : Public_key.Compressed.t lazy_t =
+    lazy
+      (let pk =
+         Snark_params.Tick.Inner_curve.(
+           to_affine_exn @@ point_near_x @@ Field.of_int 123456789)
+       in
+       Public_key.compress pk )
+
+  let of_fee_payer (t : Fee_payer.t) : t =
+    if Public_key.Compressed.(equal empty t.public_key) then
+      { dummy with public_key = force key_123456789 }
+    else of_fee_payer_original t
 
   let to_simple_fee_payer (t : Fee_payer.t) : Simple.t =
     { public_key = t.public_key
@@ -1554,22 +1586,6 @@ module Body = struct
       ]
       ~var_to_hlist:Checked.to_hlist ~var_of_hlist:Checked.of_hlist
       ~value_to_hlist:to_hlist ~value_of_hlist:of_hlist
-
-  let dummy : t =
-    { public_key = Public_key.Compressed.empty
-    ; update = Update.dummy
-    ; token_id = Token_id.default
-    ; balance_change = Amount.Signed.zero
-    ; increment_nonce = false
-    ; events = []
-    ; actions = []
-    ; call_data = Field.zero
-    ; preconditions = Preconditions.accept
-    ; use_full_commitment = false
-    ; implicit_account_creation_fee = true
-    ; may_use_token = No
-    ; authorization_kind = None_given
-    }
 
   let to_input
       ({ public_key
@@ -1762,8 +1778,14 @@ module Fee_payer = struct
   let account_id (t : t) : Account_id.t =
     Account_id.create t.body.public_key Token_id.default
 
+  (* ZEKO NOTE: When we create a fee payer from a dummy fee payer that
+     has the empty public key, we ignore the existing logic and replace it with
+     a dummy account update with public key set to point near 123456789 *)
   let to_account_update (t : t) : T.t =
-    { authorization = Control.Signature t.authorization
+    { authorization =
+        ( if Public_key.Compressed.(equal empty t.body.public_key) then
+          Control.None_given
+        else Control.Signature t.authorization )
     ; body = Body.of_fee_payer t.body
     }
 
@@ -1784,26 +1806,7 @@ let verification_key_update_to_option (t : t) :
     Verification_key_wire.t option Zkapp_basic.Set_or_keep.t =
   Zkapp_basic.Set_or_keep.map ~f:Option.some t.body.update.verification_key
 
-let key_123456789 : Public_key.Compressed.t lazy_t =
-  lazy
-    (let pk =
-       Snark_params.Tick.Inner_curve.(
-         to_affine_exn @@ point_near_x @@ Field.of_int 123456789)
-     in
-     Public_key.compress pk )
-
-let dummy_fee_payer : t =
-  { authorization = None_given
-  ; body = { Body.dummy with public_key = force key_123456789 }
-  }
-
-(* ZEKO NOTE: When we create a fee payer from a dummy fee payer that
-   has the empty public key, we ignore the existing logic and replace it with
-   a dummy account update with public key set to point near 123456789 *)
-let of_fee_payer ({ body; authorization } : Fee_payer.t) : t =
-  if Public_key.Compressed.(equal empty body.public_key) then dummy_fee_payer
-  else
-    { authorization = Signature authorization; body = Body.of_fee_payer body }
+let of_fee_payer = Fee_payer.to_account_update
 
 (** The change in balance to apply to the target account of this account_update.
       When this is negative, the amount will be withdrawn from the account and

@@ -1,3 +1,5 @@
+(env (_ (flags (-w -4-48))))
+
 (executable
  (name run)
  (libraries
