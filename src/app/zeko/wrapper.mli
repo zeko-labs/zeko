@@ -39,7 +39,4 @@ module Make (T : Transaction_snark.S) : sig
   val wrap : Transaction_snark.t -> t Async_kernel.Deferred.t
 
   val merge : t -> t -> t Async_kernel.Deferred.t
-
-  (* FIXME: remove, unneeded *)
-  val verify : t -> unit Core_kernel.Or_error.t Async_kernel.Deferred.t
 end

@@ -235,6 +235,4 @@ module Make (Txn : Transaction_snark.S) = struct
           merge_ ~handler:(Merge.handler { s1; s2 }) ()
         in
         ({ stmt; proof } : t) )
-
-  let verify _ = failwith "deprecated"
 end

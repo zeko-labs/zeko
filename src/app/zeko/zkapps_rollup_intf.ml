@@ -1,4 +1,3 @@
-open Core_kernel
 open Async_kernel
 open Mina_base
 open Signature_lib
@@ -28,9 +27,6 @@ module type S = sig
 
     (** Merge two wrapped ledger transitions, they must connect or this will fail. *)
     val merge : t -> t -> t Deferred.t
-
-    (* FIXME: remove, unneeded *)
-    val verify : t -> unit Or_error.t Deferred.t
   end
 
   module Inner : sig

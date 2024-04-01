@@ -171,7 +171,7 @@ let dummy_proof source : t =
 (* Head of list should be oldest, tail should be newest *)
 let prove ?(dummy = false) ~(source : F.t) (actionss : Actions.t list) :
     t Deferred.t =
-  assert (List.length actionss <= N_2_8.n) (* FIXME: support *) ;
+  assert (List.length actionss <= N_2_8.n) (* FIXME: support, see FIXME below *) ;
   if List.is_empty actionss then return (dummy_proof source)
   else if dummy then
     let target =
@@ -180,7 +180,7 @@ let prove ?(dummy = false) ~(source : F.t) (actionss : Actions.t list) :
     return { (dummy_proof source) with target }
   else
     let%map stmt, (), proof =
-      (* FIXME: split up when too big *)
+      (* FIXME: split up when too big, see FIXME above *)
       step
         Step.Witness.
           { actionss = Step.construct_witness ~actionss
