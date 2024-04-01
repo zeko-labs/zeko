@@ -303,11 +303,11 @@ module Inner = struct
   module Witness = struct
     type t =
       { vk_hash : F.t
+      ; all_deposits : F.t
             (* We update all_deposits to what the outer account tells us *)
             (* This _can't_ go wrong; if an incorrect one is chosen, the account will
                have an incorrect value in the app state, and the outer step will fail.
                Do note that outer step also checks the nonce. *)
-      ; all_deposits : F.t
       }
     [@@deriving snarky]
   end
@@ -317,11 +317,11 @@ module Inner = struct
   let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
     let Witness.{ vk_hash; all_deposits } = exists_witness () in
     let account_update = Body.(constant (typ ()) dummy) in
-    (* Set all_deposits *)
     let update =
       { account_update.update with
-        (* FIXME: Check Action_state_extension.var from previous to this *)
-        app_state = State.(var_to_app_state typ { all_deposits })
+        app_state =
+          State.(var_to_app_state typ { all_deposits })
+          (* This is equal to outer state action state and is checked in outer account rule *)
       }
     in
     let account_update =
@@ -471,7 +471,7 @@ module Outer = struct
           (Ledger_hash.var_to_hash_packed
              (Wrapper.statement_var t).target_ledger )
           implied_root_new ) ;
-    (* FIXME: allow more than one *)
+    (* FIXME: allow more than one inner update (#102) *)
     (* There must have been exactly one or zero "steps" in the inner account, checked by checking nonce *)
     assert_var __LOC__ (fun () ->
         Boolean.(

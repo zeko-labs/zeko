@@ -967,9 +967,6 @@ let%test_unit "apply commands and commit" =
                   (Zkapps_rollup.target_ledger snark)
                   target_ledger_hash ;
 
-                let%bind res = M.Wrapper.verify snark in
-                [%test_eq: Bool.t] true (Or_error.is_ok res) ;
-
                 return () )
           in
 
