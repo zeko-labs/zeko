@@ -253,6 +253,35 @@ let
         OCAMLPARAM = "_,cclib=-lc++";
       });
 
+      zeko-sequencer = pkgs.stdenv.mkDerivation ({
+        pname = "zeko-sequencer";
+        version = "dev";
+        inherit (self.mina-dev) src withFakeOpam MARLIN_REPO_SHA MINA_COMMIT_SHA1 MINA_COMMIT_DATE MINA_BRANCH DUNE_PROFILE buildInputs nativeBuildInputs MINA_ROCKSDB GO_CAPNP_STD MARLIN_PLONK_STUBS DISABLE_CHECK_OPAM_SWITCH MINA_VERSION_IMPLEMENTATION PLONK_WASM_NODEJS PLONK_WASM_WEB configurePhase;
+
+        postUnpack = ''
+          set +x
+        '';
+
+        buildPhase = ''
+          dune build --display=short src/app/zeko/sequencer/run.exe src/app/zeko/sequencer/deploy.exe
+        '';
+
+        outputs = [
+          "out"
+        ];
+
+        installPhase = ''
+          mkdir -p $out/bin
+          pushd _build/default
+          cp src/app/zeko/sequencer/run.exe $out/bin/zeko-run
+          cp src/app/zeko/sequencer/deploy.exe $out/bin/zeko-deploy
+          popd
+          remove-references-to -t $(dirname $(dirname $(command -v ocaml))) $out/bin/*
+        '';
+        shellHook =
+          "export MINA_LIBP2P_HELPER_PATH=${pkgs.libp2p_helper}/bin/libp2p_helper";
+      });
+
       # Same as above, but wrapped with version info.
       mina = wrapMina self.mina-dev { };
 

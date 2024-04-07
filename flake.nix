@@ -10,6 +10,9 @@
     ];
   };
 
+  inputs.dream2nix.url = "github:nix-community/dream2nix";
+  inputs.dream2nix.inputs.nixpkgs.follows = "nixpkgs";
+
   inputs.utils.url = "github:gytis-ivaskevicius/flake-utils-plus";
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable-small";
 
@@ -286,8 +289,15 @@
 
         # Main user-facing binaries.
         packages = rec {
+          da-layer = inputs.dream2nix.lib.evalModules {
+            packageSets.nixpkgs = pkgs;
+            modules = [
+              ./src/app/zeko/da-layer/dream2nix-module.nix
+            ];
+          };
+          inherit (import ./src/app/zeko/default.nix inputs system) mina-geth mina-geth-helper;
           inherit (ocamlPackages)
-            mina mina_tests mina-ocaml-format test_executive;
+            mina mina_tests mina-ocaml-format test_executive zeko-sequencer;
           inherit (pkgs)
             libp2p_helper kimchi_bindings_stubs snarky_js leaderboard
             validation trace-tool zkapp-cli;
