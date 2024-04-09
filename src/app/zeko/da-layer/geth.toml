@@ -1,0 +1,31 @@
+[Eth]
+NetworkId = 123454321
+SyncMode = "full"
+NoPruning = true
+RPCGasCap = 999999999999999
+
+[Eth.GPO]
+IgnorePrice = 0
+
+[Node]
+UseLightweightKDF = true
+IPCPath = "geth.ipc"
+HTTPHost = "127.0.0.1"
+HTTPPort = 8545
+HTTPVirtualHosts = ["localhost"]
+HTTPModules = ["net", "web3", "eth"]
+AuthAddr = "localhost"
+AuthPort = 8551
+AuthVirtualHosts = ["localhost"]
+WSHost = "127.0.0.1"
+WSPort = 8546
+WSModules = ["net", "web3", "eth"]
+GraphQLVirtualHosts = ["localhost"]
+
+[Eth.Miner]
+Etherbase = "0xd78c987031b0256c9ea6289185e151c25efd0e36"
+
+[Node.P2P]
+MaxPeers = 0
+NoDiscovery = true
+NoDial = true
