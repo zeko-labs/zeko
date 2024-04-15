@@ -1,8 +1,11 @@
 How to run:
 
 ```bash
+geth --config geth.toml --datadir <datadir> --unlock 0xd78c987031b0256c9ea6289185e151c25efd0e36 --mine --keystore ./geth_db/keystore/ --http --allow-insecure-unlock --password /dev/null init genesis.json
 geth --config geth.toml --datadir <datadir> --unlock 0xd78c987031b0256c9ea6289185e151c25efd0e36 --mine --keystore ./geth_db/keystore/ --http --allow-insecure-unlock --password /dev/null
 ```
+
+If you forget to init the database geth will implicitly init it incorrectly.
 
 The specified account's private key is included in the keystore which is checked in to git.
 This doesn't matter given that this geth instance is private anyway.
