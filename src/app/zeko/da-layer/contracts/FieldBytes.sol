@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.18;
+pragma solidity >=0.8.13;
 
 library FieldBytes {
     uint256 constant FIELD_BIT_CAPACITY = 254;

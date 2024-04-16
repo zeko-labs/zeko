@@ -191,6 +191,9 @@ let
 
         buildPhase = ''
           dune build --display=short \
+            src/app/zeko/sequencer/run.exe \
+            src/app/zeko/sequencer/deploy.exe \
+            src/app/zeko/sequencer/tests/local_network/run.exe \
             src/app/logproc/logproc.exe \
             src/app/cli/src/mina.exe \
             src/app/batch_txn_tool/batch_txn_tool.exe \
@@ -214,6 +217,8 @@ let
 
         outputs = [
           "out"
+          "zeko"
+          "localnet"
           "archive"
           "generate_keypair"
           "mainnet"
@@ -225,6 +230,7 @@ let
 
         installPhase = ''
           mkdir -p $out/bin $archive/bin $sample/share/mina $out/share/doc $generate_keypair/bin $mainnet/bin $testnet/bin $genesis/bin $genesis/var/lib/coda $batch_txn_tool/bin
+          mkdir -p $zeko/bin $localnet/bin
           mv _build/coda_cache_dir/genesis* $genesis/var/lib/coda
           pushd _build/default
           cp src/app/cli/src/mina.exe $out/bin/mina
@@ -242,10 +248,13 @@ let
           cp src/app/missing_blocks_auditor/missing_blocks_auditor.exe $archive/bin/mina-missing-blocks-auditor
           cp src/app/replayer/replayer.exe $archive/bin/mina-replayer
           cp src/app/swap_bad_balances/swap_bad_balances.exe $archive/bin/mina-swap-bad-balances
+          cp src/app/zeko/sequencer/run.exe $zeko/bin/zeko-run
+          cp src/app/zeko/sequencer/deploy.exe $zeko/bin/zeko-deploy
+          cp src/app/zeko/sequencer/tests/local_network/run.exe $localnet/bin/mina-localnet
           cp -R _doc/_html $out/share/doc/html
           # cp src/lib/mina_base/sample_keypairs.json $sample/share/mina
           popd
-          remove-references-to -t $(dirname $(dirname $(command -v ocaml))) {$out/bin/*,$mainnet/bin/*,$testnet/bin*,$genesis/bin/*,$generate_keypair/bin/*}
+          remove-references-to -t $(dirname $(dirname $(command -v ocaml))) {$out/bin/*,$mainnet/bin/*,$testnet/bin*,$genesis/bin/*,$generate_keypair/bin/*,$zeko/bin/*}
         '';
         shellHook =
           "export MINA_LIBP2P_HELPER_PATH=${pkgs.libp2p_helper}/bin/libp2p_helper";

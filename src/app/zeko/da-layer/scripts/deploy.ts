@@ -1,3 +1,9 @@
+#!/usr/bin/env node
+
+import { chdir } from "process";
+
+chdir(__dirname);
+
 import { ethers } from "hardhat";
 import { PrivateKey } from "o1js";
 import validatorsKeys from "../test-validators.json";
