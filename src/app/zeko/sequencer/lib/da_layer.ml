@@ -53,10 +53,14 @@ let post_batch (config : Config.t) ~commands ~batch_id ~previous_batch_id =
                 ; ("commands", `List (List.map commands ~f:command_to_yojson))
                 ] )
           in
-          let stdin =
-            Core.Unix.open_process_out
-              "cd ../da-layer && npx hardhat run scripts/postBatch.ts"
+          let postBatchCmd =
+            match Sys.getenv "DA_POST_BATCH" with
+            | Some cmd ->
+                cmd
+            | None ->
+                "exec $cd ../da-layer && npx hardhat run scripts/postBatch.ts"
           in
+          let stdin = Core.Unix.open_process_out postBatchCmd in
           let pid = UnixLabels.process_out_pid stdin in
           Out_channel.output_string stdin payload ;
           Out_channel.close stdin ;
@@ -74,10 +78,14 @@ let get_batches (config : Config.t) ~to_ =
           (`Assoc
             [ ("address", `String da_contract_address); ("to", `String to_) ] )
       in
-      let stdout, stdin =
-        Core.Unix.open_process
-          "cd ../da-layer && npx hardhat run scripts/getBatches.ts"
+      let getBatchesCmd =
+        match Sys.getenv "DA_GET_BATCHES" with
+        | Some cmd ->
+            cmd
+        | None ->
+            "exec $cd ../da-layer && npx hardhat run scripts/getBatches.ts"
       in
+      let stdout, stdin = Core.Unix.open_process getBatchesCmd in
       let pid = UnixLabels.process_pid (stdout, stdin) in
       Out_channel.output_string stdin payload ;
       Out_channel.close stdin ;
