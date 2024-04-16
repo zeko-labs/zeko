@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+import { chdir } from "process";
+
+chdir(__dirname);
+
 import fs from "fs";
 import { ethers } from "hardhat";
 import { z } from "zod";
