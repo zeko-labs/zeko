@@ -4,6 +4,7 @@ open Async
 open Async_kernel
 open Mina_base
 module L = Mina_ledger.Ledger
+module Field = Snark_params.Tick.Field
 
 let time label (d : 'a Deferred.t) =
   let start = Time.now () in
@@ -11,6 +12,26 @@ let time label (d : 'a Deferred.t) =
   let stop = Time.now () in
   printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
+
+let skip_transfers_before (transfers : Zkapps_rollup.TR.t list)
+    (pointer : Field.t) =
+  match
+    List.fold_right transfers
+      ~init:(`Hashing Zkapp_account.Actions.empty_state_element)
+      ~f:(fun transfer -> function
+      | `Hashing hash ->
+          if Field.equal hash pointer then `Accumulating [ transfer ]
+          else
+            `Hashing
+              (Zkapp_account.Actions.push_events hash
+                 (Zkapps_rollup.TR.to_actions transfer) )
+      | `Accumulating transfers ->
+          `Accumulating (transfer :: transfers) )
+  with
+  | `Hashing _ ->
+      []
+  | `Accumulating transfers_after_pointer ->
+      transfers_after_pointer
 
 module Sequencer = struct
   module Config = struct
@@ -79,10 +100,11 @@ module Sequencer = struct
       ; zkapp_pk : Signature_lib.Public_key.Compressed.t
       ; signer : Signature_lib.Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
+      ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; transfers_memory : Transfers_memory.t
       }
 
-    let create ~da_config ~zkapp_pk ~l1_uri ~signer =
+    let create ~da_config ~zkapp_pk ~l1_uri ~archive_uri ~signer =
       { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
       ; da_config
       ; last = None
@@ -92,6 +114,7 @@ module Sequencer = struct
       ; zkapp_pk
       ; signer
       ; l1_uri
+      ; archive_uri
       ; transfers_memory = Transfers_memory.create ~lifetime:Float.(60. * 10.)
       }
 
@@ -231,27 +254,32 @@ module Sequencer = struct
                     in
                     print_endline ("Posted batch " ^ batch_id) ;
 
-                    (* FIXME: disable only for internal MVP *)
-                    (* let%bind account_update, _, _ =
-                         time "Outer.step"
-                           (M.Outer.step (Option.value_exn t.last) ~public_key:t.zkapp_pk
-                              ~old_action_state:Zkapp_account.Actions.empty_hash
-                              ~new_actions:[]
-                              ~withdrawals_processed:Zkapp_account.Actions.empty_hash
-                              ~remaining_withdrawals:[]
-                              ~source_ledger:
-                                (Option.value_exn t.previous_committed_ledger)
-                              ~target_ledger )
-                       in *)
                     let old_inner_ledger =
                       Option.value_exn t.previous_committed_ledger
                     in
                     let new_inner_ledger = target_ledger in
+                    let%bind all_deposits =
+                      Gql_client.fetch_transfers t.archive_uri t.zkapp_pk
+                    in
+                    let (old_deposits_commit :: _) =
+                      let old_idx =
+                        Mina_ledger.Sparse_ledger.find_index_exn
+                          old_inner_ledger M.Inner.account_id
+                      in
+                      let old_inner_acc =
+                        Mina_ledger.Sparse_ledger.get_exn old_inner_ledger
+                          old_idx
+                      in
+                      (Option.value_exn old_inner_acc.zkapp).app_state
+                    in
+                    let new_deposits =
+                      skip_transfers_before (List.rev all_deposits)
+                        old_deposits_commit
+                    in
                     let%bind account_update =
-                      time "Outer.step_without_transfers"
-                        (M.Outer.step (Option.value_exn t.last)
-                           ~outer_public_key:t.zkapp_pk ~new_deposits:[]
-                           ~old_inner_ledger ~new_inner_ledger )
+                      M.Outer.step (Option.value_exn t.last)
+                        ~outer_public_key:t.zkapp_pk ~new_deposits
+                        ~old_inner_ledger ~new_inner_ledger
                     in
                     let%bind nonce =
                       Gql_client.fetch_nonce t.l1_uri
@@ -338,7 +366,7 @@ module Sequencer = struct
     }
 
   let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer =
+      ~da_contract_address ~db_dir ~l1_uri ~archive_uri ~signer =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -348,7 +376,8 @@ module Sequencer = struct
     ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
     ; config = { max_pool_size; commitment_period_sec; db_dir }
     ; da_config
-    ; snark_q = Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
+    ; snark_q =
+        Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~archive_uri ~signer
     ; stop = Ivar.create ()
     ; genesis_accounts = []
     ; protocol_state = compile_time_genesis_state
@@ -620,10 +649,10 @@ module Sequencer = struct
       , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command) )
 
   let apply_deposits t =
-    let%bind inner_account_update =
-      time "Inner.step"
-        (M.Inner.step ~all_deposits:Zkapp_account.Actions.empty_state_element)
+    let%bind all_deposits =
+      Gql_client.fetch_action_state t.snark_q.l1_uri t.snark_q.zkapp_pk
     in
+    let%bind inner_account_update = M.Inner.step ~all_deposits in
     let fee = Currency.Fee.of_mina_int_exn 0 in
     let command : Zkapp_command.t =
       { fee_payer =
@@ -650,8 +679,7 @@ module Sequencer = struct
     Snark_queue.enqueue_prove_command t.snark_q command_witness
 
   let commit t =
-    (* FIXME: disable only for internal MVP *)
-    (* let%bind () = apply_deposits t in *)
+    let%bind () = apply_deposits t in
     let () =
       match t.config.db_dir with
       | None ->
@@ -728,7 +756,8 @@ module Sequencer = struct
   end
 
   let bootstrap ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer ~test_accounts_path =
+      ~da_contract_address ~db_dir ~l1_uri ~archive_uri ~signer
+      ~test_accounts_path =
     let%bind commited_ledger_hash =
       Gql_client.fetch_commited_state l1_uri zkapp_pk
     in
@@ -763,7 +792,7 @@ module Sequencer = struct
     (* create sequencer state *)
     let t =
       create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-        ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
+        ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~archive_uri ~signer
     in
 
     t.genesis_accounts <- [ (M.Inner.account_id, M.Inner.initial_account) ] ;
@@ -823,163 +852,315 @@ end
 
 include Sequencer
 
-let%test_unit "apply commands and commit" =
-  Base.Backtrace.elide := false ;
-  let number_of_transactions = 5 in
-  let zkapp_keypair = Signature_lib.Keypair.create () in
-  let gql_uri =
-    { Cli_lib.Flag.Types.value = Uri.of_string "http://localhost:8080/graphql"
-    ; name = "gql-uri"
-    }
-  in
+let%test_module "sequencer tests" =
+  ( module struct
+    open Signature_lib
 
-  (* Create signer *)
-  let signer = Signature_lib.Keypair.create () in
-  Thread_safe.block_on_async_exn (fun () ->
-      let%bind _res =
-        Gql_client.For_tests.create_account gql_uri
-          (Signature_lib.Public_key.compress signer.public_key)
+    let sign_cmd (cmd : Zkapp_command.t) (keys : Keypair.t list) :
+        Zkapp_command.t =
+      let full_commitment =
+        Zkapp_command.Transaction_commitment.create_complete
+          (Zkapp_command.commitment cmd)
+          ~memo_hash:(Signed_command_memo.hash cmd.memo)
+          ~fee_payer_hash:
+            (Zkapp_command.Digest.Account_update.create
+               (Account_update.of_fee_payer cmd.fee_payer) )
       in
-      return () ) ;
-
-  let open Mina_transaction_logic.For_tests in
-  Quickcheck.test ~trials:1
-    (Test_spec.mk_gen ~num_transactions:number_of_transactions ())
-    ~f:(fun { init_ledger; specs } ->
-      let sequencer =
-        Sequencer.create
-          ~zkapp_pk:Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-          ~max_pool_size:10 ~commitment_period_sec:0. ~da_contract_address:None
-          ~db_dir:None ~l1_uri:gql_uri ~signer
+      let sign_raw (pk : Public_key.Compressed.t) msg =
+        printf "Signing for %s\n" (Public_key.Compressed.to_base58_check pk) ;
+        let rec go (keys : Keypair.t list) msg =
+          match keys with
+          | (kp : Keypair.t) :: keys ->
+              if
+                Public_key.Compressed.equal
+                  (Public_key.compress kp.public_key)
+                  pk
+              then (
+                printf "key found\n" ;
+                Signature_lib.Schnorr.Chunked.sign
+                  ~signature_kind:Mina_signature_kind.Testnet kp.private_key
+                  (Random_oracle.Input.Chunked.field msg) )
+              else (
+                printf "not equal to %s\n"
+                  Public_key.(
+                    kp.public_key |> compress |> Compressed.to_base58_check) ;
+                go keys msg )
+          | [] ->
+              failwithf "key not found: %s\n"
+                (Public_key.Compressed.to_base58_check pk)
+                ()
+        in
+        go keys msg
       in
-      L.with_ledger ~depth:constraint_constants.ledger_depth
-        ~f:(fun expected_ledger ->
-          (* Init ledgers *)
-          L.create_new_account_exn expected_ledger M.Inner.account_id
-            M.Inner.initial_account ;
-          add_account sequencer M.Inner.account_id M.Inner.initial_account ;
+      let rec sign_tree (tree : Zeko_util.call_forest_tree) :
+          Zeko_util.call_forest_tree =
+        { tree with
+          account_update =
+            { tree.account_update with
+              authorization =
+                ( match tree.account_update.body.authorization_kind with
+                | Signature ->
+                    assert tree.account_update.body.use_full_commitment ;
+                    Signature
+                      (sign_raw tree.account_update.body.public_key
+                         full_commitment )
+                | _ ->
+                    tree.account_update.authorization )
+            }
+        ; calls = sign_forest tree.calls
+        }
+      and sign_forest (forest : Zeko_util.call_forest) : Zeko_util.call_forest =
+        List.map ~f:(fun tree -> { tree with elt = sign_tree tree.elt }) forest
+      in
 
-          Array.iter init_ledger ~f:(fun (keypair, balance) ->
-              let pk = Signature_lib.Public_key.compress keypair.public_key in
-              let account_id = Account_id.create pk Token_id.default in
-              let balance = Unsigned.UInt64.of_int64 balance in
-              let account =
-                Account.create account_id (Currency.Balance.of_uint64 balance)
-              in
-              L.create_new_account_exn expected_ledger account_id account ;
-              add_account sequencer account_id account ) ;
+      { cmd with
+        fee_payer =
+          { cmd.fee_payer with
+            authorization =
+              ( if
+                Public_key.Compressed.(
+                  equal empty cmd.fee_payer.body.public_key)
+              then cmd.fee_payer.authorization
+              else sign_raw cmd.fee_payer.body.public_key full_commitment )
+          }
+      ; account_updates = sign_forest cmd.account_updates
+      }
 
-          let source_ledger_hash = get_root sequencer in
+    let%test_unit "apply commands and commit" =
+      Base.Backtrace.elide := false ;
+      let number_of_transactions = 5 in
+      let zkapp_keypair = Signature_lib.Keypair.create () in
+      let gql_uri =
+        { Cli_lib.Flag.Types.value =
+            Uri.of_string "http://localhost:8080/graphql"
+        ; name = "gql-uri"
+        }
+      in
 
-          [%test_eq: Frozen_ledger_hash.t] source_ledger_hash
-            (L.merkle_root expected_ledger) ;
-
-          sequencer.snark_q.previous_committed_ledger <-
-            Some
-              (Mina_ledger.Sparse_ledger.of_ledger_subset_exn expected_ledger
-                 [ M.Inner.account_id ] ) ;
-
-          (* Deploy *)
-          Thread_safe.block_on_async_exn (fun () ->
-              ( print_endline
-              @@ Signature_lib.Public_key.(
-                   Compressed.to_base58_check
-                   @@ compress zkapp_keypair.public_key) ) ;
-              let%bind nonce =
-                Gql_client.fetch_nonce gql_uri
-                  (Signature_lib.Public_key.compress signer.public_key)
-              in
-              let command =
-                Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
-                  ~fee:(Currency.Fee.of_mina_int_exn 1)
-                  ~nonce:(Account.Nonce.of_int nonce)
-                  ~initial_ledger:expected_ledger ~constraint_constants
-                  (module M)
-              in
-              let%bind _ = Gql_client.send_zkapp gql_uri command in
-              return () ) ;
-
-          (* Apply commands *)
-          let () =
-            Thread_safe.block_on_async_exn (fun () ->
-                List.iteri specs ~f:(fun i spec ->
-                    let result =
-                      match i % 2 = 0 with
-                      | true ->
-                          let command = account_update_send spec in
-                          ( match
-                              L.apply_zkapp_command_unchecked expected_ledger
-                                command ~constraint_constants
-                                ~global_slot:
-                                  Mina_numbers.Global_slot_since_genesis.zero
-                                ~state_view:
-                                  Mina_state.Protocol_state.(
-                                    Body.view @@ body sequencer.protocol_state)
-                            with
-                          | Ok _ ->
-                              ()
-                          | _ ->
-                              () ) ;
-
-                          apply_zkapp_command sequencer command
-                      | false ->
-                          let command = command_send spec in
-                          ( match
-                              L.apply_user_command_unchecked expected_ledger
-                                command ~constraint_constants
-                                ~txn_global_slot:
-                                  Mina_numbers.Global_slot_since_genesis.zero
-                            with
-                          | Ok _ ->
-                              ()
-                          | _ ->
-                              () ) ;
-
-                          apply_signed_command sequencer command
-                    in
-
-                    [%test_eq: Bool.t] true (Or_error.is_ok result) ;
-                    let txn_applied, command_witness = Or_error.ok_exn result in
-
-                    don't_wait_for
-                    @@ Snark_queue.enqueue_prove_command sequencer.snark_q
-                         command_witness ;
-
-                    let status =
-                      L.Transaction_applied.transaction_status txn_applied
-                    in
-                    [%test_eq: Transaction_status.t] status Applied ) ;
-
-                let target_ledger_hash = get_root sequencer in
-
-                [%test_eq: Frozen_ledger_hash.t] target_ledger_hash
-                  (L.merkle_root expected_ledger) ;
-
-                let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-
-                [%test_eq: Bool.t] true (Option.is_some sequencer.snark_q.last) ;
-                let snark = Option.value_exn sequencer.snark_q.last in
-                (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
-                [%test_eq: Frozen_ledger_hash.t]
-                  (Zkapps_rollup.source_ledger snark)
-                  source_ledger_hash ;
-                [%test_eq: Frozen_ledger_hash.t]
-                  (Zkapps_rollup.target_ledger snark)
-                  target_ledger_hash ;
-
-                return () )
+      (* Create signer *)
+      let signer = Signature_lib.Keypair.create () in
+      Thread_safe.block_on_async_exn (fun () ->
+          let%bind _res =
+            Gql_client.For_tests.create_account gql_uri
+              (Signature_lib.Public_key.compress signer.public_key)
           in
+          return () ) ;
 
-          (* Commit *)
-          Thread_safe.block_on_async_exn (fun () ->
-              let%bind () = commit sequencer in
-              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-              let%bind commited_ledger_hash =
-                Gql_client.fetch_commited_state gql_uri
-                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+      let open Mina_transaction_logic.For_tests in
+      Quickcheck.test ~trials:1
+        (Test_spec.mk_gen ~num_transactions:number_of_transactions ())
+        ~f:(fun { init_ledger; specs } ->
+          let sequencer =
+            Sequencer.create
+              ~zkapp_pk:
+                Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              ~max_pool_size:10 ~commitment_period_sec:0.
+              ~da_contract_address:None ~db_dir:None ~l1_uri:gql_uri
+              ~archive_uri:gql_uri ~signer
+          in
+          L.with_ledger ~depth:constraint_constants.ledger_depth
+            ~f:(fun expected_ledger ->
+              (* Init ledgers *)
+              L.create_new_account_exn expected_ledger M.Inner.account_id
+                M.Inner.initial_account ;
+              add_account sequencer M.Inner.account_id M.Inner.initial_account ;
+
+              Array.iter init_ledger ~f:(fun (keypair, balance) ->
+                  let pk =
+                    Signature_lib.Public_key.compress keypair.public_key
+                  in
+                  let account_id = Account_id.create pk Token_id.default in
+                  let balance = Unsigned.UInt64.of_int64 balance in
+                  let account =
+                    Account.create account_id
+                      (Currency.Balance.of_uint64 balance)
+                  in
+                  L.create_new_account_exn expected_ledger account_id account ;
+                  add_account sequencer account_id account ) ;
+
+              let source_ledger_hash = get_root sequencer in
+
+              [%test_eq: Frozen_ledger_hash.t] source_ledger_hash
+                (L.merkle_root expected_ledger) ;
+
+              sequencer.snark_q.previous_committed_ledger <-
+                Some
+                  (Mina_ledger.Sparse_ledger.of_ledger_subset_exn
+                     expected_ledger [ M.Inner.account_id ] ) ;
+
+              (* Deploy *)
+              Thread_safe.block_on_async_exn (fun () ->
+                  ( print_endline
+                  @@ Signature_lib.Public_key.(
+                       Compressed.to_base58_check
+                       @@ compress zkapp_keypair.public_key) ) ;
+                  let%bind nonce =
+                    Gql_client.fetch_nonce gql_uri
+                      (Signature_lib.Public_key.compress signer.public_key)
+                  in
+                  let command =
+                    Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
+                      ~fee:(Currency.Fee.of_mina_int_exn 1)
+                      ~nonce:(Account.Nonce.of_int nonce)
+                      ~initial_ledger:expected_ledger ~constraint_constants
+                      (module M)
+                  in
+                  let%bind _ = Gql_client.send_zkapp gql_uri command in
+                  return () ) ;
+
+              (* Send deposit *)
+              Thread_safe.block_on_async_exn (fun () ->
+                  let submit_deposit (signer : Keypair.t) amount =
+                    let%bind nonce =
+                      Gql_client.fetch_nonce gql_uri
+                        (Signature_lib.Public_key.compress signer.public_key)
+                    in
+                    let fee_payer =
+                      Account_update.Fee_payer.
+                        { body =
+                            { public_key = Public_key.compress signer.public_key
+                            ; fee = Currency.Fee.one
+                            ; valid_until = None
+                            ; nonce = Account.Nonce.of_int nonce
+                            }
+                        ; authorization = Signature.dummy
+                        }
+                    in
+                    let deposit : Zkapps_rollup.TR.t =
+                      { recipient = Public_key.compress signer.public_key
+                      ; amount
+                      }
+                    in
+                    let%bind transfer_update =
+                      M.Outer.submit_deposit
+                        ~outer_public_key:
+                          (Public_key.compress zkapp_keypair.public_key)
+                        ~deposit
+                    in
+                    let transferrer_update : Account_update.t =
+                      { body =
+                          { Account_update.Body.dummy with
+                            public_key = Public_key.compress signer.public_key
+                          ; balance_change =
+                              Currency.Amount.Signed.(
+                                negate @@ of_unsigned amount)
+                          ; use_full_commitment = true
+                          ; authorization_kind = Signature
+                          }
+                      ; authorization = Signature Signature.dummy
+                      }
+                    in
+                    let transfer_cmd : Zkapp_command.t =
+                      { fee_payer
+                      ; account_updates =
+                          Zkapp_command.Call_forest.(
+                            cons_tree transfer_update @@ accumulate_hashes'
+                            @@ of_account_updates
+                                 ~account_update_depth:(fun _ -> 0)
+                                 [ transferrer_update ])
+                      ; memo = Signed_command_memo.empty
+                      }
+                    in
+                    return @@ sign_cmd transfer_cmd [ signer ]
+                  in
+                  let%bind command =
+                    submit_deposit signer (Currency.Amount.of_mina_int_exn 10)
+                  in
+                  let%bind _ = Gql_client.send_zkapp gql_uri command in
+                  return () ) ;
+
+              (* Apply commands *)
+              let () =
+                Thread_safe.block_on_async_exn (fun () ->
+                    List.iteri specs ~f:(fun i spec ->
+                        let result =
+                          match i % 2 = 0 with
+                          | true ->
+                              let command = account_update_send spec in
+                              ( match
+                                  L.apply_zkapp_command_unchecked
+                                    expected_ledger command
+                                    ~constraint_constants
+                                    ~global_slot:
+                                      Mina_numbers.Global_slot_since_genesis
+                                      .zero
+                                    ~state_view:
+                                      Mina_state.Protocol_state.(
+                                        Body.view
+                                        @@ body sequencer.protocol_state)
+                                with
+                              | Ok _ ->
+                                  ()
+                              | _ ->
+                                  () ) ;
+
+                              apply_zkapp_command sequencer command
+                          | false ->
+                              let command = command_send spec in
+                              ( match
+                                  L.apply_user_command_unchecked expected_ledger
+                                    command ~constraint_constants
+                                    ~txn_global_slot:
+                                      Mina_numbers.Global_slot_since_genesis
+                                      .zero
+                                with
+                              | Ok _ ->
+                                  ()
+                              | _ ->
+                                  () ) ;
+
+                              apply_signed_command sequencer command
+                        in
+
+                        [%test_eq: Bool.t] true (Or_error.is_ok result) ;
+                        let txn_applied, command_witness =
+                          Or_error.ok_exn result
+                        in
+
+                        don't_wait_for
+                        @@ Snark_queue.enqueue_prove_command sequencer.snark_q
+                             command_witness ;
+
+                        let status =
+                          L.Transaction_applied.transaction_status txn_applied
+                        in
+                        [%test_eq: Transaction_status.t] status Applied ) ;
+
+                    let target_ledger_hash = get_root sequencer in
+
+                    [%test_eq: Frozen_ledger_hash.t] target_ledger_hash
+                      (L.merkle_root expected_ledger) ;
+
+                    let%bind () =
+                      Snark_queue.wait_to_finish sequencer.snark_q
+                    in
+
+                    [%test_eq: Bool.t] true
+                      (Option.is_some sequencer.snark_q.last) ;
+                    let snark = Option.value_exn sequencer.snark_q.last in
+                    (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
+                    [%test_eq: Frozen_ledger_hash.t]
+                      (Zkapps_rollup.source_ledger snark)
+                      source_ledger_hash ;
+                    [%test_eq: Frozen_ledger_hash.t]
+                      (Zkapps_rollup.target_ledger snark)
+                      target_ledger_hash ;
+
+                    return () )
               in
-              let target_ledger_hash = get_root sequencer in
-              [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash
-                target_ledger_hash ;
 
-              Deferred.unit ) ) )
+              (* Commit *)
+              Thread_safe.block_on_async_exn (fun () ->
+                  let%bind () = commit sequencer in
+                  let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+                  let%bind commited_ledger_hash =
+                    Gql_client.fetch_commited_state gql_uri
+                      Signature_lib.Public_key.(
+                        compress zkapp_keypair.public_key)
+                  in
+                  let target_ledger_hash = get_root sequencer in
+                  [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash
+                    target_ledger_hash ;
+
+                  return () ) ) )
+  end )

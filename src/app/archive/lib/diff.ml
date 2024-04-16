@@ -224,7 +224,8 @@ module Builder = struct
     in
     let sender_receipt_chain_from_parent_ledger =
       let sender = User_command.(fee_payer command) in
-      Option.value_exn
+      Option.value
+        ~default:(Account_id.empty, Receipt.Chain_hash.empty)
         (let open Option.Let_syntax in
         let%bind ledger_location =
           Mina_ledger.Ledger.location_of_account ledger sender

@@ -6,7 +6,7 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 
 let run port zkapp_pk max_pool_size commitment_period da_contract_address db_dir
-    l1_uri signer rollback_checker_interval test_accounts_path () =
+    l1_uri archive_uri signer rollback_checker_interval test_accounts_path () =
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
@@ -16,7 +16,7 @@ let run port zkapp_pk max_pool_size commitment_period da_contract_address db_dir
     let%bind sequencer =
       Zeko_sequencer.bootstrap ~zkapp_pk ~max_pool_size
         ~commitment_period_sec:commitment_period ~da_contract_address ~db_dir
-        ~l1_uri ~test_accounts_path
+        ~l1_uri ~archive_uri ~test_accounts_path
         ~signer:
           Signature_lib.(
             Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn signer)
@@ -69,7 +69,9 @@ let () =
        flag "-p" (optional_with_default 8080 int) ~doc:"int Port to listen on"
      and zkapp_pk =
        flag "--zkapp-pk" (optional string) ~doc:"string ZkApp public key"
-     and l1_uri = Cli_lib.Flag.Uri.Client.rest_graphql
+     and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
+     and archive_uri =
+       flag "--archive-uri" (required string) ~doc:"string archive URI"
      and commitment_period =
        flag "--commitment-period"
          (optional_with_default 120. float)
@@ -94,7 +96,14 @@ let () =
          ~doc:"string Path to the test genesis accounts file"
      in
      let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
-
+     let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
+       Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
+     in
+     let archive_uri : Uri.t Cli_lib.Flag.Types.with_name =
+       Cli_lib.Flag.Types.
+         { value = Uri.of_string archive_uri; name = "archive-uri" }
+     in
      run port zkapp_pk max_pool_size commitment_period da_contract_address
-       db_dir l1_uri signer rollback_checker_interval test_accounts_path )
+       db_dir l1_uri archive_uri signer rollback_checker_interval
+       test_accounts_path )
   |> Command_unix.run
