@@ -8,13 +8,16 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 
 let run port db_dir genesis_account () =
+  let db =
+    Ledger.Db.create ~directory_name:db_dir
+      ~depth:Gql.constraint_constants.ledger_depth ()
+  in
   let t =
     Gql.
-      { db =
-          Ledger.Db.create ~directory_name:db_dir
-            ~depth:Gql.constraint_constants.ledger_depth ()
+      { db
       ; slot = Mina_numbers.Global_slot_since_genesis.zero
       ; commands = Hashtbl.create (module String)
+      ; archive = Sequencer_lib.Archive.create ~kvdb:(Ledger.Db.kvdb db)
       }
   in
 
