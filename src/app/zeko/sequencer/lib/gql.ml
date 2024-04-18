@@ -8,6 +8,10 @@ open Signature_lib
 open Currency
 module Schema = Graphql_wrapper.Make (Schema)
 
+let result_field ~resolve =
+  Schema.io_field ~resolve:(fun resolve_info src inputs ->
+      Deferred.return @@ resolve resolve_info src inputs )
+
 module Types = struct
   open Schema
 
@@ -59,6 +63,23 @@ module Types = struct
               ~resolve:(fun _ v -> v.chain_id)
           ] )
   end
+
+  let transaction_status :
+      (Zeko_sequencer.t, Transaction_inclusion_status.State.t option) typ =
+    enum "TransactionStatus" ~doc:"Status of a transaction"
+      ~values:
+        Transaction_inclusion_status.State.
+          [ enum_value "INCLUDED" ~value:Included
+              ~doc:"A transaction that is on the longest chain"
+          ; enum_value "PENDING" ~value:Pending
+              ~doc:
+                "A transaction either in the transition frontier or in \
+                 transaction pool but is not on the longest chain"
+          ; enum_value "UNKNOWN" ~value:Unknown
+              ~doc:
+                "The transaction has either been snarked, reached finality \
+                 through consensus or has been dropped"
+          ]
 
   let merkle_path_element :
       (_, [ `Left of Zkapp_basic.F.t | `Right of Zkapp_basic.F.t ] option) typ =
@@ -1790,6 +1811,39 @@ module Queries = struct
                               } )
                       } ) ) )
 
+  let transaction_status =
+    result_field "transactionStatus" ~doc:"Get the status of a transaction"
+      ~typ:(non_null Types.transaction_status)
+      ~args:Arg.[ arg "hash" ~typ:(non_null string) ~doc:"Hash of a command" ]
+      ~resolve:(fun { ctx = sequencer; _ } () (hash : string) ->
+        let open Transaction_inclusion_status.State in
+        match Transaction_hash.of_base58_check hash with
+        | Error _ ->
+            Error "Invalid hash"
+        | Ok hash ->
+            if
+              Commands_db.is_hash_stored
+                Zeko_sequencer.(sequencer.snark_q.commands_db)
+                ~hash
+            then Ok Included
+            else if
+              List.exists
+                Zeko_sequencer.(sequencer.snark_q.staged_commands)
+                ~f:(fun command ->
+                  Commands_db.is_hash_stored
+                    Zeko_sequencer.(sequencer.snark_q.commands_db)
+                    ~hash:
+                      ( match command with
+                      | Signed_command command ->
+                          Mina_transaction.Transaction_hash.hash_command
+                            (Signed_command
+                               (Signed_command.forget_check command) )
+                      | Zkapp_command command ->
+                          Mina_transaction.Transaction_hash.hash_command
+                            (Zkapp_command command) ) )
+            then Ok Pending
+            else Ok Unknown )
+
   module Archive = struct
     let actions =
       field "actions"
@@ -1831,6 +1885,7 @@ module Queries = struct
     ; accounts_for_pk
     ; transfer_account_update
     ; committed_transaction
+    ; transaction_status
     ]
     @ Archive.commands
 end

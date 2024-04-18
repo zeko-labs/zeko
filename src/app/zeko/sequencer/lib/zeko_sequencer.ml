@@ -106,9 +106,10 @@ module Sequencer = struct
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; transfers_memory : Transfers_memory.t
+      ; commands_db : Commands_db.t
       }
 
-    let create ~da_config ~zkapp_pk ~l1_uri ~archive_uri ~signer =
+    let create ~da_config ~zkapp_pk ~l1_uri ~archive_uri ~signer ~commands_db =
       { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
       ; da_config
       ; last = None
@@ -120,6 +121,7 @@ module Sequencer = struct
       ; l1_uri
       ; archive_uri
       ; transfers_memory = Transfers_memory.create ~lifetime:Float.(60. * 10.)
+      ; commands_db
       }
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
@@ -257,6 +259,17 @@ module Sequencer = struct
                      ~default:(Frozen_ledger_hash0.of_decimal_string "0")
                      t.previous_committed_ledger_hash )
               in
+
+              Commands_db.store_command_hashes t.commands_db
+                ~hashes:
+                  (List.map t.staged_commands ~f:(fun cmd ->
+                       match cmd with
+                       | Signed_command cmd ->
+                           Mina_transaction.Transaction_hash.hash_command
+                             (Signed_command (Signed_command.forget_check cmd))
+                       | Zkapp_command cmd ->
+                           Mina_transaction.Transaction_hash.hash_command
+                             (Zkapp_command cmd) ) ) ;
 
               match%bind
                 try_with (fun () ->
@@ -397,6 +410,7 @@ module Sequencer = struct
     ; da_config
     ; snark_q =
         Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~archive_uri ~signer
+          ~commands_db:(L.Db.kvdb db)
     ; stop = Ivar.create ()
     ; genesis_accounts = []
     ; protocol_state = compile_time_genesis_state
