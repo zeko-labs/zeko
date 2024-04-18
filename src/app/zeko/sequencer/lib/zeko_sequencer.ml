@@ -45,10 +45,14 @@ module Sequencer = struct
   module Transfer = struct
     type direction = Deposit | Withdraw
 
-    type t =
-      { address : Account.key
-      ; amount : Unsigned.UInt64.t
-      ; direction : direction
+    type t = { transfer : Zkapps_rollup.TR.t; direction : direction }
+
+    type claim =
+      { is_new : bool
+      ; pointer : Field.t
+      ; before : Zkapps_rollup.TR.t list
+      ; after : Zkapps_rollup.TR.t list
+      ; transfer : t
       }
   end
 
@@ -194,27 +198,42 @@ module Sequencer = struct
           | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
               prove_zkapp_command t ~witnesses ~zkapp_command )
 
-    let enqueue_prove_transfer t ~key ~(transfer : Transfer.t) =
+    let enqueue_prove_transfer_request t ~key ~(transfer : Transfer.t) =
       Throttle.enqueue t.q (fun () ->
           let%bind tree =
-            match transfer.direction with
-            | Deposit ->
-                time "Outer.deposit"
-                  (M.Outer.submit_deposit ~outer_public_key:t.zkapp_pk
-                     ~deposit:
-                       { amount = Currency.Amount.of_uint64 transfer.amount
-                       ; recipient = transfer.address
-                       } )
-            | Withdraw ->
-                time "Inner.withdraw"
-                  (M.Inner.submit_withdrawal
-                     ~withdrawal:
-                       { amount = Currency.Amount.of_uint64 transfer.amount
-                       ; recipient = transfer.address
-                       } )
+            match transfer with
+            | { direction = Deposit; transfer } ->
+                M.Outer.submit_deposit ~outer_public_key:t.zkapp_pk
+                  ~deposit:transfer
+            | { direction = Withdraw; transfer } ->
+                M.Inner.submit_withdrawal ~withdrawal:transfer
           in
           Transfers_memory.add t.transfers_memory key
             (Zkapp_command.Call_forest.cons_tree tree []) ;
+          return () )
+
+    let enqueue_prove_transfer_claim t ~key ~(claim : Transfer.claim) =
+      Throttle.enqueue t.q (fun () ->
+          let%bind _, forest =
+            match claim with
+            | { transfer = { direction = Deposit; transfer }
+              ; is_new
+              ; pointer
+              ; before
+              ; after
+              } ->
+                M.Inner.process_deposit ~is_new ~pointer ~before ~after
+                  ~deposit:transfer
+            | { transfer = { direction = Withdraw; transfer }
+              ; is_new
+              ; pointer
+              ; before
+              ; after
+              } ->
+                M.Outer.process_withdrawal ~outer_public_key:t.zkapp_pk ~is_new
+                  ~pointer ~before ~after ~withdrawal:transfer
+          in
+          Transfers_memory.add t.transfers_memory key forest ;
           return () )
 
     let enqueue_prove_commit t ~target_ledger =
