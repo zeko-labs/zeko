@@ -2,19 +2,6 @@ open Core_kernel
 open Mina_base
 open Async
 
-let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
-  let rec go attempt =
-    match%bind f () with
-    | Ok x ->
-        return (Ok x)
-    | Error _ when attempt < max_attempts ->
-        let%bind () = after delay in
-        go (attempt + 1)
-    | Error e ->
-        return (Error e)
-  in
-  go 0
-
 module Config = struct
   type t = { da_contract_address : string option }
 end
@@ -36,7 +23,7 @@ let command_to_yojson command =
         ]
 
 let post_batch (config : Config.t) ~commands ~batch_id ~previous_batch_id =
-  retry
+  Utils.retry
     ~f:(fun () ->
       match config.da_contract_address with
       | None ->
