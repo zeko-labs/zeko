@@ -52,8 +52,15 @@ let run uri sk test_accounts_path () =
           (module M) )
   in
   Thread_safe.block_on_async_exn (fun () ->
-      let%map result = Sequencer_lib.Gql_client.send_zkapp uri command in
-      print_endline result )
+      match%bind Sequencer_lib.Gql_client.send_zkapp uri command with
+      | Ok _ ->
+          Deferred.unit
+      | Error (`Failed_request err) ->
+          eprintf "Failed request: %s\n%!" err ;
+          Deferred.unit
+      | Error (`Graphql_error err) ->
+          eprintf "Graphql error: %s\n%!" err ;
+          Deferred.unit )
 
 let () =
   Command_unix.run
