@@ -70,10 +70,9 @@ module Sequencer = struct
       ; mutable previous_committed_ledger_hash : Frozen_ledger_hash0.t option
       ; mutable previous_committed_ledger : Mina_ledger.Sparse_ledger.t option
       ; zkapp_pk : Signature_lib.Public_key.Compressed.t
-      ; signer : Signature_lib.Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; transfers_memory : Transfers_memory.t
-      ; mutable sequencer_nonce : int option
+      ; executor : Executor.t
       }
 
     let create ~da_config ~zkapp_pk ~l1_uri ~signer =
@@ -84,10 +83,9 @@ module Sequencer = struct
       ; previous_committed_ledger_hash = None
       ; previous_committed_ledger = None
       ; zkapp_pk
-      ; signer
       ; l1_uri
       ; transfers_memory = Transfers_memory.create ~lifetime:Float.(60. * 10.)
-      ; sequencer_nonce = None
+      ; executor = Executor.create ~l1_uri ~signer ()
       }
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
@@ -246,24 +244,15 @@ module Sequencer = struct
                         ~outer_public_key:t.zkapp_pk ~new_deposits:[]
                         ~old_inner_ledger ~new_inner_ledger
                     in
-                    let%bind nonce =
-                      match t.sequencer_nonce with
-                      | Some nonce ->
-                          return nonce
-                      | None ->
-                          Gql_client.fetch_nonce t.l1_uri
-                            (Signature_lib.Public_key.compress
-                               t.signer.public_key )
-                    in
                     let command : Zkapp_command.t =
                       { fee_payer =
                           { Account_update.Fee_payer.body =
                               { public_key =
                                   Signature_lib.Public_key.compress
-                                    t.signer.public_key
+                                    t.executor.signer.public_key
                               ; fee = Currency.Fee.of_mina_int_exn 1
                               ; valid_until = None
-                              ; nonce = Unsigned.UInt32.of_int nonce
+                              ; nonce = Unsigned.UInt32.zero
                               }
                           ; authorization = Signature.dummy
                           }
@@ -272,35 +261,13 @@ module Sequencer = struct
                       ; memo = Signed_command_memo.empty
                       }
                     in
-                    let full_commitment =
-                      Zkapp_command.Transaction_commitment.create_complete
-                        (Zkapp_command.commitment command)
-                        ~memo_hash:(Signed_command_memo.hash command.memo)
-                        ~fee_payer_hash:
-                          (Zkapp_command.Digest.Account_update.create
-                             (Account_update.of_fee_payer command.fee_payer) )
-                    in
-                    let signature =
-                      Signature_lib.Schnorr.Chunked.sign
-                        ~signature_kind:Mina_signature_kind.Testnet
-                        t.signer.private_key
-                        (Random_oracle.Input.Chunked.field full_commitment)
-                    in
-                    let command =
-                      { command with
-                        fee_payer =
-                          { command.fee_payer with authorization = signature }
-                      }
-                    in
-                    Gql_client.send_zkapp t.l1_uri command )
+                    Executor.send_zkapp_command t.executor command )
               with
               | Ok _ ->
                   t.staged_commands <- [] ;
                   t.last <- None ;
                   t.previous_committed_ledger_hash <- Some ledger_hash ;
                   t.previous_committed_ledger <- Some target_ledger ;
-                  t.sequencer_nonce <-
-                    Option.map t.sequencer_nonce ~f:(fun x -> x + 1) ;
                   return ()
               | Error e ->
                   (* Continue expanding batch if commit failed *)
