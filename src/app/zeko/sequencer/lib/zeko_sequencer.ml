@@ -5,13 +5,6 @@ open Async_kernel
 open Mina_base
 module L = Mina_ledger.Ledger
 
-let time label (d : 'a Deferred.t) =
-  let start = Time.now () in
-  let%bind x = d in
-  let stop = Time.now () in
-  printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
-  return x
-
 module Sequencer = struct
   module Config = struct
     type t =
@@ -80,6 +73,7 @@ module Sequencer = struct
       ; signer : Signature_lib.Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; transfers_memory : Transfers_memory.t
+      ; mutable sequencer_nonce : int option
       }
 
     let create ~da_config ~zkapp_pk ~l1_uri ~signer =
@@ -93,16 +87,17 @@ module Sequencer = struct
       ; signer
       ; l1_uri
       ; transfers_memory = Transfers_memory.create ~lifetime:Float.(60. * 10.)
+      ; sequencer_nonce = None
       }
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
     let wrap_and_merge t txn_snark command =
-      let%bind wrapped = time "Wrapper.wrap" (M.Wrapper.wrap txn_snark) in
+      let%bind wrapped = M.Wrapper.wrap txn_snark in
       let%bind final_snark =
         match t.last with
         | Some last' ->
-            time "Wrapper.merge" (M.Wrapper.merge last' wrapped)
+            M.Wrapper.merge last' wrapped
         | None ->
             return wrapped
       in
@@ -130,7 +125,7 @@ module Sequencer = struct
         unstage @@ Mina_ledger.Sparse_ledger.handler sparse_ledger
       in
       let%bind txn_snark =
-        time "Transaction_snark.of_signed_command"
+        Utils.time "Transaction_snark.of_signed_command"
           (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
              ~statement user_command_in_block handler )
       in
@@ -144,18 +139,19 @@ module Sequencer = struct
             failwith "No witnesses"
         | (witness, spec, statement) :: rest ->
             let%bind p1 =
-              time "Transaction_snark.of_zkapp_command_segment"
+              Utils.time "Transaction_snark.of_zkapp_command_segment"
                 (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
             in
             Deferred.List.fold ~init:p1 rest
               ~f:(fun acc (witness, spec, statement) ->
                 let%bind prev = return acc in
                 let%bind curr =
-                  time "Transaction_snark.of_zkapp_command_segment"
+                  Utils.time "Transaction_snark.of_zkapp_command_segment"
                     (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
                 in
                 let%bind merged =
-                  time "Transaction_snark.merge" (T.merge curr prev ~sok_digest)
+                  Utils.time "Transaction_snark.merge"
+                    (T.merge curr prev ~sok_digest)
                 in
                 return (Or_error.ok_exn merged) )
       in
@@ -176,19 +172,17 @@ module Sequencer = struct
           let%bind tree =
             match transfer.direction with
             | Deposit ->
-                time "Outer.deposit"
-                  (M.Outer.submit_deposit ~outer_public_key:t.zkapp_pk
-                     ~deposit:
-                       { amount = Currency.Amount.of_uint64 transfer.amount
-                       ; recipient = transfer.address
-                       } )
+                M.Outer.submit_deposit ~outer_public_key:t.zkapp_pk
+                  ~deposit:
+                    { amount = Currency.Amount.of_uint64 transfer.amount
+                    ; recipient = transfer.address
+                    }
             | Withdraw ->
-                time "Inner.withdraw"
-                  (M.Inner.submit_withdrawal
-                     ~withdrawal:
-                       { amount = Currency.Amount.of_uint64 transfer.amount
-                       ; recipient = transfer.address
-                       } )
+                M.Inner.submit_withdrawal
+                  ~withdrawal:
+                    { amount = Currency.Amount.of_uint64 transfer.amount
+                    ; recipient = transfer.address
+                    }
           in
           Transfers_memory.add t.transfers_memory key
             (Zkapp_command.Call_forest.cons_tree tree []) ;
@@ -248,14 +242,18 @@ module Sequencer = struct
                     in
                     let new_inner_ledger = target_ledger in
                     let%bind account_update =
-                      time "Outer.step_without_transfers"
-                        (M.Outer.step (Option.value_exn t.last)
-                           ~outer_public_key:t.zkapp_pk ~new_deposits:[]
-                           ~old_inner_ledger ~new_inner_ledger )
+                      M.Outer.step (Option.value_exn t.last)
+                        ~outer_public_key:t.zkapp_pk ~new_deposits:[]
+                        ~old_inner_ledger ~new_inner_ledger
                     in
                     let%bind nonce =
-                      Gql_client.fetch_nonce t.l1_uri
-                        (Signature_lib.Public_key.compress t.signer.public_key)
+                      match t.sequencer_nonce with
+                      | Some nonce ->
+                          return nonce
+                      | None ->
+                          Gql_client.fetch_nonce t.l1_uri
+                            (Signature_lib.Public_key.compress
+                               t.signer.public_key )
                     in
                     let command : Zkapp_command.t =
                       { fee_payer =
@@ -301,6 +299,8 @@ module Sequencer = struct
                   t.last <- None ;
                   t.previous_committed_ledger_hash <- Some ledger_hash ;
                   t.previous_committed_ledger <- Some target_ledger ;
+                  t.sequencer_nonce <-
+                    Option.map t.sequencer_nonce ~f:(fun x -> x + 1) ;
                   return ()
               | Error e ->
                   (* Continue expanding batch if commit failed *)
@@ -621,8 +621,7 @@ module Sequencer = struct
 
   let apply_deposits t =
     let%bind inner_account_update =
-      time "Inner.step"
-        (M.Inner.step ~all_deposits:Zkapp_account.Actions.empty_state_element)
+      M.Inner.step ~all_deposits:Zkapp_account.Actions.empty_state_element
     in
     let fee = Currency.Fee.of_mina_int_exn 0 in
     let command : Zkapp_command.t =
@@ -846,6 +845,8 @@ let%test_unit "apply commands and commit" =
   Quickcheck.test ~trials:1
     (Test_spec.mk_gen ~num_transactions:number_of_transactions ())
     ~f:(fun { init_ledger; specs } ->
+      let batch1, batch2 = List.split_n specs 3 in
+
       let sequencer =
         Sequencer.create
           ~zkapp_pk:Signature_lib.Public_key.(compress zkapp_keypair.public_key)
@@ -868,11 +869,6 @@ let%test_unit "apply commands and commit" =
               in
               L.create_new_account_exn expected_ledger account_id account ;
               add_account sequencer account_id account ) ;
-
-          let source_ledger_hash = get_root sequencer in
-
-          [%test_eq: Frozen_ledger_hash.t] source_ledger_hash
-            (L.merkle_root expected_ledger) ;
 
           sequencer.snark_q.previous_committed_ledger <-
             Some
@@ -899,10 +895,15 @@ let%test_unit "apply commands and commit" =
               let%bind _ = Gql_client.send_zkapp gql_uri command in
               return () ) ;
 
-          (* Apply commands *)
+          (* Apply first batch *)
           let () =
             Thread_safe.block_on_async_exn (fun () ->
-                List.iteri specs ~f:(fun i spec ->
+                let source_ledger_hash = get_root sequencer in
+
+                [%test_eq: Frozen_ledger_hash.t] source_ledger_hash
+                  (L.merkle_root expected_ledger) ;
+
+                List.iteri batch1 ~f:(fun i spec ->
                     let result =
                       match i % 2 = 0 with
                       | true ->
@@ -970,7 +971,95 @@ let%test_unit "apply commands and commit" =
                 return () )
           in
 
-          (* Commit *)
+          (* First commit *)
+          Thread_safe.block_on_async_exn (fun () ->
+              let%bind () = commit sequencer in
+              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+              let%bind commited_ledger_hash =
+                Gql_client.fetch_commited_state gql_uri
+                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              in
+              let target_ledger_hash = get_root sequencer in
+              [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash
+                target_ledger_hash ;
+
+              Deferred.unit ) ;
+
+          (* Apply second batch *)
+          Thread_safe.block_on_async_exn (fun () ->
+              let source_ledger_hash = get_root sequencer in
+
+              [%test_eq: Frozen_ledger_hash.t] source_ledger_hash
+                (L.merkle_root expected_ledger) ;
+
+              List.iteri batch2 ~f:(fun i spec ->
+                  let result =
+                    match i % 2 = 0 with
+                    | true ->
+                        let command = account_update_send spec in
+                        ( match
+                            L.apply_zkapp_command_unchecked expected_ledger
+                              command ~constraint_constants
+                              ~global_slot:
+                                Mina_numbers.Global_slot_since_genesis.zero
+                              ~state_view:
+                                Mina_state.Protocol_state.(
+                                  Body.view @@ body sequencer.protocol_state)
+                          with
+                        | Ok _ ->
+                            ()
+                        | _ ->
+                            () ) ;
+
+                        apply_zkapp_command sequencer command
+                    | false ->
+                        let command = command_send spec in
+                        ( match
+                            L.apply_user_command_unchecked expected_ledger
+                              command ~constraint_constants
+                              ~txn_global_slot:
+                                Mina_numbers.Global_slot_since_genesis.zero
+                          with
+                        | Ok _ ->
+                            ()
+                        | _ ->
+                            () ) ;
+
+                        apply_signed_command sequencer command
+                  in
+
+                  [%test_eq: Bool.t] true (Or_error.is_ok result) ;
+                  let txn_applied, command_witness = Or_error.ok_exn result in
+
+                  don't_wait_for
+                  @@ Snark_queue.enqueue_prove_command sequencer.snark_q
+                       command_witness ;
+
+                  let status =
+                    L.Transaction_applied.transaction_status txn_applied
+                  in
+                  [%test_eq: Transaction_status.t] status Applied ) ;
+
+              let target_ledger_hash = get_root sequencer in
+
+              [%test_eq: Frozen_ledger_hash.t] target_ledger_hash
+                (L.merkle_root expected_ledger) ;
+
+              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+
+              [%test_eq: Bool.t] true (Option.is_some sequencer.snark_q.last) ;
+              let snark = Option.value_exn sequencer.snark_q.last in
+              (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
+              [%test_eq: Frozen_ledger_hash.t]
+                (Zkapps_rollup.source_ledger snark)
+                source_ledger_hash ;
+              [%test_eq: Frozen_ledger_hash.t]
+                (Zkapps_rollup.target_ledger snark)
+                target_ledger_hash ;
+
+              return () ) ;
+
+          (* Second commit *)
           Thread_safe.block_on_async_exn (fun () ->
               let%bind () = commit sequencer in
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
