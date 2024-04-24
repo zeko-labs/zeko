@@ -261,7 +261,8 @@ module Sequencer = struct
                       ; memo = Signed_command_memo.empty
                       }
                     in
-                    Executor.send_zkapp_command t.executor command )
+                    return @@ don't_wait_for
+                    @@ Executor.send_zkapp_command t.executor command )
               with
               | Ok _ ->
                   t.staged_commands <- [] ;
