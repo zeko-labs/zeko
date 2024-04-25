@@ -1,4 +1,3 @@
-open Base
 open Async
 open Async_kernel
 open Core_kernel
