@@ -92,7 +92,7 @@ module type S = sig
 end
 
 module type Intf = sig
-  type t
+  type t [@@deriving yojson]
 
   val source_ledger : t -> Frozen_ledger_hash.t
 

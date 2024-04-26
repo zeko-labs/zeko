@@ -1700,7 +1700,8 @@ module Queries = struct
       ~args:Arg.[]
       ~resolve:(fun { ctx = sequencer; _ } () ->
         match
-          Zeko_sequencer.(sequencer.snark_q.previous_committed_ledger_hash)
+          Zeko_sequencer.(
+            sequencer.snark_q.state.previous_committed_ledger_hash)
         with
         | None ->
             return (Ok None)

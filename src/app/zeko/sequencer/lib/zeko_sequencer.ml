@@ -58,51 +58,6 @@ module Sequencer = struct
          ~prover:(Signature_lib.Public_key.compress keypair.public_key)
 
   module Snark_queue = struct
-    type t =
-      { q : unit Throttle.t
-      ; da_config : Da_layer.Config.t
-      ; mutable last : Zkapps_rollup.t option
-      ; mutable staged_commands :
-          ( Signed_command.With_valid_signature.t
-          , Zkapp_command.t )
-          User_command.t_
-          list
-      ; mutable previous_committed_ledger_hash : Frozen_ledger_hash0.t option
-      ; mutable previous_committed_ledger : Mina_ledger.Sparse_ledger.t option
-      ; zkapp_pk : Signature_lib.Public_key.Compressed.t
-      ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
-      ; transfers_memory : Transfers_memory.t
-      ; executor : Executor.t
-      }
-
-    let create ~da_config ~zkapp_pk ~l1_uri ~signer =
-      { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
-      ; da_config
-      ; last = None
-      ; staged_commands = []
-      ; previous_committed_ledger_hash = None
-      ; previous_committed_ledger = None
-      ; zkapp_pk
-      ; l1_uri
-      ; transfers_memory = Transfers_memory.create ~lifetime:Float.(60. * 10.)
-      ; executor = Executor.create ~l1_uri ~signer ()
-      }
-
-    let queue_size t = Throttle.num_jobs_waiting_to_start t.q
-
-    let wrap_and_merge t txn_snark command =
-      let%bind wrapped = M.Wrapper.wrap txn_snark in
-      let%bind final_snark =
-        match t.last with
-        | Some last' ->
-            M.Wrapper.merge last' wrapped
-        | None ->
-            return wrapped
-      in
-      t.last <- Some final_snark ;
-      t.staged_commands <- t.staged_commands @ [ command ] ;
-      return ()
-
     module Command_witness = struct
       type t =
         | Signed_command of
@@ -115,7 +70,110 @@ module Sequencer = struct
             * Mina_state.Snarked_ledger_state.With_sok.t )
             list
             * Zkapp_command.t
+      [@@deriving yojson]
     end
+
+    module State = struct
+      type t =
+        { last : Zkapps_rollup.t option
+        ; staged_commands : User_command.t list
+        ; queued_commands : Command_witness.t list
+        ; previous_committed_ledger_hash : Frozen_ledger_hash.t option
+        ; previous_committed_ledger : Mina_ledger.Sparse_ledger.t option
+        }
+      [@@deriving yojson, fields]
+
+      let create () =
+        { last = None
+        ; staged_commands = []
+        ; queued_commands = []
+        ; previous_committed_ledger_hash = None
+        ; previous_committed_ledger = None
+        }
+
+      let set_last t last = { t with last = Some last }
+
+      let add_staged_command t command =
+        { t with staged_commands = t.staged_commands @ [ command ] }
+
+      let add_queued_command t command =
+        { t with queued_commands = t.queued_commands @ [ command ] }
+
+      let pop_queued_command t =
+        match t.queued_commands with
+        | [] ->
+            t
+        | _ :: rest ->
+            { t with queued_commands = rest }
+
+      let clear_staged_commands t = { t with staged_commands = [] }
+
+      let clear_queued_commands t = { t with queued_commands = [] }
+
+      let reset_for_new_batch t previous_ledger =
+        { t with
+          last = None
+        ; staged_commands = []
+        ; previous_committed_ledger_hash =
+            Some (Mina_ledger.Sparse_ledger.merkle_root previous_ledger)
+        ; previous_committed_ledger = Some previous_ledger
+        }
+    end
+
+    type t =
+      { q : unit Throttle.t
+      ; da_config : Da_layer.Config.t
+      ; zkapp_pk : Signature_lib.Public_key.Compressed.t
+      ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
+      ; transfers_memory : Transfers_memory.t
+      ; executor : Executor.t
+      ; kvdb : L.Kvdb.t
+      ; mutable state : State.t
+      }
+
+    let create ~da_config ~zkapp_pk ~l1_uri ~signer ~kvdb =
+      { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
+      ; da_config
+      ; zkapp_pk
+      ; l1_uri
+      ; transfers_memory = Transfers_memory.create ~lifetime:Float.(60. * 10.)
+      ; executor = Executor.create ~l1_uri ~signer ()
+      ; kvdb
+      ; state = State.create ()
+      }
+
+    let queue_size t = Throttle.num_jobs_waiting_to_start t.q
+
+    let db_key = Bigstring.of_string "snark_queue"
+
+    let persist_state t () =
+      L.Kvdb.set t.kvdb ~key:db_key
+        ~data:
+          ( Bigstring.of_string @@ Yojson.Safe.to_string
+          @@ State.to_yojson t.state )
+
+    let get_state ~kvdb =
+      let%bind.Option data = L.Kvdb.get kvdb ~key:db_key in
+      match
+        State.of_yojson @@ Yojson.Safe.from_string @@ Bigstring.to_string data
+      with
+      | Ok state ->
+          Some state
+      | Error e ->
+          failwith e
+
+    let wrap_and_merge t txn_snark command =
+      let%bind wrapped = M.Wrapper.wrap txn_snark in
+      let%bind final_snark =
+        match t.state.last with
+        | Some last' ->
+            M.Wrapper.merge last' wrapped
+        | None ->
+            return wrapped
+      in
+      t.state <- State.set_last t.state final_snark ;
+      t.state <- State.add_staged_command t.state command ;
+      return ()
 
     let prove_signed_command t ~sparse_ledger ~user_command_in_block ~statement
         =
@@ -128,7 +186,8 @@ module Sequencer = struct
              ~statement user_command_in_block handler )
       in
       wrap_and_merge t txn_snark
-        (User_command.Signed_command user_command_in_block.transaction)
+        (User_command.Signed_command
+           (Signed_command.forget_check user_command_in_block.transaction) )
 
     let prove_zkapp_command t ~witnesses ~zkapp_command =
       let%bind txn_snark =
@@ -155,18 +214,29 @@ module Sequencer = struct
       in
       wrap_and_merge t txn_snark (User_command.Zkapp_command zkapp_command)
 
-    let enqueue_prove_command t command_witness =
+    let enqueue t f =
       Throttle.enqueue t.q (fun () ->
-          match command_witness with
-          | Command_witness.Signed_command
-              (sparse_ledger, user_command_in_block, statement) ->
-              prove_signed_command t ~sparse_ledger ~user_command_in_block
-                ~statement
-          | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
-              prove_zkapp_command t ~witnesses ~zkapp_command )
+          let%map result = f () in
+          let () = persist_state t () in
+          result )
+
+    let enqueue_prove_command t command_witness =
+      t.state <- State.add_queued_command t.state command_witness ;
+      persist_state t () ;
+      enqueue t (fun () ->
+          let%map () =
+            match command_witness with
+            | Command_witness.Signed_command
+                (sparse_ledger, user_command_in_block, statement) ->
+                prove_signed_command t ~sparse_ledger ~user_command_in_block
+                  ~statement
+            | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
+                prove_zkapp_command t ~witnesses ~zkapp_command
+          in
+          t.state <- State.pop_queued_command t.state )
 
     let enqueue_prove_transfer t ~key ~(transfer : Transfer.t) =
-      Throttle.enqueue t.q (fun () ->
+      enqueue t (fun () ->
           let%bind tree =
             match transfer.direction with
             | Deposit ->
@@ -187,8 +257,8 @@ module Sequencer = struct
           return () )
 
     let enqueue_prove_commit t ~target_ledger =
-      Throttle.enqueue t.q (fun () ->
-          match List.is_empty t.staged_commands with
+      enqueue t (fun () ->
+          match List.is_empty t.state.staged_commands with
           | true ->
               print_endline "Nothing to commit" ;
               return ()
@@ -196,7 +266,7 @@ module Sequencer = struct
               print_endline "Committing..." ;
 
               let ledger_hash =
-                Zkapps_rollup.target_ledger @@ Option.value_exn t.last
+                Zkapps_rollup.target_ledger @@ Option.value_exn t.state.last
               in
               let batch_id =
                 Frozen_ledger_hash0.to_decimal_string ledger_hash
@@ -205,7 +275,7 @@ module Sequencer = struct
                 Frozen_ledger_hash0.to_decimal_string
                   (Option.value
                      ~default:(Frozen_ledger_hash0.of_decimal_string "0")
-                     t.previous_committed_ledger_hash )
+                     t.state.previous_committed_ledger_hash )
               in
 
               match%bind
@@ -213,7 +283,7 @@ module Sequencer = struct
                     let%bind () =
                       match%bind
                         Da_layer.post_batch t.da_config
-                          ~commands:t.staged_commands ~batch_id
+                          ~commands:t.state.staged_commands ~batch_id
                           ~previous_batch_id
                       with
                       | Ok _ ->
@@ -236,11 +306,12 @@ module Sequencer = struct
                               ~target_ledger )
                        in *)
                     let old_inner_ledger =
-                      Option.value_exn t.previous_committed_ledger
+                      Option.value_exn t.state.previous_committed_ledger
                     in
                     let new_inner_ledger = target_ledger in
                     let%bind account_update =
-                      M.Outer.step (Option.value_exn t.last)
+                      M.Outer.step
+                        (Option.value_exn t.state.last)
                         ~outer_public_key:t.zkapp_pk ~new_deposits:[]
                         ~old_inner_ledger ~new_inner_ledger
                     in
@@ -265,10 +336,7 @@ module Sequencer = struct
                     @@ Executor.send_zkapp_command t.executor command )
               with
               | Ok _ ->
-                  t.staged_commands <- [] ;
-                  t.last <- None ;
-                  t.previous_committed_ledger_hash <- Some ledger_hash ;
-                  t.previous_committed_ledger <- Some target_ledger ;
+                  t.state <- State.reset_for_new_batch t.state target_ledger ;
                   return ()
               | Error e ->
                   (* Continue expanding batch if commit failed *)
@@ -300,13 +368,13 @@ module Sequencer = struct
     ; da_config : Da_layer.Config.t
     ; snark_q : Snark_queue.t
     ; stop : unit Ivar.t
-    ; mutable genesis_accounts : (Account_id.t * Account.t) list
+    ; genesis_accounts : (Account_id.t * Account.t) list
     ; mutable protocol_state : Mina_state.Protocol_state.value
     ; mutable subscriptions : Subscriptions.t
     }
 
   let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer =
+      ~da_contract_address ~db_dir ~l1_uri ~signer ~genesis_accounts =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -316,9 +384,11 @@ module Sequencer = struct
     ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
     ; config = { max_pool_size; commitment_period_sec; db_dir }
     ; da_config
-    ; snark_q = Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
+    ; snark_q =
+        Snark_queue.create ~da_config ~zkapp_pk ~l1_uri ~signer
+          ~kvdb:(L.Db.kvdb db)
     ; stop = Ivar.create ()
-    ; genesis_accounts = []
+    ; genesis_accounts
     ; protocol_state = compile_time_genesis_state
     ; subscriptions = Subscriptions.create ()
     }
@@ -351,7 +421,7 @@ module Sequencer = struct
 
   let get_root t = L.Db.merkle_root t.db
 
-  let save_protocol_state t =
+  let persist_protocol_state t =
     let data =
       Bigstring.of_string @@ Yojson.Safe.to_string
       @@ Mina_state.Protocol_state.value_to_yojson t.protocol_state
@@ -439,6 +509,7 @@ module Sequencer = struct
     in
 
     L.Mask.Attached.commit l ;
+    persist_protocol_state t ;
 
     let target_ledger_hash = L.merkle_root l in
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
@@ -624,7 +695,6 @@ module Sequencer = struct
       | None ->
           ()
       | Some db_dir -> (
-          save_protocol_state t ;
           let ledger_hash =
             Frozen_ledger_hash.to_decimal_string L.Db.(merkle_root t.db)
           in
@@ -645,8 +715,8 @@ module Sequencer = struct
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()
     else
-      every ~stop:(Ivar.read t.stop)
-        (Time_ns.Span.of_sec t.config.commitment_period_sec) (fun () ->
+      let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
+      every ~start:(after period) ~stop:(Ivar.read t.stop) period (fun () ->
           don't_wait_for @@ commit t )
 
   let add_transactions_subscriber t =
@@ -699,6 +769,25 @@ module Sequencer = struct
     let%bind commited_ledger_hash =
       Gql_client.fetch_commited_state l1_uri zkapp_pk
     in
+    let continue_batch =
+      let kvdb = L.Kvdb.create db_dir in
+      let state = Snark_queue.get_state ~kvdb in
+      L.Kvdb.close kvdb ;
+      match state with
+      | Some
+          ( { previous_committed_ledger_hash =
+                Some previous_committed_ledger_hash
+            ; _
+            } as state ) ->
+          if
+            Frozen_ledger_hash.equal previous_committed_ledger_hash
+              commited_ledger_hash
+          then `Can_continue state
+          else `Can't_continue
+      | _ ->
+          `Can't_continue
+    in
+
     let commit_dir =
       Filename.concat db_dir
         ("commit-" ^ Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
@@ -707,8 +796,10 @@ module Sequencer = struct
 
     (* prepare db *)
     let () =
-      match found_checkpoint with
-      | true -> (
+      match (continue_batch, found_checkpoint) with
+      | `Can_continue _, _ ->
+          print_endline "Can continue batch, skipping bootstrap"
+      | `Can't_continue, true -> (
           print_endline "Found checkpoint, skipping bootstrap" ;
           let commit_files = FileUtil.ls commit_dir in
           let old_files =
@@ -720,42 +811,47 @@ module Sequencer = struct
             FileUtil.rm ~force:Force old_files ;
             FileUtil.cp ~force:FileUtil.Force ~recurse:true commit_files db_dir
           with err -> print_endline (Exn.to_string err) )
-      | false -> (
+      | `Can't_continue, false -> (
           print_endline "No checkpoint found, bootstrapping from genesis" ;
           (* remove present db *)
           try FileUtil.rm ~force:Force ~recurse:true [ db_dir ]
           with err -> print_endline (Exn.to_string err) )
     in
 
-    (* create sequencer state *)
-    let t =
-      create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-        ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
+    let genesis_accounts =
+      ref [ (M.Inner.account_id, M.Inner.initial_account) ]
     in
-
-    t.genesis_accounts <- [ (M.Inner.account_id, M.Inner.initial_account) ] ;
-
     (* Only for testing *)
     ( match test_accounts_path with
     | Some test_accounts_path ->
         print_endline "Adding test accounts" ;
-        t.genesis_accounts <-
-          t.genesis_accounts
+        genesis_accounts :=
+          !genesis_accounts
           @ Test_accounts.parse_accounts_exn ~test_accounts_path
     | None ->
         print_endline "No test accounts" ) ;
 
+    (* create sequencer state *)
+    let t =
+      create ~zkapp_pk ~max_pool_size ~commitment_period_sec
+        ~da_contract_address ~db_dir:(Some db_dir) ~l1_uri ~signer
+        ~genesis_accounts:!genesis_accounts
+    in
+
     (* add initial accounts *)
-    if not found_checkpoint then
-      List.iter t.genesis_accounts ~f:(fun (account_id, account) ->
-          add_account t account_id account ) ;
+    ( match (continue_batch, found_checkpoint) with
+    | `Can't_continue, false ->
+        List.iter t.genesis_accounts ~f:(fun (account_id, account) ->
+            add_account t account_id account )
+    | _ ->
+        () ) ;
 
     print_endline
       ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ;
 
     let%bind () =
-      match found_checkpoint with
-      | false ->
+      match (continue_batch, found_checkpoint) with
+      | `Can't_continue, false ->
           (* apply commands from DA layer *)
           let%bind commands =
             Da_layer.get_batches t.da_config
@@ -776,16 +872,29 @@ module Sequencer = struct
                     () )
           in
           return ()
-      | true ->
+      | `Can't_continue, true ->
           return @@ load_protocol_state_exn t
+      | `Can_continue state, _ ->
+          return ()
     in
-    t.snark_q.previous_committed_ledger_hash <- Some (get_root t) ;
-    t.snark_q.previous_committed_ledger <-
-      Some
-        (Mina_ledger.Sparse_ledger.of_ledger_subset_exn
-           L.(of_database t.db)
-           [ M.Inner.account_id ] ) ;
-    return t
+    match continue_batch with
+    | `Can_continue state ->
+        t.snark_q.state <- state ;
+
+        printf "Requeueing %d commands\n%!" (List.length state.queued_commands) ;
+        List.iter state.queued_commands ~f:(fun command_witness ->
+            don't_wait_for
+            @@ Snark_queue.enqueue_prove_command t.snark_q command_witness ) ;
+        return t
+    | `Can't_continue ->
+        let l =
+          Mina_ledger.Sparse_ledger.of_ledger_subset_exn
+            L.(of_database t.db)
+            [ M.Inner.account_id ]
+        in
+        t.snark_q.state <-
+          Snark_queue.State.reset_for_new_batch t.snark_q.state l ;
+        return t
 end
 
 include Sequencer
@@ -819,7 +928,7 @@ let%test_unit "apply commands and commit" =
         Sequencer.create
           ~zkapp_pk:Signature_lib.Public_key.(compress zkapp_keypair.public_key)
           ~max_pool_size:10 ~commitment_period_sec:0. ~da_contract_address:None
-          ~db_dir:None ~l1_uri:gql_uri ~signer
+          ~db_dir:None ~l1_uri:gql_uri ~signer ~genesis_accounts:[]
       in
       L.with_ledger ~depth:constraint_constants.ledger_depth
         ~f:(fun expected_ledger ->
@@ -838,10 +947,13 @@ let%test_unit "apply commands and commit" =
               L.create_new_account_exn expected_ledger account_id account ;
               add_account sequencer account_id account ) ;
 
-          sequencer.snark_q.previous_committed_ledger <-
-            Some
-              (Mina_ledger.Sparse_ledger.of_ledger_subset_exn expected_ledger
-                 [ M.Inner.account_id ] ) ;
+          sequencer.snark_q.state <-
+            { sequencer.snark_q.state with
+              previous_committed_ledger =
+                Some
+                  (Mina_ledger.Sparse_ledger.of_ledger_subset_exn
+                     expected_ledger [ M.Inner.account_id ] )
+            } ;
 
           (* Deploy *)
           Thread_safe.block_on_async_exn (fun () ->
@@ -926,8 +1038,9 @@ let%test_unit "apply commands and commit" =
 
                 let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
 
-                [%test_eq: Bool.t] true (Option.is_some sequencer.snark_q.last) ;
-                let snark = Option.value_exn sequencer.snark_q.last in
+                [%test_eq: Bool.t] true
+                  (Option.is_some sequencer.snark_q.state.last) ;
+                let snark = Option.value_exn sequencer.snark_q.state.last in
                 (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
                 [%test_eq: Frozen_ledger_hash.t]
                   (Zkapps_rollup.source_ledger snark)
@@ -943,6 +1056,9 @@ let%test_unit "apply commands and commit" =
           Thread_safe.block_on_async_exn (fun () ->
               let%bind () = commit sequencer in
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+              let%bind () =
+                Executor.wait_to_finish sequencer.snark_q.executor
+              in
               let%bind commited_ledger_hash =
                 Gql_client.fetch_commited_state gql_uri
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
@@ -1015,8 +1131,9 @@ let%test_unit "apply commands and commit" =
 
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
 
-              [%test_eq: Bool.t] true (Option.is_some sequencer.snark_q.last) ;
-              let snark = Option.value_exn sequencer.snark_q.last in
+              [%test_eq: Bool.t] true
+                (Option.is_some sequencer.snark_q.state.last) ;
+              let snark = Option.value_exn sequencer.snark_q.state.last in
               (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
               [%test_eq: Frozen_ledger_hash.t]
                 (Zkapps_rollup.source_ledger snark)
@@ -1031,6 +1148,9 @@ let%test_unit "apply commands and commit" =
           Thread_safe.block_on_async_exn (fun () ->
               let%bind () = commit sequencer in
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+              let%bind () =
+                Executor.wait_to_finish sequencer.snark_q.executor
+              in
               let%bind commited_ledger_hash =
                 Gql_client.fetch_commited_state gql_uri
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)

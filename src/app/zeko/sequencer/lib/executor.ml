@@ -84,3 +84,5 @@ let process_command t (command : Zkapp_command.t) =
 
 let send_zkapp_command t command =
   Throttle.enqueue t.q (fun () -> process_command t command)
+
+let wait_to_finish t = Throttle.capacity_available t.q

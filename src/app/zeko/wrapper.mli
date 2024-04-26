@@ -8,7 +8,7 @@ module Stmt : sig
   [@@deriving snarky, yojson]
 end
 
-type t [@@deriving snarky]
+type t [@@deriving snarky, yojson]
 
 val statement_var : var -> Stmt.var
 
