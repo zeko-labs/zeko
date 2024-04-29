@@ -5,7 +5,7 @@ module Block_data : sig
   module Stable : sig
     module V2 : sig
       type t = Mina_state.Protocol_state.Body.Value.Stable.V2.t
-      [@@deriving sexp]
+      [@@deriving sexp, yojson]
     end
   end]
 
@@ -25,7 +25,7 @@ module Poly : sig
         ; block_data : Block_data.Stable.V2.t
         ; global_slot : Mina_numbers.Global_slot_since_genesis.Stable.V1.t
         }
-      [@@deriving sexp]
+      [@@deriving sexp, yojson]
     end
   end]
 end
@@ -33,7 +33,7 @@ end
 [%%versioned:
 module Stable : sig
   module V2 : sig
-    type 'a t = 'a Poly.Stable.V2.t [@@deriving sexp]
+    type 'a t = 'a Poly.Stable.V2.t [@@deriving sexp, yojson]
   end
 end]
 

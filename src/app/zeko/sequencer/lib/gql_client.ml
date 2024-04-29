@@ -56,41 +56,36 @@ let fetch_commited_state uri pk =
 
 let send_zkapp ({ value = uri; _ } : Uri.t Cli_lib.Flag.Types.with_name) command
     =
-  Utils.retry
-    ~f:(fun () ->
-      let q =
-        object
-          method query =
-            String.substr_replace_all ~pattern:"\n" ~with_:" "
-              {|
-                mutation ($input: SendZkappInput!) {
-                  sendZkapp(input: $input){
-                    zkapp {
-                      id
-                      failureReason {
-                        index
-                        failures
-                      }
-                    }
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            mutation ($input: SendZkappInput!) {
+              sendZkapp(input: $input){
+                zkapp {
+                  id
+                  failureReason {
+                    index
+                    failures
                   }
-                } 
-              |}
+                }
+              }
+            } 
+          |}
 
-          method variables =
-            `Assoc
-              [ ( "input"
-                , `Assoc
-                    [ ( "zkappCommand"
-                      , Yojson.Safe.to_basic @@ Zkapp_command.to_json command )
-                    ] )
-              ]
-        end
-      in
-      let%bind.Deferred.Result result =
-        Graphql_client.Client.query_json q uri
-      in
-      return (Ok Yojson.Safe.(to_string result)) )
-    ()
+      method variables =
+        `Assoc
+          [ ( "input"
+            , `Assoc
+                [ ( "zkappCommand"
+                  , Yojson.Safe.to_basic @@ Zkapp_command.to_json command )
+                ] )
+          ]
+    end
+  in
+  let%bind.Deferred.Result result = Graphql_client.Client.query_json q uri in
+  return (Ok Yojson.Safe.(to_string result))
 
 let fetch_block_height uri =
   let q =

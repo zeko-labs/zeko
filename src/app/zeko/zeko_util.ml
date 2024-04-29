@@ -203,10 +203,10 @@ end
 
 (** To be used with deriving snarky, a reference to T with no in-circuit representation *)
 module MkRef (T : sig
-  type t
+  type t [@@deriving yojson]
 end) =
 struct
-  type t = T.t
+  type t = T.t [@@deriving yojson]
 
   type var = T.t As_prover.Ref.t
 

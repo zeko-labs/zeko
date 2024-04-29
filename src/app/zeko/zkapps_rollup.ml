@@ -580,7 +580,7 @@ module Outer = struct
 end
 
 (* What we expose from this module *)
-type t = Wrapper.t
+type t = Wrapper.t [@@deriving yojson]
 
 let source_ledger (t : t) = (Wrapper.statement t).source_ledger
 

@@ -11,10 +11,7 @@ let command_to_yojson command =
   | User_command.Signed_command signed_command ->
       `Assoc
         [ ("commandType", `Int 0)
-        ; ( "data"
-          , `String
-              (Signed_command.to_base64
-                 (Signed_command.forget_check signed_command) ) )
+        ; ("data", `String (Signed_command.to_base64 signed_command))
         ]
   | User_command.Zkapp_command zkapp_command ->
       `Assoc
