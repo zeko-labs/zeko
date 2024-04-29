@@ -246,7 +246,10 @@ let rec run ~logger ~zeko_uri ~archive_uri () =
       Thread_safe.block_on_async (fun () ->
           Conduit_async.V3.with_connection_uri zeko_uri (fun _ r w ->
               print_endline "Connected to zeko" ;
-              let r, w = Websocket_async.client_ez zeko_uri r w in
+              let r, w =
+                Websocket_async.client_ez ~heartbeat:(Time_ns.Span.of_sec 15.)
+                  zeko_uri r w
+              in
 
               let%bind () = handshake r w in
               let%bind () = subscribe w in
