@@ -1,4 +1,7 @@
-(env (_ (flags (-w -4-48))))
+(env
+ (_
+  (flags
+   (-w -4-48))))
 
 (executable
  (name run)
@@ -56,3 +59,26 @@
  (preprocess
   (pps ppx_jane))
  (modules deploy))
+
+(executable
+ (name committer)
+ (libraries
+  sequencer_lib
+  ;; mina ;;
+  init
+  signature_lib
+  cli_lib
+  ;; opam libraries ;;
+  cohttp
+  cohttp-async
+  graphql
+  graphql-async
+  core
+  core_kernel
+  async_kernel
+  async
+  async_unix
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_jane))
+ (modules committer))
