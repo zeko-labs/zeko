@@ -199,6 +199,7 @@ module Sequencer = struct
       in
       t.state <- State.set_last t.state final_snark ;
       t.state <- State.add_staged_command t.state command ;
+      t.state <- State.pop_queued_command t.state ;
       return ()
 
     let prove_signed_command t ~sparse_ledger ~user_command_in_block ~statement
@@ -250,16 +251,13 @@ module Sequencer = struct
       t.state <- State.add_queued_command t.state command_witness ;
       persist_state t () ;
       enqueue t (fun () ->
-          let%map () =
-            match command_witness with
-            | Command_witness.Signed_command
-                (sparse_ledger, user_command_in_block, statement) ->
-                prove_signed_command t ~sparse_ledger ~user_command_in_block
-                  ~statement
-            | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
-                prove_zkapp_command t ~witnesses ~zkapp_command
-          in
-          t.state <- State.pop_queued_command t.state )
+          match command_witness with
+          | Command_witness.Signed_command
+              (sparse_ledger, user_command_in_block, statement) ->
+              prove_signed_command t ~sparse_ledger ~user_command_in_block
+                ~statement
+          | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
+              prove_zkapp_command t ~witnesses ~zkapp_command )
 
     let enqueue_prove_transfer t ~key ~(transfer : Transfer.t) =
       enqueue t (fun () ->
@@ -811,9 +809,16 @@ module Sequencer = struct
         Snark_queue.get_state ~kvdb:(L.Db.kvdb db)
         |> Option.iter ~f:(fun state -> t.snark_q.state <- state) ;
 
+        printf "Staged %d commands \n%!"
+          (List.length t.snark_q.state.staged_commands) ;
         printf "Requeueing %d commands\n%!"
           (List.length t.snark_q.state.queued_commands) ;
-        List.iter t.snark_q.state.queued_commands ~f:(fun command_witness ->
+
+        let queued_commands = t.snark_q.state.queued_commands in
+        (* enqueue will requeue also state *)
+        t.snark_q.state <-
+          Snark_queue.State.clear_queued_commands t.snark_q.state ;
+        List.iter queued_commands ~f:(fun command_witness ->
             don't_wait_for
             @@ Snark_queue.enqueue_prove_command t.snark_q command_witness ) ;
 
