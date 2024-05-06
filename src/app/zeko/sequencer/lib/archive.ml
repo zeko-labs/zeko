@@ -8,7 +8,6 @@ open Mina_transaction
 open Sexplib.Std
 open Snark_params
 open Key_value_database.Monad.Ident.Let_syntax
-module Db = Mina_ledger.Ledger.Kvdb
 
 let ok_exn x =
   let open Ppx_deriving_yojson_runtime.Result in
@@ -93,7 +92,7 @@ module Account_update_actions = struct
 end
 
 module Archive = struct
-  type t = Db.t
+  type t = Kvdb.t
 
   let create ~kvdb : t = kvdb
 
@@ -105,10 +104,7 @@ module Archive = struct
       ^ Token_id.to_string (Account_id.token_id account_id) )
 
   let query_events t account_id =
-    let%bind events =
-      Db.get t
-        ~key:Bigstring.(concat [ of_string "events"; serialize_key account_id ])
-    in
+    let%bind events = Kvdb.get t ~key:(EVENTS account_id) in
     let events =
       Option.value ~default:"[]" @@ Option.map ~f:Bigstring.to_string events
     in
@@ -117,11 +113,7 @@ module Archive = struct
       Yojson.Safe.(Util.to_list @@ from_string events)
 
   let query_actions t account_id =
-    let%bind actions =
-      Db.get t
-        ~key:
-          Bigstring.(concat [ of_string "actions"; serialize_key account_id ])
-    in
+    let%bind actions = Kvdb.get t ~key:(ACTIONS account_id) in
     let actions =
       Option.value ~default:"[]" @@ Option.map ~f:Bigstring.to_string actions
     in
@@ -135,9 +127,7 @@ module Archive = struct
       @@ `List (List.map ~f:Account_update_events.to_yojson events)
     in
     let%bind () =
-      Db.set t
-        ~key:Bigstring.(concat [ of_string "events"; serialize_key account_id ])
-        ~data:(Bigstring.of_string events)
+      Kvdb.set t ~key:(EVENTS account_id) ~data:(Bigstring.of_string events)
     in
     ()
 
@@ -147,10 +137,7 @@ module Archive = struct
       @@ `List (List.map ~f:Account_update_actions.to_yojson actions)
     in
     let%bind () =
-      Db.set t
-        ~key:
-          Bigstring.(concat [ of_string "actions"; serialize_key account_id ])
-        ~data:(Bigstring.of_string actions)
+      Kvdb.set t ~key:(ACTIONS account_id) ~data:(Bigstring.of_string actions)
     in
     ()
 

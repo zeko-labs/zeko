@@ -185,6 +185,7 @@ let
           dune build --display=short \
             src/app/zeko/sequencer/run.exe \
             src/app/zeko/sequencer/deploy.exe \
+            src/app/zeko/sequencer/committer.exe \
             src/app/zeko/sequencer/tests/local_network/run.exe \
             src/app/logproc/logproc.exe \
             src/app/cli/src/mina.exe \
@@ -252,6 +253,7 @@ let
           cp src/app/swap_bad_balances/swap_bad_balances.exe $archive/bin/mina-swap-bad-balances
           cp src/app/zeko/sequencer/run.exe $zeko/bin/zeko-run
           cp src/app/zeko/sequencer/deploy.exe $zeko/bin/zeko-deploy
+          cp src/app/zeko/sequencer/committer.exe $zeko/bin/zeko-committer
           cp src/app/zeko/sequencer/tests/local_network/run.exe $localnet/bin/mina-localnet
           cp -R _doc/_html $out/share/doc/html
           # cp src/lib/mina_base/sample_keypairs.json $sample/share/mina
