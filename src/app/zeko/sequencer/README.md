@@ -130,14 +130,14 @@ To list all available commit transactions:
 
 ```bash
 export DUNE_PROFILE=devnet
-dune exec ./cli.exe -- list
+dune exec ./cli.exe -- committer list
 ```
 
 To get json of the commit transaction:
 
 ```bash
 export DUNE_PROFILE=devnet
-dune exec ./cli.exe -- get --source <source-ledger-hash> --target <target-ledger-hash>
+dune exec ./cli.exe -- committer get --source <source-ledger-hash> --target <target-ledger-hash>
 ```
 
 To resend the commit transaction:
@@ -145,7 +145,7 @@ To resend the commit transaction:
 ```bash
 export DUNE_PROFILE=devnet
 export MINA_PRIVATE_KEY="base58 signer private key"
-dune exec ./cli.exe -- send
+dune exec ./cli.exe -- committer send
     --source <source-ledger-hash> \
     --target <target-ledger-hash> \
     --l1-uri <l1-uri> \
