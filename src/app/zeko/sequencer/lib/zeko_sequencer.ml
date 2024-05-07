@@ -734,19 +734,22 @@ module Sequencer = struct
     let%bind commited_ledger_hash =
       Gql_client.fetch_commited_state config.l1_uri config.zkapp_pk
     in
+    printf "Fetched root: %s\n%!"
+      Frozen_ledger_hash.(to_decimal_string commited_ledger_hash) ;
 
     (* add initial accounts *)
     List.iter genesis_accounts ~f:(fun (account_id, account) ->
         add_account t account_id account ) ;
 
-    print_endline
-      ("Init root: " ^ Frozen_ledger_hash.(to_decimal_string (get_root t))) ;
+    printf "Init root: %s\n%!"
+      Frozen_ledger_hash.(to_decimal_string (get_root t)) ;
 
     (* apply commands from DA layer *)
     let%bind commands =
       Da_layer.get_batches da_config
         ~to_:(Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
     in
+    printf "Applying %d commands\n%!" (List.length commands) ;
     List.iter commands ~f:(fun command ->
         match command with
         | User_command.Signed_command signed_command ->
@@ -757,6 +760,13 @@ module Sequencer = struct
         | User_command.Zkapp_command zkapp_command ->
             let _res = apply_zkapp_command t zkapp_command |> Or_error.ok_exn in
             () ) ;
+
+    let current_root = get_root t in
+    printf "Current root: %s\n%!"
+      Frozen_ledger_hash.(to_decimal_string current_root) ;
+
+    if not @@ Frozen_ledger_hash.equal current_root commited_ledger_hash then
+      print_endline "Ledger mismatch" ;
 
     let sparse_ledger =
       Mina_ledger.Sparse_ledger.of_ledger_subset_exn
