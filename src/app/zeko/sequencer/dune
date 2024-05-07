@@ -61,7 +61,7 @@
  (modules deploy))
 
 (executable
- (name committer)
+ (name cli)
  (libraries
   sequencer_lib
   ;; mina ;;
@@ -81,4 +81,4 @@
   core_unix.command_unix)
  (preprocess
   (pps ppx_jane))
- (modules committer))
+ (modules cli))

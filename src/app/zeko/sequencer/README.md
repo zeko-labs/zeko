@@ -124,20 +124,20 @@ docker run --entrypoint archive_relay \
 
 ## Manual commit
 
-In case automatic commit transaction fails and sequencer gets in the unrecoverable state, `committer.exe` can be used to manually resend commit transactions.
+In case automatic commit transaction fails and sequencer gets in the unrecoverable state, `cli.exe` can be used to manually resend commit transactions.
 
 To list all available commit transactions:
 
 ```bash
 export DUNE_PROFILE=devnet
-dune exec ./committer.exe -- list
+dune exec ./cli.exe -- list
 ```
 
 To get json of the commit transaction:
 
 ```bash
 export DUNE_PROFILE=devnet
-dune exec ./committer.exe -- get --source <source-ledger-hash> --target <target-ledger-hash>
+dune exec ./cli.exe -- get --source <source-ledger-hash> --target <target-ledger-hash>
 ```
 
 To resend the commit transaction:
@@ -145,7 +145,7 @@ To resend the commit transaction:
 ```bash
 export DUNE_PROFILE=devnet
 export MINA_PRIVATE_KEY="base58 signer private key"
-dune exec ./committer.exe -- send
+dune exec ./cli.exe -- send
     --source <source-ledger-hash> \
     --target <target-ledger-hash> \
     --l1-uri <l1-uri> \
