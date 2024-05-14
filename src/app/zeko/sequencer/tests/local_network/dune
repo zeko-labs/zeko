@@ -74,4 +74,4 @@
   core_unix.command_unix)
  (preprocess
   (pps ppx_jane ppx_mina))
- (modules run gql))
+ (modules run state gql))

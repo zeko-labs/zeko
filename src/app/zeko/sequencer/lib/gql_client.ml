@@ -97,16 +97,18 @@ let inferr_nonce uri pk =
       List.map pooled_zkapp_commands ~f:(fun command ->
           Zkapp_command.fee_payer_account_update command
           |> Account_update.Fee_payer.body
-          |> Account_update.Body.Fee_payer.nonce )
+          |> Account_update.Body.Fee_payer.nonce
+          |> Unsigned.UInt32.(add one) )
       |> List.max_elt ~compare:Unsigned.UInt32.compare
       |> Option.value ~default:Unsigned.UInt32.zero
     in
     let max_signed_commands_nonce =
-      List.map pooled_signed_commands ~f:Signed_command.nonce
+      List.map pooled_signed_commands ~f:(fun command ->
+          Signed_command.nonce command |> Unsigned.UInt32.(add one) )
       |> List.max_elt ~compare:Unsigned.UInt32.compare
       |> Option.value ~default:Unsigned.UInt32.zero
     in
-    Unsigned.UInt32.max max_zkapp_commands_nonce max_signed_commands_nonce
+    Unsigned.UInt32.(max max_zkapp_commands_nonce max_signed_commands_nonce)
   in
   let%map commited_nonce = fetch_nonce uri pk in
   Unsigned.UInt32.max max_pooled_nonce commited_nonce
@@ -236,6 +238,23 @@ module For_tests = struct
               , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
               )
             ]
+      end
+    in
+    let%map result = Graphql_client.query_json_exn q uri in
+    Yojson.Safe.(to_string result)
+
+  let create_new_block uri =
+    let q =
+      object
+        method query =
+          String.substr_replace_all ~pattern:"\n" ~with_:" "
+            {|
+              mutation {
+                createNewBlock
+              } 
+            |}
+
+        method variables = `Assoc []
       end
     in
     let%map result = Graphql_client.query_json_exn q uri in

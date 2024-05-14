@@ -899,6 +899,9 @@ let%test_unit "apply commands and commit" =
                   (module M)
               in
               let%bind _ = Gql_client.send_zkapp gql_uri command in
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
+              in
               return () ) ;
 
           (* Init sequencer *)
@@ -1004,15 +1007,11 @@ let%test_unit "apply commands and commit" =
               let%bind () =
                 Executor.wait_to_finish sequencer.snark_q.executor
               in
-              let%bind commited_ledger_hash =
-                Gql_client.fetch_commited_state gql_uri
-                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-              in
-              let target_ledger_hash = get_root sequencer in
-              [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash
-                target_ledger_hash ;
-
               Deferred.unit ) ;
+
+          (* To test nonce inferring from pool *)
+          (* The first commit is still in the pool *)
+          Executor.refresh_nonce sequencer.snark_q.executor ;
 
           (* Apply second batch *)
           Thread_safe.block_on_async_exn (fun () ->
@@ -1095,6 +1094,9 @@ let%test_unit "apply commands and commit" =
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
               let%bind () =
                 Executor.wait_to_finish sequencer.snark_q.executor
+              in
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
               in
               let%bind commited_ledger_hash =
                 Gql_client.fetch_commited_state gql_uri
