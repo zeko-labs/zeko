@@ -93,9 +93,9 @@ let committer =
                let%bind nonce =
                  match nonce_opt with
                  | Some nonce ->
-                     return nonce
+                     return (Account.Nonce.of_int nonce)
                  | None ->
-                     Sequencer_lib.Gql_client.fetch_nonce l1_uri
+                     Sequencer_lib.Gql_client.inferr_nonce l1_uri
                        (Signature_lib.Public_key.compress signer.public_key)
                in
                let executor = Executor.create ~nonce ~l1_uri ~signer ~kvdb () in

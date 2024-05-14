@@ -889,14 +889,13 @@ let%test_unit "apply commands and commit" =
                    Compressed.to_base58_check
                    @@ compress zkapp_keypair.public_key) ) ;
               let%bind nonce =
-                Gql_client.fetch_nonce gql_uri
+                Gql_client.inferr_nonce gql_uri
                   (Signature_lib.Public_key.compress signer.public_key)
               in
               let command =
                 Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
                   ~fee:(Currency.Fee.of_mina_int_exn 1)
-                  ~nonce:(Account.Nonce.of_int nonce)
-                  ~initial_ledger:expected_ledger ~constraint_constants
+                  ~nonce ~initial_ledger:expected_ledger ~constraint_constants
                   (module M)
               in
               let%bind _ = Gql_client.send_zkapp gql_uri command in

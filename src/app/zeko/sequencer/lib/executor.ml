@@ -12,7 +12,7 @@ type t =
   { l1_uri : Uri.t Cli_lib.Flag.Types.with_name
   ; signer : Keypair.t
   ; q : unit Throttle.t
-  ; mutable nonce : int option
+  ; mutable nonce : Account.Nonce.t option
   ; max_attempts : int
   ; delay : Time.Span.t
   ; kvdb : Kvdb.t
@@ -31,7 +31,7 @@ let create ?(max_attempts = 5) ?(delay = Time.Span.of_sec 5.) ?nonce ~l1_uri
 
 let refresh_nonce t = t.nonce <- None
 
-let increment_nonce t = t.nonce <- Option.map t.nonce ~f:(fun x -> x + 1)
+let increment_nonce t = t.nonce <- Option.map t.nonce ~f:Account.Nonce.(add one)
 
 let process_command t (command : Zkapp_command.t) =
   let rec retry attempt () =
@@ -40,17 +40,14 @@ let process_command t (command : Zkapp_command.t) =
       | Some nonce ->
           return nonce
       | None ->
-          Gql_client.fetch_nonce t.l1_uri
+          Gql_client.inferr_nonce t.l1_uri
             (Public_key.compress t.signer.public_key)
     in
     let command =
       { command with
         fee_payer =
           { command.fee_payer with
-            body =
-              { command.fee_payer.body with
-                nonce = Unsigned.UInt32.of_int nonce
-              }
+            body = { command.fee_payer.body with nonce }
           }
       }
     in

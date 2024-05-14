@@ -1505,8 +1505,49 @@ module Queries = struct
         in
         Some cmd_with_hash )
 
+  let pooled_user_commands =
+    field "pooledUserCommands"
+      ~doc:
+        "Retrieve all the scheduled user commands for a specified sender that \
+         the current daemon sees in its transaction pool. All scheduled \
+         commands are queried if no sender is specified"
+      ~typ:(non_null @@ list @@ non_null Types.User_command.user_command)
+      ~args:
+        Arg.
+          [ arg "publicKey" ~doc:"Public key of sender of pooled user commands"
+              ~typ:Types.Input.PublicKey.arg_typ
+          ; arg "hashes" ~doc:"Hashes of the commands to find in the pool"
+              ~typ:(list (non_null string))
+          ; arg "ids" ~typ:(list (non_null guid)) ~doc:"Ids of User commands"
+          ]
+      ~resolve:(fun _ () _ _ _ -> [])
+
+  let pooled_zkapp_commands =
+    field "pooledZkappCommands"
+      ~doc:
+        "Retrieve all the scheduled zkApp commands for a specified sender that \
+         the current daemon sees in its transaction pool. All scheduled \
+         commands are queried if no sender is specified"
+      ~typ:(non_null @@ list @@ non_null Types.Zkapp_command.zkapp_command)
+      ~args:
+        Arg.
+          [ arg "publicKey" ~doc:"Public key of sender of pooled zkApp commands"
+              ~typ:Types.Input.PublicKey.arg_typ
+          ; arg "hashes" ~doc:"Hashes of the zkApp commands to find in the pool"
+              ~typ:(list (non_null string))
+          ; arg "ids" ~typ:(list (non_null guid)) ~doc:"Ids of zkApp commands"
+          ]
+      ~resolve:(fun _ () _ _ _ -> [])
+
   let commands =
-    [ sync_status; daemon_status; account; user_command; zkapp_command ]
+    [ sync_status
+    ; daemon_status
+    ; account
+    ; user_command
+    ; zkapp_command
+    ; pooled_user_commands
+    ; pooled_zkapp_commands
+    ]
 end
 
 let schema =

@@ -26,7 +26,90 @@ let fetch_nonce uri pk =
   in
   let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.Util.(result |> member "account" |> member "nonce" |> to_string)
-  |> Int.of_string
+  |> Int.of_string |> Unsigned.UInt32.of_int
+
+let fetch_pooled_zkapp_commands uri pk =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!) {
+              pooledZkappCommands(publicKey: $pk){
+                id
+              }
+            } 
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
+            )
+          ]
+    end
+  in
+  let%map result = Graphql_client.query_json_exn q uri in
+  Yojson.Safe.Util.(
+    result
+    |> member "pooledZkappCommands"
+    |> to_list
+    |> List.map ~f:(member "id")
+    |> List.map ~f:to_string
+    |> List.map ~f:(Fn.compose ok_exn Zkapp_command.of_base64))
+
+let fetch_pooled_signed_commands uri pk =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!) {
+              pooledUserCommands(publicKey: $pk){
+                id
+              }
+            } 
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
+            )
+          ]
+    end
+  in
+  let%map result = Graphql_client.query_json_exn q uri in
+  Yojson.Safe.Util.(
+    result
+    |> member "pooledUserCommands"
+    |> to_list
+    |> List.map ~f:(member "id")
+    |> List.map ~f:to_string
+    |> List.map ~f:(Fn.compose ok_exn Signed_command.of_base64))
+
+(* Inferrs nonce based on pooled commands *)
+let inferr_nonce uri pk =
+  let%bind pooled_zkapp_commands = fetch_pooled_zkapp_commands uri pk
+  and pooled_signed_commands = fetch_pooled_signed_commands uri pk in
+  let max_pooled_nonce =
+    let max_zkapp_commands_nonce =
+      List.map pooled_zkapp_commands ~f:(fun command ->
+          Zkapp_command.fee_payer_account_update command
+          |> Account_update.Fee_payer.body
+          |> Account_update.Body.Fee_payer.nonce )
+      |> List.max_elt ~compare:Unsigned.UInt32.compare
+      |> Option.value ~default:Unsigned.UInt32.zero
+    in
+    let max_signed_commands_nonce =
+      List.map pooled_signed_commands ~f:Signed_command.nonce
+      |> List.max_elt ~compare:Unsigned.UInt32.compare
+      |> Option.value ~default:Unsigned.UInt32.zero
+    in
+    Unsigned.UInt32.max max_zkapp_commands_nonce max_signed_commands_nonce
+  in
+  let%map commited_nonce = fetch_nonce uri pk in
+  Unsigned.UInt32.max max_pooled_nonce commited_nonce
 
 let fetch_commited_state uri pk =
   let q =
