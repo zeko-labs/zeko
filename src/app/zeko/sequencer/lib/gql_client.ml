@@ -139,6 +139,27 @@ let fetch_commited_state uri pk =
     result |> member "account" |> member "zkappState" |> index 0 |> to_string)
   |> Frozen_ledger_hash.of_decimal_string
 
+let inferr_commited_state uri ~zkapp_pk ~signer_pk =
+  let%bind commited_state = fetch_commited_state uri zkapp_pk
+  and pooled_zkapp_commands = fetch_pooled_zkapp_commands uri signer_pk in
+  let pooled_zkapp_commands =
+    List.sort pooled_zkapp_commands ~compare:(fun a b ->
+        Zkapp_command.(
+          Account.Nonce.compare (applicable_at_nonce a) (applicable_at_nonce b)) )
+  in
+  let pooled_state_transitions =
+    List.map pooled_zkapp_commands ~f:(Utils.get_state_transition zkapp_pk)
+    |> List.filter_opt
+  in
+  let future_state =
+    List.fold_until pooled_state_transitions ~init:commited_state
+      ~f:(fun acc (source, target) ->
+        if Frozen_ledger_hash.equal acc source then Continue target
+        else Stop acc )
+      ~finish:Fn.id
+  in
+  return future_state
+
 let send_zkapp ({ value = uri; _ } : Uri.t Cli_lib.Flag.Types.with_name) command
     =
   let q =

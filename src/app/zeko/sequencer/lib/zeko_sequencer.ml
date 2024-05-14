@@ -1007,6 +1007,17 @@ let%test_unit "apply commands and commit" =
               let%bind () =
                 Executor.wait_to_finish sequencer.snark_q.executor
               in
+              let%bind commited_ledger_hash =
+                Gql_client.inferr_commited_state gql_uri
+                  ~signer_pk:
+                    (Signature_lib.Public_key.compress signer.public_key)
+                  ~zkapp_pk:
+                    (Signature_lib.Public_key.compress zkapp_keypair.public_key)
+              in
+              let target_ledger_hash = get_root sequencer in
+              [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash
+                target_ledger_hash ;
+
               Deferred.unit ) ;
 
           (* To test nonce inferring from pool *)
