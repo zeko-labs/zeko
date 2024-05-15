@@ -45,25 +45,14 @@ let pooled_commands t = Indexed_pool.transactions ~logger t.pool
 let apply_command t ~command =
   let l = Ledger.of_database t.db in
   let%bind.Result partialy_applied_txn =
-    match
-      Ledger.apply_transaction_first_pass
-        ~constraint_constants:Constants.constraint_constants
-        ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-        ~txn_state_view:
-          (Mina_state.Protocol_state.Body.view Constants.state_body)
-        l (Command command)
-    with
-    | Error err ->
-        Error (Error.to_string_mach err)
-    | Ok partialy_applied_txn ->
-        Ok partialy_applied_txn
+    Ledger.apply_transaction_first_pass
+      ~constraint_constants:Constants.constraint_constants
+      ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
+      ~txn_state_view:(Mina_state.Protocol_state.Body.view Constants.state_body)
+      l (Command command)
   in
   let%bind.Result txn_applied =
-    match Ledger.apply_transaction_second_pass l partialy_applied_txn with
-    | Error err ->
-        Error (Error.to_string_mach err)
-    | Ok txn_applied ->
-        Ok txn_applied
+    Ledger.apply_transaction_second_pass l partialy_applied_txn
   in
 
   Ledger.Mask.Attached.commit l ;
@@ -98,7 +87,7 @@ let add_command_to_pool t ~(command : User_command.Valid.t) =
           (User_command.fee_payer @@ User_command.forget_check command)
       with
       | None ->
-          `Failed "fee payer account not found"
+          `Failed (Error.of_string "fee payer account not found")
       | Some account -> (
           let nonce = account.nonce in
           let balance = account.balance in
@@ -109,7 +98,9 @@ let add_command_to_pool t ~(command : User_command.Valid.t) =
               (Currency.Balance.to_amount balance)
           with
           | Error err ->
-              `Failed (Yojson.Safe.to_string @@ Command_error.to_yojson err)
+              `Failed
+                ( Error.of_string @@ Yojson.Safe.to_string
+                @@ Command_error.to_yojson err )
           | Ok (_, pool, _) ->
               t.pool <- pool ;
               print_endline "added command to pool" ;
