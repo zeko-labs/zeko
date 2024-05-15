@@ -2,6 +2,7 @@ open Async
 open Async_kernel
 open Core_kernel
 open Mina_base
+open Mina_transaction
 open Signature_lib
 
 let ok_exn x =
@@ -14,11 +15,11 @@ type t =
   ; q : unit Throttle.t
   ; mutable nonce : Account.Nonce.t option
   ; max_attempts : int
-  ; delay : Time.Span.t
+  ; delay : Time_ns.Span.t
   ; kvdb : Kvdb.t
   }
 
-let create ?(max_attempts = 5) ?(delay = Time.Span.of_sec 5.) ?nonce ~l1_uri
+let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce ~l1_uri
     ~signer ~kvdb () =
   { l1_uri
   ; signer
@@ -69,20 +70,32 @@ let process_command t (command : Zkapp_command.t) =
         fee_payer = { command.fee_payer with authorization = signature }
       }
     in
+    let err_to_string = function
+      | `Failed_request err ->
+          "Failed_request: " ^ err
+      | `Graphql_error err ->
+          "Graphql_error: " ^ err
+    in
     match%bind Gql_client.send_zkapp t.l1_uri command with
     | Ok _ ->
+        printf "Sent zkapp command: %s\n%!"
+          Transaction_hash.(
+            to_base58_check @@ hash_command (Zkapp_command command)) ;
         return @@ increment_nonce t
-    | Error (`Failed_request err) when attempt >= t.max_attempts ->
-        failwithf "Failed to send zkapp command: Failed_request %s" err ()
-    | Error (`Graphql_error err) when attempt >= t.max_attempts ->
-        failwithf "Failed to send zkapp command: Graphql_error %s" err ()
+    | Error err when attempt >= t.max_attempts ->
+        failwithf "Failed to send zkapp command: %s" (err_to_string err) ()
     | Error err ->
         if
           String.is_substring
             (match err with `Graphql_error s -> s | _ -> "")
             ~substring:"Account_nonce_precondition_unsatisfied"
         then refresh_nonce t ;
-        retry (attempt + 1) ()
+
+        printf "Failed to send zkapp command: %s, retrying in %s\n%!"
+          (err_to_string err)
+          (Time_ns.Span.to_string t.delay) ;
+
+        after t.delay >>= retry (attempt + 1)
   in
   retry 0 ()
 

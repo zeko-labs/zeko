@@ -1270,7 +1270,7 @@ module Mutations = struct
           | `Enqueued ->
               return (Ok Types.Command_status.Enqueued)
           | `Failed err ->
-              return (Error err)
+              return (Error (Error.to_string_hum err))
         in
         let command = Signed_command.forget_check command in
         let cmd =
@@ -1305,7 +1305,7 @@ module Mutations = struct
           | `Enqueued ->
               return (Ok Types.Command_status.Enqueued)
           | `Failed err ->
-              return (Error err)
+              return (Error (Error.to_string_hum err))
         in
         let cmd =
           { Types.Zkapp_command.With_status.data = zkapp_command; status }

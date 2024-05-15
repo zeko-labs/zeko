@@ -91,10 +91,11 @@ let add_command_to_pool t ~(command : User_command.Valid.t) =
       | Some account -> (
           let nonce = account.nonce in
           let balance = account.balance in
+          let command =
+            Transaction_hash.User_command_with_valid_signature.create command
+          in
           match
-            Indexed_pool.add_from_gossip_exn t.pool
-              (Transaction_hash.User_command_with_valid_signature.create command)
-              nonce
+            Indexed_pool.add_from_gossip_exn t.pool command nonce
               (Currency.Balance.to_amount balance)
           with
           | Error err ->
@@ -103,7 +104,10 @@ let add_command_to_pool t ~(command : User_command.Valid.t) =
                 @@ Command_error.to_yojson err )
           | Ok (_, pool, _) ->
               t.pool <- pool ;
-              print_endline "added command to pool" ;
+              printf "added command to pool: %s\n%!"
+                Transaction_hash.(
+                  to_base58_check
+                  @@ User_command_with_valid_signature.hash command) ;
               `Enqueued ) )
 
 let create_pool () =
@@ -124,7 +128,7 @@ let create_new_block t =
       | Ok () ->
           ()
       | Error err ->
-          printf "Failed to apply command: %s\n%!" err ) ;
+          printf "Failed to apply command: %s\n%!" (Error.to_string_hum err) ) ;
   t.pool <- create_pool ()
 
 let create ~block_period ~db_dir () =
