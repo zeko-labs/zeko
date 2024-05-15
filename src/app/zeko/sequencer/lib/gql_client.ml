@@ -88,8 +88,8 @@ let fetch_pooled_signed_commands uri pk =
     |> List.map ~f:to_string
     |> List.map ~f:(Fn.compose ok_exn Signed_command.of_base64))
 
-(* Inferrs nonce based on pooled commands *)
-let inferr_nonce uri pk =
+(* Infers nonce based on pooled commands *)
+let infer_nonce uri pk =
   let%bind pooled_zkapp_commands = fetch_pooled_zkapp_commands uri pk
   and pooled_signed_commands = fetch_pooled_signed_commands uri pk in
   let max_pooled_nonce =
@@ -139,7 +139,7 @@ let fetch_commited_state uri pk =
     result |> member "account" |> member "zkappState" |> index 0 |> to_string)
   |> Frozen_ledger_hash.of_decimal_string
 
-let inferr_commited_state uri ~zkapp_pk ~signer_pk =
+let infer_commited_state uri ~zkapp_pk ~signer_pk =
   let%bind commited_state = fetch_commited_state uri zkapp_pk
   and pooled_zkapp_commands = fetch_pooled_zkapp_commands uri signer_pk in
   let pooled_zkapp_commands =

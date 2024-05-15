@@ -27,7 +27,7 @@ let run uri sk test_accounts_path () =
 
   let nonce =
     Thread_safe.block_on_async_exn (fun () ->
-        Sequencer_lib.Gql_client.inferr_nonce uri
+        Sequencer_lib.Gql_client.infer_nonce uri
           (Signature_lib.Public_key.compress sender_keypair.public_key) )
   in
   let command =

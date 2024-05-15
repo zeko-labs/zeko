@@ -443,7 +443,7 @@ module Sequencer = struct
     Mina_state.Protocol_state.consensus_state t.protocol_state
     |> Consensus.Data.Consensus_state.global_slot_since_genesis
 
-  let inferr_nonce t public_key =
+  let infer_nonce t public_key =
     match get_account t public_key Token_id.default with
     | Some account ->
         account.nonce
@@ -736,7 +736,7 @@ module Sequencer = struct
       Executor.recommit_all snark_q.executor ~zkapp_pk:config.zkapp_pk
     in
     let%bind commited_ledger_hash =
-      Gql_client.inferr_commited_state config.l1_uri ~zkapp_pk:config.zkapp_pk
+      Gql_client.infer_commited_state config.l1_uri ~zkapp_pk:config.zkapp_pk
         ~signer_pk:(Signature_lib.Public_key.compress config.signer.public_key)
     in
     printf "Fetched root: %s\n%!"
@@ -901,7 +901,7 @@ let%test_unit "apply commands and commit" =
                    Compressed.to_base58_check
                    @@ compress zkapp_keypair.public_key) ) ;
               let%bind nonce =
-                Gql_client.inferr_nonce gql_uri
+                Gql_client.infer_nonce gql_uri
                   (Signature_lib.Public_key.compress signer.public_key)
               in
               let command =
@@ -1020,7 +1020,7 @@ let%test_unit "apply commands and commit" =
                 Executor.wait_to_finish sequencer.snark_q.executor
               in
               let%bind commited_ledger_hash =
-                Gql_client.inferr_commited_state gql_uri
+                Gql_client.infer_commited_state gql_uri
                   ~signer_pk:
                     (Signature_lib.Public_key.compress signer.public_key)
                   ~zkapp_pk:

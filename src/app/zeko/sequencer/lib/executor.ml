@@ -40,7 +40,7 @@ let process_command t (command : Zkapp_command.t) =
       | Some nonce ->
           return nonce
       | None ->
-          Gql_client.inferr_nonce t.l1_uri
+          Gql_client.infer_nonce t.l1_uri
             (Public_key.compress t.signer.public_key)
     in
     let command =
@@ -148,7 +148,7 @@ let send_commit t command ~source ~target =
 
 let recommit_all t ~zkapp_pk =
   let%bind current_state =
-    Gql_client.inferr_commited_state t.l1_uri ~zkapp_pk
+    Gql_client.infer_commited_state t.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress t.signer.public_key)
   in
   let commits = Commits_store.get_index t.kvdb in
