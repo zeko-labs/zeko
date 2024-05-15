@@ -139,11 +139,34 @@ module Commits_store = struct
   let get_all kvdb =
     let index = get_index kvdb in
     let commits = List.map index ~f:(load_commit_exn kvdb) in
-    return commits
+    commits
 end
 
 let send_commit t command ~source ~target =
   Commits_store.store_commit t.kvdb command ~source ~target ;
   send_zkapp_command t command
+
+let recommit_all t ~zkapp_pk =
+  let%bind current_state =
+    Gql_client.inferr_commited_state t.l1_uri ~zkapp_pk
+      ~signer_pk:(Public_key.compress t.signer.public_key)
+  in
+  let commits = Commits_store.get_index t.kvdb in
+  let rec recommit_next current_state =
+    match
+      List.find commits ~f:(fun (source, _) ->
+          Frozen_ledger_hash.equal source current_state )
+    with
+    | None ->
+        return ()
+    | Some (source, target) ->
+        printf "Recommitting %s -> %s\n%!"
+          (Frozen_ledger_hash.to_base58_check source)
+          (Frozen_ledger_hash.to_base58_check target) ;
+        let command = Commits_store.load_commit_exn t.kvdb (source, target) in
+        let%bind () = send_zkapp_command t command in
+        recommit_next target
+  in
+  recommit_next current_state
 
 let wait_to_finish t = Throttle.capacity_available t.q

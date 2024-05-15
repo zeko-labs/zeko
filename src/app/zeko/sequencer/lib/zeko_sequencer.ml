@@ -40,6 +40,7 @@ module Sequencer = struct
       ; commitment_period_sec : float
       ; db_dir : string option
       ; zkapp_pk : Signature_lib.Public_key.Compressed.t
+      ; signer : Signature_lib.Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       }
   end
@@ -730,9 +731,13 @@ module Sequencer = struct
     t.subscriptions.transactions <- w :: t.subscriptions.transactions ;
     r
 
-  let bootstrap ({ config; da_config; genesis_accounts; _ } as t) =
+  let bootstrap ({ config; da_config; genesis_accounts; snark_q; _ } as t) =
+    let%bind () =
+      Executor.recommit_all snark_q.executor ~zkapp_pk:config.zkapp_pk
+    in
     let%bind commited_ledger_hash =
-      Gql_client.fetch_commited_state config.l1_uri config.zkapp_pk
+      Gql_client.inferr_commited_state config.l1_uri ~zkapp_pk:config.zkapp_pk
+        ~signer_pk:(Signature_lib.Public_key.compress config.signer.public_key)
     in
     printf "Fetched root: %s\n%!"
       Frozen_ledger_hash.(to_decimal_string commited_ledger_hash) ;
@@ -796,7 +801,14 @@ module Sequencer = struct
           []
     in
     let config =
-      Config.{ max_pool_size; commitment_period_sec; db_dir; l1_uri; zkapp_pk }
+      Config.
+        { max_pool_size
+        ; commitment_period_sec
+        ; db_dir
+        ; l1_uri
+        ; zkapp_pk
+        ; signer
+        }
     in
     let t =
       { db
