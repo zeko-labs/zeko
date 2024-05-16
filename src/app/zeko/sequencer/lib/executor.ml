@@ -2,6 +2,7 @@ open Async
 open Async_kernel
 open Core_kernel
 open Mina_base
+open Mina_transaction
 open Signature_lib
 
 let ok_exn x =
@@ -12,13 +13,13 @@ type t =
   { l1_uri : Uri.t Cli_lib.Flag.Types.with_name
   ; signer : Keypair.t
   ; q : unit Throttle.t
-  ; mutable nonce : int option
+  ; mutable nonce : Account.Nonce.t option
   ; max_attempts : int
-  ; delay : Time.Span.t
+  ; delay : Time_ns.Span.t
   ; kvdb : Kvdb.t
   }
 
-let create ?(max_attempts = 5) ?(delay = Time.Span.of_sec 5.) ?nonce ~l1_uri
+let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce ~l1_uri
     ~signer ~kvdb () =
   { l1_uri
   ; signer
@@ -31,7 +32,7 @@ let create ?(max_attempts = 5) ?(delay = Time.Span.of_sec 5.) ?nonce ~l1_uri
 
 let refresh_nonce t = t.nonce <- None
 
-let increment_nonce t = t.nonce <- Option.map t.nonce ~f:(fun x -> x + 1)
+let increment_nonce t = t.nonce <- Option.map t.nonce ~f:Account.Nonce.(add one)
 
 let process_command t (command : Zkapp_command.t) =
   let rec retry attempt () =
@@ -40,17 +41,14 @@ let process_command t (command : Zkapp_command.t) =
       | Some nonce ->
           return nonce
       | None ->
-          Gql_client.fetch_nonce t.l1_uri
+          Gql_client.infer_nonce t.l1_uri
             (Public_key.compress t.signer.public_key)
     in
     let command =
       { command with
         fee_payer =
           { command.fee_payer with
-            body =
-              { command.fee_payer.body with
-                nonce = Unsigned.UInt32.of_int nonce
-              }
+            body = { command.fee_payer.body with nonce }
           }
       }
     in
@@ -72,20 +70,32 @@ let process_command t (command : Zkapp_command.t) =
         fee_payer = { command.fee_payer with authorization = signature }
       }
     in
+    let err_to_string = function
+      | `Failed_request err ->
+          "Failed_request: " ^ err
+      | `Graphql_error err ->
+          "Graphql_error: " ^ err
+    in
     match%bind Gql_client.send_zkapp t.l1_uri command with
     | Ok _ ->
+        printf "Sent zkapp command: %s\n%!"
+          Transaction_hash.(
+            to_base58_check @@ hash_command (Zkapp_command command)) ;
         return @@ increment_nonce t
-    | Error (`Failed_request err) when attempt >= t.max_attempts ->
-        failwithf "Failed to send zkapp command: Failed_request %s" err ()
-    | Error (`Graphql_error err) when attempt >= t.max_attempts ->
-        failwithf "Failed to send zkapp command: Graphql_error %s" err ()
+    | Error err when attempt >= t.max_attempts ->
+        failwithf "Failed to send zkapp command: %s" (err_to_string err) ()
     | Error err ->
         if
           String.is_substring
             (match err with `Graphql_error s -> s | _ -> "")
             ~substring:"Account_nonce_precondition_unsatisfied"
         then refresh_nonce t ;
-        retry (attempt + 1) ()
+
+        printf "Failed to send zkapp command: %s, retrying in %s\n%!"
+          (err_to_string err)
+          (Time_ns.Span.to_string t.delay) ;
+
+        after t.delay >>= retry (attempt + 1)
   in
   retry 0 ()
 
@@ -142,11 +152,34 @@ module Commits_store = struct
   let get_all kvdb =
     let index = get_index kvdb in
     let commits = List.map index ~f:(load_commit_exn kvdb) in
-    return commits
+    commits
 end
 
 let send_commit t command ~source ~target =
   Commits_store.store_commit t.kvdb command ~source ~target ;
   send_zkapp_command t command
+
+let recommit_all t ~zkapp_pk =
+  let%bind current_state =
+    Gql_client.infer_committed_state t.l1_uri ~zkapp_pk
+      ~signer_pk:(Public_key.compress t.signer.public_key)
+  in
+  let commits = Commits_store.get_index t.kvdb in
+  let rec recommit_next current_state =
+    match
+      List.find commits ~f:(fun (source, _) ->
+          Frozen_ledger_hash.equal source current_state )
+    with
+    | None ->
+        return ()
+    | Some (source, target) ->
+        printf "Recommitting %s -> %s\n%!"
+          (Frozen_ledger_hash.to_base58_check source)
+          (Frozen_ledger_hash.to_base58_check target) ;
+        let command = Commits_store.load_commit_exn t.kvdb (source, target) in
+        let%bind () = send_zkapp_command t command in
+        recommit_next target
+  in
+  recommit_next current_state
 
 let wait_to_finish t = Throttle.capacity_available t.q

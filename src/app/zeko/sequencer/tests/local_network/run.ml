@@ -7,15 +7,13 @@ module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 
-let run port db_dir genesis_account () =
+let run ~port ~db_dir ~genesis_account ~block_period () =
   let t =
-    Gql.
-      { db =
-          Ledger.Db.create ~directory_name:db_dir
-            ~depth:Gql.constraint_constants.ledger_depth ()
-      ; slot = Mina_numbers.Global_slot_since_genesis.zero
-      ; commands = Hashtbl.create (module String)
-      }
+    State.create ~db_dir
+      ~block_period:
+        (Option.map block_period
+           ~f:(Fn.compose Time_ns.Span.of_sec Int.to_float) )
+      ()
   in
 
   ( if Option.is_some genesis_account then
@@ -69,6 +67,9 @@ let () =
        flag "--db-dir"
          (optional_with_default "l1_db" string)
          ~doc:"string Directory to store the database"
+     and block_period =
+       flag "--block-period" (optional int)
+         ~doc:"int Optional block period in seconds"
      in
-     run port db_dir genesis_account )
+     run ~port ~db_dir ~genesis_account ~block_period )
   |> Command_unix.run

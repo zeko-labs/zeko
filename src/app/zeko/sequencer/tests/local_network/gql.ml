@@ -8,30 +8,6 @@ open Signature_lib
 open Currency
 module Schema = Graphql_wrapper.Make (Schema)
 
-type t =
-  { db : Ledger.Db.t
-  ; slot : Mina_numbers.Global_slot_since_genesis.t
-  ; commands : (string, User_command.t * Transaction_status.t) Hashtbl.t
-  }
-
-let constraint_constants = Genesis_constants.Constraint_constants.compiled
-
-let genesis_constants = Genesis_constants.compiled
-
-let consensus_constants =
-  Consensus.Constants.create ~constraint_constants
-    ~protocol_constants:genesis_constants.protocol
-
-let state_body =
-  let compile_time_genesis =
-    Mina_state.Genesis_protocol_state.t
-      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-      ~constraint_constants ~consensus_constants
-      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-  in
-  Mina_state.Protocol_state.body compile_time_genesis.data
-
 module Types = struct
   open Schema
 
@@ -98,7 +74,7 @@ module Types = struct
               match x with `Left _ -> None | `Right h -> Some h )
         ] )
 
-  let account_timing : (t, Account_timing.t option) typ =
+  let account_timing : (State.t, Account_timing.t option) typ =
     obj "AccountTiming" ~fields:(fun _ ->
         [ field "initialMinimumBalance" ~typ:balance
             ~doc:"The initial minimum balance for a time-locked account"
@@ -797,7 +773,7 @@ module Types = struct
           resolve c uc.With_status.data )
 
     let user_command_shared_fields :
-        ( t
+        ( State.t
         , (Signed_command.t, Transaction_hash.t) With_hash.t With_status.t )
         field
         list =
@@ -935,8 +911,9 @@ module Types = struct
           resolve c cmd.With_status.data )
 
     let zkapp_command =
-      let conv (x : (t, Zkapp_command.t) Fields_derivers_graphql.Schema.typ) :
-          (t, Zkapp_command.t) typ =
+      let conv
+          (x : (State.t, Zkapp_command.t) Fields_derivers_graphql.Schema.typ) :
+          (State.t, Zkapp_command.t) typ =
         Obj.magic x
       in
       obj "ZkappCommandResult" ~fields:(fun _ ->
@@ -1280,50 +1257,32 @@ module Mutations = struct
                   payload
               with
               | Some command ->
-                  return (Ok (Signed_command.forget_check command))
+                  return (Ok command)
               | None ->
                   return (Error "Signature verification failed") )
         in
-        let l = Ledger.of_database t.db in
-        match
-          Result.( >>= )
-            (Ledger.apply_transaction_first_pass ~constraint_constants
-               ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-               ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-               l (Command (Signed_command command)) )
-            (Ledger.apply_transaction_second_pass l)
-        with
-        | Error err ->
-            return (Error (Error.to_string_mach err))
-        | Ok txn_applied ->
-            Ledger.Mask.Attached.commit l ;
-
-            let txn_hash =
-              Transaction_hash.to_base58_check
-              @@ Transaction_hash.hash_command (Signed_command command)
-            in
-            Hashtbl.add_exn t.commands ~key:txn_hash
-              ~data:
-                ( Signed_command command
-                , Ledger.Transaction_applied.transaction_status txn_applied ) ;
-
-            print_endline @@ "applied payment: " ^ txn_hash ^ " "
-            ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
-            @@ Ledger.Transaction_applied.transaction_status txn_applied ;
-
-            let cmd =
-              { Types.User_command.With_status.data = command
-              ; status = Applied
-              }
-            in
-            let cmd_with_hash =
-              Types.User_command.With_status.map cmd ~f:(fun cmd ->
-                  { With_hash.data = cmd
-                  ; hash = Transaction_hash.hash_command (Signed_command cmd)
-                  } )
-            in
-            Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash)
-        )
+        let%bind.Deferred.Result status =
+          match
+            State.add_command_to_pool t ~command:(Signed_command command)
+          with
+          | `Applied ->
+              return (Ok Types.Command_status.Applied)
+          | `Enqueued ->
+              return (Ok Types.Command_status.Enqueued)
+          | `Failed err ->
+              return (Error (Error.to_string_hum err))
+        in
+        let command = Signed_command.forget_check command in
+        let cmd =
+          { Types.User_command.With_status.data = command; status = Applied }
+        in
+        let cmd_with_hash =
+          Types.User_command.With_status.map cmd ~f:(fun cmd ->
+              { With_hash.data = cmd
+              ; hash = Transaction_hash.hash_command (Signed_command cmd)
+              } )
+        in
+        Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash) )
 
   let send_zkapp =
     io_field "sendZkapp" ~doc:"Send a zkApp transaction"
@@ -1331,47 +1290,25 @@ module Mutations = struct
       ~args:
         Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
       ~resolve:(fun { ctx = t; _ } () zkapp_command ->
-        let l = Ledger.of_database t.db in
-        let%bind.Deferred.Result partialy_applied_txn =
+        let command =
+          match Zkapp_command.Valid.to_valid_unsafe zkapp_command with
+          (* FIXME: check zkapp command if needed *)
+          | `If_this_is_used_it_should_have_a_comment_justifying_it command ->
+              command
+        in
+        let%bind.Deferred.Result status =
           match
-            Ledger.apply_transaction_first_pass ~constraint_constants
-              ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-              ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-              l (Command (Zkapp_command zkapp_command))
+            State.add_command_to_pool t ~command:(Zkapp_command command)
           with
-          | Error err ->
-              return (Error (Error.to_string_mach err))
-          | Ok partialy_applied_txn ->
-              return (Ok partialy_applied_txn)
+          | `Applied ->
+              return (Ok Types.Command_status.Applied)
+          | `Enqueued ->
+              return (Ok Types.Command_status.Enqueued)
+          | `Failed err ->
+              return (Error (Error.to_string_hum err))
         in
-
-        let%bind.Deferred.Result txn_applied =
-          match Ledger.apply_transaction_second_pass l partialy_applied_txn with
-          | Error err ->
-              return (Error (Error.to_string_mach err))
-          | Ok txn_applied ->
-              return (Ok txn_applied)
-        in
-
-        Ledger.Mask.Attached.commit l ;
-
-        let txn_hash =
-          Transaction_hash.to_base58_check
-          @@ Transaction_hash.hash_command (Zkapp_command zkapp_command)
-        in
-        Hashtbl.add_exn t.commands ~key:txn_hash
-          ~data:
-            ( Zkapp_command zkapp_command
-            , Ledger.Transaction_applied.transaction_status txn_applied ) ;
-
-        print_endline @@ "applied zkapp command: " ^ txn_hash ^ " "
-        ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
-        @@ Ledger.Transaction_applied.transaction_status txn_applied ;
-
         let cmd =
-          { Types.Zkapp_command.With_status.data = zkapp_command
-          ; status = Applied
-          }
+          { Types.Zkapp_command.With_status.data = zkapp_command; status }
         in
         let cmd_with_hash =
           Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
@@ -1392,7 +1329,9 @@ module Mutations = struct
             (Currency.Balance.of_uint64
                (Unsigned.UInt64.of_int64 1_000_000_000_000L) )
         in
-        match Ledger.Db.get_or_create_account t.db account_id account with
+        match
+          Ledger.Db.get_or_create_account (State.db t) account_id account
+        with
         | Ok (`Added, _) ->
             return (Ok "Added")
         | Ok (`Existed, _) ->
@@ -1400,7 +1339,12 @@ module Mutations = struct
         | Error err ->
             return (Error (Error.to_string_mach err)) )
 
-  let commands = [ send_payment; send_zkapp; create_account ]
+  let create_new_block =
+    field "createNewBlock" ~doc:"Create a new block" ~typ:(non_null string)
+      ~args:Arg.[]
+      ~resolve:(fun { ctx = t; _ } () -> State.create_new_block t ; "Created")
+
+  let commands = [ send_payment; send_zkapp; create_account; create_new_block ]
 end
 
 module Queries = struct
@@ -1505,8 +1449,115 @@ module Queries = struct
         in
         Some cmd_with_hash )
 
+  let pooled_user_commands =
+    field "pooledUserCommands"
+      ~doc:
+        "Retrieve all the scheduled user commands for a specified signer that \
+         the current daemon sees in its transaction pool. All scheduled \
+         commands are queried if no sender is specified"
+      ~typ:(non_null @@ list @@ non_null Types.User_command.user_command)
+      ~args:
+        Arg.
+          [ arg "publicKey" ~doc:"Public key of sender of pooled user commands"
+              ~typ:Types.Input.PublicKey.arg_typ
+          ; arg "hashes" ~doc:"Hashes of the commands to find in the pool"
+              ~typ:(list (non_null string))
+          ; arg "ids" ~typ:(list (non_null guid)) ~doc:"Ids of User commands"
+          ]
+      ~resolve:(fun { ctx = t; _ } () pk_opt _ _ ->
+        (* FIXME: currently it queries only based on public key *)
+        let commands = State.pooled_commands t in
+        Sequence.to_list commands
+        |> List.filter_map ~f:(fun command_with_hash ->
+               match
+                 Transaction_hash.User_command_with_valid_signature.command
+                   command_with_hash
+               with
+               | Signed_command cmd -> (
+                   let sender = Signed_command.fee_payer_pk cmd in
+                   match
+                     Option.map pk_opt ~f:(fun pk ->
+                         Account.Key.equal sender pk )
+                   with
+                   | Some true | None ->
+                       let cmd =
+                         { Types.User_command.With_status.data = cmd
+                         ; status = Enqueued
+                         }
+                       in
+                       let cmd_with_hash =
+                         Types.User_command.With_status.map cmd ~f:(fun cmd ->
+                             { With_hash.data = cmd
+                             ; hash =
+                                 Transaction_hash.hash_command
+                                   (Signed_command cmd)
+                             } )
+                       in
+                       Some (Types.User_command.mk_payment cmd_with_hash)
+                   | _ ->
+                       None )
+               | _ ->
+                   None ) )
+
+  let pooled_zkapp_commands =
+    field "pooledZkappCommands"
+      ~doc:
+        "Retrieve all the scheduled zkApp commands for a specified fee payer \
+         that the current daemon sees in its transaction pool. All scheduled \
+         commands are queried if no sender is specified"
+      ~typ:(non_null @@ list @@ non_null Types.Zkapp_command.zkapp_command)
+      ~args:
+        Arg.
+          [ arg "publicKey" ~doc:"Public key of sender of pooled zkApp commands"
+              ~typ:Types.Input.PublicKey.arg_typ
+          ; arg "hashes" ~doc:"Hashes of the zkApp commands to find in the pool"
+              ~typ:(list (non_null string))
+          ; arg "ids" ~typ:(list (non_null guid)) ~doc:"Ids of zkApp commands"
+          ]
+      ~resolve:(fun { ctx = t; _ } () pk_opt _ _ ->
+        (* FIXME: currently it queries only based on public key *)
+        let commands = State.pooled_commands t in
+        Sequence.to_list commands
+        |> List.filter_map ~f:(fun command_with_hash ->
+               match
+                 Transaction_hash.User_command_with_valid_signature.command
+                   command_with_hash
+               with
+               | Zkapp_command cmd -> (
+                   let sender = Zkapp_command.fee_payer_pk cmd in
+                   match
+                     Option.map pk_opt ~f:(fun pk ->
+                         Account.Key.equal sender pk )
+                   with
+                   | Some true | None ->
+                       let cmd =
+                         { Types.Zkapp_command.With_status.data = cmd
+                         ; status = Enqueued
+                         }
+                       in
+                       let cmd_with_hash =
+                         Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
+                             { With_hash.data = cmd
+                             ; hash =
+                                 Transaction_hash.hash_command
+                                   (Zkapp_command cmd)
+                             } )
+                       in
+                       Some cmd_with_hash
+                   | _ ->
+                       None )
+               | _ ->
+                   None ) )
+
   let commands =
-    [ sync_status; daemon_status; account; user_command; zkapp_command ]
+    [ sync_status
+    ; daemon_status
+    ; account
+    ; user_command
+    ; zkapp_command
+    ; pooled_user_commands
+    ; pooled_zkapp_commands
+    ]
 end
 
 let schema =

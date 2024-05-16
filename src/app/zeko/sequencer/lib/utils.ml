@@ -42,3 +42,28 @@ let skip_transfers_before (transfers : Zkapps_rollup.TR.t list)
       []
   | `Accumulating transfers_after_pointer ->
       transfers_after_pointer
+
+(* Finds the account_id's account update and returns the 0th state update *)
+let get_state_transition pk command =
+  let account_id = Account_id.create pk Token_id.default in
+  let%bind.Option account_update =
+    Zkapp_command.account_updates command
+    |> Zkapp_command.Call_forest.to_list
+    |> List.find ~f:(fun account_update ->
+           Account_update.account_id account_update
+           |> Account_id.equal account_id )
+  in
+  let body = Account_update.body account_update in
+  let zeroth l = List.nth_exn l 0 in
+  let source =
+    body |> Account_update.Body.preconditions
+    |> Account_update.Preconditions.account |> Zkapp_precondition.Account.state
+    |> Zkapp_state.V.to_list |> zeroth |> Zkapp_basic.Or_ignore.to_option
+    |> Option.value ~default:Field.zero
+  in
+  let target =
+    body |> Account_update.Body.update |> Account_update.Update.app_state
+    |> Zkapp_state.V.to_list |> zeroth |> Zkapp_basic.Set_or_keep.to_option
+    |> Option.value ~default:Field.zero
+  in
+  Some (source, target)

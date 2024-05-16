@@ -1532,7 +1532,7 @@ module Mutations = struct
             ~fee_payer_pk:from
             ~nonce:
               (Option.value
-                 ~default:(Zeko_sequencer.inferr_nonce sequencer from)
+                 ~default:(Zeko_sequencer.infer_nonce sequencer from)
                  nonce_opt )
             ~valid_until:
               (Option.map valid_until
