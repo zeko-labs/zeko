@@ -110,10 +110,10 @@ let infer_nonce uri pk =
     in
     Unsigned.UInt32.(max max_zkapp_commands_nonce max_signed_commands_nonce)
   in
-  let%map commited_nonce = fetch_nonce uri pk in
-  Unsigned.UInt32.max max_pooled_nonce commited_nonce
+  let%map committed_nonce = fetch_nonce uri pk in
+  Unsigned.UInt32.max max_pooled_nonce committed_nonce
 
-let fetch_commited_state uri pk =
+let fetch_committed_state uri pk =
   let q =
     object
       method query =
@@ -139,8 +139,8 @@ let fetch_commited_state uri pk =
     result |> member "account" |> member "zkappState" |> index 0 |> to_string)
   |> Frozen_ledger_hash.of_decimal_string
 
-let infer_commited_state uri ~zkapp_pk ~signer_pk =
-  let%bind commited_state = fetch_commited_state uri zkapp_pk
+let infer_committed_state uri ~zkapp_pk ~signer_pk =
+  let%bind committed_state = fetch_committed_state uri zkapp_pk
   and pooled_zkapp_commands = fetch_pooled_zkapp_commands uri signer_pk in
   let pooled_zkapp_commands =
     List.sort pooled_zkapp_commands ~compare:(fun a b ->
@@ -152,7 +152,7 @@ let infer_commited_state uri ~zkapp_pk ~signer_pk =
     |> List.filter_opt
   in
   let future_state =
-    List.fold_until pooled_state_transitions ~init:commited_state
+    List.fold_until pooled_state_transitions ~init:committed_state
       ~f:(fun acc (source, target) ->
         if Frozen_ledger_hash.equal acc source then Continue target
         else Stop acc )

@@ -735,12 +735,12 @@ module Sequencer = struct
     let%bind () =
       Executor.recommit_all snark_q.executor ~zkapp_pk:config.zkapp_pk
     in
-    let%bind commited_ledger_hash =
-      Gql_client.infer_commited_state config.l1_uri ~zkapp_pk:config.zkapp_pk
+    let%bind committed_ledger_hash =
+      Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
         ~signer_pk:(Signature_lib.Public_key.compress config.signer.public_key)
     in
     printf "Fetched root: %s\n%!"
-      Frozen_ledger_hash.(to_decimal_string commited_ledger_hash) ;
+      Frozen_ledger_hash.(to_decimal_string committed_ledger_hash) ;
 
     (* add initial accounts *)
     List.iter genesis_accounts ~f:(fun (account_id, account) ->
@@ -752,7 +752,7 @@ module Sequencer = struct
     (* apply commands from DA layer *)
     let%bind commands =
       Da_layer.get_batches da_config
-        ~to_:(Frozen_ledger_hash.to_decimal_string commited_ledger_hash)
+        ~to_:(Frozen_ledger_hash.to_decimal_string committed_ledger_hash)
     in
     printf "Applying %d commands\n%!" (List.length commands) ;
     List.iter commands ~f:(fun command ->
@@ -770,7 +770,7 @@ module Sequencer = struct
     printf "Current root: %s\n%!"
       Frozen_ledger_hash.(to_decimal_string current_root) ;
 
-    if not @@ Frozen_ledger_hash.equal current_root commited_ledger_hash then
+    if not @@ Frozen_ledger_hash.equal current_root committed_ledger_hash then
       print_endline "Ledger mismatch" ;
 
     let sparse_ledger =
@@ -1019,15 +1019,15 @@ let%test_unit "apply commands and commit" =
               let%bind () =
                 Executor.wait_to_finish sequencer.snark_q.executor
               in
-              let%bind commited_ledger_hash =
-                Gql_client.infer_commited_state gql_uri
+              let%bind committed_ledger_hash =
+                Gql_client.infer_committed_state gql_uri
                   ~signer_pk:
                     (Signature_lib.Public_key.compress signer.public_key)
                   ~zkapp_pk:
                     (Signature_lib.Public_key.compress zkapp_keypair.public_key)
               in
               let target_ledger_hash = get_root sequencer in
-              [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash
+              [%test_eq: Frozen_ledger_hash.t] committed_ledger_hash
                 target_ledger_hash ;
 
               Deferred.unit ) ;
@@ -1121,12 +1121,12 @@ let%test_unit "apply commands and commit" =
               let%bind _created =
                 Gql_client.For_tests.create_new_block gql_uri
               in
-              let%bind commited_ledger_hash =
-                Gql_client.fetch_commited_state gql_uri
+              let%bind committed_ledger_hash =
+                Gql_client.fetch_committed_state gql_uri
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
               in
               let target_ledger_hash = get_root sequencer in
-              [%test_eq: Frozen_ledger_hash.t] commited_ledger_hash
+              [%test_eq: Frozen_ledger_hash.t] committed_ledger_hash
                 target_ledger_hash ;
 
               Deferred.unit ) ) )

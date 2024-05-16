@@ -1452,7 +1452,7 @@ module Queries = struct
   let pooled_user_commands =
     field "pooledUserCommands"
       ~doc:
-        "Retrieve all the scheduled user commands for a specified sender that \
+        "Retrieve all the scheduled user commands for a specified signer that \
          the current daemon sees in its transaction pool. All scheduled \
          commands are queried if no sender is specified"
       ~typ:(non_null @@ list @@ non_null Types.User_command.user_command)
@@ -1502,8 +1502,8 @@ module Queries = struct
   let pooled_zkapp_commands =
     field "pooledZkappCommands"
       ~doc:
-        "Retrieve all the scheduled zkApp commands for a specified sender that \
-         the current daemon sees in its transaction pool. All scheduled \
+        "Retrieve all the scheduled zkApp commands for a specified fee payer \
+         that the current daemon sees in its transaction pool. All scheduled \
          commands are queried if no sender is specified"
       ~typ:(non_null @@ list @@ non_null Types.Zkapp_command.zkapp_command)
       ~args:

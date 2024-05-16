@@ -161,7 +161,7 @@ let send_commit t command ~source ~target =
 
 let recommit_all t ~zkapp_pk =
   let%bind current_state =
-    Gql_client.infer_commited_state t.l1_uri ~zkapp_pk
+    Gql_client.infer_committed_state t.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress t.signer.public_key)
   in
   let commits = Commits_store.get_index t.kvdb in
