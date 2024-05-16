@@ -732,9 +732,6 @@ module Sequencer = struct
     r
 
   let bootstrap ({ config; da_config; genesis_accounts; snark_q; _ } as t) =
-    let%bind () =
-      Executor.recommit_all snark_q.executor ~zkapp_pk:config.zkapp_pk
-    in
     let%bind committed_ledger_hash =
       Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
         ~signer_pk:(Signature_lib.Public_key.compress config.signer.public_key)
@@ -846,7 +843,9 @@ module Sequencer = struct
 
         return () )
     in
-
+    let%bind () =
+      Executor.recommit_all t.snark_q.executor ~zkapp_pk:config.zkapp_pk
+    in
     return t
 end
 
