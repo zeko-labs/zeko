@@ -402,12 +402,64 @@ module Outer = struct
 
   module Path = SnarkList (Path')
 
+  (* Pickles allows to verify max 2 proofs recursively, so we wrap the extensions into separate proof *)
+  module Extensions_wrapper = struct
+    module Stmt = struct
+      type t =
+        { all_deposits : Action_state_extension.Stmt.t
+        ; delay_extension : Action_state_extension.Stmt.t
+        }
+      [@@deriving snarky]
+    end
+
+    module Witness = struct
+      type t =
+        { all_deposits : Action_state_extension.t  (** Action state on the L1 *)
+        ; delay_extension : Action_state_extension.t  (** To delay deposits *)
+        }
+      [@@deriving snarky]
+    end
+
+    type t = { stmt : Stmt.t; proof : RefProof.t } [@@deriving snarky]
+
+    include MkHandler (Witness)
+
+    let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
+      let ({ all_deposits; delay_extension } : Witness.var) =
+        exists_witness ()
+      in
+      Pickles.Inductive_rule.
+        { previous_proof_statements =
+            [ Action_state_extension.verify all_deposits
+            ; Action_state_extension.verify delay_extension
+            ]
+        ; public_output =
+            Stmt.
+              { all_deposits = Action_state_extension.statement_var all_deposits
+              ; delay_extension =
+                  Action_state_extension.statement_var delay_extension
+              }
+        ; auxiliary_output = ()
+        }
+
+    let rule action_extension_tag : _ Pickles.Inductive_rule.t =
+      { identifier = "wrapper for Outer.step extensions"
+      ; prevs = [ action_extension_tag; action_extension_tag ]
+      ; main
+      ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
+      }
+
+    let verify ({ stmt; proof } : var) :
+        (Stmt.var, Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t =
+      { public_input = stmt; proof_must_verify = Boolean.(true_); proof }
+  end
+
   module Witness = struct
     type t =
       { t : Wrapper.t  (** The ledger transition we are performing. *)
       ; public_key : PC.t  (** Our public key on the L2 *)
       ; vk_hash : F.t  (** Our vk hash *)
-      ; all_deposits : Action_state_extension.t  (** Action state on the L1 *)
+      ; actions_extensions : Extensions_wrapper.t
       ; old_inner_acc : Account.t
       ; new_inner_acc : Account.t  (** Withdrawals to be processed this time *)
       ; old_inner_acc_path : Path.t  (** Old path to inner account *)
@@ -449,7 +501,7 @@ module Outer = struct
     let ({ t
          ; public_key
          ; vk_hash
-         ; all_deposits
+         ; actions_extensions
          ; old_inner_acc_path
          ; old_inner_acc
          ; new_inner_acc_path
@@ -457,6 +509,9 @@ module Outer = struct
          }
           : Witness.var ) =
       exists_witness ()
+    in
+    let ({ all_deposits; delay_extension } : Extensions_wrapper.Stmt.var) =
+      actions_extensions.stmt
     in
     let implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let implied_root_new = implied_root new_inner_acc new_inner_acc_path in
@@ -508,13 +563,13 @@ module Outer = struct
     in
     (* Check that it matches all_deposits witness *)
     with_label __LOC__ (fun () ->
-        Field.Assert.equal
-          (Action_state_extension.statement_var all_deposits).source
-          old_all_deposits ) ;
+        Field.Assert.equal all_deposits.source old_all_deposits ) ;
     with_label __LOC__ (fun () ->
-        Field.Assert.equal
-          (Action_state_extension.statement_var all_deposits).target
-          new_all_deposits ) ;
+        Field.Assert.equal all_deposits.target new_all_deposits ) ;
+    (* We want to transfer only deposits finalised with some certainty.
+       By submitting `delay_extension` we can prove that we are transfering older deposits. *)
+    with_label __LOC__ (fun () ->
+        Field.Assert.equal delay_extension.source new_all_deposits ) ;
     (* Init account update *)
     let account_update = Body.(constant (typ ()) dummy) in
     (* Withdrawals are registered in the inner account's action state *)
@@ -542,7 +597,7 @@ module Outer = struct
                   ; all_withdrawals = None
                   })
           ; action_state =
-              Or_ignore.Checked.make_unsafe Boolean.true_ new_all_deposits
+              Or_ignore.Checked.make_unsafe Boolean.true_ delay_extension.target
               (* Our action state must match *)
           }
       }
@@ -564,16 +619,17 @@ module Outer = struct
       { previous_proof_statements =
           [ Wrapper.verify t
             (* Proof for Wrapper showing there is a valid transition from source to target *)
-          ; Action_state_extension.verify all_deposits
-            (* Proof that deposits as recorded on L1 went forward, otherwise it could go backwards *)
+          ; Extensions_wrapper.verify actions_extensions
+            (* Proof that deposits as recorded on L1 went forward, otherwise it could go backwards,
+               and proof that the action_state precondition is an extension of our new all_deposits *)
           ]
       ; public_output
       ; auxiliary_output
       }
 
-  let rule tag action_state_extension_tag : _ Pickles.Inductive_rule.t =
+  let rule tag extensions_wrapper_tag : _ Pickles.Inductive_rule.t =
     { identifier = "Rollup step"
-    ; prevs = [ tag; action_state_extension_tag ]
+    ; prevs = [ tag; extensions_wrapper_tag ]
     ; main
     ; feature_flags
     }
@@ -776,6 +832,32 @@ module Make (T' : Transaction_snark.S) = struct
   module Outer = struct
     include Outer
 
+    module Extensions_wrapper = struct
+      include Extensions_wrapper
+
+      let tag, _, _, Pickles.Provers.[ prove_ ] =
+        time "Extensions_wrapper.compile" (fun () ->
+            Pickles.compile ()
+              ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+              ~cache:Cache_dir.cache ~public_input:(Output Stmt.typ)
+              ~auxiliary_typ:Typ.unit
+              ~branches:(module Nat.N1)
+              ~max_proofs_verified:(module Nat.N2)
+              ~name:"wrapper for Outer.step extensions"
+              ~constraint_constants:
+                (Genesis_constants.Constraint_constants.to_snark_keys_header
+                   constraint_constants )
+              ~choices:(fun ~self:_ ->
+                [ rule (force Action_state_extension.tag) ] ) )
+
+      let prove all_deposits delay_extension =
+        time_async "Extensions_wrapper.prove" (fun () ->
+            let%map stmt, _, proof =
+              prove_ ~handler:(handler { all_deposits; delay_extension }) ()
+            in
+            ({ stmt; proof } : t) )
+    end
+
     let to_precondition : Process_transfer.to_precondition =
      fun ~all_transfers ->
       State.Precondition.(
@@ -797,7 +879,7 @@ module Make (T' : Transaction_snark.S) = struct
               (Genesis_constants.Constraint_constants.to_snark_keys_header
                  constraint_constants )
             ~choices:(fun ~self:_ ->
-              [ rule Wrapper.tag (force Action_state_extension.tag)
+              [ rule Wrapper.tag Extensions_wrapper.tag
               ; Submit_transfer.rule
               ; Process_transfer.rule to_precondition
                   (force Action_state_extension.tag)
@@ -828,6 +910,7 @@ module Make (T' : Transaction_snark.S) = struct
             ~after ~vk_hash ~transfer:withdrawal process_withdrawal_ )
 
     let step (t : t) ~(outer_public_key : PC.t) ~(new_deposits : TR.t list)
+        ~(unprocessed_deposits : TR.t list)
         ~(old_inner_ledger : Mina_ledger.Sparse_ledger.t)
         ~(new_inner_ledger : Mina_ledger.Sparse_ledger.t) :
         ( Account_update.t
@@ -882,11 +965,18 @@ module Make (T' : Transaction_snark.S) = struct
             Field.Constant.equal
               (Action_state_extension.statement all_deposits).target
               new_all_deposits ) ;
+          let%bind delay_extension =
+            Action_state_extension.prove ~dummy:true ~source:new_all_deposits
+              (List.map ~f:(value_to_actions TR.typ) unprocessed_deposits)
+          in
+          let%bind actions_extensions =
+            Extensions_wrapper.prove all_deposits delay_extension
+          in
           let%map _, tree, proof =
             let w : Witness.t =
               { vk_hash
               ; t
-              ; all_deposits
+              ; actions_extensions
               ; public_key = outer_public_key
               ; old_inner_acc
               ; old_inner_acc_path
