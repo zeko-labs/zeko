@@ -784,7 +784,7 @@ module Make (T' : Transaction_snark.S) = struct
     let vk_hash = Zkapp_account.digest_vk vk
 
     let submit_withdrawal ~withdrawal:({ amount; recipient } : TR.t) =
-      time "Inner.submit_withdrawal" (fun () ->
+      time_async "Inner.submit_withdrawal" (fun () ->
           let%map _, tree, proof =
             submit_withdrawal_
               ~handler:
@@ -795,7 +795,7 @@ module Make (T' : Transaction_snark.S) = struct
           mktree tree proof )
 
     let process_deposit ~is_new ~pointer ~before ~after ~deposit =
-      time "Inner.process_deposit" (fun () ->
+      time_async "Inner.process_deposit" (fun () ->
           process_transfer ~is_new ~pointer ~before ~after ~transfer:deposit
             ~vk_hash ~public_key process_deposit_ )
 
@@ -805,7 +805,7 @@ module Make (T' : Transaction_snark.S) = struct
         , Zkapp_command.Digest.Forest.t )
         Zkapp_command.Call_forest.Tree.t
         Deferred.t =
-      time "Inner.step" (fun () ->
+      time_async "Inner.step" (fun () ->
           let%map _, tree, proof =
             let w : Inner.Witness.t = { vk_hash; all_deposits } in
             step_ ~handler:(Inner.handler w) ()
@@ -893,7 +893,7 @@ module Make (T' : Transaction_snark.S) = struct
 
     let submit_deposit ~outer_public_key ~deposit:({ amount; recipient } : TR.t)
         =
-      time "Outer.submit_deposit" (fun () ->
+      time_async "Outer.submit_deposit" (fun () ->
           let%map _, tree, proof =
             submit_deposit_
               ~handler:
@@ -905,7 +905,7 @@ module Make (T' : Transaction_snark.S) = struct
 
     let process_withdrawal ~is_new ~outer_public_key ~pointer ~before ~after
         ~withdrawal =
-      time "Inner.process_withdrawal" (fun () ->
+      time_async "Inner.process_withdrawal" (fun () ->
           process_transfer ~is_new ~public_key:outer_public_key ~pointer ~before
             ~after ~vk_hash ~transfer:withdrawal process_withdrawal_ )
 
@@ -918,60 +918,60 @@ module Make (T' : Transaction_snark.S) = struct
         , Zkapp_command.Digest.Forest.t )
         Zkapp_command.Call_forest.Tree.t
         Deferred.t =
-      time "Outer.step" (fun () ->
-          let old_idx =
-            Mina_ledger.Sparse_ledger.find_index_exn old_inner_ledger
-              Inner.account_id
-          in
-          let old_inner_acc =
-            Mina_ledger.Sparse_ledger.get_exn old_inner_ledger old_idx
-          in
-          let old_inner_acc_path =
-            List.map ~f:(function
-              | `Left other ->
-                  ({ is_right = false; other } : PathElt.t)
-              | `Right other ->
-                  ({ is_right = true; other } : PathElt.t) )
-            @@ Mina_ledger.Sparse_ledger.path_exn old_inner_ledger old_idx
-          in
-          let new_idx =
-            Mina_ledger.Sparse_ledger.find_index_exn new_inner_ledger
-              Inner.account_id
-          in
-          let new_inner_acc =
-            Mina_ledger.Sparse_ledger.get_exn new_inner_ledger new_idx
-          in
-          let new_inner_acc_path =
-            List.map ~f:(function
-              | `Left other ->
-                  ({ is_right = false; other } : PathElt.t)
-              | `Right other ->
-                  ({ is_right = true; other } : PathElt.t) )
-            @@ Mina_ledger.Sparse_ledger.path_exn new_inner_ledger new_idx
-          in
-          let ({ all_deposits = old_all_deposits } : Inner.State.t) =
-            Inner.State.value_of_app_state
-              (Option.value_exn old_inner_acc.zkapp).app_state
-          in
-          let ({ all_deposits = new_all_deposits } : Inner.State.t) =
-            Inner.State.value_of_app_state
-              (Option.value_exn new_inner_acc.zkapp).app_state
-          in
-          let%bind all_deposits =
-            Action_state_extension.prove ~source:old_all_deposits
-              (List.map ~f:(value_to_actions TR.typ) new_deposits)
-          in
-          assert (
-            Field.Constant.equal
-              (Action_state_extension.statement all_deposits).target
-              new_all_deposits ) ;
-          let%bind delay_extension =
-            Action_state_extension.prove ~dummy:true ~source:new_all_deposits
-              (List.map ~f:(value_to_actions TR.typ) unprocessed_deposits)
-          in
-          let%bind actions_extensions =
-            Extensions_wrapper.prove all_deposits delay_extension
-          in
+      let old_idx =
+        Mina_ledger.Sparse_ledger.find_index_exn old_inner_ledger
+          Inner.account_id
+      in
+      let old_inner_acc =
+        Mina_ledger.Sparse_ledger.get_exn old_inner_ledger old_idx
+      in
+      let old_inner_acc_path =
+        List.map ~f:(function
+          | `Left other ->
+              ({ is_right = false; other } : PathElt.t)
+          | `Right other ->
+              ({ is_right = true; other } : PathElt.t) )
+        @@ Mina_ledger.Sparse_ledger.path_exn old_inner_ledger old_idx
+      in
+      let new_idx =
+        Mina_ledger.Sparse_ledger.find_index_exn new_inner_ledger
+          Inner.account_id
+      in
+      let new_inner_acc =
+        Mina_ledger.Sparse_ledger.get_exn new_inner_ledger new_idx
+      in
+      let new_inner_acc_path =
+        List.map ~f:(function
+          | `Left other ->
+              ({ is_right = false; other } : PathElt.t)
+          | `Right other ->
+              ({ is_right = true; other } : PathElt.t) )
+        @@ Mina_ledger.Sparse_ledger.path_exn new_inner_ledger new_idx
+      in
+      let ({ all_deposits = old_all_deposits } : Inner.State.t) =
+        Inner.State.value_of_app_state
+          (Option.value_exn old_inner_acc.zkapp).app_state
+      in
+      let ({ all_deposits = new_all_deposits } : Inner.State.t) =
+        Inner.State.value_of_app_state
+          (Option.value_exn new_inner_acc.zkapp).app_state
+      in
+      let%bind all_deposits =
+        Action_state_extension.prove ~source:old_all_deposits
+          (List.map ~f:(value_to_actions TR.typ) new_deposits)
+      in
+      assert (
+        Field.Constant.equal
+          (Action_state_extension.statement all_deposits).target
+          new_all_deposits ) ;
+      let%bind delay_extension =
+        Action_state_extension.prove ~dummy:true ~source:new_all_deposits
+          (List.map ~f:(value_to_actions TR.typ) unprocessed_deposits)
+      in
+      let%bind actions_extensions =
+        Extensions_wrapper.prove all_deposits delay_extension
+      in
+      time_async "Outer.step" (fun () ->
           let%map _, tree, proof =
             let w : Witness.t =
               { vk_hash
