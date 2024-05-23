@@ -1732,6 +1732,20 @@ module Queries = struct
                               } )
                       } ) ) )
 
+  let token_owner =
+    field "tokenOwner" ~doc:"Find the account that owns a given token"
+      ~typ:Types.AccountObj.account
+      ~args:
+        Arg.
+          [ arg "tokenId" ~doc:"Token ID to find the owning account for"
+              ~typ:(non_null Types.Input.TokenId.arg_typ)
+          ]
+      ~resolve:(fun { ctx = sequencer; _ } () token ->
+        let open Option.Let_syntax in
+        let l = Ledger.of_database sequencer.db in
+        let%map account_id = Ledger.token_owner l token in
+        Types.AccountObj.get_best_ledger_account l account_id )
+
   module Archive = struct
     let actions =
       field "actions"
@@ -1773,6 +1787,7 @@ module Queries = struct
     ; accounts_for_pk
     ; transfer
     ; committed_transaction
+    ; token_owner
     ]
     @ Archive.commands
 end
