@@ -14,6 +14,18 @@ module CAS = Currency.Amount.Signed
 module CA = Currency.Amount
 open Zeko_util
 
+(**
+  This is the state for the helper accounts.
+  Each user has a helper account they create for handling transfers.
+  Keep in mind that the transfers recorded is the action state, i.e.
+  a merkle list of transfers.
+  `transfers_processed` is like a pointer into that list.
+  It is literally the root of the merkle list at some point in time,
+  and is ~guaranteed to be unique.
+  The user processes their transfer by reducing the balance from the main
+  account and updating the pointer to the point in the merkle list
+  after the transfer we processed.
+*)
 module Helper_state = struct
   type t = { transfers_processed : F.t } [@@deriving snarky]
 
@@ -43,12 +55,47 @@ end
 
 (** The type for "transfer requests" put in actions *)
 module TR = struct
-  type t = { amount : CA.t; recipient : PC.t } [@@deriving snarky]
+  type t =
+    { amount : CA.t  (** Amount to be transferred *)
+    ; recipient : PC.t  (** Recipient, i.e. pk of helper account *)
+    }
+  [@@deriving snarky]
 
   let to_actions (t : t) : Actions.t = value_to_actions typ t
 end
 
-(** Rule used by both inner and outer accounts to process transfers posted to them *)
+(**
+  Rule used by both inner and outer accounts to process transfers posted to them.
+  
+  The rule takes as witness a proof that the transfer has been submitted,
+  and that it hasn't been processed by this account already.
+  The recipient has an associated helper account which tracks what transfers
+  this recipient has had processed.
+  There must be an action state extension from the old root to the point just
+  before the transfer to be processed, and one from the root at the time of the
+  transfer until the current all_transfers, i.e. the root of all transfers in existence.
+  
+  If the recipient is new a trivial optimization is done since it's impossible
+  for a transfer to already have been processed.
+  
+  The actual payout is done by including a child to which the transfer is sent.
+  
+  There is notably a seemingly unnecessary overhead here.
+  Why do we need to verify which account receives the funds?
+  Couldn't we abstain from enforcing its use entirely?
+  Then the whole transaction could be signed by the recipient,
+  and when signing they could verify that the funds go where they want
+  (which might be somewhere else entirely!).
+  
+  We can't however check the signature on the whole transaction!
+  The only thing we can do is have a child account update with use_full_commitment = true,
+  and a signature on that, and we've done that here.
+  It also has the benefit of working better with smart contracts.
+  
+  Optimally Mina would expose the full commitment as an input to smart contracts too.
+  
+  NB: Helper account is both made and updated in this rule.
+*)
 module Process_transfer = struct
   module A = struct
     type t = Zkapp_call_forest.account_update
@@ -60,7 +107,7 @@ module Process_transfer = struct
 
   module Witness = struct
     type t =
-      { transfer : TR.t
+      { transfer : TR.t  (** The transfer *)
       ; child : A.t
       ; vk_hash : F.t
       ; public_key : PC.t
@@ -120,13 +167,15 @@ module Process_transfer = struct
           Field.(
             equal transfers_processed (constant Actions.empty_state_element))
           ||| not is_new) ) ;
+    (* Helper account account update *)
     let child_helper = Body.(constant (typ ()) dummy) in
     let child_helper =
       { child_helper with
         public_key = transfer.recipient
       ; token_id = public_key_to_token_id_var public_key
       ; use_full_commitment = Boolean.true_
-      ; authorization_kind = authorization_signed ()
+      ; authorization_kind =
+          authorization_signed () (* FIXME: permit proof auth *)
       ; preconditions =
           { Preconditions.(constant (typ ()) accept) with
             account =
@@ -155,15 +204,18 @@ module Process_transfer = struct
                       (Action_state_extension.statement_var trans2).source
                   })
           }
-      ; may_use_token = May_use_token.Checked.constant Parents_own_token
-      ; implicit_account_creation_fee = Boolean.false_
+      ; may_use_token =
+          May_use_token.Checked.constant Parents_own_token
+          (* We give it permission *)
+      ; implicit_account_creation_fee =
+          Boolean.false_ (* Custom token account, can't be true *)
       }
     in
     let child_helper : Zkapp_call_forest.Checked.account_update =
       attach_control_var child_helper
     in
 
-    (* Recipient can't have children *)
+    (* FIXME: Recipient can't have children *)
     let calls =
       Zkapp_call_forest.Checked.(
         push ~account_update:child ~calls:(empty ())
