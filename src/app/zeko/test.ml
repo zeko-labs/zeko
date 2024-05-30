@@ -211,7 +211,7 @@ let prove_zeko_command (staged_ledger : staged_ledger) cmd : unit =
   ()
 
 (* Only supports use_full_commitment for simplicity *)
-let sign_cmd (cmd : Zkapp_command.t) (keys : Keypair.t list) : Zkapp_command.t =
+let sign_cmd (keys : Keypair.t list) (cmd : Zkapp_command.t) : Zkapp_command.t =
   let keys = Option.value_exn !outer_fee_payer :: keys in
   let full_commitment =
     Zkapp_command.Transaction_commitment.create_complete
@@ -381,8 +381,8 @@ let submit_transfer ~(transfers : Zkapps_rollup.TR.t list ref) (kp : Keypair.t)
                [ transferrer_update ])
     ; memo = Signed_command_memo.empty
     }
+    |> sign_cmd [ kp ]
   in
-  let transfer_cmd = sign_cmd transfer_cmd [ kp ] in
   transfers := transfer :: !transfers ;
   transfer_cmd
 
@@ -475,8 +475,8 @@ let process_transfer ~is_new ~(ledger : Ledger.t)
     ; account_updates = process_updates
     ; memo = Signed_command_memo.empty
     }
+    |> sign_cmd [ recipient ]
   in
-  let process_cmd = sign_cmd process_cmd [ recipient ] in
   process_cmd
 
 let process_deposit ~is_new ~staged_ledger ~deposits ~recipient amount =
