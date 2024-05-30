@@ -51,7 +51,7 @@ let proof_permissions : Permissions.t =
   ; increment_nonce = None
   ; set_voting_for = Proof
   ; set_timing = Proof
-  ; access = None
+  ; access = Proof
   }
 
 (* Intended to be used for custom token accounts *)
