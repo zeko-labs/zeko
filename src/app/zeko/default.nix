@@ -4,8 +4,8 @@ let
     src = pkgs.fetchFromGitHub {
       owner = "dcspark";
       repo = "go-ethereum";
-      rev = "352d900fea2cd96b5dc1ee08527e39db994f98a5";
-      sha256 = "sha256-emNQSq4Uhi8GM5vTkP8vqPsQbkjnnla/IYFQrFxQbGM=";
+      rev = "daee9a8b65f5ba06c36d38bc5a6ed3609a505c9b";
+      sha256 = "sha256-x7tY5Veh1fcoh/jMqBThJuQIkMuY2vUl9s/qRPM7soc=";
     };
 in
 rec {
