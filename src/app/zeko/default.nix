@@ -5,7 +5,7 @@ let
       owner = "dcspark";
       repo = "go-ethereum";
       rev = "daee9a8b65f5ba06c36d38bc5a6ed3609a505c9b";
-      sha256 = pkgs.lib.fakeHash;
+      sha256 = "sha256-x7tY5Veh1fcoh/jMqBThJuQIkMuY2vUl9s/qRPM7soc=";
     };
 in
 rec {
