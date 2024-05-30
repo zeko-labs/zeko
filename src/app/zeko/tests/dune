@@ -1,0 +1,77 @@
+(executable
+ (name tokens)
+ (libraries
+  ;; opam libraries
+  core
+  async
+  async_unix
+  base
+  core_kernel
+  async_kernel
+  ;; local libraries
+  allocation_functor
+  base58_check
+  block_time
+  cache_dir
+  crypto_params
+  currency
+  consensus
+  genesis_ledger
+  staged_ledger_diff
+  data_hash_lib
+  fields_derivers
+  fields_derivers_zkapps
+  genesis_constants
+  hash_prefixes
+  h_list
+  kimchi_backend
+  kimchi_backend.common
+  kimchi_backend_common
+  kimchi_backend.pasta
+  kimchi_backend.pasta.basic
+  kimchi_backend.pasta.constraint_system
+  kimchi_bindings
+  kimchi_pasta
+  kimchi_types
+  logger
+  mina_base
+  mina_base.import
+  mina_ledger
+  mina_numbers
+  mina_signature_kind
+  mina_state
+  mina_transaction
+  mina_transaction_logic
+  mina_wire_types
+  pasta_bindings
+  pickles
+  pickles.backend
+  pickles_base
+  pickles.limb_vector
+  pickles_types
+  ppx_version.runtime
+  random_oracle
+  random_oracle_input
+  sgn
+  signature_lib
+  snark_keys_header
+  snark_params
+  snarky.backendless
+  sponge
+  transaction_snark
+  tuple_lib
+  unsigned_extended
+  with_hash
+  zkapps_examples
+  zkapps_rollup
+  transaction_snark_tests
+  transaction_protocol_state
+  integers
+  sexplib
+  zeko_util)
+ (instrumentation
+  (backend bisect_ppx))
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
+ (modules tokens)
+ )
