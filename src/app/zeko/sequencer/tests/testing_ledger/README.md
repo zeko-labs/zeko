@@ -4,6 +4,8 @@ This is a local ledger for testing Mina transaction logic. It's not a full netwo
 
 It's just a local ledger with database and graphql API exposing few usefull mutations and queries.
 
+Keep in mind that this is just a ledger and not a network nor blockchain, so all the network/blockchain/consensus stuff is not working or mocked.
+
 ## Usage
 
 There are 2 possible modes:
