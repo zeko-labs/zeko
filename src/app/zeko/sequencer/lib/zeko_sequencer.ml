@@ -42,6 +42,7 @@ module Sequencer = struct
       ; zkapp_pk : Signature_lib.Public_key.Compressed.t
       ; signer : Signature_lib.Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
+      ; network_id : string
       }
   end
 
@@ -805,6 +806,7 @@ module Sequencer = struct
         ; l1_uri
         ; zkapp_pk
         ; signer
+        ; network_id = "testnet"
         }
     in
     let t =

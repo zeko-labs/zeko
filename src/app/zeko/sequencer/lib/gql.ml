@@ -1644,6 +1644,16 @@ module Queries = struct
         let open Types.DaemonStatus in
         return (Ok { chain_id = "69420" }) )
 
+  let network_id =
+    field "networkID"
+      ~doc:
+        "The chain-agnostic identifier of the network this daemon is \
+         participating in"
+      ~typ:(non_null string)
+      ~args:Arg.[]
+      ~resolve:(fun { ctx = sequencer; _ } () ->
+        "zeko:" ^ Sequencer_lib.Zeko_sequencer.(sequencer.config.network_id) )
+
   let account =
     field "account" ~doc:"Find any account via a public key and token"
       ~typ:Types.AccountObj.account
