@@ -1652,7 +1652,7 @@ module Queries = struct
       ~typ:(non_null string)
       ~args:Arg.[]
       ~resolve:(fun { ctx = sequencer; _ } () ->
-        "zeko:" ^ Sequencer_lib.Zeko_sequencer.(sequencer.config.network_id) )
+        "zeko:" ^ Zeko_sequencer.(sequencer.config.network_id) )
 
   let account =
     field "account" ~doc:"Find any account via a public key and token"
