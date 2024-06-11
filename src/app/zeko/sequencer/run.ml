@@ -6,7 +6,7 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
-    ~db_dir ~l1_uri ~signer ~test_accounts_path () =
+    ~db_dir ~l1_uri ~signer ~test_accounts_path ~network_id () =
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
@@ -16,7 +16,7 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
     Thread_safe.block_on_async_exn (fun () ->
         Zeko_sequencer.create ~zkapp_pk ~max_pool_size ~da_contract_address
           ~db_dir:(Some db_dir) ~l1_uri ~test_accounts_path
-          ~commitment_period_sec:commitment_period
+          ~commitment_period_sec:commitment_period ~network_id
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
@@ -69,9 +69,13 @@ let () =
      and test_accounts_path =
        flag "--test-accounts-path" (optional string)
          ~doc:"string Path to the test genesis accounts file"
+     and network_id =
+       flag "--network-id"
+         (optional_with_default "testnet" string)
+         ~doc:"string Network id"
      in
      let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
 
      run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
-       ~db_dir ~l1_uri ~signer ~test_accounts_path )
+       ~db_dir ~l1_uri ~signer ~test_accounts_path ~network_id )
   |> Command_unix.run

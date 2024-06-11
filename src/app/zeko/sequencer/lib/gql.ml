@@ -1798,6 +1798,7 @@ module Queries = struct
     ; transfer
     ; committed_transaction
     ; token_owner
+    ; network_id
     ]
     @ Archive.commands
 end
