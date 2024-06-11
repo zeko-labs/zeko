@@ -781,7 +781,8 @@ module Sequencer = struct
     return ()
 
   let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer ~test_accounts_path =
+      ~da_contract_address ~db_dir ~l1_uri ~signer ~test_accounts_path
+      ~network_id =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -806,7 +807,7 @@ module Sequencer = struct
         ; l1_uri
         ; zkapp_pk
         ; signer
-        ; network_id = "testnet"
+        ; network_id
         }
     in
     let t =
@@ -925,7 +926,7 @@ let%test_unit "apply commands and commit" =
                     Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                   ~max_pool_size:10 ~commitment_period_sec:0.
                   ~da_contract_address:None ~db_dir:None ~l1_uri:gql_uri ~signer
-                  ~test_accounts_path:None )
+                  ~test_accounts_path:None ~network_id:"testnet" )
           in
           add_test_accounts ~f:(add_account sequencer) ;
           sequencer.snark_q.state <-
