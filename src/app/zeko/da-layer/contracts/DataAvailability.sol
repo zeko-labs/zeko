@@ -2,7 +2,7 @@
 pragma solidity >=0.8.13;
 
 import {hasher, signer, NetworkId} from "./MinaPrecompiles.sol";
-import {MinaSchnorrSignature, MinaPublicKey, HashedMinaPublicKey, RollupBatch, MinaCommand} from "./Types.sol";
+import {MinaSchnorrSignature, MinaPublicKey, HashedMinaPublicKey, RollupBatch} from "./Types.sol";
 import {MinaMultisig} from "./MinaMultisig.sol";
 import {FieldBytes} from "./FieldBytes.sol";
 import {Endianness} from "./Endianness.sol";
@@ -11,9 +11,9 @@ contract DataAvailability is MinaMultisig {
     using FieldBytes for bytes;
     using Endianness for bytes32;
 
-    event BatchPosted(bytes32 indexed id);
+    event BatchPosted(uint256 indexed location);
     event BatchSigned(
-        bytes32 indexed id,
+        uint256 indexed location,
         HashedMinaPublicKey indexed publicKey,
         uint256 signatureCount
     );
@@ -28,46 +28,42 @@ contract DataAvailability is MinaMultisig {
     }
 
     function postBatch(
-        bytes32 id,
-        bytes32 previousId,
-        MinaCommand[] memory commands
+        int256 previousLocation,
+        bytes memory sourceReceiptChainHashes,
+        bytes[] memory commands,
+        bytes memory targetSparseLedger,
+        bytes32[] memory sigData
     ) external onlySequencer {
         require(commands.length > 0, "Commands cannot be empty");
-        require(id != previousId, "Batch cannot be equal to previous batch");
+        // -1 means genesis batch
+        require(
+            previousLocation < (int256)(batchesLength) && previousLocation >= -1,
+            "Invalid previousLocation"
+        );
 
-        RollupBatch storage batch = batches[id];
+        RollupBatch storage batch = batches[batchesLength];
 
-        require(batch.commands.length == 0, "Batch already exists");
+        batch.previousLocation = previousLocation;
+        batch.sourceReceiptChainHashes = sourceReceiptChainHashes;
+        batch.commands = commands;
+        batch.targetSparseLedger = targetSparseLedger;
+        batch.sigData = sigData;
 
-        batch.previousId = previousId;
+        emit BatchPosted(batchesLength);
 
-        if (batches[previousId].commands.length == 0 || previousId == bytes32(0)) {
-            batch.genesis = true;
-        } else {
-            batch.genesis = false;
-        }
-
-        for (uint256 i = 0; i < commands.length; i++) {
-            batch.commands.push(commands[i]);
-        }
-
-        lastBatchId = id;
-        emit BatchPosted(id);
+        batchesLength++;
     }
 
     function addBatchSignature(
-        bytes32 id,
+        uint256 location,
         MinaSchnorrSignature calldata signature
     ) external validatorExists(hashPublicKey(signature.publicKey)) {
-        RollupBatch storage batch = batches[id];
+        RollupBatch storage batch = batches[location];
 
         require(
-            !batch.validatorSigned[hashPublicKey(signature.publicKey)],
+            !validatorSigned[hashPublicKey(signature.publicKey)][location],
             "Validator already signed"
         );
-
-        bytes32[] memory sigData = new bytes32[](1);
-        sigData[0] = id;
 
         bool verified = signer.verify(
             NetworkId.TESTNET,
@@ -75,22 +71,37 @@ contract DataAvailability is MinaMultisig {
             signature.publicKey.y,
             signature.rx,
             signature.s,
-            sigData
+            batch.sigData
         );
 
         require(verified, "Invalid signature");
 
         batch.signatures.push(signature);
-        batch.validatorSigned[hashPublicKey(signature.publicKey)] = true;
+        validatorSigned[hashPublicKey(signature.publicKey)][location] = true;
 
-        emit BatchSigned(id, hashPublicKey(signature.publicKey), batch.signatures.length);
+        emit BatchSigned(location, hashPublicKey(signature.publicKey), batch.signatures.length);
     }
 
-    function getBatchSignatures(bytes32 id) external view returns (MinaSchnorrSignature[] memory) {
-        return batches[id].signatures;
+    function getBatchSignatures(
+        uint256 location
+    ) external view returns (MinaSchnorrSignature[] memory) {
+        return batches[location].signatures;
     }
 
-    function getBatchData(bytes32 id) external view returns (bool, bytes32, MinaCommand[] memory) {
-        return (batches[id].genesis, batches[id].previousId, batches[id].commands);
+    function getBatchData(
+        uint256 location
+    )
+        external
+        view
+        returns (int256, bytes memory, bytes[] memory, bytes memory, bytes32[] memory)
+    {
+        RollupBatch storage batch = batches[location];
+        return (
+            batch.previousLocation,
+            batch.sourceReceiptChainHashes,
+            batch.commands,
+            batch.targetSparseLedger,
+            batch.sigData
+        );
     }
 }

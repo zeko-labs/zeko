@@ -1,6 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.13;
 
+/**
+ * @dev Multisig transaction proposal, for validators to vote on and
+ * execute.
+ */
+struct Transaction {
+    address destination;
+    uint256 value;
+    bytes data;
+    bool executed;
+    uint256 validatorVotePeriod;
+}
+
+/**
+ * @dev Mina specific types
+ */
+
 struct MinaPublicKey {
     bytes32 x;
     bytes32 y;
@@ -14,32 +30,11 @@ struct MinaSchnorrSignature {
     bytes32 s;
 }
 
-enum MinaCommandType {
-    SIGNED_COMMAND,
-    ZKAPP_COMMAND
-}
-
-struct MinaCommand {
-    MinaCommandType commandType;
-    bytes data;
-}
-
 struct RollupBatch {
-    bytes32 previousId;
-    MinaCommand[] commands;
+    int256 previousLocation;
+    bytes sourceReceiptChainHashes;
+    bytes[] commands;
+    bytes targetSparseLedger;
     MinaSchnorrSignature[] signatures;
-    mapping(HashedMinaPublicKey => bool) validatorSigned;
-    bool genesis;
-}
-
-/**
- * @dev Multisig transaction proposal, for validators to vote on and
- * execute.
- */
-struct Transaction {
-    address destination;
-    uint256 value;
-    bytes data;
-    bool executed;
-    uint256 validatorVotePeriod;
+    bytes32[] sigData;
 }
