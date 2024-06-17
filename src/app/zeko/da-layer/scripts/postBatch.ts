@@ -11,27 +11,35 @@ import { fieldToHex } from "../utils/mina";
 
 const schema = z.object({
   address: z.string(),
-  id: z.string().transform(fieldToHex),
-  previousId: z.string().transform(fieldToHex),
-  commands: z.array(
-    z.object({
-      commandType: z.number().int().gte(0).lte(1),
-      data: z.string().transform((data) => Buffer.from(data, "base64")),
-    })
-  ),
+  previousLocation: z.string(),
+  sourceReceiptChainHashes: z.string(),
+  targetSparseLedger: z.string(),
+  sigData: z.array(z.string().transform(fieldToHex)),
+  commands: z.array(z.string().transform((data) => Buffer.from(data, "base64"))),
 });
 
 const main = async () => {
   const daFactory = await ethers.getContractFactory("DataAvailability");
 
-  const { address, id, previousId, commands } = schema.parse(
-    JSON.parse(fs.readFileSync(0).toString())
-  );
+  const {
+    address,
+    previousLocation,
+    sourceReceiptChainHashes,
+    targetSparseLedger,
+    sigData,
+    commands,
+  } = schema.parse(JSON.parse(fs.readFileSync(0).toString()));
 
   const contract = daFactory.attach(address);
 
   try {
-    const tx = await contract.postBatch(id, previousId, commands);
+    const tx = await contract.postBatch(
+      previousLocation,
+      sourceReceiptChainHashes,
+      commands,
+      targetSparseLedger,
+      sigData
+    );
     await tx.wait();
   } catch (e) {
     if (

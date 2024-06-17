@@ -1,0 +1,67 @@
+(dirs :standard \ target)
+
+(rule
+ (target dune-build-root)
+ (deps
+  (sandbox none))
+ (action
+  (system "printf \"%s\" $(realpath %{workspace_root}/..) > %{target}")))
+
+(rule
+ (target libda_utils.dylib)
+ (enabled_if
+  (= %{ocaml-config:system} "macosx"))
+ (deps
+  Cargo.toml
+  src/DataAvailability.json
+  (glob_files src/*.rs))
+ (action
+  (progn
+   (setenv
+    CARGO_TARGET_DIR
+    "%{read:dune-build-root}/da_utils"
+    (run cargo build --release))
+   (run pwd)
+   (run cp %{read:dune-build-root}/da_utils/release/libda_utils.dylib .))))
+
+(rule
+ (target libda_utils.so)
+ (enabled_if
+  (= %{ocaml-config:system} "linux"))
+ (deps
+  Cargo.toml
+  src/DataAvailability.json
+  (glob_files src/*.rs))
+ (action
+  (progn
+   (setenv
+    CARGO_TARGET_DIR
+    "%{read:dune-build-root}/da_utils"
+    (run cargo build --release))
+   (run pwd)
+   (run cp %{read:dune-build-root}/da_utils/release/libda_utils.so .))))
+
+(rule
+ (target c_flags)
+ (enabled_if
+  (= %{ocaml-config:system} "macosx"))
+ (deps libda_utils.dylib)
+ (action
+  (system
+   "echo '-L%{read:dune-build-root}/da_utils/release/ -lda_utils -framework CoreFoundation -framework SystemConfiguration -framework Security' > %{target}")))
+
+(rule
+ (target c_flags)
+ (enabled_if
+  (= %{ocaml-config:system} "linux"))
+ (deps libda_utils.so)
+ (action
+  (system
+   "echo '-L%{read:dune-build-root}/da_utils/release/ -lda_utils' > %{target}")))
+
+(library
+ (name da_utils)
+ (foreign_stubs
+  (language c)
+  (names da_utils))
+ (c_library_flags (%{read:c_flags})))
