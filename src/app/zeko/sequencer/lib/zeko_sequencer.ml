@@ -339,7 +339,8 @@ module Sequencer = struct
                       M.Outer.step
                         (Option.value_exn t.state.last)
                         ~outer_public_key:t.config.zkapp_pk ~new_deposits:[]
-                        ~old_inner_ledger ~new_inner_ledger
+                        ~unprocessed_deposits:[] ~old_inner_ledger
+                        ~new_inner_ledger
                     in
                     let command : Zkapp_command.t =
                       { fee_payer =

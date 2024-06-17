@@ -533,7 +533,7 @@ let commit ~zeko_kp ~outer_ledger ~inner_ledger ~(staged_ledger : staged_ledger)
         Z.Outer.step
           (Option.value_exn !(staged_ledger.proof))
           ~outer_public_key:(Public_key.compress zeko_kp.public_key)
-          ~new_deposits
+          ~new_deposits ~unprocessed_deposits:[]
           ~new_inner_ledger:(to_sparse staged_ledger.ledger inner_step_cmd)
           ~old_inner_ledger:(to_sparse inner_ledger inner_step_cmd) )
   in

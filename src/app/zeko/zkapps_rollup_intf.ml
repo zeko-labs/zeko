@@ -77,6 +77,8 @@ module type S = sig
          t (** The transition, must include Inner.step account update *)
       -> outer_public_key:Public_key.Compressed.t
       -> new_deposits:TR.t list (** new deposits from new to old *)
+      -> unprocessed_deposits:TR.t list
+           (** from new deposits to the current action state *)
       -> old_inner_ledger:Mina_ledger.Sparse_ledger.t
            (** Old sparse inner ledger including inner account *)
       -> new_inner_ledger:Mina_ledger.Sparse_ledger.t
