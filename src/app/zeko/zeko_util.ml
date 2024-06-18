@@ -208,9 +208,9 @@ end) =
 struct
   type t = T.t [@@deriving yojson]
 
-  type var = T.t As_prover.Ref.t
+  type var = T.t V.t
 
-  let typ : (var, t) Typ.t = Typ.Internal.ref ()
+  let typ : (var, t) Typ.t = V.typ ()
 end
 
 (** A list of `length` `t`s *)
@@ -310,3 +310,6 @@ let assert_var label expr =
 
 let assert_var_checked label expr =
   with_label label (fun () -> expr () |> run |> Boolean.Assert.is_true)
+
+let v_ref (x : 'a V.t) : 'a As_prover.Ref.t =
+  As_prover.Ref.create (fun () -> V.get x)
