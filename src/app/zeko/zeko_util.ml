@@ -5,6 +5,7 @@ open Snark_params.Tick.Run
 
 open Zkapp_basic
 open Account_update
+
 module V = Prover_value
 
 let attach_control_var :
@@ -201,16 +202,22 @@ module F = struct
    fun fmt f -> Format.pp_print_string fmt @@ Field.Constant.to_string f
 end
 
+module type CircuitType = sig
+  type t
+  type var
+  val typ : (var, t) Typ.t
+end
+
 (** To be used with deriving snarky, a reference to T with no in-circuit representation *)
 module MkRef (T : sig
-  type t [@@deriving yojson]
+  type t
 end) =
 struct
-  type t = T.t [@@deriving yojson]
+  type t = T.t
 
-  type var = T.t As_prover.Ref.t
+  type var = T.t V.t
 
-  let typ : (var, t) Typ.t = Typ.Internal.ref ()
+  let typ : (var, t) Typ.t = V.typ ()
 end
 
 (** A list of `length` `t`s *)
@@ -310,3 +317,33 @@ let assert_var label expr =
 
 let assert_var_checked label expr =
   with_label label (fun () -> expr () |> run |> Boolean.Assert.is_true)
+
+(* TODO: I implemented this, but should we use this?
+module V = struct
+  type 'a t = 'a option
+  let typ : ('a t, 'a) Typ.t =
+    Typ {
+      var_to_fields = (fun x -> ([||], x))
+      ; var_of_fields = (fun (_, x) -> x)
+      ; value_to_fields = (fun x -> ([||], Some x))
+      ; value_of_fields = (fun (_, x) -> Option.value_exn x)
+      ; size_in_field_elements = 0
+      ; constraint_system_auxiliary = (fun () -> None)
+      ; check = (fun _ -> Snark_params.Tick.Checked.return ())
+    }
+    let create (f : unit -> 'a) : 'a t =
+      if As_prover.in_prover_block ()
+        then f () |> Some
+        else None
+    let value_exn : 'a t -> 'a = function
+      | Some x -> x
+      | None -> failwith "not proving"
+    let return : 'a -> 'a t = fun x -> create (fun () -> x)
+    let map : 'a t -> f:('a -> 'b) -> 'b t = fun x ~f = match x with
+      | Some x -> Some (f x)
+      | None -> None
+    let bind : 'a t -> f:('a -> 'b t) -> 'b t = fun x ~f = match x with
+      | Some x -> f x
+      | None -> None
+end
+*)

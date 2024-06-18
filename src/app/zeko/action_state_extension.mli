@@ -11,6 +11,8 @@ val statement_var : var -> Stmt.var
 
 val statement : t -> Stmt.t
 
+val proof_must_verify : Stmt.var -> Boolean.var
+
 val verify :
      ?check:Boolean.var
   -> var

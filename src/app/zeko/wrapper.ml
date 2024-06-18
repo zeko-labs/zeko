@@ -26,7 +26,7 @@ end
 
 module T = struct
   (** Akin to Transaction_snark.t *)
-  type t = { stmt : Stmt.t; proof : RefProof.t } [@@deriving snarky, yojson]
+  type t = { stmt : Stmt.t; proof : RefProof.t [@to_yojson Proof.to_yojson] [@of_yojson Proof.of_yojson] } [@@deriving snarky, yojson]
 
   let verify { stmt; proof } =
     Pickles.Inductive_rule.Previous_proof_statement.

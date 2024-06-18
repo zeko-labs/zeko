@@ -15,65 +15,31 @@ module Stmt = struct
   type t = { source : F.t; target : F.t } [@@deriving show, snarky]
 end
 
-module T = struct
-  type t = { source : F.t; target : F.t; proof : RefProof.t }
-  [@@deriving snarky]
+module Mk(Count : sig val n : int end) = struct
+  module Witness = struct
+    type t = Proof of Proof.t | List of F.t list
+  end
+  module RefWitness = MkRef (Witness)
+  
+  type t = { source : F.t; target: F.t; witness : RefWitness.t } [@@deriving snarky]
+
+  let dummy_proof = Pickles.Proof.dummy Nat.N2.n Nat.N2.n Nat.N1.n ~domain_log2:14
 
   (* Do some checking here to avoid having two create unnecessary proofs, see issue #101 *)
-  let verify ?check ({ source; target; proof } : var) :
-      (Stmt.var, Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t =
-    let proof_must_verify = Boolean.not (Field.equal source target) in
-    let proof_must_verify =
-      match check with
-      | Some check ->
-          Boolean.(check &&& proof_must_verify)
-      | None ->
-          proof_must_verify
-    in
-    { public_input = { source; target }
-    ; proof_must_verify (* Don't check proof if source == target *)
-    ; proof
-    }
-
-  let statement_var ({ source; target } : var) : Stmt.var = { source; target }
-
-  let statement ({ source; target } : t) : Stmt.t = { source; target }
-end
-
-include T
-
-(** Step `n` times *)
-module MkStep (N : sig
-  val n : int
-end) =
-struct
-  module Actionss' = struct
-    module T = F
-    (* This should be treated as an instance of Actions,
-       however, Outside_hash_image.t is reserved, and is ignored *)
-
-    let length = N.n
-  end
-
-  module Actionss = SnarkList (Actionss')
-
-  module Witness = struct
-    type t = { actionss : Actionss.t; prev : T.t } [@@deriving snarky]
-  end
-
-  include MkHandler (Witness)
-
-  (* FIXME: slow, but probably fast enough for now *)
-  let construct_witness ~(actionss : Actions.t list) =
-    List.append
-      (List.map ~f:Actions.hash actionss)
-      (List.init
-         (N.n - List.length actionss)
-         ~f:(fun _ -> Outside_hash_image.t) )
-
-  let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-    let Witness.{ actionss; prev = { source } as prev } = exists_witness () in
-    let f actions target' =
+  (* Creates a constraint between source and target such that if there is some actionss in between
+     to link them, we return false (proof needn't be checked), but return true *)
+  let proof_must_verify_impl (witness : RefWitness.var) (t : Stmt.var) : Boolean.var =
+    let module FList' = struct
+      module T = F
+      let length = Count.n
+    end in
+    let module FList = SnarkList (FList') in
+    let actionss = exists FList.typ ~compute:(fun () ->
+      match As_prover.Ref.get witness with
+        | List actionss -> List.append actionss (List.init (Count.n - List.length actionss) ~f:(fun _ -> Outside_hash_image.t))
+        | Proof _ -> List.init Count.n ~f:(fun _ -> Outside_hash_image.t)
+    ) in
+    let f actions target =
       (* Bad unsafe use, with mismatching data and hash, but it works *)
       let actions' =
         Data_as_hash.make_unsafe actions (As_prover.Ref.create (fun () -> []))
@@ -81,28 +47,41 @@ struct
       let open Field in
       if_
         (equal actions @@ constant Outside_hash_image.t)
-        ~then_:target'
-        ~else_:(Actions.push_events_checked target' actions')
+        ~then_:target
+        ~else_:(Actions.push_events_checked target actions')
     in
-    let target' = List.fold_right ~init:source ~f actionss in
-    Pickles.Inductive_rule.
-      { previous_proof_statements = [ verify prev ]
-      ; public_output = Stmt.{ source; target = target' }
-      ; auxiliary_output = ()
-      }
+    let target' = List.fold_right ~init:t.source ~f actionss in
+    Boolean.not (Field.equal target' t.target)
 
-  let rule tag : _ Pickles.Inductive_rule.t =
-    { identifier = "action state extension step"
-    ; prevs = [ tag ]
-    ; main
-    ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
+
+  (* Do some checking here to avoid having two create unnecessary proofs, see issue #101 *)
+  let verify ?check ({ source; target; witness } : var) :
+      (Stmt.var, Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t =
+    let proof_must_verify = proof_must_verify_impl witness {source; target} in
+    { public_input = ({ source; target } : Stmt.var)
+    ; proof_must_verify = (match check with
+      | Some check -> Boolean.(check &&& proof_must_verify)
+      | None -> proof_must_verify)
+    ; proof = As_prover.Ref.create (fun () ->
+        (match As_prover.Ref.get witness with
+          | Proof p -> p
+          | List _ -> dummy_proof
+        )
+    )
     }
+
+  let statement_var ({ source; target } : var) : Stmt.var = { source; target }
+
+  let statement ({ source; target } : t) : Stmt.t = { source; target }
 end
 
+module P0 = Mk(struct let n = 0 end)
+module P256 = Mk(struct let n = 256 end)
+
 (** Merge two matching statements *)
-module Merge = struct
+module MkMerge (Left : module type of P256) (Right : module type of P256) = struct
   module Witness = struct
-    type t = { left : T.t; right : T.t } [@@deriving snarky]
+    type t = { left : Left.t; right : Right.t } [@@deriving snarky]
   end
 
   include MkHandler (Witness)
@@ -111,7 +90,7 @@ module Merge = struct
     let Witness.{ left; right } = exists_witness () in
     Field.Assert.equal left.target right.source ;
     Pickles.Inductive_rule.
-      { previous_proof_statements = [ verify left; verify right ]
+      { previous_proof_statements = [ Left.verify left; Right.verify right ]
       ; public_output = Stmt.{ source = left.source; target = right.target }
       ; auxiliary_output = ()
       }
@@ -123,12 +102,9 @@ module Merge = struct
     ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
     }
 end
+module MergeLeft = MkMerge (P256) (P0)
+module MergeRight = MkMerge (P0) (P256)
 
-module N_2_8 = struct
-  let n = Int.pow 2 8
-end
-
-module Step = MkStep (N_2_8)
 open Async_kernel
 
 let compilation_result =
@@ -144,13 +120,13 @@ let compilation_result =
            ~constraint_constants:
              (Genesis_constants.Constraint_constants.to_snark_keys_header
                 constraint_constants )
-           ~choices:(fun ~self -> [ Step.rule self; Merge.rule self ]) ) )
+           ~choices:(fun ~self -> [ MergeLeft.rule self; MergeRight.rule self ]) ) )
 
 let tag = lazy (match force compilation_result with tag, _, _, _ -> tag)
 
-let step w =
+let merge_left_ w =
   match force compilation_result with
-  | _, _, _, Pickles.Provers.[ step_; _ ] ->
+  | _, _, _, Pickles.Provers.[ merge_left_; _ ] ->
       time_async "Action_state_extension.step" (fun () ->
           step_ ~handler:(Step.handler w) () )
 
@@ -161,12 +137,6 @@ let merge (left : t) (right : t) : t Deferred.t =
         merge_ ~handler:(Merge.handler { left; right }) ()
       in
       ({ source = stmt.source; target = stmt.target; proof } : t)
-
-let dummy_proof source : t =
-  { source
-  ; target = source
-  ; proof = Pickles.Proof.dummy Nat.N2.n Nat.N2.n Nat.N1.n ~domain_log2:14
-  }
 
 (* Head of list should be oldest, tail should be newest *)
 let prove ?(dummy = false) ~(source : F.t) (actionss : Actions.t list) :
