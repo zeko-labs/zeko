@@ -32,7 +32,7 @@ module T = struct
     in
     { public_input = { source; target }
     ; proof_must_verify (* Don't check proof if source == target *)
-    ; proof
+    ; proof = ref_of_v proof
     }
 
   let statement_var ({ source; target } : var) : Stmt.var = { source; target }

@@ -503,7 +503,10 @@ module Outer = struct
 
     let verify ({ stmt; proof } : var) :
         (Stmt.var, Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t =
-      { public_input = stmt; proof_must_verify = Boolean.(true_); proof }
+      { public_input = stmt
+      ; proof_must_verify = Boolean.(true_)
+      ; proof = ref_of_v proof
+      }
   end
 
   module Witness = struct
