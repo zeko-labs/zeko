@@ -6,7 +6,7 @@
 
 [Zeko](https://twitter.com/ZekoLabs) is a fully isomorphic L2 for the Mina protocol ecosystem. Same client-side ZK private compute layer, and compatible with Mina infra and tooling, but super fast.
 
-This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina). The zeko related code is in the [zeko](src/app/zkapps_examples/rollup) directory.
+This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina). The zeko related code is in the [zeko](./src/app/zeko) directory.
 
 # Mina
 
