@@ -68,7 +68,7 @@
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules zeko_util)
+ (modules zeko_util wrap_two)
  )
  
 (library
