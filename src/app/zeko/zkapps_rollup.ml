@@ -505,7 +505,7 @@ module Outer = struct
         (Stmt.var, Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t =
       { public_input = stmt
       ; proof_must_verify = Boolean.(true_)
-      ; proof = v_ref proof
+      ; proof = ref_of_v proof
       }
   end
 

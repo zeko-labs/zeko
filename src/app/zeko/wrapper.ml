@@ -32,7 +32,7 @@ module T = struct
     Pickles.Inductive_rule.Previous_proof_statement.
       { public_input = stmt
       ; proof_must_verify = Boolean.true_
-      ; proof = v_ref proof
+      ; proof = ref_of_v proof
       }
 
   let statement_var { stmt } = stmt
@@ -154,7 +154,7 @@ module Wrap = struct
           (* Proof for txn_snark_stmt using normal txn snark *)
           [ { public_input = txn_snark_stmt
             ; proof_must_verify = Boolean.true_
-            ; proof = V.map txn_snark ~f:Transaction_snark.proof |> v_ref
+            ; proof = V.map txn_snark ~f:Transaction_snark.proof |> ref_of_v
             }
           ]
       ; public_output = stmt
