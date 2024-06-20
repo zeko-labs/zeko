@@ -174,11 +174,9 @@ module Sequencer = struct
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
-    let persist_state t () =
-      Kvdb.set t.kvdb ~key:SNARK_QUEUE_STATE
-        ~data:
-          ( Bigstring.of_string @@ Yojson.Safe.to_string
-          @@ State.to_yojson t.state )
+    let persist_state ~kvdb t () =
+      Kvdb.set kvdb ~key:SNARK_QUEUE_STATE
+        ~data:(Bigstring.of_string @@ Yojson.Safe.to_string @@ State.to_yojson t)
 
     let get_state ~kvdb =
       let%bind.Option data = Kvdb.get kvdb ~key:SNARK_QUEUE_STATE in
@@ -246,12 +244,12 @@ module Sequencer = struct
     let enqueue t f =
       Throttle.enqueue t.q (fun () ->
           let%map result = f () in
-          let () = persist_state t () in
+          let () = persist_state ~kvdb:t.kvdb t.state () in
           result )
 
     let enqueue_prove_command t command_witness =
       t.state <- State.add_queued_command t.state command_witness ;
-      persist_state t () ;
+      persist_state ~kvdb:t.kvdb t.state () ;
       enqueue t (fun () ->
           match command_witness with
           | Command_witness.Signed_command
