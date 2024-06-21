@@ -702,7 +702,10 @@ module Eff = struct
         { account_update : 'account_update; account : 'account }
         -> ( 'account
            , < account_update : 'account_update ; account : 'account ; .. > )
-           t
+           t  (** ZEKO NOTE: issue #64 *)
+    | Get_shift_action_state :
+        'account
+        -> ('bool, < bool : 'bool ; account : 'account ; .. >) t
 end
 
 type 'e handler = { perform : 'r. ('r, 'e) Eff.t -> 'r }
@@ -1062,20 +1065,19 @@ module Make (Inputs : Inputs_intf) = struct
     }
 
   let update_action_state (action_state : _ Pickles_types.Vector.t) actions
-      ~txn_global_slot ~last_action_slot =
+      ~txn_global_slot ~last_action_slot ~shift_action_state =
     (* Push events to s1. *)
     let [ s1'; s2'; s3'; s4'; s5' ] = action_state in
     let is_empty = Actions.is_empty actions in
     let s1_updated = Actions.push_events s1' actions in
     let s1 = Field.if_ is_empty ~then_:s1' ~else_:s1_updated in
+    let shift_action_state' = Bool.(shift_action_state &&& not is_empty) in
     (* Shift along if not empty and last update wasn't this slot *)
-    (* ZEKO NOTE: We don't support time, so we shift it along every time. (issue #64) *)
-    let is_this_slot = Bool.false_ in
-    let is_empty_or_this_slot = Bool.(is_empty ||| is_this_slot) in
-    let s5 = Field.if_ is_empty_or_this_slot ~then_:s5' ~else_:s4' in
-    let s4 = Field.if_ is_empty_or_this_slot ~then_:s4' ~else_:s3' in
-    let s3 = Field.if_ is_empty_or_this_slot ~then_:s3' ~else_:s2' in
-    let s2 = Field.if_ is_empty_or_this_slot ~then_:s2' ~else_:s1' in
+    (* ZEKO NOTE: We don't support time, so we shift it along whenever the sequencer wants to. (issue #64) *)
+    let s5 = Field.if_ shift_action_state' ~then_:s4' ~else_:s5' in
+    let s4 = Field.if_ shift_action_state' ~then_:s3' ~else_:s4' in
+    let s3 = Field.if_ shift_action_state' ~then_:s2' ~else_:s3' in
+    let s2 = Field.if_ shift_action_state' ~then_:s1' ~else_:s2' in
     let last_action_slot =
       Global_slot_since_genesis.if_ is_empty ~then_:last_action_slot
         ~else_:txn_global_slot
@@ -1607,9 +1609,10 @@ module Make (Inputs : Inputs_intf) = struct
     let a, local_state =
       let actions = Account_update.Update.actions account_update in
       let last_action_slot = Account.last_action_slot a in
+      let shift_action_state = h.perform (Get_shift_action_state a) in
       let action_state, last_action_slot =
         update_action_state (Account.action_state a) actions ~txn_global_slot
-          ~last_action_slot
+          ~last_action_slot ~shift_action_state
       in
       let is_empty =
         (* also computed in update_action_state, but messy to return it *)

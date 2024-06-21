@@ -121,7 +121,8 @@ val create_new_account_exn : t -> Account_id.t -> Account.t -> unit
     made available here so we can use this logic in the Zkapp_command generators
 *)
 val update_action_state :
-     Snark_params.Tick.Field.t Pickles_types.Vector.Vector_5.t
+     ?shift_action_state:bool (* ZEKO NOTE: issue #64 *)
+  -> Snark_params.Tick.Field.t Pickles_types.Vector.Vector_5.t
   -> Zkapp_account.Actions.t
   -> txn_global_slot:Mina_numbers.Global_slot_since_genesis.t
   -> last_action_slot:Mina_numbers.Global_slot_since_genesis.t

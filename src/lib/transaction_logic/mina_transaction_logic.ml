@@ -248,6 +248,14 @@ module Transaction_applied = struct
         c.coinbase.status
 end
 
+(* ZEKO NOTE: issue #64 *)
+type env = < mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
+
+let dummy_env : env =
+  object
+    method mark_shifted_and_get_previous_shiftedness _ = true
+  end
+
 module type S = sig
   type ledger
 
@@ -395,7 +403,8 @@ module type S = sig
     -> Transaction_applied.Signed_command_applied.t Or_error.t
 
   val update_action_state :
-       Snark_params.Tick.Field.t Pickles_types.Vector.Vector_5.t
+       ?shift_action_state:bool (* ZEKO NOTE: issue #64 *)
+    -> Snark_params.Tick.Field.t Pickles_types.Vector.Vector_5.t
     -> Zkapp_account.Actions.t
     -> txn_global_slot:Global_slot_since_genesis.t
     -> last_action_slot:Global_slot_since_genesis.t
@@ -403,7 +412,8 @@ module type S = sig
        * Global_slot_since_genesis.t
 
   val apply_zkapp_command_unchecked :
-       constraint_constants:Genesis_constants.Constraint_constants.t
+       ?env:env
+    -> constraint_constants:Genesis_constants.Constraint_constants.t
     -> global_slot:Mina_numbers.Global_slot_since_genesis.t
     -> state_view:Zkapp_precondition.Protocol_state.View.t
     -> ledger
@@ -436,7 +446,8 @@ module type S = sig
       zkapp_command to include in the snark work spec / transaction snark witness.
   *)
   val apply_zkapp_command_unchecked_aux :
-       constraint_constants:Genesis_constants.Constraint_constants.t
+       ?env:env
+    -> constraint_constants:Genesis_constants.Constraint_constants.t
     -> global_slot:Mina_numbers.Global_slot_since_genesis.t
     -> state_view:Zkapp_precondition.Protocol_state.View.t
     -> init:'acc
@@ -460,7 +471,8 @@ module type S = sig
     -> (Transaction_applied.Zkapp_command_applied.t * 'acc) Or_error.t
 
   val apply_zkapp_command_first_pass_aux :
-       constraint_constants:Genesis_constants.Constraint_constants.t
+       ?env:env
+    -> constraint_constants:Genesis_constants.Constraint_constants.t
     -> global_slot:Mina_numbers.Global_slot_since_genesis.t
     -> state_view:Zkapp_precondition.Protocol_state.View.t
     -> init:'acc
@@ -485,7 +497,8 @@ module type S = sig
        Or_error.t
 
   val apply_zkapp_command_second_pass_aux :
-       init:'acc
+       ?env:env
+    -> init:'acc
     -> f:
          (   'acc
           -> Global_state.t
@@ -1876,7 +1889,7 @@ module Make (L : Ledger_intf.S) :
       ; field : Snark_params.Tick.Field.t
       ; failure : Transaction_status.Failure.t option >
 
-    let perform ~constraint_constants:_ (type r)
+    let perform ~(env : env) ~constraint_constants:_ (type r)
         (eff : (r, t) Zkapp_command_logic.Eff.t) : r =
       match eff with
       | Check_valid_while_precondition (valid_while, global_state) ->
@@ -1898,23 +1911,29 @@ module Make (L : Ledger_intf.S) :
           !local_state
       | Init_account { account_update = _; account = a } ->
           a
+      | Get_shift_action_state a ->
+          (* ZEKO NOTE: issue #64 *)
+          env#mark_shifted_and_get_previous_shiftedness
+            (Account_id.create a.public_key a.token_id)
   end
 
   module M = Zkapp_command_logic.Make (Inputs)
 
-  let update_action_state action_state actions ~txn_global_slot
-      ~last_action_slot =
+  (* ZEKO NOTE: issue #64 *)
+  let update_action_state ?(shift_action_state = true) action_state actions
+      ~txn_global_slot ~last_action_slot =
     let action_state', last_action_slot' =
       M.update_action_state action_state actions ~txn_global_slot
-        ~last_action_slot
+        ~last_action_slot ~shift_action_state
     in
     (action_state', last_action_slot')
 
   (* apply zkapp command fee payer's while stubbing out the second pass ledger
      CAUTION: If you use the intermediate local states, you MUST update the
        [will_succeed] field to [false] if the [status] is [Failed].*)
-  let apply_zkapp_command_first_pass_aux (type user_acc) ~constraint_constants
-      ~global_slot ~(state_view : Zkapp_precondition.Protocol_state.View.t)
+  let apply_zkapp_command_first_pass_aux (type user_acc) ?(env = dummy_env)
+      ~constraint_constants ~global_slot
+      ~(state_view : Zkapp_precondition.Protocol_state.View.t)
       ~(init : user_acc) ~f
       ?((* TODO: can this be ripped out from here? *)
         fee_excess = Amount.Signed.zero)
@@ -1935,7 +1954,7 @@ module Make (L : Ledger_intf.S) :
             (loc, a)) )
       ]
     in
-    let perform eff = Env.perform ~constraint_constants eff in
+    let perform eff = Env.perform ~env ~constraint_constants eff in
     let initial_state :
         Inputs.Global_state.t * _ Zkapp_command_logic.Local_state.t =
       ( { protocol_state = state_view
@@ -1991,7 +2010,7 @@ module Make (L : Ledger_intf.S) :
       }
     , user_acc )
 
-  let apply_zkapp_command_first_pass ~constraint_constants ~global_slot
+  let apply_zkapp_command_first_pass ?env ~constraint_constants ~global_slot
       ~(state_view : Zkapp_precondition.Protocol_state.View.t)
       ?((* TODO: can this be ripped out from here? *)
         fee_excess = Amount.Signed.zero)
@@ -2002,19 +2021,19 @@ module Make (L : Ledger_intf.S) :
       =
     let open Or_error.Let_syntax in
     let%map partial_stmt, _user_acc =
-      apply_zkapp_command_first_pass_aux ~constraint_constants ~global_slot
+      apply_zkapp_command_first_pass_aux ?env ~constraint_constants ~global_slot
         ~state_view ~fee_excess ~supply_increase ledger command ~init:None
         ~f:(fun _acc state -> Some state)
     in
     partial_stmt
 
-  let apply_zkapp_command_second_pass_aux (type user_acc) ~(init : user_acc) ~f
-      ledger
+  let apply_zkapp_command_second_pass_aux (type user_acc) ?(env = dummy_env)
+      ~(init : user_acc) ~f ledger
       (c : Transaction_partially_applied.Zkapp_command_partially_applied.t) :
       (Transaction_applied.Zkapp_command_applied.t * user_acc) Or_error.t =
     let open Or_error.Let_syntax in
     let perform eff =
-      Env.perform ~constraint_constants:c.constraint_constants eff
+      Env.perform ~env ~constraint_constants:c.constraint_constants eff
     in
     let original_account_states =
       (*get the original states of all the accounts in each pass.
@@ -2159,28 +2178,29 @@ module Make (L : Ledger_intf.S) :
               "Zkapp_command application failed but new accounts created or \
                some of the other account_update updates applied"
 
-  let apply_zkapp_command_second_pass ledger c :
+  let apply_zkapp_command_second_pass ?env ledger c :
       Transaction_applied.Zkapp_command_applied.t Or_error.t =
     let open Or_error.Let_syntax in
     let%map x, () =
-      apply_zkapp_command_second_pass_aux ~init:() ~f:Fn.const ledger c
+      apply_zkapp_command_second_pass_aux ?env ~init:() ~f:Fn.const ledger c
     in
     x
 
-  let apply_zkapp_command_unchecked_aux ~constraint_constants ~global_slot
+  let apply_zkapp_command_unchecked_aux ?env ~constraint_constants ~global_slot
       ~state_view ~init ~f ?fee_excess ?supply_increase ledger command =
     let open Or_error.Let_syntax in
-    apply_zkapp_command_first_pass_aux ~constraint_constants ~global_slot
+    apply_zkapp_command_first_pass_aux ?env ~constraint_constants ~global_slot
       ~state_view ?fee_excess ?supply_increase ledger command ~init ~f
     >>= fun (partial_stmt, user_acc) ->
-    apply_zkapp_command_second_pass_aux ~init:user_acc ~f ledger partial_stmt
+    apply_zkapp_command_second_pass_aux ?env ~init:user_acc ~f ledger
+      partial_stmt
 
-  let apply_zkapp_command_unchecked ~constraint_constants ~global_slot
+  let apply_zkapp_command_unchecked ?env ~constraint_constants ~global_slot
       ~state_view ledger command =
     let open Or_error.Let_syntax in
     apply_zkapp_command_first_pass ~constraint_constants ~global_slot
       ~state_view ledger command
-    >>= apply_zkapp_command_second_pass_aux ledger ~init:None
+    >>= apply_zkapp_command_second_pass_aux ?env ledger ~init:None
           ~f:(fun _acc (global_state, local_state) ->
             Some (local_state, global_state.fee_excess) )
     |> Result.map ~f:(fun (account_update_applied, state_res) ->
