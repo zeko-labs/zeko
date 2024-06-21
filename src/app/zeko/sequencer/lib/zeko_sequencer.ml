@@ -472,113 +472,33 @@ module Sequencer = struct
     | Error (`Msg e) ->
         print_endline e
 
-  let apply_signed_command t (signed_command : Signed_command.t) =
+  let apply_user_command t command =
     let%bind.Result () =
       if Snark_queue.queue_size t.snark_q >= t.config.max_pool_size then
         Error (Error.of_string "Maximum pool size reached, try later")
       else Ok ()
     in
 
-    let%bind.Result with_valid_signature =
-      match Signed_command.check_only_for_signature signed_command with
-      | Some x ->
-          Ok x
-      | None ->
-          Error (Error.of_string "Signature check failed")
-    in
-    let txn =
-      Mina_transaction.Transaction.Command
-        (User_command.Signed_command signed_command)
-    in
     (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
     let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
     let state_body =
       Mina_state.Protocol_state.body compile_time_genesis_state
     in
     let l = L.of_database t.db in
-    let source_ledger_hash = L.merkle_root l in
-    let sparse_ledger =
-      Mina_ledger.Sparse_ledger.of_ledger_subset_exn l
-        (Signed_command.accounts_referenced signed_command)
-    in
-    let%bind.Result txn_applied =
-      Result.( >>= )
-        (L.apply_transaction_first_pass ~constraint_constants ~global_slot
-           ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-           l (Command (Signed_command signed_command)) )
-        (L.apply_transaction_second_pass l)
-    in
-    let%bind.Result txn_applied =
-      match L.Transaction_applied.transaction_status txn_applied with
-      | Failed failure ->
-          Error
-            ( Error.of_string @@ Yojson.Safe.to_string
-            @@ Transaction_status.Failure.Collection.to_yojson failure )
-      | Applied ->
-          Ok txn_applied
+
+    let%bind.Result valid =
+      User_command.check ~failed:false
+        ~find_vk:
+          (Zkapp_command.Verifiable.load_vk_from_ledger ~get:(L.get l)
+             ~location_of_account:(L.location_of_account l) )
+        command
     in
 
-    L.Mask.Attached.commit l ;
-
-    let target_ledger_hash = L.merkle_root l in
-    let pc : Transaction_snark.Pending_coinbase_stack_state.t =
-      (* No coinbase to add to the stack. *)
-      let stack_with_state global_slot =
-        Pending_coinbase.Stack.push_state
-          (Mina_state.Protocol_state.Body.hash state_body)
-          global_slot Pending_coinbase.Stack.empty
-      in
-      { source = stack_with_state global_slot
-      ; target = stack_with_state global_slot
-      }
-    in
-    let user_command_in_block =
-      { Transaction_protocol_state.Poly.transaction = with_valid_signature
-      ; block_data = state_body
-      ; global_slot
-      }
-    in
-    let (statement : Transaction_snark.Statement.With_sok.t) =
-      Transaction_snark.Statement.Poly.with_empty_local_state
-        ~source_first_pass_ledger:source_ledger_hash
-        ~target_first_pass_ledger:target_ledger_hash
-        ~source_second_pass_ledger:target_ledger_hash
-        ~target_second_pass_ledger:target_ledger_hash
-        ~connecting_ledger_left:target_ledger_hash
-        ~connecting_ledger_right:target_ledger_hash ~sok_digest
-        ~fee_excess:
-          (Mina_transaction.Transaction.fee_excess txn |> Or_error.ok_exn)
-        ~supply_increase:
-          (L.Transaction_applied.supply_increase txn_applied |> Or_error.ok_exn)
-        ~pending_coinbase_stack_state:pc
-    in
-
-    dispatch_transaction t ~ledger:l
-      ~accounts_created:(L.Transaction_applied.new_accounts txn_applied)
-      ~new_state_hash:target_ledger_hash
-      ~txn:(L.Transaction_applied.transaction txn_applied) ;
-
-    Result.return
-      ( txn_applied
-      , Snark_queue.Command_witness.Signed_command
-          (sparse_ledger, user_command_in_block, statement) )
-
-  let apply_zkapp_command t (zkapp_command : Zkapp_command.t) =
-    let%bind.Result () =
-      if Snark_queue.queue_size t.snark_q >= t.config.max_pool_size then
-        Error (Error.of_string "Maximum pool size reached, try later")
-      else Ok ()
-    in
-    (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
-    let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
-    let state_body =
-      Mina_state.Protocol_state.body compile_time_genesis_state
-    in
-    let l = L.of_database t.db in
-    let%bind.Result first_pass_ledger, second_pass_ledger, txn_applied =
-      let accounts_referenced =
-        Zkapp_command.accounts_referenced zkapp_command
-      in
+    let%bind.Result ( first_pass_ledger
+                    , second_pass_ledger
+                    , txn_applied
+                    , target_ledger_hash ) =
+      let accounts_referenced = User_command.accounts_referenced command in
 
       let first_pass_ledger =
         Mina_ledger.Sparse_ledger.of_ledger_subset_exn l accounts_referenced
@@ -586,7 +506,7 @@ module Sequencer = struct
       let%bind.Result partialy_applied_txn =
         L.apply_transaction_first_pass ~constraint_constants ~global_slot
           ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-          l (Command (Zkapp_command zkapp_command))
+          l (Command command)
       in
 
       let second_pass_ledger =
@@ -605,31 +525,45 @@ module Sequencer = struct
             Ok txn_applied
       in
 
+      let target_ledger_hash = L.merkle_root l in
+
       L.Mask.Attached.commit l ;
 
-      Zkapp_command.(
-        Call_forest.iteri (account_updates zkapp_command) ~f:(fun _ update ->
-            let account =
-              Option.value_exn
-              @@ get_account t
-                   (Account_update.public_key update)
-                   (Account_update.token_id update)
-            in
-            Archive.add_account_update t.archive update account
-              (Some
-                 Archive.Transaction_info.
-                   { status = Applied
-                   ; hash =
-                       Mina_transaction.Transaction_hash.hash_command
-                         (Zkapp_command zkapp_command)
-                   ; memo = Zkapp_command.memo zkapp_command
-                   ; authorization_kind =
-                       Account_update.Body.authorization_kind
-                       @@ Account_update.body update
-                   } ) )) ;
-
-      (first_pass_ledger, second_pass_ledger, txn_applied)
+      (* Add events and actions to the memory *)
+      let () =
+        match command with
+        | Signed_command _ ->
+            ()
+        | Zkapp_command zkapp_command ->
+            Zkapp_command.(
+              Call_forest.iteri (account_updates zkapp_command)
+                ~f:(fun _ update ->
+                  let account =
+                    Option.value_exn
+                    @@ get_account t
+                         (Account_update.public_key update)
+                         (Account_update.token_id update)
+                  in
+                  Archive.add_account_update t.archive update account
+                    (Some
+                       Archive.Transaction_info.
+                         { status = Applied
+                         ; hash =
+                             Mina_transaction.Transaction_hash.hash_command
+                               (Zkapp_command zkapp_command)
+                         ; memo = Zkapp_command.memo zkapp_command
+                         ; authorization_kind =
+                             Account_update.Body.authorization_kind
+                             @@ Account_update.body update
+                         } ) ))
+      in
+      (first_pass_ledger, second_pass_ledger, txn_applied, target_ledger_hash)
     in
+
+    dispatch_transaction t ~ledger:l
+      ~accounts_created:(L.Transaction_applied.new_accounts txn_applied)
+      ~new_state_hash:(L.merkle_root l)
+      ~txn:(L.Transaction_applied.transaction txn_applied) ;
 
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
       (* No coinbase to add to the stack. *)
@@ -642,30 +576,60 @@ module Sequencer = struct
       ; target = stack_with_state global_slot
       }
     in
-    let witnesses =
-      Transaction_snark.zkapp_command_witnesses_exn ~constraint_constants
-        ~global_slot ~state_body
-        ~fee_excess:
-          ( Currency.Amount.Signed.of_unsigned
-          @@ Currency.Amount.of_fee (Zkapp_command.fee zkapp_command) )
-        [ ( `Pending_coinbase_init_stack Pending_coinbase.Stack.empty
-          , `Pending_coinbase_of_statement pc
-          , `Sparse_ledger first_pass_ledger
-          , `Sparse_ledger second_pass_ledger
-          , `Connecting_ledger_hash
-              (Mina_ledger.Sparse_ledger.merkle_root second_pass_ledger)
-          , zkapp_command )
-        ]
-    in
 
-    dispatch_transaction t ~ledger:l
-      ~accounts_created:(L.Transaction_applied.new_accounts txn_applied)
-      ~new_state_hash:(L.merkle_root l)
-      ~txn:(L.Transaction_applied.transaction txn_applied) ;
-
-    Result.return
-      ( txn_applied
-      , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command) )
+    match (command, valid) with
+    | Signed_command signed_command, Signed_command with_valid_signature ->
+        let user_command_in_block =
+          { Transaction_protocol_state.Poly.transaction = with_valid_signature
+          ; block_data = state_body
+          ; global_slot
+          }
+        in
+        let source_ledger_hash =
+          Mina_ledger.Sparse_ledger.merkle_root first_pass_ledger
+        in
+        let (statement : Transaction_snark.Statement.With_sok.t) =
+          Transaction_snark.Statement.Poly.with_empty_local_state
+            ~source_first_pass_ledger:source_ledger_hash
+            ~target_first_pass_ledger:target_ledger_hash
+            ~source_second_pass_ledger:target_ledger_hash
+            ~target_second_pass_ledger:target_ledger_hash
+            ~connecting_ledger_left:target_ledger_hash
+            ~connecting_ledger_right:target_ledger_hash ~sok_digest
+            ~fee_excess:
+              ( Mina_transaction.Transaction.fee_excess (Command command)
+              |> Or_error.ok_exn )
+            ~supply_increase:
+              ( L.Transaction_applied.supply_increase txn_applied
+              |> Or_error.ok_exn )
+            ~pending_coinbase_stack_state:pc
+        in
+        Result.return
+          ( txn_applied
+          , Snark_queue.Command_witness.Signed_command
+              (first_pass_ledger, user_command_in_block, statement) )
+    | Zkapp_command zkapp_command, _ ->
+        let witnesses =
+          Transaction_snark.zkapp_command_witnesses_exn ~constraint_constants
+            ~global_slot ~state_body
+            ~fee_excess:
+              ( Currency.Amount.Signed.of_unsigned
+              @@ Currency.Amount.of_fee (Zkapp_command.fee zkapp_command) )
+            [ ( `Pending_coinbase_init_stack Pending_coinbase.Stack.empty
+              , `Pending_coinbase_of_statement pc
+              , `Sparse_ledger first_pass_ledger
+              , `Sparse_ledger second_pass_ledger
+              , `Connecting_ledger_hash
+                  (Mina_ledger.Sparse_ledger.merkle_root second_pass_ledger)
+              , zkapp_command )
+            ]
+        in
+        Result.return
+          ( txn_applied
+          , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command)
+          )
+    | _ ->
+        failwith "Invalid command"
 
   let apply_deposits t =
     let%bind inner_account_update =
@@ -692,7 +656,7 @@ module Sequencer = struct
     let _, command_witness =
       Result.ok_exn
       @@ Result.map_error ~f:Error.to_exn
-      @@ apply_zkapp_command t command
+      @@ apply_user_command t (Zkapp_command command)
     in
     Snark_queue.enqueue_prove_command t.snark_q command_witness
 
@@ -752,15 +716,8 @@ module Sequencer = struct
     in
     printf "Applying %d commands\n%!" (List.length commands) ;
     List.iter commands ~f:(fun command ->
-        match command with
-        | User_command.Signed_command signed_command ->
-            let _res =
-              apply_signed_command t signed_command |> Or_error.ok_exn
-            in
-            ()
-        | User_command.Zkapp_command zkapp_command ->
-            let _res = apply_zkapp_command t zkapp_command |> Or_error.ok_exn in
-            () ) ;
+        let _res = apply_user_command t command |> Or_error.ok_exn in
+        () ) ;
 
     let current_root = get_root t in
     printf "Current root: %s\n%!"
@@ -962,7 +919,7 @@ let%test_unit "apply commands and commit" =
                           | _ ->
                               () ) ;
 
-                          apply_zkapp_command sequencer command
+                          apply_user_command sequencer (Zkapp_command command)
                       | false ->
                           let command = command_send spec in
                           ( match
@@ -976,7 +933,7 @@ let%test_unit "apply commands and commit" =
                           | _ ->
                               () ) ;
 
-                          apply_signed_command sequencer command
+                          apply_user_command sequencer (Signed_command command)
                     in
 
                     [%test_eq: Bool.t] true (Or_error.is_ok result) ;
@@ -1062,7 +1019,7 @@ let%test_unit "apply commands and commit" =
                         | _ ->
                             () ) ;
 
-                        apply_zkapp_command sequencer command
+                        apply_user_command sequencer (Zkapp_command command)
                     | false ->
                         let command = command_send spec in
                         ( match
@@ -1076,7 +1033,7 @@ let%test_unit "apply commands and commit" =
                         | _ ->
                             () ) ;
 
-                        apply_signed_command sequencer command
+                        apply_user_command sequencer (Signed_command command)
                   in
 
                   [%test_eq: Bool.t] true (Or_error.is_ok result) ;
