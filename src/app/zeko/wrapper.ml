@@ -98,7 +98,8 @@ module Wrap = struct
         @@ Ledger_hash.assert_equal stmt.target_ledger
              txn_snark_stmt.target.second_pass_ledger ) ;
 
-    (* Check that pending_coinbase_stack is correctly set *)
+    (* Check that pending_coinbase_stack is correctly set. This also constrains
+       protocol state. See check_protocol_state in transaction_snark.ml. *)
     let dummy_pc = constant Pending_coinbase.Stack.typ dummy_pc in
     with_label __LOC__ (fun () ->
         Boolean.Assert.is_true @@ run
