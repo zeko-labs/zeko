@@ -1,9 +1,12 @@
+open Core
+open Mina_base
+open Mina_transaction
+open Snark_params
+open Currency
+
+type env = < mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
+
 module type Full = sig
-  open Core
-  open Mina_base
-  open Mina_transaction
-  open Snark_params
-  open Currency
   module Transaction_validator = Transaction_validator
 
   (** For debugging. Logs to stderr the inputs to the top hash. *)
@@ -158,6 +161,13 @@ module type Full = sig
       -> spec:Zkapp_command_segment.Basic.t
       -> t Async.Deferred.t
 
+    val of_zkapp_command_segment_zeko_exn :
+         statement:Statement.With_sok.t
+      -> witness:Zkapp_command_segment.Witness.t
+      -> env:env
+      -> spec:Zkapp_command_segment.Basic.t
+      -> t Async.Deferred.t
+
     val merge :
       t -> t -> sok_digest:Sok_message.Digest.t -> t Async.Deferred.Or_error.t
   end
@@ -254,6 +264,7 @@ module type Full = sig
     module Zkapp_command_snark : sig
       val main :
            ?witness:Zkapp_command_segment.Witness.t
+        -> ?env:env
         -> Zkapp_command_segment.Spec.t
         -> constraint_constants:Genesis_constants.Constraint_constants.t
         -> Statement.With_sok.var
