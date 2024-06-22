@@ -4,6 +4,7 @@ open Mina_transaction
 open Snark_params
 open Currency
 
+(* ZEKO NOTE: issue #64 *)
 type env = < mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
 
 module type Full = sig
@@ -161,6 +162,7 @@ module type Full = sig
       -> spec:Zkapp_command_segment.Basic.t
       -> t Async.Deferred.t
 
+    (* ZEKO NOTE: issue #64, allows passing in env *)
     val of_zkapp_command_segment_zeko_exn :
          statement:Statement.With_sok.t
       -> witness:Zkapp_command_segment.Witness.t
