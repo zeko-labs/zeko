@@ -7,6 +7,9 @@ module Graphql_cohttp_async =
 
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
     ~db_dir ~l1_uri ~signer ~test_accounts_path ~network_id () =
+  let (module T), (module M) = Lazy.force Zeko_sequencer.prover_modules in
+  let module Sequencer = Zeko_sequencer.Make (T) (M) in
+  let module Gql = Gql.Make (T) (M) (Sequencer) in
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
@@ -14,7 +17,7 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
   in
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
-        Zeko_sequencer.create ~zkapp_pk ~max_pool_size ~da_contract_address
+        Sequencer.create ~zkapp_pk ~max_pool_size ~da_contract_address
           ~db_dir:(Some db_dir) ~l1_uri ~test_accounts_path
           ~commitment_period_sec:commitment_period ~network_id
           ~signer:
@@ -23,7 +26,7 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
               @@ Private_key.of_base58_check_exn signer) )
   in
 
-  Zeko_sequencer.run_committer sequencer ;
+  Sequencer.run_committer sequencer ;
 
   let graphql_callback =
     Graphql_cohttp_async.make_callback

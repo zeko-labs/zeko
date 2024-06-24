@@ -160,7 +160,11 @@ let snark_queue =
          in
          fun () ->
            let kvdb = Kvdb.of_dir db_dir in
-           let open Zeko_sequencer.Snark_queue in
+           let (module T), (module M) =
+             Lazy.force Zeko_sequencer.prover_modules
+           in
+           let module Sequencer = Zeko_sequencer.Make (T) (M) in
+           let open Sequencer.Snark_queue in
            match get_state ~kvdb with
            | None ->
                printf "No state in db\n%!"
@@ -182,7 +186,11 @@ let snark_queue =
          in
          fun () ->
            let kvdb = Kvdb.of_dir db_dir in
-           let open Zeko_sequencer.Snark_queue in
+           let (module T), (module M) =
+             Lazy.force Zeko_sequencer.prover_modules
+           in
+           let module Sequencer = Zeko_sequencer.Make (T) (M) in
+           let open Sequencer.Snark_queue in
            match get_state ~kvdb with
            | None ->
                printf "No state in db\n%!"

@@ -5,6 +5,8 @@ open Async_kernel
 open Mina_base
 module L = Mina_ledger.Ledger
 
+let constraint_constants = Genesis_constants.Constraint_constants.compiled
+
 module Test_accounts = struct
   type t = { pk : string; balance : int64 } [@@deriving yojson]
 
@@ -33,7 +35,7 @@ module Test_accounts = struct
         (account_id, account) )
 end
 
-module Sequencer = struct
+module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
   module Config = struct
     type t =
       { max_pool_size : int
@@ -56,8 +58,6 @@ module Sequencer = struct
       }
   end
 
-  let constraint_constants = Genesis_constants.Constraint_constants.compiled
-
   let genesis_constants = Genesis_constants.compiled
 
   let compile_time_genesis_state =
@@ -73,14 +73,6 @@ module Sequencer = struct
         ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
     in
     compile_time_genesis.data
-
-  module T = Transaction_snark.Make (struct
-    let constraint_constants = constraint_constants
-
-    let proof_level = Genesis_constants.Proof_level.Full
-  end)
-
-  module M = Zkapps_rollup.Make (T)
 
   let keypair = Signature_lib.Keypair.create ()
 
@@ -807,9 +799,21 @@ module Sequencer = struct
     return t
 end
 
-include Sequencer
+let prover_modules :
+    ((module Transaction_snark.S) * (module Zkapps_rollup.S)) lazy_t =
+  lazy
+    (let module T = Transaction_snark.Make (struct
+       let constraint_constants = constraint_constants
+
+       let proof_level = Genesis_constants.Proof_level.Full
+     end) in
+    let module M = Zkapps_rollup.Make (T) in
+    ((module T), (module M)) )
 
 let%test_unit "apply commands and commit" =
+  let (module T), (module M) = Lazy.force prover_modules in
+  let module Sequencer = Make (T) (M) in
+  let open Sequencer in
   Base.Backtrace.elide := false ;
   let number_of_transactions = 5 in
   let zkapp_keypair = Signature_lib.Keypair.create () in
