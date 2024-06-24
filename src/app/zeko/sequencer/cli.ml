@@ -147,6 +147,62 @@ let da_layer =
   , Command.group ~summary:"Tool to interact with the DA layer of the sequencer"
       [ bootstrap_commands ] )
 
+let snark_queue =
+  let get_state =
+    ( "get-state"
+    , Command.basic ~summary:"Get state of the snark queue"
+        (let%map_open.Command db_dir =
+           flag "--db-dir"
+             (optional_with_default "db" string)
+             ~doc:"string Directory to store the database"
+         and pretty =
+           flag "--pretty" no_arg ~doc:"string Pretty print the staged commands"
+         in
+         fun () ->
+           let kvdb = Kvdb.of_dir db_dir in
+           let (module T), (module M) =
+             Lazy.force Zeko_sequencer.prover_modules
+           in
+           let module Sequencer = Zeko_sequencer.Make (T) (M) in
+           let open Sequencer.Snark_queue in
+           match get_state ~kvdb with
+           | None ->
+               printf "No state in db\n%!"
+           | Some state ->
+               let to_string : Yojson.Safe.t -> string =
+                 if pretty then function
+                   | json -> Yojson.Safe.pretty_to_string json
+                 else function json -> Yojson.Safe.to_string json
+               in
+               print_endline @@ to_string @@ State.to_yojson state ) )
+  in
+  let clear_queued_commands =
+    ( "clear-queued-commands"
+    , Command.basic ~summary:"Delete queued commands from the snark queue"
+        (let%map_open.Command db_dir =
+           flag "--db-dir"
+             (optional_with_default "db" string)
+             ~doc:"string Directory to store the database"
+         in
+         fun () ->
+           let kvdb = Kvdb.of_dir db_dir in
+           let (module T), (module M) =
+             Lazy.force Zeko_sequencer.prover_modules
+           in
+           let module Sequencer = Zeko_sequencer.Make (T) (M) in
+           let open Sequencer.Snark_queue in
+           match get_state ~kvdb with
+           | None ->
+               printf "No state in db\n%!"
+           | Some state ->
+               let new_state = State.clear_queued_commands state in
+               persist_state ~kvdb new_state () ) )
+  in
+  ( "snark-queue"
+  , Command.group
+      ~summary:"Script to manually send commiting transactions to L1"
+      [ get_state; clear_queued_commands ] )
+
 let () =
-  Command.group ~summary:"Sequencer CLI" [ committer; da_layer ]
+  Command.group ~summary:"Sequencer CLI" [ committer; da_layer; snark_queue ]
   |> Command_unix.run
