@@ -20,12 +20,18 @@ describe("Batches DataAvailability", () => {
       validators.map((validator) => validator.toPublicKey())
     );
 
+    const genesisState = ethers.utils.randomBytes(randomInt(50, 100));
+    await dataAvailabilityContract.initGenesisState(genesisState).then((tx) => tx.wait());
+
     const previousLocation = -1;
 
     const numberOfUserCommands = randomInt(5, 10);
 
     const sourceReceiptChainHashes = ethers.utils.randomBytes(randomInt(50, 100));
     const userCommands = Array.from({ length: numberOfUserCommands }, () =>
+      ethers.utils.randomBytes(randomInt(50, 100))
+    );
+    const envs = Array.from({ length: numberOfUserCommands }, () =>
       ethers.utils.randomBytes(randomInt(50, 100))
     );
     const targetSparseLedger = ethers.utils.randomBytes(randomInt(50, 100));
@@ -35,6 +41,7 @@ describe("Batches DataAvailability", () => {
       previousLocation,
       sourceReceiptChainHashes,
       userCommands,
+      envs,
       targetSparseLedger,
       sigData.map(fieldToHex)
     );
@@ -100,11 +107,27 @@ describe("Batches DataAvailability", () => {
   it("should fail if the proposer is not sequencer", async () => {
     const validators = Array.from({ length: 5 }, () => PrivateKey.random());
 
+    const [fundedAccount] = await ethers.getSigners();
+    const sequencer = ethers.Wallet.createRandom().connect(ethers.provider);
+
+    await fundedAccount
+      .sendTransaction({
+        to: sequencer.address,
+        value: ethers.utils.parseEther("1"),
+      })
+      .then((tx) => tx.wait());
+
     const dataAvailabilityContract = await deployDataAvailabilityContract(
       validators.map((validator) => validator.toPublicKey()),
       5,
-      ethers.Wallet.createRandom().address
+      sequencer.address
     );
+
+    const genesisState = ethers.utils.randomBytes(randomInt(50, 100));
+    await dataAvailabilityContract
+      .connect(sequencer)
+      .initGenesisState(genesisState)
+      .then((tx) => tx.wait());
 
     const previousLocation = -1;
 
@@ -112,6 +135,9 @@ describe("Batches DataAvailability", () => {
 
     const sourceReceiptChainHashes = ethers.utils.randomBytes(randomInt(50, 100));
     const userCommands = Array.from({ length: numberOfUserCommands }, () =>
+      ethers.utils.randomBytes(randomInt(50, 100))
+    );
+    const envs = Array.from({ length: numberOfUserCommands }, () =>
       ethers.utils.randomBytes(randomInt(50, 100))
     );
     const targetSparseLedger = ethers.utils.randomBytes(randomInt(50, 100));
@@ -122,6 +148,7 @@ describe("Batches DataAvailability", () => {
         previousLocation,
         sourceReceiptChainHashes,
         userCommands,
+        envs,
         targetSparseLedger,
         sigData.map(fieldToHex)
       )

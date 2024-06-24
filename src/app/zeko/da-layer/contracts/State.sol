@@ -78,6 +78,9 @@ abstract contract State {
     mapping(uint256 => RollupBatch) public batches;
     uint256 public batchesLength = 0;
 
+    bool public genesisInitialized = false;
+    bytes public genesisState;
+
     mapping(HashedMinaPublicKey => mapping(uint256 => bool)) validatorSigned;
 
     address public sequencer;

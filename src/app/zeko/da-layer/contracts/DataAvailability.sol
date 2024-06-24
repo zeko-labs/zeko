@@ -23,18 +23,33 @@ contract DataAvailability is MinaMultisig {
         _;
     }
 
+    modifier postGenesis() {
+        require(genesisInitialized, "First init the genesis state");
+        _;
+    }
+
     function setSequencer(address sequencer_) external onlyMultisig {
         sequencer = sequencer_;
+    }
+
+    function initGenesisState(bytes memory genesisState_) external onlySequencer {
+        require(!genesisInitialized, "Genesis state already initialized");
+
+        genesisState = genesisState_;
+        genesisInitialized = true;
     }
 
     function postBatch(
         int256 previousLocation,
         bytes memory sourceReceiptChainHashes,
         bytes[] memory commands,
+        bytes[] memory envs,
         bytes memory targetSparseLedger,
         bytes32[] memory sigData
-    ) external onlySequencer {
+    ) external postGenesis onlySequencer {
+        require(envs.length == commands.length, "Commands and envs length mismatch");
         require(commands.length > 0, "Commands cannot be empty");
+
         // -1 means genesis batch
         require(
             previousLocation < (int256)(batchesLength) && previousLocation >= -1,
