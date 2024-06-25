@@ -198,10 +198,39 @@ let snark_queue =
                let new_state = State.clear_queued_commands state in
                persist_state ~kvdb new_state () ) )
   in
+  let clear_state =
+    ( "clear-state"
+    , Command.basic ~summary:"Delete the whole snark queue state"
+        (let%map_open.Command db_dir =
+           flag "--db-dir"
+             (optional_with_default "db" string)
+             ~doc:"string Directory to store the database"
+         in
+         fun () ->
+           let db =
+             Mina_ledger.Ledger.Db.create ~directory_name:db_dir
+               ~depth:Zeko_sequencer.constraint_constants.ledger_depth ()
+           in
+           let kvdb = Kvdb.of_dir db_dir in
+           let (module T), (module M) =
+             Lazy.force Zeko_sequencer.prover_modules
+           in
+           let module Sequencer = Zeko_sequencer.Make (T) (M) in
+           let open Sequencer.Snark_queue in
+           let sparse_ledger =
+             Mina_ledger.Sparse_ledger.of_ledger_subset_exn
+               Mina_ledger.Ledger.(of_database db)
+               [ M.Inner.account_id ]
+           in
+           let new_state =
+             State.(reset_for_new_batch (create ()) sparse_ledger)
+           in
+           persist_state ~kvdb new_state () ) )
+  in
   ( "snark-queue"
   , Command.group
       ~summary:"Script to manually send commiting transactions to L1"
-      [ get_state; clear_queued_commands ] )
+      [ get_state; clear_queued_commands; clear_state ] )
 
 let () =
   Command.group ~summary:"Sequencer CLI" [ committer; da_layer; snark_queue ]
