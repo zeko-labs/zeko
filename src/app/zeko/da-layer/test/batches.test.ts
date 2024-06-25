@@ -23,26 +23,11 @@ describe("Batches DataAvailability", () => {
     const genesisState = ethers.utils.randomBytes(randomInt(50, 100));
     await dataAvailabilityContract.initGenesisState(genesisState).then((tx) => tx.wait());
 
-    const previousLocation = -1;
-
-    const numberOfUserCommands = randomInt(5, 10);
-
-    const sourceReceiptChainHashes = ethers.utils.randomBytes(randomInt(50, 100));
-    const userCommands = Array.from({ length: numberOfUserCommands }, () =>
-      ethers.utils.randomBytes(randomInt(50, 100))
-    );
-    const envs = Array.from({ length: numberOfUserCommands }, () =>
-      ethers.utils.randomBytes(randomInt(50, 100))
-    );
-    const targetSparseLedger = ethers.utils.randomBytes(randomInt(50, 100));
+    const batchData = ethers.utils.randomBytes(randomInt(50, 100));
     const sigData = Array.from({ length: randomInt(5, 10) }, () => Field.random());
 
     const proposalTx = await dataAvailabilityContract.postBatch(
-      previousLocation,
-      sourceReceiptChainHashes,
-      userCommands,
-      envs,
-      targetSparseLedger,
+      batchData,
       sigData.map(fieldToHex)
     );
     const proposalReceipt = await proposalTx.wait();
@@ -53,11 +38,12 @@ describe("Batches DataAvailability", () => {
       proposalReceipt.events?.find(({ event }) => event === "BatchPosted")?.args?.location
     ).to.equal(expectedLocation);
 
-    const [fetchedPreviousLocation] = await dataAvailabilityContract.getBatchData(
+    const [fetchedBatchData, fetchedSigData] = await dataAvailabilityContract.getBatchData(
       expectedLocation
     );
 
-    expect(fetchedPreviousLocation).to.equal(previousLocation);
+    expect(new Uint8Array(Buffer.from(fetchedBatchData.slice(2), "hex"))).to.deep.equal(batchData);
+    expect(fetchedSigData).to.deep.equal(sigData.map(fieldToHex));
 
     const expectedSignatures: MinaSchnorrSignatureStruct[] = [];
 
@@ -129,29 +115,11 @@ describe("Batches DataAvailability", () => {
       .initGenesisState(genesisState)
       .then((tx) => tx.wait());
 
-    const previousLocation = -1;
-
-    const numberOfUserCommands = randomInt(5, 10);
-
-    const sourceReceiptChainHashes = ethers.utils.randomBytes(randomInt(50, 100));
-    const userCommands = Array.from({ length: numberOfUserCommands }, () =>
-      ethers.utils.randomBytes(randomInt(50, 100))
-    );
-    const envs = Array.from({ length: numberOfUserCommands }, () =>
-      ethers.utils.randomBytes(randomInt(50, 100))
-    );
-    const targetSparseLedger = ethers.utils.randomBytes(randomInt(50, 100));
+    const batchData = ethers.utils.randomBytes(randomInt(50, 100));
     const sigData = Array.from({ length: randomInt(5, 10) }, () => Field.random());
 
     await expect(
-      dataAvailabilityContract.postBatch(
-        previousLocation,
-        sourceReceiptChainHashes,
-        userCommands,
-        envs,
-        targetSparseLedger,
-        sigData.map(fieldToHex)
-      )
+      dataAvailabilityContract.postBatch(batchData, sigData.map(fieldToHex))
     ).to.be.revertedWith("Only sequencer can call this function");
   });
 });

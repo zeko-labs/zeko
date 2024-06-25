@@ -31,11 +31,7 @@ struct MinaSchnorrSignature {
 }
 
 struct RollupBatch {
-    int256 previousLocation;
-    bytes sourceReceiptChainHashes;
-    bytes[] commands;
-    bytes[] envs;
-    bytes targetSparseLedger;
+    bytes data;
     MinaSchnorrSignature[] signatures;
     bytes32[] sigData;
 }

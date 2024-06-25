@@ -40,28 +40,12 @@ contract DataAvailability is MinaMultisig {
     }
 
     function postBatch(
-        int256 previousLocation,
-        bytes memory sourceReceiptChainHashes,
-        bytes[] memory commands,
-        bytes[] memory envs,
-        bytes memory targetSparseLedger,
+        bytes memory batchData,
         bytes32[] memory sigData
     ) external postGenesis onlySequencer {
-        require(envs.length == commands.length, "Commands and envs length mismatch");
-        require(commands.length > 0, "Commands cannot be empty");
-
-        // -1 means genesis batch
-        require(
-            previousLocation < (int256)(batchesLength) && previousLocation >= -1,
-            "Invalid previousLocation"
-        );
-
         RollupBatch storage batch = batches[batchesLength];
 
-        batch.previousLocation = previousLocation;
-        batch.sourceReceiptChainHashes = sourceReceiptChainHashes;
-        batch.commands = commands;
-        batch.targetSparseLedger = targetSparseLedger;
+        batch.data = batchData;
         batch.sigData = sigData;
 
         emit BatchPosted(batchesLength);
@@ -105,18 +89,8 @@ contract DataAvailability is MinaMultisig {
 
     function getBatchData(
         uint256 location
-    )
-        external
-        view
-        returns (int256, bytes memory, bytes[] memory, bytes memory, bytes32[] memory)
-    {
+    ) external view returns (bytes memory, bytes32[] memory) {
         RollupBatch storage batch = batches[location];
-        return (
-            batch.previousLocation,
-            batch.sourceReceiptChainHashes,
-            batch.commands,
-            batch.targetSparseLedger,
-            batch.sigData
-        );
+        return (batch.data, batch.sigData);
     }
 }
