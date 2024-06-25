@@ -211,7 +211,7 @@ let snark_queue =
              Mina_ledger.Ledger.Db.create ~directory_name:db_dir
                ~depth:Zeko_sequencer.constraint_constants.ledger_depth ()
            in
-           let kvdb = Kvdb.of_dir db_dir in
+           let kvdb = Mina_ledger.Ledger.Db.kvdb db in
            let (module T), (module M) =
              Lazy.force Zeko_sequencer.prover_modules
            in
