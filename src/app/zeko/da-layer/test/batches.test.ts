@@ -88,6 +88,9 @@ describe("Batches DataAvailability", () => {
         s,
       }))
     ).to.deep.equal(expectedSignatures);
+
+    console.log(dataAvailabilityContract.address);
+    console.log(expectedLocation.toString());
   });
 
   it("should fail if the proposer is not sequencer", async () => {

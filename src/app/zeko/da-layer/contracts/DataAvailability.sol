@@ -90,6 +90,8 @@ contract DataAvailability is MinaMultisig {
     function getBatchData(
         uint256 location
     ) external view returns (bytes memory, bytes32[] memory) {
+        require(location < batchesLength, "Invalid location");
+
         RollupBatch storage batch = batches[location];
         return (batch.data, batch.sigData);
     }

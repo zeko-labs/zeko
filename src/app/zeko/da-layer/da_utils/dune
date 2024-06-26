@@ -61,6 +61,7 @@
 
 (library
  (name da_utils)
+ (libraries async)
  (foreign_stubs
   (language c)
   (names da_utils))
