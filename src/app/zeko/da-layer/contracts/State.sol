@@ -79,7 +79,7 @@ abstract contract State {
     uint256 public batchesLength = 0;
 
     bool public genesisInitialized = false;
-    bytes public genesisState;
+    string public genesisState;
 
     mapping(HashedMinaPublicKey => mapping(uint256 => bool)) validatorSigned;
 

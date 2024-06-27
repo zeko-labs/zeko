@@ -150,3 +150,49 @@ CAMLprim value caml_get_batch_data(value da_websocket, value da_contract_address
         CAMLreturn(result);
     }
 }
+
+extern int get_genesis_state(
+    const char* da_websocket,
+    const char* da_contract_address,
+    char** output_ptr,
+    char** error_ptr);
+
+// Ocaml function signature:
+// string -> string -> (string, string) result
+CAMLprim value caml_get_genesis_state(value da_websocket, value da_contract_address)
+{
+    CAMLparam2(da_websocket, da_contract_address);
+
+    // Convert the ocaml strings to C strings
+    // This needs to happen before releasing the ocaml runtime system
+    char* da_websocket_cstr = caml_stat_strdup(String_val(da_websocket));
+    char* da_contract_address_cstr = caml_stat_strdup(String_val(da_contract_address));
+
+    // To make it work with async we need to release the ocaml runtime system
+    caml_release_runtime_system();
+
+    char *output, *error;
+    int rust_result = get_genesis_state(da_websocket_cstr, da_contract_address_cstr, &output, &error);
+
+    caml_stat_free(da_websocket_cstr);
+    caml_stat_free(da_contract_address_cstr);
+
+    // Reacquire the ocaml runtime system
+    caml_acquire_runtime_system();
+
+    if (rust_result == 0) {
+        // Error
+        CAMLlocal1(result);
+        result = caml_alloc(1, 1); // Allocate a block with 1 field, tag 1 (Error)
+        Store_field(result, 0, caml_copy_string(error));
+        free_string(error);
+        CAMLreturn(result);
+    } else {
+        // Ok
+        CAMLlocal1(result);
+        result = caml_alloc(1, 0); // Allocate a block with 1 field, tag 0 (Ok)
+        Store_field(result, 0, caml_copy_string(output));
+        free_string(output);
+        CAMLreturn(result);
+    }
+}

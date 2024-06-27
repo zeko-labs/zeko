@@ -97,4 +97,10 @@ impl DALayerCaller {
 
         Ok(data)
     }
+
+    pub async fn get_genesis_state(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let data = self.contract.genesis_state().await?;
+
+        Ok(data)
+    }
 }

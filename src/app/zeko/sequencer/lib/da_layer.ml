@@ -11,6 +11,25 @@ module Config = struct
     }
 end
 
+module Genesis_state = struct
+  [%%versioned
+  module Stable = struct
+    module V1 = struct
+      type t = Account.Stable.V2.t list [@@deriving to_yojson]
+
+      let to_latest = Fn.id
+    end
+  end]
+end
+
+let get_genesis_accounts (config : Config.t) =
+  let%bind.Deferred.Result data =
+    Da_utils.get_genesis_state ~da_websocket:config.da_websocket
+      ~da_contract_address:config.da_contract_address
+  in
+  let accounts = Binable.of_string (module Genesis_state.Stable.Latest) data in
+  return (Ok accounts)
+
 module Batch = struct
   [%%versioned
   module Stable = struct

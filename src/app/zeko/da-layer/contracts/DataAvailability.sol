@@ -32,7 +32,7 @@ contract DataAvailability is MinaMultisig {
         sequencer = sequencer_;
     }
 
-    function initGenesisState(bytes memory genesisState_) external onlySequencer {
+    function initGenesisState(string memory genesisState_) external onlySequencer {
         require(!genesisInitialized, "Genesis state already initialized");
 
         genesisState = genesisState_;

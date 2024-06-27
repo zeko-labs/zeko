@@ -20,3 +20,12 @@ let get_batch_data ~da_websocket ~da_contract_address ~location :
   In_thread.run (fun () ->
       caml_get_batch_data da_websocket da_contract_address location
       |> Result.map_error ~f:(fun e -> Error.of_string e) )
+
+external caml_get_genesis_state : string -> string -> (string, string) result
+  = "caml_get_genesis_state"
+
+let get_genesis_state ~da_websocket ~da_contract_address :
+    (string, Error.t) result Deferred.t =
+  In_thread.run (fun () ->
+      caml_get_genesis_state da_websocket da_contract_address
+      |> Result.map_error ~f:(fun e -> Error.of_string e) )

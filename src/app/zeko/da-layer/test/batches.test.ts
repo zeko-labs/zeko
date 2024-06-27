@@ -20,7 +20,7 @@ describe("Batches DataAvailability", () => {
       validators.map((validator) => validator.toPublicKey())
     );
 
-    const genesisState = ethers.utils.randomBytes(randomInt(50, 100));
+    const genesisState = ethers.utils.randomBytes(randomInt(50, 100)).toString();
     await dataAvailabilityContract.initGenesisState(genesisState).then((tx) => tx.wait());
 
     const batchData = ethers.utils.randomBytes(randomInt(50, 100)).toString();
@@ -112,7 +112,7 @@ describe("Batches DataAvailability", () => {
       sequencer.address
     );
 
-    const genesisState = ethers.utils.randomBytes(randomInt(50, 100));
+    const genesisState = ethers.utils.randomBytes(randomInt(50, 100)).toString();
     await dataAvailabilityContract
       .connect(sequencer)
       .initGenesisState(genesisState)
