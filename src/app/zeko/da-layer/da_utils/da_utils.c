@@ -50,6 +50,7 @@ extern int post_batch(
     char** output_ptr,
     char** error_ptr);
 
+// Ocaml function signature:
 // string -> string -> string -> string -> string list -> (string, string) result
 CAMLprim value caml_post_batch(value da_websocket, value da_contract_address, value da_private_key, value batch_data, value sig_data)
 {
@@ -108,6 +109,7 @@ extern int get_batch_data(
     char** output_ptr,
     char** error_ptr);
 
+// Ocaml function signature:
 // string -> string -> string -> (string, string) result
 CAMLprim value caml_get_batch_data(value da_websocket, value da_contract_address, value location)
 {
