@@ -31,7 +31,7 @@ struct MinaSchnorrSignature {
 }
 
 struct RollupBatch {
-    bytes data;
+    string data;
     MinaSchnorrSignature[] signatures;
     bytes32[] sigData;
 }

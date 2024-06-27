@@ -902,6 +902,7 @@ dependencies = [
  "mina-curves",
  "mina-hasher",
  "mina-signer",
+ "num-bigint",
  "o1-utils",
  "rand",
  "sha2",

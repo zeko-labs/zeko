@@ -40,7 +40,7 @@ contract DataAvailability is MinaMultisig {
     }
 
     function postBatch(
-        bytes memory batchData,
+        string memory batchData,
         bytes32[] memory sigData
     ) external postGenesis onlySequencer {
         RollupBatch storage batch = batches[batchesLength];
@@ -89,7 +89,7 @@ contract DataAvailability is MinaMultisig {
 
     function getBatchData(
         uint256 location
-    ) external view returns (bytes memory, bytes32[] memory) {
+    ) external view returns (string memory, bytes32[] memory) {
         require(location < batchesLength, "Invalid location");
 
         RollupBatch storage batch = batches[location];

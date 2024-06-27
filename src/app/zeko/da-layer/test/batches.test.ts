@@ -23,7 +23,7 @@ describe("Batches DataAvailability", () => {
     const genesisState = ethers.utils.randomBytes(randomInt(50, 100));
     await dataAvailabilityContract.initGenesisState(genesisState).then((tx) => tx.wait());
 
-    const batchData = ethers.utils.randomBytes(randomInt(50, 100));
+    const batchData = ethers.utils.randomBytes(randomInt(50, 100)).toString();
     const sigData = Array.from({ length: randomInt(5, 10) }, () => Field.random());
 
     const proposalTx = await dataAvailabilityContract.postBatch(
@@ -42,7 +42,7 @@ describe("Batches DataAvailability", () => {
       expectedLocation
     );
 
-    expect(new Uint8Array(Buffer.from(fetchedBatchData.slice(2), "hex"))).to.deep.equal(batchData);
+    expect(fetchedBatchData).to.deep.equal(batchData);
     expect(fetchedSigData).to.deep.equal(sigData.map(fieldToHex));
 
     const expectedSignatures: MinaSchnorrSignatureStruct[] = [];
@@ -118,7 +118,7 @@ describe("Batches DataAvailability", () => {
       .initGenesisState(genesisState)
       .then((tx) => tx.wait());
 
-    const batchData = ethers.utils.randomBytes(randomInt(50, 100));
+    const batchData = ethers.utils.randomBytes(randomInt(50, 100)).toString();
     const sigData = Array.from({ length: randomInt(5, 10) }, () => Field.random());
 
     await expect(

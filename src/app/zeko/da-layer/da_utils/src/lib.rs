@@ -1,6 +1,8 @@
 mod da_layer;
 
-use da_layer::DALayer;
+use da_layer::{DALayerCaller, DALayerExecutor};
+use mina_signer::BaseField;
+use o1_utils::FieldHelpers;
 use std::{
     ffi::{CStr, CString},
     os::raw::c_char,
@@ -42,6 +44,89 @@ pub unsafe extern "C" fn free_string(s: *mut c_char) {
  * this function dereferences C strings
  */
 #[no_mangle]
+pub unsafe extern "C" fn post_batch(
+    da_websocket: *const c_char,
+    da_contract_address: *const c_char,
+    da_private_key: *const c_char,
+    batch_data: *const c_char,
+    sig_data: *const *const c_char,
+    sig_data_len: usize,
+    output_ptr: *mut *mut c_char,
+    error_ptr: *mut *mut c_char,
+) -> bool {
+    let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_c_string(error_ptr, "Failed to convert da_websocket to string");
+            return false;
+        }
+    };
+
+    let da_contract_address = match unsafe { CStr::from_ptr(da_contract_address) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_c_string(error_ptr, "Failed to convert da_contract_address to string");
+            return false;
+        }
+    };
+
+    let da_private_key = match unsafe { CStr::from_ptr(da_private_key) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_c_string(error_ptr, "Failed to convert da_private_key to string");
+            return false;
+        }
+    };
+
+    let batch_data = match unsafe { CStr::from_ptr(batch_data) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_c_string(error_ptr, "Failed to convert batch_data to string");
+            return false;
+        }
+    };
+
+    let sig_data = match (0..sig_data_len)
+        .flat_map(|i: usize| unsafe { CStr::from_ptr(*sig_data.add(i)) }.to_str())
+        .flat_map(|s| s.parse::<num_bigint::BigUint>())
+        .map(|uint| BaseField::from_biguint(&uint))
+        .collect::<Result<Vec<BaseField>, _>>()
+    {
+        Ok(sig_data) => sig_data,
+        Err(err) => {
+            set_c_string(error_ptr, &format!("{}", err));
+            return false;
+        }
+    };
+
+    create_runtime().block_on(async {
+        let da_layer =
+            match DALayerExecutor::new(da_websocket, da_contract_address, da_private_key).await {
+                Ok(da_layer) => da_layer,
+                Err(err) => {
+                    set_c_string(error_ptr, &format!("{}", err));
+                    return false;
+                }
+            };
+
+        match da_layer.post_batch(batch_data, sig_data).await {
+            Ok(data) => {
+                set_c_string(output_ptr, &data);
+                true
+            }
+            Err(err) => {
+                set_c_string(error_ptr, &format!("{}", err));
+                false
+            }
+        }
+    })
+}
+
+/**
+ * # Safety
+ * this function dereferences C strings
+ */
+#[no_mangle]
 pub unsafe extern "C" fn get_batch_data(
     da_websocket: *const c_char,
     da_contract_address: *const c_char,
@@ -74,7 +159,7 @@ pub unsafe extern "C" fn get_batch_data(
     };
 
     create_runtime().block_on(async {
-        let da_layer = match DALayer::new(da_websocket, da_contract_address).await {
+        let da_layer = match DALayerCaller::new(da_websocket, da_contract_address).await {
             Ok(da_layer) => da_layer,
             Err(err) => {
                 set_c_string(error_ptr, &format!("{}", err));
