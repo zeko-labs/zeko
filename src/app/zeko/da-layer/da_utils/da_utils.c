@@ -151,6 +151,56 @@ CAMLprim value caml_get_batch_data(value da_websocket, value da_contract_address
     }
 }
 
+extern int init_genesis_state(
+    const char* da_websocket,
+    const char* da_contract_address,
+    const char* da_private_key,
+    const char* data,
+    char** error_ptr);
+
+// Ocaml function signature:
+// string -> string -> string -> string -> ((), string) result
+CAMLprim value caml_init_genesis_state(value da_websocket, value da_contract_address, value da_private_key, value data)
+{
+    CAMLparam4(da_websocket, da_contract_address, da_private_key, data);
+
+    // Convert the ocaml strings to C strings
+    // This needs to happen before releasing the ocaml runtime system
+    char* da_websocket_cstr = caml_stat_strdup(String_val(da_websocket));
+    char* da_contract_address_cstr = caml_stat_strdup(String_val(da_contract_address));
+    char* da_private_key_cstr = caml_stat_strdup(String_val(da_private_key));
+    char* data_cstr = caml_stat_strdup(String_val(data));
+
+    // To make it work with async we need to release the ocaml runtime system
+    caml_release_runtime_system();
+
+    char* error;
+    int rust_result = init_genesis_state(da_websocket_cstr, da_contract_address_cstr, da_private_key_cstr, data_cstr, &error);
+
+    caml_stat_free(da_websocket_cstr);
+    caml_stat_free(da_contract_address_cstr);
+    caml_stat_free(da_private_key_cstr);
+    caml_stat_free(data_cstr);
+
+    // Reacquire the ocaml runtime system
+    caml_acquire_runtime_system();
+
+    if (rust_result == 0) {
+        // Error
+        CAMLlocal1(result);
+        result = caml_alloc(1, 1); // Allocate a block with 1 field, tag 1 (Error)
+        Store_field(result, 0, caml_copy_string(error));
+        free_string(error);
+        CAMLreturn(result);
+    } else {
+        // Ok
+        CAMLlocal1(result);
+        result = caml_alloc(1, 0); // Allocate a block with 1 field, tag 0 (Ok)
+        Store_field(result, 0, Val_unit);
+        CAMLreturn(result);
+    }
+}
+
 extern int get_genesis_state(
     const char* da_websocket,
     const char* da_contract_address,

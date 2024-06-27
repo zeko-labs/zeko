@@ -30,6 +30,15 @@ let get_genesis_accounts (config : Config.t) =
   let accounts = Binable.of_string (module Genesis_state.Stable.Latest) data in
   return (Ok accounts)
 
+let init_genesis_accounts (config : Config.t)
+    ~(genesis_accounts : Account.t list) =
+  let data =
+    Binable.to_string (module Genesis_state.Stable.Latest) genesis_accounts
+  in
+  Da_utils.init_genesis_state ~da_websocket:config.da_websocket
+    ~da_contract_address:config.da_contract_address
+    ~da_private_key:config.da_private_key ~data
+
 module Batch = struct
   [%%versioned
   module Stable = struct

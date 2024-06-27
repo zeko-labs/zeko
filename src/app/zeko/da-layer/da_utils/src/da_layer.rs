@@ -69,6 +69,23 @@ impl DALayerExecutor {
             None => Err("Transaction failed".into()),
         }
     }
+
+    pub async fn init_genesis_state(&self, data: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let txn = self
+            .contract
+            .init_genesis_state(data.to_string())
+            .from(self.wallet.address())
+            .legacy();
+
+        let pending_tx = txn.send().await?;
+
+        let receipt: Option<TransactionReceipt> = pending_tx.await?;
+
+        match receipt {
+            Some(_) => Ok(()),
+            None => Err("Transaction failed".into()),
+        }
+    }
 }
 
 pub struct DALayerCaller {

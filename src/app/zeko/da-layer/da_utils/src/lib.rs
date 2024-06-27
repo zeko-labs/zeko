@@ -185,6 +185,70 @@ pub unsafe extern "C" fn get_batch_data(
  * this function dereferences C strings
  */
 #[no_mangle]
+pub unsafe extern "C" fn init_genesis_state(
+    da_websocket: *const c_char,
+    da_contract_address: *const c_char,
+    da_private_key: *const c_char,
+    data: *const c_char,
+    error_ptr: *mut *mut c_char,
+) -> bool {
+    let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_c_string(error_ptr, "Failed to convert da_websocket to string");
+            return false;
+        }
+    };
+
+    let da_contract_address = match unsafe { CStr::from_ptr(da_contract_address) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_c_string(error_ptr, "Failed to convert da_contract_address to string");
+            return false;
+        }
+    };
+
+    let da_private_key = match unsafe { CStr::from_ptr(da_private_key) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_c_string(error_ptr, "Failed to convert da_private_key to string");
+            return false;
+        }
+    };
+
+    let data = match unsafe { CStr::from_ptr(data) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_c_string(error_ptr, "Failed to convert batch_data to string");
+            return false;
+        }
+    };
+
+    create_runtime().block_on(async {
+        let da_layer =
+            match DALayerExecutor::new(da_websocket, da_contract_address, da_private_key).await {
+                Ok(da_layer) => da_layer,
+                Err(err) => {
+                    set_c_string(error_ptr, &format!("{}", err));
+                    return false;
+                }
+            };
+
+        match da_layer.init_genesis_state(data).await {
+            Ok(()) => true,
+            Err(err) => {
+                set_c_string(error_ptr, &format!("{}", err));
+                false
+            }
+        }
+    })
+}
+
+/**
+ * # Safety
+ * this function dereferences C strings
+ */
+#[no_mangle]
 pub unsafe extern "C" fn get_genesis_state(
     da_websocket: *const c_char,
     da_contract_address: *const c_char,
