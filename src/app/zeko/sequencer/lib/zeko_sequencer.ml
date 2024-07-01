@@ -1067,21 +1067,37 @@ let%test_unit "apply commands and commit" =
               return () ) ;
 
           (* Second commit *)
-          Thread_safe.block_on_async_exn (fun () ->
-              let%bind () = commit sequencer in
-              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-              let%bind () =
-                Executor.wait_to_finish sequencer.snark_q.executor
-              in
-              let%bind _created =
-                Gql_client.For_tests.create_new_block gql_uri
-              in
-              let%bind committed_ledger_hash, committed_location =
-                Gql_client.fetch_committed_state gql_uri
-                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-              in
-              let target_ledger_hash = get_root sequencer in
-              [%test_eq: Frozen_ledger_hash.t] committed_ledger_hash
-                target_ledger_hash ;
+          let final_ledger_hash =
+            Thread_safe.block_on_async_exn (fun () ->
+                let%bind () = commit sequencer in
+                let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+                let%bind () =
+                  Executor.wait_to_finish sequencer.snark_q.executor
+                in
+                let%bind _created =
+                  Gql_client.For_tests.create_new_block gql_uri
+                in
+                let%bind committed_ledger_hash, committed_location =
+                  Gql_client.fetch_committed_state gql_uri
+                    Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+                in
+                let target_ledger_hash = get_root sequencer in
+                [%test_eq: Frozen_ledger_hash.t] committed_ledger_hash
+                  target_ledger_hash ;
 
-              Deferred.unit ) ) )
+                return target_ledger_hash )
+          in
+
+          (* Try to bootstrap again *)
+          Thread_safe.block_on_async_exn (fun () ->
+              let%bind new_sequencer =
+                Sequencer.create
+                  ~zkapp_pk:
+                    Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+                  ~max_pool_size:10 ~commitment_period_sec:0. ~da_websocket
+                  ~da_contract_address ~da_private_key ~db_dir:None
+                  ~l1_uri:gql_uri ~signer ~network_id:"testnet"
+              in
+              return
+              @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
+                   final_ledger_hash ) ) )
