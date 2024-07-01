@@ -135,9 +135,15 @@ let fetch_committed_state uri pk =
     end
   in
   let%map result = Graphql_client.query_json_exn q uri in
-  Yojson.Safe.Util.(
-    result |> member "account" |> member "zkappState" |> index 0 |> to_string)
-  |> Frozen_ledger_hash.of_decimal_string
+  let state =
+    Yojson.Safe.Util.(result |> member "account" |> member "zkappState")
+  in
+  let ledger_hash =
+    Yojson.Safe.Util.(index 0 state |> to_string)
+    |> Frozen_ledger_hash.of_decimal_string
+  in
+  let location = Yojson.Safe.Util.(index 2 state |> to_string) in
+  (ledger_hash, location)
 
 let infer_committed_state uri ~zkapp_pk ~signer_pk =
   let%bind committed_state = fetch_committed_state uri zkapp_pk
@@ -153,8 +159,9 @@ let infer_committed_state uri ~zkapp_pk ~signer_pk =
   in
   let future_state =
     List.fold_until pooled_state_transitions ~init:committed_state
-      ~f:(fun acc (source, target) ->
-        if Frozen_ledger_hash.equal acc source then Continue target
+      ~f:(fun ((acc_ledger_hash, _) as acc) ((source_ledger_hash, _), target) ->
+        if Frozen_ledger_hash.equal acc_ledger_hash source_ledger_hash then
+          Continue target
         else Stop acc )
       ~finish:Fn.id
   in

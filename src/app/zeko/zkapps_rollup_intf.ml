@@ -83,6 +83,7 @@ module type S = sig
            (** Old sparse inner ledger including inner account *)
       -> new_inner_ledger:Mina_ledger.Sparse_ledger.t
            (** New sparse inner ledger including inner account *)
+      -> location:string (** Location of the batch on the DA layer *)
       -> call_forest_tree Deferred.t
 
     (** Create an account update update for deploying the zkapp, given a valid ledger for it. *)

@@ -54,16 +54,25 @@ let get_state_transition pk command =
            |> Account_id.equal account_id )
   in
   let body = Account_update.body account_update in
-  let zeroth l = List.nth_exn l 0 in
-  let source =
+  let get_ledger_hash_and_location field_to_option state =
+    Zkapp_state.V.to_list state
+    |> function
+    | ledger_hash :: _all_withdrawals :: location :: _ ->
+        Some
+          ( field_to_option ledger_hash |> Option.value ~default:Field.zero
+          , field_to_option location
+            |> Option.value ~default:Field.zero
+            |> Field.to_string )
+    | _ ->
+        None
+  in
+  let%bind.Option source =
     body |> Account_update.Body.preconditions
     |> Account_update.Preconditions.account |> Zkapp_precondition.Account.state
-    |> Zkapp_state.V.to_list |> zeroth |> Zkapp_basic.Or_ignore.to_option
-    |> Option.value ~default:Field.zero
+    |> get_ledger_hash_and_location Zkapp_basic.Or_ignore.to_option
   in
-  let target =
+  let%bind.Option target =
     body |> Account_update.Body.update |> Account_update.Update.app_state
-    |> Zkapp_state.V.to_list |> zeroth |> Zkapp_basic.Set_or_keep.to_option
-    |> Option.value ~default:Field.zero
+    |> get_ledger_hash_and_location Zkapp_basic.Set_or_keep.to_option
   in
   Some (source, target)

@@ -246,3 +246,60 @@ CAMLprim value caml_get_genesis_state(value da_websocket, value da_contract_addr
         CAMLreturn(result);
     }
 }
+
+extern int deploy(
+    const char* da_websocket,
+    const char* da_private_key,
+    u_int64_t quorum,
+    char** validators,
+    uintptr_t validators_len,
+    char** output_ptr,
+    char** error_ptr);
+
+// Ocaml function signature:
+// string -> string -> uint64 -> string list -> (string, string) result
+CAMLprim value caml_deploy(value da_websocket, value da_private_key, value quorum, value validators)
+{
+    CAMLparam4(da_websocket, da_private_key, quorum, validators);
+
+    // Convert the ocaml strings to C strings
+    // This needs to happen before releasing the ocaml runtime system
+    char* da_websocket_cstr = caml_stat_strdup(String_val(da_websocket));
+    char* da_private_key_cstr = caml_stat_strdup(String_val(da_private_key));
+    u_int64_t quorum_c = Int64_val(quorum);
+
+    uintptr_t validators_len;
+    char** validators_cstr = caml_string_list_to_c_array(validators, &validators_len);
+
+    // To make it work with async we need to release the ocaml runtime system
+    caml_release_runtime_system();
+
+    char *output, *error;
+    int rust_result = deploy(da_websocket_cstr, da_private_key_cstr, quorum_c, validators_cstr, validators_len, &output, &error);
+
+    caml_stat_free(da_websocket_cstr);
+    caml_stat_free(da_private_key_cstr);
+
+    for (int i = 0; i < validators_len; i++) {
+        caml_stat_free(validators_cstr[i]);
+    }
+
+    // Reacquire the ocaml runtime system
+    caml_acquire_runtime_system();
+
+    if (rust_result == 0) {
+        // Error
+        CAMLlocal1(result);
+        result = caml_alloc(1, 1); // Allocate a block with 1 field, tag 1 (Error)
+        Store_field(result, 0, caml_copy_string(error));
+        free_string(error);
+        CAMLreturn(result);
+    } else {
+        // Ok
+        CAMLlocal1(result);
+        result = caml_alloc(1, 0); // Allocate a block with 1 field, tag 0 (Ok)
+        Store_field(result, 0, caml_copy_string(output));
+        free_string(output);
+        CAMLreturn(result);
+    }
+}

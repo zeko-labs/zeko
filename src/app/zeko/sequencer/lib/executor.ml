@@ -160,7 +160,7 @@ let send_commit t command ~source ~target =
   send_zkapp_command t command
 
 let recommit_all t ~zkapp_pk =
-  let%bind current_state =
+  let%bind current_state, _current_location =
     Gql_client.infer_committed_state t.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress t.signer.public_key)
   in

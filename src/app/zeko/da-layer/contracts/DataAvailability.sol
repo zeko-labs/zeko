@@ -37,6 +37,10 @@ contract DataAvailability is MinaMultisig {
 
         genesisState = genesisState_;
         genesisInitialized = true;
+
+        batches[0].data = genesisState_;
+        emit BatchPosted(batchesLength);
+        batchesLength++;
     }
 
     function postBatch(
@@ -90,6 +94,11 @@ contract DataAvailability is MinaMultisig {
     function getBatchData(
         uint256 location
     ) external view returns (string memory, bytes32[] memory) {
+        // Location 0 is reserved for the genesis state
+        if (location == 0) {
+            return ("", new bytes32[](0));
+        }
+
         require(location < batchesLength, "Invalid location");
 
         RollupBatch storage batch = batches[location];

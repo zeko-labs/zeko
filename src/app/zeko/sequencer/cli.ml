@@ -118,35 +118,6 @@ let committer =
       ~summary:"Script to manually send commiting transactions to L1"
       [ list; get; send ] )
 
-let da_layer =
-  let bootstrap_commands =
-    ( "bootstrap-commands"
-    , Command.basic ~summary:"List commands to be applied when bootstrapping"
-        (let%map_open.Command target =
-           flag "--target" (required string)
-             ~doc:"string The target ledger of the transaction (decimal string)"
-         and da_contract_address =
-           flag "--da-contract-address" (required string)
-             ~doc:"string The address of the DA contract"
-         in
-         fun () ->
-           Thread_safe.block_on_async_exn (fun () ->
-               let%bind commands =
-                 Da_layer.get_batches
-                   Da_layer.{ da_contract_address = Some da_contract_address }
-                   ~to_:target
-               in
-               printf "Found %d commands\n%!" (List.length commands) ;
-               return
-               @@ List.iter commands ~f:(fun command ->
-                      printf "%s\n\n%!"
-                        ( Yojson.Safe.pretty_to_string
-                        @@ User_command.to_yojson command ) ) ) ) )
-  in
-  ( "da-layer"
-  , Command.group ~summary:"Tool to interact with the DA layer of the sequencer"
-      [ bootstrap_commands ] )
-
 let snark_queue =
   let get_state =
     ( "get-state"
@@ -198,40 +169,11 @@ let snark_queue =
                let new_state = State.clear_queued_commands state in
                persist_state ~kvdb new_state () ) )
   in
-  let clear_state =
-    ( "clear-state"
-    , Command.basic ~summary:"Delete the whole snark queue state"
-        (let%map_open.Command db_dir =
-           flag "--db-dir"
-             (optional_with_default "db" string)
-             ~doc:"string Directory to store the database"
-         in
-         fun () ->
-           let db =
-             Mina_ledger.Ledger.Db.create ~directory_name:db_dir
-               ~depth:Zeko_sequencer.constraint_constants.ledger_depth ()
-           in
-           let kvdb = Mina_ledger.Ledger.Db.kvdb db in
-           let (module T), (module M) =
-             Lazy.force Zeko_sequencer.prover_modules
-           in
-           let module Sequencer = Zeko_sequencer.Make (T) (M) in
-           let open Sequencer.Snark_queue in
-           let sparse_ledger =
-             Mina_ledger.Sparse_ledger.of_ledger_subset_exn
-               Mina_ledger.Ledger.(of_database db)
-               [ M.Inner.account_id ]
-           in
-           let new_state =
-             State.(reset_for_new_batch (create ()) sparse_ledger)
-           in
-           persist_state ~kvdb new_state () ) )
-  in
   ( "snark-queue"
   , Command.group
       ~summary:"Script to manually send commiting transactions to L1"
-      [ get_state; clear_queued_commands; clear_state ] )
+      [ get_state; clear_queued_commands ] )
 
 let () =
-  Command.group ~summary:"Sequencer CLI" [ committer; da_layer; snark_queue ]
+  Command.group ~summary:"Sequencer CLI" [ committer; snark_queue ]
   |> Command_unix.run

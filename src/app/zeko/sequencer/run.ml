@@ -5,8 +5,9 @@ module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 
-let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
-    ~db_dir ~l1_uri ~signer ~test_accounts_path ~network_id () =
+let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_websocket
+    ~da_contract_address ~da_private_key ~db_dir ~l1_uri ~signer
+    ~test_accounts_path ~network_id () =
   let (module T), (module M) = Lazy.force Zeko_sequencer.prover_modules in
   let module Sequencer = Zeko_sequencer.Make (T) (M) in
   let module Gql = Gql.Make (T) (M) (Sequencer) in
@@ -17,9 +18,10 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
   in
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
-        Sequencer.create ~zkapp_pk ~max_pool_size ~da_contract_address
-          ~db_dir:(Some db_dir) ~l1_uri ~test_accounts_path
-          ~commitment_period_sec:commitment_period ~network_id
+        Sequencer.create ~zkapp_pk ~max_pool_size ~da_websocket
+          ~da_contract_address ~da_private_key ~db_dir:(Some db_dir) ~l1_uri
+          ~test_accounts_path ~commitment_period_sec:commitment_period
+          ~network_id
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
@@ -62,8 +64,11 @@ let () =
        flag "--max-pool-size"
          (optional_with_default 10 int)
          ~doc:"int Maximum transaction pool size"
+     and da_websocket =
+       flag "--da-websocket" (required string)
+         ~doc:"string Websocket uri of the DA layer"
      and da_contract_address =
-       flag "--da-contract-address" (optional string)
+       flag "--da-contract-address" (required string)
          ~doc:"string Address of the DA contract"
      and db_dir =
        flag "--db-dir"
@@ -78,7 +83,9 @@ let () =
          ~doc:"string Network id"
      in
      let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+     let da_private_key = Sys.getenv_exn "DA_PRIVATE_KEY" in
 
-     run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_contract_address
-       ~db_dir ~l1_uri ~signer ~test_accounts_path ~network_id )
+     run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_websocket
+       ~da_contract_address ~da_private_key ~db_dir ~l1_uri ~signer
+       ~test_accounts_path ~network_id )
   |> Command_unix.run

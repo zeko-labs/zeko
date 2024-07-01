@@ -40,3 +40,13 @@ let get_genesis_state ~da_websocket ~da_contract_address :
   In_thread.run (fun () ->
       caml_get_genesis_state da_websocket da_contract_address
       |> Result.map_error ~f:(fun e -> Error.of_string e) )
+
+external caml_deploy :
+  string -> string -> Unsigned.uint64 -> string list -> (string, string) result
+  = "caml_deploy"
+
+let deploy ~da_websocket ~da_private_key ~quorum ~validators :
+    (string, Error.t) result Deferred.t =
+  In_thread.run (fun () ->
+      caml_deploy da_websocket da_private_key quorum validators
+      |> Result.map_error ~f:(fun e -> Error.of_string e) )

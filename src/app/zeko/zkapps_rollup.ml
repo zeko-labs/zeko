@@ -408,12 +408,14 @@ module Outer = struct
       { ledger_hash : Ledger_hash.t  (** The ledger hash of the rollup *)
       ; all_withdrawals : F.t
             (** All withdrawals registered on the L2. They are paid out on the L1. *)
+      ; location : F.t  (** The location of the batch on the DA layer *)
       }
     [@@deriving snarky]
 
     let value_of_app_state
-        (ledger_hash :: all_withdrawals :: _ : F.t Zkapp_state.V.t) : t =
-      { ledger_hash; all_withdrawals }
+        (ledger_hash :: all_withdrawals :: location :: _ : F.t Zkapp_state.V.t)
+        : t =
+      { ledger_hash; all_withdrawals; location }
 
     (* FIXME: Define through HKD *)
     module Precondition = struct
@@ -519,6 +521,7 @@ module Outer = struct
       ; new_inner_acc : Account.t  (** Withdrawals to be processed this time *)
       ; old_inner_acc_path : Path.t  (** Old path to inner account *)
       ; new_inner_acc_path : Path.t  (** New path to inner account *)
+      ; location : F.t  (** The location of the batch on the DA layer *)
       }
     [@@deriving snarky]
   end
@@ -561,6 +564,7 @@ module Outer = struct
          ; old_inner_acc
          ; new_inner_acc_path
          ; new_inner_acc
+         ; location
          }
           : Witness.var ) =
       exists_witness ()
@@ -637,6 +641,7 @@ module Outer = struct
             var_to_app_state typ
               ( { ledger_hash = (Wrapper.statement_var t).target_ledger
                 ; all_withdrawals = new_all_withdrawals
+                ; location
                 }
                 : var ))
       }
@@ -967,7 +972,7 @@ module Make (T' : Transaction_snark.S) = struct
     let step (t : t) ~(outer_public_key : PC.t) ~(new_deposits : TR.t list)
         ~(unprocessed_deposits : TR.t list)
         ~(old_inner_ledger : Mina_ledger.Sparse_ledger.t)
-        ~(new_inner_ledger : Mina_ledger.Sparse_ledger.t) :
+        ~(new_inner_ledger : Mina_ledger.Sparse_ledger.t) ~(location : string) :
         ( Account_update.t
         , Zkapp_command.Digest.Account_update.t
         , Zkapp_command.Digest.Forest.t )
@@ -1037,6 +1042,7 @@ module Make (T' : Transaction_snark.S) = struct
               ; old_inner_acc_path
               ; new_inner_acc
               ; new_inner_acc_path
+              ; location = Field.Constant.of_string location
               }
             in
             step_ ~handler:(handler w) ()
@@ -1049,7 +1055,10 @@ module Make (T' : Transaction_snark.S) = struct
           app_state =
             State.(
               value_to_app_state typ
-                ( { ledger_hash; all_withdrawals = Actions.empty_state_element }
+                ( { ledger_hash
+                  ; all_withdrawals = Actions.empty_state_element
+                  ; location = Field.Constant.zero
+                  }
                   : t ))
         ; verification_key = Set vk
         ; permissions = Set proof_permissions

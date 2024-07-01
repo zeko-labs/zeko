@@ -7,34 +7,6 @@ module L = Mina_ledger.Ledger
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
-module Test_accounts = struct
-  type t = { pk : string; balance : int64 } [@@deriving yojson]
-
-  let parse_accounts_exn ~test_accounts_path : (Account_id.t * Account.t) list =
-    let accounts =
-      Yojson.Safe.(
-        from_file test_accounts_path
-        |> Util.to_list
-        |> List.map ~f:(fun t ->
-               match of_yojson t with
-               | Ppx_deriving_yojson_runtime.Result.Ok t ->
-                   t
-               | Ppx_deriving_yojson_runtime.Result.Error e ->
-                   failwith e ))
-    in
-    List.map accounts ~f:(fun { pk; balance } ->
-        let account_id =
-          Account_id.create
-            (Signature_lib.Public_key.Compressed.of_base58_check_exn pk)
-            Token_id.default
-        in
-        let account =
-          Account.create account_id
-            (Currency.Balance.of_uint64 (Unsigned.UInt64.of_int64 balance))
-        in
-        (account_id, account) )
-end
-
 module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
   module Config = struct
     type t =
@@ -104,6 +76,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         ; queued_commands : Command_witness.t list
         ; previous_committed_ledger_hash : Frozen_ledger_hash.t option
         ; previous_committed_ledger : Mina_ledger.Sparse_ledger.t option
+        ; previous_committed_location : string option
         }
       [@@deriving yojson, fields]
 
@@ -113,6 +86,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         ; queued_commands = []
         ; previous_committed_ledger_hash = None
         ; previous_committed_ledger = None
+        ; previous_committed_location = None
         }
 
       let set_last t last = { t with last = Some last }
@@ -134,13 +108,14 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
       let clear_queued_commands t = { t with queued_commands = [] }
 
-      let reset_for_new_batch t previous_ledger =
+      let reset_for_new_batch t previous_ledger previous_location =
         { t with
           last = None
         ; staged_commands = []
         ; previous_committed_ledger_hash =
             Some (Mina_ledger.Sparse_ledger.merkle_root previous_ledger)
         ; previous_committed_ledger = Some previous_ledger
+        ; previous_committed_location = Some previous_location
         }
     end
 
@@ -281,46 +256,25 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           | false -> (
               print_endline "Committing..." ;
 
-              let ledger_hash =
-                Zkapps_rollup.target_ledger @@ Option.value_exn t.state.last
-              in
-              let batch_id =
-                Frozen_ledger_hash0.to_decimal_string ledger_hash
-              in
-              let previous_batch_id =
-                Frozen_ledger_hash0.to_decimal_string
-                  (Option.value
-                     ~default:(Frozen_ledger_hash0.of_decimal_string "0")
-                     t.state.previous_committed_ledger_hash )
-              in
-
+              (* Post batch to DA layer *)
               match%bind
                 try_with (fun () ->
-                    let%bind () =
+                    let%bind new_location =
                       match%bind
                         Da_layer.post_batch t.da_config
-                          ~commands:t.state.staged_commands ~batch_id
-                          ~previous_batch_id
+                          ~previous_location:
+                            (Option.value t.state.previous_committed_location
+                               ~default:"0" )
+                          ~commands:t.state.staged_commands
+                          ~receipt_chain_hashes:[] ~target_ledger
                       with
-                      | Ok _ ->
-                          return ()
+                      | Ok new_location ->
+                          return new_location
                       | Error e ->
-                          failwith (Unix.Exit_or_signal.to_string_hum (Error e))
+                          failwith (Error.raise e)
                     in
-                    print_endline ("Posted batch " ^ batch_id) ;
+                    print_endline ("Posted batch to " ^ new_location) ;
 
-                    (* FIXME: disable only for internal MVP *)
-                    (* let%bind account_update, _, _ =
-                         time "Outer.step"
-                           (M.Outer.step (Option.value_exn t.last) ~public_key:t.zkapp_pk
-                              ~old_action_state:Zkapp_account.Actions.empty_hash
-                              ~new_actions:[]
-                              ~withdrawals_processed:Zkapp_account.Actions.empty_hash
-                              ~remaining_withdrawals:[]
-                              ~source_ledger:
-                                (Option.value_exn t.previous_committed_ledger)
-                              ~target_ledger )
-                       in *)
                     let old_inner_ledger =
                       Option.value_exn t.state.previous_committed_ledger
                     in
@@ -330,7 +284,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                         (Option.value_exn t.state.last)
                         ~outer_public_key:t.config.zkapp_pk ~new_deposits:[]
                         ~unprocessed_deposits:[] ~old_inner_ledger
-                        ~new_inner_ledger
+                        ~new_inner_ledger ~location:new_location
                     in
                     let command : Zkapp_command.t =
                       { fee_payer =
@@ -349,17 +303,20 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                       ; memo = Signed_command_memo.empty
                       }
                     in
-                    return @@ don't_wait_for
+                    don't_wait_for
                     @@ Executor.send_commit t.executor command
                          ~source:
                            (Mina_ledger.Sparse_ledger.merkle_root
                               old_inner_ledger )
                          ~target:
                            (Mina_ledger.Sparse_ledger.merkle_root
-                              new_inner_ledger ) )
+                              new_inner_ledger ) ;
+
+                    return new_location )
               with
-              | Ok _ ->
-                  t.state <- State.reset_for_new_batch t.state target_ledger ;
+              | Ok new_location ->
+                  t.state <-
+                    State.reset_for_new_batch t.state target_ledger new_location ;
                   return ()
               | Error e ->
                   (* Continue expanding batch if commit failed *)
@@ -391,7 +348,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     ; da_config : Da_layer.Config.t
     ; snark_q : Snark_queue.t
     ; stop : unit Ivar.t
-    ; genesis_accounts : (Account_id.t * Account.t) list
     ; mutable protocol_state : Mina_state.Protocol_state.value
     ; mutable subscriptions : Subscriptions.t
     }
@@ -687,25 +643,40 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     t.subscriptions.transactions <- w :: t.subscriptions.transactions ;
     r
 
-  let bootstrap ({ config; da_config; genesis_accounts; snark_q; _ } as t) =
-    let%bind committed_ledger_hash =
+  let bootstrap ({ config; da_config; snark_q; _ } as t) =
+    let%bind genesis_accounts =
+      match%bind Da_layer.get_genesis_accounts da_config with
+      | Ok genesis_accounts ->
+          return genesis_accounts
+      | Error e ->
+          Error.raise e
+    in
+    print_endline @@ Int.to_string @@ List.length genesis_accounts ;
+    List.iter genesis_accounts ~f:(fun account ->
+        let account_id =
+          Account_id.create account.public_key account.token_id
+        in
+        add_account t account_id account ) ;
+
+    let%bind committed_ledger_hash, committed_location =
       Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
         ~signer_pk:(Signature_lib.Public_key.compress config.signer.public_key)
     in
     printf "Fetched root: %s\n%!"
       Frozen_ledger_hash.(to_decimal_string committed_ledger_hash) ;
 
-    (* add initial accounts *)
-    List.iter genesis_accounts ~f:(fun (account_id, account) ->
-        add_account t account_id account ) ;
-
     printf "Init root: %s\n%!"
       Frozen_ledger_hash.(to_decimal_string (get_root t)) ;
 
     (* apply commands from DA layer *)
     let%bind commands =
-      Da_layer.get_batches da_config
-        ~to_:(Frozen_ledger_hash.to_decimal_string committed_ledger_hash)
+      match%bind
+        Da_layer.get_batches da_config ~location:committed_location
+      with
+      | Ok commands ->
+          return commands
+      | Error e ->
+          Error.raise e
     in
     printf "Applying %d commands\n%!" (List.length commands) ;
     List.iter commands ~f:(fun command ->
@@ -725,27 +696,18 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         [ M.Inner.account_id ]
     in
     t.snark_q.state <-
-      Snark_queue.State.reset_for_new_batch t.snark_q.state sparse_ledger ;
+      Snark_queue.State.reset_for_new_batch t.snark_q.state sparse_ledger
+        committed_location ;
     return ()
 
-  let create ~zkapp_pk ~max_pool_size ~commitment_period_sec
-      ~da_contract_address ~db_dir ~l1_uri ~signer ~test_accounts_path
-      ~network_id =
+  let create ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_websocket
+      ~da_contract_address ~da_private_key ~db_dir ~l1_uri ~signer ~network_id =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
     in
-    let da_config : Da_layer.Config.t = { da_contract_address } in
-    let genesis_accounts =
-      [ (M.Inner.account_id, M.Inner.initial_account) ]
-      @
-      match test_accounts_path with
-      | Some test_accounts_path ->
-          print_endline "Adding test accounts" ;
-          Test_accounts.parse_accounts_exn ~test_accounts_path
-      | None ->
-          print_endline "No test accounts" ;
-          []
+    let da_config : Da_layer.Config.t =
+      { da_websocket; da_contract_address; da_private_key }
     in
     let config =
       Config.
@@ -766,7 +728,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; snark_q =
           Snark_queue.create ~da_config ~config ~signer ~kvdb:(L.Db.kvdb db)
       ; stop = Ivar.create ()
-      ; genesis_accounts
       ; protocol_state = compile_time_genesis_state
       ; subscriptions = Subscriptions.create ()
       }
@@ -823,6 +784,27 @@ let%test_unit "apply commands and commit" =
     ; name = "gql-uri"
     }
   in
+  let da_websocket = "ws://localhost:8546" in
+  let da_private_key =
+    "0x35f9400884bdd60fdd1a769ebf39fa1c5b148072e68a5b2c8bc9ac2227c192b2"
+  in
+  let validators = [ Signature_lib.Keypair.create () ] in
+  let da_contract_address =
+    match
+      Thread_safe.block_on_async_exn (fun () ->
+          Da_layer.deploy ~da_websocket ~da_private_key
+            ~quorum:(Unsigned.UInt64.of_int 1)
+            ~validators:
+              (List.map validators ~f:(fun keypair ->
+                   Signature_lib.Public_key.(
+                     Compressed.to_base58_check @@ compress keypair.public_key) )
+              ) )
+    with
+    | Ok address ->
+        address
+    | Error e ->
+        Error.raise e
+  in
 
   (* Create signer *)
   let signer = Signature_lib.Keypair.create () in
@@ -837,24 +819,43 @@ let%test_unit "apply commands and commit" =
   Quickcheck.test ~trials:1
     (Test_spec.mk_gen ~num_transactions:number_of_transactions ())
     ~f:(fun { init_ledger; specs } ->
-      let add_test_accounts ~f =
-        Array.iter init_ledger ~f:(fun (keypair, balance) ->
-            let pk = Signature_lib.Public_key.compress keypair.public_key in
-            let account_id = Account_id.create pk Token_id.default in
-            let balance = Unsigned.UInt64.of_int64 balance in
-            let account =
-              Account.create account_id (Currency.Balance.of_uint64 balance)
-            in
-            f account_id account )
+      let genesis_accounts =
+        (M.Inner.account_id, M.Inner.initial_account)
+        :: ( Array.map init_ledger ~f:(fun (keypair, balance) ->
+                 let pk =
+                   Signature_lib.Public_key.compress keypair.public_key
+                 in
+                 let account_id = Account_id.create pk Token_id.default in
+                 let balance = Unsigned.UInt64.of_int64 balance in
+                 let account =
+                   Account.create account_id
+                     (Currency.Balance.of_uint64 balance)
+                 in
+                 (account_id, account) )
+           |> Array.to_list )
       in
       let batch1, batch2 = List.split_n specs 3 in
 
       L.with_ledger ~depth:constraint_constants.ledger_depth
         ~f:(fun expected_ledger ->
           (* Init expected ledger *)
-          L.create_new_account_exn expected_ledger M.Inner.account_id
-            M.Inner.initial_account ;
-          add_test_accounts ~f:(L.create_new_account_exn expected_ledger) ;
+          List.iter genesis_accounts ~f:(fun (aid, acc) ->
+              L.create_new_account_exn expected_ledger aid acc ) ;
+
+          (* Init DA layer *)
+          let () =
+            match
+              Thread_safe.block_on_async_exn (fun () ->
+                  Da_layer.init_genesis_accounts
+                    Da_layer.Config.
+                      { da_websocket; da_private_key; da_contract_address }
+                    ~genesis_accounts:(List.map ~f:snd genesis_accounts) )
+            with
+            | Ok _ ->
+                ()
+            | Error e ->
+                Error.raise e
+          in
 
           (* Deploy *)
           Thread_safe.block_on_async_exn (fun () ->
@@ -884,18 +885,10 @@ let%test_unit "apply commands and commit" =
                 Sequencer.create
                   ~zkapp_pk:
                     Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-                  ~max_pool_size:10 ~commitment_period_sec:0.
-                  ~da_contract_address:None ~db_dir:None ~l1_uri:gql_uri ~signer
-                  ~test_accounts_path:None ~network_id:"testnet" )
+                  ~max_pool_size:10 ~commitment_period_sec:0. ~da_websocket
+                  ~da_contract_address ~da_private_key ~db_dir:None
+                  ~l1_uri:gql_uri ~signer ~network_id:"testnet" )
           in
-          add_test_accounts ~f:(add_account sequencer) ;
-          sequencer.snark_q.state <-
-            { sequencer.snark_q.state with
-              previous_committed_ledger =
-                Some
-                  (Mina_ledger.Sparse_ledger.of_ledger_subset_exn
-                     expected_ledger [ M.Inner.account_id ] )
-            } ;
 
           (* Apply first batch *)
           let () =
@@ -981,7 +974,7 @@ let%test_unit "apply commands and commit" =
               let%bind () =
                 Executor.wait_to_finish sequencer.snark_q.executor
               in
-              let%bind committed_ledger_hash =
+              let%bind committed_ledger_hash, committed_location =
                 Gql_client.infer_committed_state gql_uri
                   ~signer_pk:
                     (Signature_lib.Public_key.compress signer.public_key)
@@ -1083,7 +1076,7 @@ let%test_unit "apply commands and commit" =
               let%bind _created =
                 Gql_client.For_tests.create_new_block gql_uri
               in
-              let%bind committed_ledger_hash =
+              let%bind committed_ledger_hash, committed_location =
                 Gql_client.fetch_committed_state gql_uri
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
               in

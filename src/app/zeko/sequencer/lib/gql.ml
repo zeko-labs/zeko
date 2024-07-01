@@ -1749,19 +1749,33 @@ module Make
         ~args:Arg.[]
         ~resolve:(fun { ctx = sequencer; _ } () ->
           match
-            Zeko_sequencer.(
-              sequencer.snark_q.state.previous_committed_ledger_hash)
+            Zeko_sequencer.(sequencer.snark_q.state.previous_committed_location)
           with
           | None ->
               return (Ok None)
-          | Some last_committed_ledger_hash ->
-              let%bind commands =
-                Da_layer.get_batches
-                  Zeko_sequencer.(sequencer.da_config)
-                  ~to_:
-                    (Frozen_ledger_hash.to_decimal_string
-                       last_committed_ledger_hash )
+          | Some last_committed_location ->
+              let%bind.Deferred.Result genesis_accounts =
+                match%bind
+                  Da_layer.get_genesis_accounts
+                    Zeko_sequencer.(sequencer.da_config)
+                with
+                | Ok genesis_accounts ->
+                    return (Ok genesis_accounts)
+                | Error e ->
+                    return @@ Error (Error.to_string_hum e)
               in
+              let%bind.Deferred.Result commands =
+                match%bind
+                  Da_layer.get_batches
+                    Zeko_sequencer.(sequencer.da_config)
+                    ~location:last_committed_location
+                with
+                | Ok commands ->
+                    return (Ok commands)
+                | Error e ->
+                    return @@ Error (Error.to_string_hum e)
+              in
+
               return
                 (Ok
                    (Some
@@ -1770,12 +1784,13 @@ module Make
                             List.map commands ~f:(fun c ->
                                 User_command.to_base64 c )
                         ; json_genesis_accounts =
-                            List.map
-                              Zeko_sequencer.(sequencer.genesis_accounts)
-                              ~f:(fun (id, acc) ->
+                            List.map genesis_accounts ~f:(fun acc ->
                                 { account_id =
                                     Yojson.Safe.to_string
-                                    @@ Account_id.to_yojson id
+                                    @@ Account_id.to_yojson
+                                    @@ Account_id.create
+                                         (Account.public_key acc)
+                                         (Account.token acc)
                                 ; account =
                                     Yojson.Safe.to_string
                                     @@ Account.to_yojson acc
