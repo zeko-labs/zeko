@@ -67,16 +67,41 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             list
             * Zkapp_command.t
       [@@deriving yojson]
+
+      (* Auxiliary data that are needed in Snark queue, but not for proving *)
+      type with_aux = t * (Account_id.t * Receipt.Chain_hash.t)
+      [@@deriving yojson]
+
+      let (user_command : with_aux -> User_command.t) = function
+        | Signed_command (_, user_command_in_block, _), _ ->
+            User_command.Signed_command
+              (Signed_command.forget_check user_command_in_block.transaction)
+        | Zkapp_command (_, zkapp_command), _ ->
+            User_command.Zkapp_command zkapp_command
+    end
+
+    module Account_map = struct
+      include Core.Map.Make (Account_id)
+
+      let to_yojson a_to_yojson (m : 'a t) =
+        to_alist m |> [%to_yojson: (Account_id.t * 'a) list] a_to_yojson
+
+      let of_yojson a_of_yojson json =
+        let%map.Result alist =
+          [%of_yojson: (Account_id.t * 'a) list] a_of_yojson json
+        in
+        of_alist_exn alist
     end
 
     module State = struct
       type t =
         { last : Zkapps_rollup.t option
         ; staged_commands : User_command.t list
-        ; queued_commands : Command_witness.t list
+        ; queued_commands : Command_witness.with_aux list
         ; previous_committed_ledger_hash : Frozen_ledger_hash.t option
         ; previous_committed_ledger : Mina_ledger.Sparse_ledger.t option
         ; previous_committed_location : string option
+        ; receipt_chain_hashes : Receipt.Chain_hash.t Account_map.t
         }
       [@@deriving yojson, fields]
 
@@ -87,6 +112,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         ; previous_committed_ledger_hash = None
         ; previous_committed_ledger = None
         ; previous_committed_location = None
+        ; receipt_chain_hashes = Account_map.empty
         }
 
       let set_last t last = { t with last = Some last }
@@ -104,6 +130,14 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         | _ :: rest ->
             { t with queued_commands = rest }
 
+      let add_receipt_chain_hash t account_id hash =
+        if Account_map.mem t.receipt_chain_hashes account_id then t
+        else
+          { t with
+            receipt_chain_hashes =
+              Account_map.set t.receipt_chain_hashes ~key:account_id ~data:hash
+          }
+
       let clear_staged_commands t = { t with staged_commands = [] }
 
       let clear_queued_commands t = { t with queued_commands = [] }
@@ -116,6 +150,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             Some (Mina_ledger.Sparse_ledger.merkle_root previous_ledger)
         ; previous_committed_ledger = Some previous_ledger
         ; previous_committed_location = Some previous_location
+        ; receipt_chain_hashes = Account_map.empty
         }
     end
 
@@ -214,10 +249,13 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           let () = persist_state ~kvdb:t.kvdb t.state () in
           result )
 
-    let enqueue_prove_command t command_witness =
-      t.state <- State.add_queued_command t.state command_witness ;
+    let enqueue_prove_command t
+        ((command_witness, (account_id, receipt_chain_hash)) as with_aux) =
+      t.state <- State.add_queued_command t.state with_aux ;
       persist_state ~kvdb:t.kvdb t.state () ;
       enqueue t (fun () ->
+          t.state <-
+            State.add_receipt_chain_hash t.state account_id receipt_chain_hash ;
           match command_witness with
           | Command_witness.Signed_command
               (sparse_ledger, user_command_in_block, statement) ->
@@ -266,7 +304,9 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                             (Option.value t.state.previous_committed_location
                                ~default:"0" )
                           ~commands:t.state.staged_commands
-                          ~receipt_chain_hashes:[] ~target_ledger
+                          ~receipt_chain_hashes:
+                            (Account_map.to_alist t.state.receipt_chain_hashes)
+                          ~target_ledger
                       with
                       | Ok new_location ->
                           return new_location
@@ -443,6 +483,15 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         command
     in
 
+    let account_id = User_command.fee_payer command in
+    let receipt_chain_hash =
+      let open Option.Let_syntax in
+      L.location_of_account l account_id
+      >>= L.get l
+      >>= (fun account -> Some account.receipt_chain_hash)
+      |> Option.value ~default:Receipt.Chain_hash.empty
+    in
+
     let%bind.Result ( first_pass_ledger
                     , second_pass_ledger
                     , txn_applied
@@ -555,8 +604,9 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         in
         Result.return
           ( txn_applied
-          , Snark_queue.Command_witness.Signed_command
-              (first_pass_ledger, user_command_in_block, statement) )
+          , ( Snark_queue.Command_witness.Signed_command
+                (first_pass_ledger, user_command_in_block, statement)
+            , (account_id, receipt_chain_hash) ) )
     | Zkapp_command zkapp_command, _ ->
         let witnesses =
           Transaction_snark.zkapp_command_witnesses_exn ~constraint_constants
@@ -575,8 +625,9 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         in
         Result.return
           ( txn_applied
-          , Snark_queue.Command_witness.Zkapp_command (witnesses, zkapp_command)
-          )
+          , ( Snark_queue.Command_witness.Zkapp_command
+                (witnesses, zkapp_command)
+            , (account_id, receipt_chain_hash) ) )
     | _ ->
         failwith "Invalid command"
 
@@ -612,10 +663,22 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
   let commit t =
     (* FIXME: disable only for internal MVP *)
     (* let%bind () = apply_deposits t in *)
+
+    (* Accounts that are needed for DA layer for receipt chain hashes *)
+    let user_accounts_referenced =
+      let staged_commands = Snark_queue.State.staged_commands t.snark_q.state in
+      let queued_commands =
+        List.map ~f:Snark_queue.Command_witness.user_command
+        @@ Snark_queue.State.queued_commands t.snark_q.state
+      in
+      List.concat [ staged_commands; queued_commands ]
+      |> List.map ~f:User_command.fee_payer
+      |> List.dedup_and_sort ~compare:Account_id.compare
+    in
     let target_ledger =
       Mina_ledger.Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.db)
-        [ M.Inner.account_id ]
+        (M.Inner.account_id :: user_accounts_referenced)
     in
     Subscriptions.clear_staged_diffs t.subscriptions ;
     Snark_queue.enqueue_prove_commit t.snark_q ~target_ledger
@@ -1101,3 +1164,5 @@ let%test_unit "apply commands and commit" =
               return
               @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
                    final_ledger_hash ) ) )
+
+(* pridat 1. receipt chain hashes 2. target ledger 3. signer process 4. pocuvanie na signature 5. check signature v circuite *)
