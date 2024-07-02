@@ -35,15 +35,14 @@ let run uri sk test_accounts_path () =
         L.create_new_account_exn ledger M.Inner.account_id
           M.Inner.initial_account ;
 
-        ( match test_accounts_path with
-        | None ->
-            ()
-        | Some test_accounts_path ->
-            List.iter
-              (Sequencer_lib.Zeko_sequencer.Test_accounts.parse_accounts_exn
-                 ~test_accounts_path ) ~f:(fun (account_id, account) ->
-                L.create_new_account_exn ledger account_id account ) ) ;
-
+        (* ( match test_accounts_path with
+           | None ->
+               ()
+           | Some test_accounts_path ->
+               List.iter
+                 (Sequencer_lib.Zeko_sequencer.Test_accounts.parse_accounts_exn
+                    ~test_accounts_path ) ~f:(fun (account_id, account) ->
+                   L.create_new_account_exn ledger account_id account ) ) ; *)
         Sequencer_lib.Deploy.deploy_command_exn ~signer:sender_keypair
           ~zkapp:zkapp_keypair
           ~fee:(Currency.Fee.of_mina_int_exn 1)

@@ -1756,7 +1756,7 @@ module Make
           | Some last_committed_location ->
               let%bind.Deferred.Result genesis_accounts =
                 match%bind
-                  Da_layer.get_genesis_accounts
+                  Da_layer.Genesis_state.get
                     Zeko_sequencer.(sequencer.da_config)
                 with
                 | Ok genesis_accounts ->
@@ -1766,7 +1766,7 @@ module Make
               in
               let%bind.Deferred.Result commands =
                 match%bind
-                  Da_layer.get_batches
+                  Da_layer.Batch.get_commands
                     Zeko_sequencer.(sequencer.da_config)
                     ~location:last_committed_location
                 with

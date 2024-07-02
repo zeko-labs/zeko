@@ -76,3 +76,20 @@ let get_state_transition pk command =
     |> get_ledger_hash_and_location Zkapp_basic.Set_or_keep.to_option
   in
   Some (source, target)
+
+let accounts_with_receipt (command : User_command.t) =
+  let account_ids =
+    match command with
+    | Signed_command command ->
+        [ Signed_command.fee_payer command ]
+    | Zkapp_command zkapp_command ->
+        List.filter_map (Zkapp_command.all_account_updates_list zkapp_command)
+          ~f:(fun account_update ->
+            let account_id = Account_update.account_id account_update in
+            match Account_update.authorization account_update with
+            | None_given ->
+                None
+            | _ ->
+                Some account_id )
+  in
+  List.dedup_and_sort ~compare:Account_id.compare account_ids

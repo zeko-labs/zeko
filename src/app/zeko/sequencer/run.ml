@@ -20,8 +20,7 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_websocket
     Thread_safe.block_on_async_exn (fun () ->
         Sequencer.create ~zkapp_pk ~max_pool_size ~da_websocket
           ~da_contract_address ~da_private_key ~db_dir:(Some db_dir) ~l1_uri
-          ~test_accounts_path ~commitment_period_sec:commitment_period
-          ~network_id
+          ~commitment_period_sec:commitment_period ~network_id
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn

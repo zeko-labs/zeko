@@ -4,6 +4,7 @@ open Async
 open Async_kernel
 open Mina_base
 module L = Mina_ledger.Ledger
+module Account_map = Da_layer.Account_map
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -69,7 +70,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       [@@deriving yojson]
 
       (* Auxiliary data that are needed in Snark queue, but not for proving *)
-      type with_aux = t * (Account_id.t * Receipt.Chain_hash.t)
+      type with_aux = t * (Account_id.t * Receipt.Chain_hash.t) list
       [@@deriving yojson]
 
       let (user_command : with_aux -> User_command.t) = function
@@ -78,19 +79,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
               (Signed_command.forget_check user_command_in_block.transaction)
         | Zkapp_command (_, zkapp_command), _ ->
             User_command.Zkapp_command zkapp_command
-    end
-
-    module Account_map = struct
-      include Core.Map.Make (Account_id)
-
-      let to_yojson a_to_yojson (m : 'a t) =
-        to_alist m |> [%to_yojson: (Account_id.t * 'a) list] a_to_yojson
-
-      let of_yojson a_of_yojson json =
-        let%map.Result alist =
-          [%of_yojson: (Account_id.t * 'a) list] a_of_yojson json
-        in
-        of_alist_exn alist
     end
 
     module State = struct
@@ -250,12 +238,16 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           result )
 
     let enqueue_prove_command t
-        ((command_witness, (account_id, receipt_chain_hash)) as with_aux) =
+        ((command_witness, receipt_chain_hashes) as with_aux) =
       t.state <- State.add_queued_command t.state with_aux ;
       persist_state ~kvdb:t.kvdb t.state () ;
       enqueue t (fun () ->
-          t.state <-
-            State.add_receipt_chain_hash t.state account_id receipt_chain_hash ;
+          List.iter receipt_chain_hashes
+            ~f:(fun (account_id, receipt_chain_hash) ->
+              t.state <-
+                State.add_receipt_chain_hash t.state account_id
+                  receipt_chain_hash ) ;
+
           match command_witness with
           | Command_witness.Signed_command
               (sparse_ledger, user_command_in_block, statement) ->
@@ -299,7 +291,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                 try_with (fun () ->
                     let%bind new_location =
                       match%bind
-                        Da_layer.post_batch t.da_config
+                        Da_layer.Batch.post t.da_config
                           ~previous_location:
                             (Option.value t.state.previous_committed_location
                                ~default:"0" )
@@ -461,7 +453,10 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     | Error (`Msg e) ->
         print_endline e
 
-  let apply_user_command t command =
+  let apply_user_command t command :
+      ( L.Transaction_applied.t * Snark_queue.Command_witness.with_aux
+      , Error.t )
+      result =
     let%bind.Result () =
       if Snark_queue.queue_size t.snark_q >= t.config.max_pool_size then
         Error (Error.of_string "Maximum pool size reached, try later")
@@ -483,13 +478,17 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         command
     in
 
-    let account_id = User_command.fee_payer command in
-    let receipt_chain_hash =
-      let open Option.Let_syntax in
-      L.location_of_account l account_id
-      >>= L.get l
-      >>= (fun account -> Some account.receipt_chain_hash)
-      |> Option.value ~default:Receipt.Chain_hash.empty
+    let receipt_chain_hashes =
+      let account_ids = Utils.accounts_with_receipt command in
+      List.map account_ids ~f:(fun account_id ->
+          let receipt_chain_hash =
+            let open Option.Let_syntax in
+            L.location_of_account l account_id
+            >>= L.get l
+            >>= (fun account -> Some account.receipt_chain_hash)
+            |> Option.value ~default:Receipt.Chain_hash.empty
+          in
+          (account_id, receipt_chain_hash) )
     in
 
     let%bind.Result ( first_pass_ledger
@@ -606,7 +605,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           ( txn_applied
           , ( Snark_queue.Command_witness.Signed_command
                 (first_pass_ledger, user_command_in_block, statement)
-            , (account_id, receipt_chain_hash) ) )
+            , receipt_chain_hashes ) )
     | Zkapp_command zkapp_command, _ ->
         let witnesses =
           Transaction_snark.zkapp_command_witnesses_exn ~constraint_constants
@@ -627,7 +626,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           ( txn_applied
           , ( Snark_queue.Command_witness.Zkapp_command
                 (witnesses, zkapp_command)
-            , (account_id, receipt_chain_hash) ) )
+            , receipt_chain_hashes ) )
     | _ ->
         failwith "Invalid command"
 
@@ -672,7 +671,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         @@ Snark_queue.State.queued_commands t.snark_q.state
       in
       List.concat [ staged_commands; queued_commands ]
-      |> List.map ~f:User_command.fee_payer
+      |> List.map ~f:Utils.accounts_with_receipt
+      |> List.join
       |> List.dedup_and_sort ~compare:Account_id.compare
     in
     let target_ledger =
@@ -708,7 +708,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
   let bootstrap ({ config; da_config; snark_q; _ } as t) =
     let%bind genesis_accounts =
-      match%bind Da_layer.get_genesis_accounts da_config with
+      match%bind Da_layer.Genesis_state.get da_config with
       | Ok genesis_accounts ->
           return genesis_accounts
       | Error e ->
@@ -734,7 +734,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     (* apply commands from DA layer *)
     let%bind commands =
       match%bind
-        Da_layer.get_batches da_config ~location:committed_location
+        Da_layer.Batch.get_commands da_config ~location:committed_location
       with
       | Ok commands ->
           return commands
@@ -868,6 +868,9 @@ let%test_unit "apply commands and commit" =
     | Error e ->
         Error.raise e
   in
+  let da_config =
+    Da_layer.Config.{ da_websocket; da_contract_address; da_private_key }
+  in
 
   (* Create signer *)
   let signer = Signature_lib.Keypair.create () in
@@ -877,6 +880,23 @@ let%test_unit "apply commands and commit" =
           (Signature_lib.Public_key.compress signer.public_key)
       in
       return () ) ;
+
+  let check_last_batch_for_validity () =
+    let%bind _, committed_location =
+      Gql_client.infer_committed_state gql_uri
+        ~zkapp_pk:Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+        ~signer_pk:Signature_lib.Public_key.(compress signer.public_key)
+    in
+    match%bind
+      Da_layer.Batch.get da_config ~location:committed_location
+      >>= Fn.compose return Or_error.ok_exn
+      >>= Fn.compose return Da_layer.Batch.is_valid
+    with
+    | Ok `Valid ->
+        return ()
+    | Error reason ->
+        failwith reason
+  in
 
   let open Mina_transaction_logic.For_tests in
   Quickcheck.test ~trials:1
@@ -909,7 +929,7 @@ let%test_unit "apply commands and commit" =
           let () =
             match
               Thread_safe.block_on_async_exn (fun () ->
-                  Da_layer.init_genesis_accounts
+                  Da_layer.Genesis_state.init
                     Da_layer.Config.
                       { da_websocket; da_private_key; da_contract_address }
                     ~genesis_accounts:(List.map ~f:snd genesis_accounts) )
@@ -1050,6 +1070,10 @@ let%test_unit "apply commands and commit" =
 
               Deferred.unit ) ;
 
+          (* Check that first batch on DA layer is valid *)
+          Thread_safe.block_on_async_exn (fun () ->
+              check_last_batch_for_validity () ) ;
+
           (* To test nonce inferring from pool *)
           (* The first commit is still in the pool *)
           Executor.refresh_nonce sequencer.snark_q.executor ;
@@ -1151,6 +1175,10 @@ let%test_unit "apply commands and commit" =
                 return target_ledger_hash )
           in
 
+          (* Check that second batch on DA layer is valid *)
+          Thread_safe.block_on_async_exn (fun () ->
+              check_last_batch_for_validity () ) ;
+
           (* Try to bootstrap again *)
           Thread_safe.block_on_async_exn (fun () ->
               let%bind new_sequencer =
@@ -1164,5 +1192,3 @@ let%test_unit "apply commands and commit" =
               return
               @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
                    final_ledger_hash ) ) )
-
-(* pridat 1. receipt chain hashes 2. target ledger 3. signer process 4. pocuvanie na signature 5. check signature v circuite *)
