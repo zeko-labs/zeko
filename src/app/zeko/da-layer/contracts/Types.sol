@@ -33,5 +33,7 @@ struct MinaSchnorrSignature {
 struct RollupBatch {
     string data;
     MinaSchnorrSignature[] signatures;
+    // sigData corresponds to the target ledger hash that validator signs
+    // this is for the DA layer to verify the signature
     bytes32[] sigData;
 }

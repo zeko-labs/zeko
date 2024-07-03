@@ -38,6 +38,7 @@ contract DataAvailability is MinaMultisig {
         genesisState = genesisState_;
         genesisInitialized = true;
 
+        // We set 0th batch as genesis state
         batches[0].data = genesisState_;
         emit BatchPosted(batchesLength);
         batchesLength++;

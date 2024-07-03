@@ -56,6 +56,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
   module Snark_queue = struct
     module Command_witness = struct
+      (* Type that holds all the data needed to prove the command *)
       type t =
         | Signed_command of
             Mina_ledger.Sparse_ledger.t
@@ -119,6 +120,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             { t with queued_commands = rest }
 
       let add_receipt_chain_hash t account_id hash =
+        (* We add the receipt chain hash only if it has not been added yet *)
+        (* We need the beginning receipt chain hash of the batch *)
         if Account_map.mem t.receipt_chain_hashes account_id then t
         else
           { t with
@@ -242,6 +245,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       t.state <- State.add_queued_command t.state with_aux ;
       persist_state ~kvdb:t.kvdb t.state () ;
       enqueue t (fun () ->
+          (* Add all the receipt chain hashes that need to be updated in the command *)
+          (* This is needed for the batch that goes to DA layer *)
           List.iter receipt_chain_hashes
             ~f:(fun (account_id, receipt_chain_hash) ->
               t.state <-
@@ -478,7 +483,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         command
     in
 
-    let receipt_chain_hashes =
+    let receipt_chain_hashes : (Account_id.t * Receipt.Chain_hash.t) list =
       let account_ids = Utils.accounts_with_receipt command in
       List.map account_ids ~f:(fun account_id ->
           let receipt_chain_hash =

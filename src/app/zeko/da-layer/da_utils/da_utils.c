@@ -71,8 +71,10 @@ CAMLprim value caml_post_batch(value da_websocket, value da_contract_address, va
     caml_release_runtime_system();
 
     char *output, *error;
+    // Call the function
     int rust_result = post_batch(da_websocket_cstr, da_contract_address_cstr, da_private_key_cstr, batch_data_cstr, sig_data_cstr, sig_data_len, &output, &error);
 
+    // Free up the memory
     caml_stat_free(da_websocket_cstr);
     caml_stat_free(da_contract_address_cstr);
     caml_stat_free(da_private_key_cstr);
@@ -90,6 +92,7 @@ CAMLprim value caml_post_batch(value da_websocket, value da_contract_address, va
         CAMLlocal1(result);
         result = caml_alloc(1, 1); // Allocate a block with 1 field, tag 1 (Error)
         Store_field(result, 0, caml_copy_string(error));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(error);
         CAMLreturn(result);
     } else {
@@ -97,6 +100,7 @@ CAMLprim value caml_post_batch(value da_websocket, value da_contract_address, va
         CAMLlocal1(result);
         result = caml_alloc(1, 0); // Allocate a block with 1 field, tag 0 (Ok)
         Store_field(result, 0, caml_copy_string(output));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(output);
         CAMLreturn(result);
     }
@@ -125,8 +129,10 @@ CAMLprim value caml_get_batch_data(value da_websocket, value da_contract_address
     caml_release_runtime_system();
 
     char *output, *error;
+    // Call the function
     int rust_result = get_batch_data(da_websocket_cstr, da_contract_address_cstr, location_cstr, &output, &error);
 
+    // Free up the memory
     caml_stat_free(da_websocket_cstr);
     caml_stat_free(da_contract_address_cstr);
     caml_stat_free(location_cstr);
@@ -139,6 +145,7 @@ CAMLprim value caml_get_batch_data(value da_websocket, value da_contract_address
         CAMLlocal1(result);
         result = caml_alloc(1, 1); // Allocate a block with 1 field, tag 1 (Error)
         Store_field(result, 0, caml_copy_string(error));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(error);
         CAMLreturn(result);
     } else {
@@ -146,6 +153,7 @@ CAMLprim value caml_get_batch_data(value da_websocket, value da_contract_address
         CAMLlocal1(result);
         result = caml_alloc(1, 0); // Allocate a block with 1 field, tag 0 (Ok)
         Store_field(result, 0, caml_copy_string(output));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(output);
         CAMLreturn(result);
     }
@@ -175,8 +183,10 @@ CAMLprim value caml_init_genesis_state(value da_websocket, value da_contract_add
     caml_release_runtime_system();
 
     char* error;
+    // Call the function
     int rust_result = init_genesis_state(da_websocket_cstr, da_contract_address_cstr, da_private_key_cstr, data_cstr, &error);
 
+    // Free up the memory
     caml_stat_free(da_websocket_cstr);
     caml_stat_free(da_contract_address_cstr);
     caml_stat_free(da_private_key_cstr);
@@ -190,6 +200,7 @@ CAMLprim value caml_init_genesis_state(value da_websocket, value da_contract_add
         CAMLlocal1(result);
         result = caml_alloc(1, 1); // Allocate a block with 1 field, tag 1 (Error)
         Store_field(result, 0, caml_copy_string(error));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(error);
         CAMLreturn(result);
     } else {
@@ -222,8 +233,10 @@ CAMLprim value caml_get_genesis_state(value da_websocket, value da_contract_addr
     caml_release_runtime_system();
 
     char *output, *error;
+    // Call the function
     int rust_result = get_genesis_state(da_websocket_cstr, da_contract_address_cstr, &output, &error);
 
+    // Free up the memory
     caml_stat_free(da_websocket_cstr);
     caml_stat_free(da_contract_address_cstr);
 
@@ -235,6 +248,7 @@ CAMLprim value caml_get_genesis_state(value da_websocket, value da_contract_addr
         CAMLlocal1(result);
         result = caml_alloc(1, 1); // Allocate a block with 1 field, tag 1 (Error)
         Store_field(result, 0, caml_copy_string(error));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(error);
         CAMLreturn(result);
     } else {
@@ -242,6 +256,7 @@ CAMLprim value caml_get_genesis_state(value da_websocket, value da_contract_addr
         CAMLlocal1(result);
         result = caml_alloc(1, 0); // Allocate a block with 1 field, tag 0 (Ok)
         Store_field(result, 0, caml_copy_string(output));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(output);
         CAMLreturn(result);
     }
@@ -275,8 +290,10 @@ CAMLprim value caml_deploy(value da_websocket, value da_private_key, value quoru
     caml_release_runtime_system();
 
     char *output, *error;
+    // Call the function
     int rust_result = deploy(da_websocket_cstr, da_private_key_cstr, quorum_c, validators_cstr, validators_len, &output, &error);
 
+    // Free up the memory
     caml_stat_free(da_websocket_cstr);
     caml_stat_free(da_private_key_cstr);
 
@@ -292,6 +309,7 @@ CAMLprim value caml_deploy(value da_websocket, value da_private_key, value quoru
         CAMLlocal1(result);
         result = caml_alloc(1, 1); // Allocate a block with 1 field, tag 1 (Error)
         Store_field(result, 0, caml_copy_string(error));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(error);
         CAMLreturn(result);
     } else {
@@ -299,6 +317,7 @@ CAMLprim value caml_deploy(value da_websocket, value da_private_key, value quoru
         CAMLlocal1(result);
         result = caml_alloc(1, 0); // Allocate a block with 1 field, tag 0 (Ok)
         Store_field(result, 0, caml_copy_string(output));
+        // This was allocated by rust library, so we need to free it in rust
         free_string(output);
         CAMLreturn(result);
     }

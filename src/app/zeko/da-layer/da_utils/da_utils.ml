@@ -1,4 +1,10 @@
+(** 
+  These functions call external C functions that call rust functions defined in rust library
+  These are long running functions with IO operations, so they are run in separate threads,
+  C code calls `caml_release_runtime_system` so that other threads can run in parallel.    
+*)
 open Async
+
 open Core
 
 external caml_post_batch :

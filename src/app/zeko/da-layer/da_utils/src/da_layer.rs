@@ -10,13 +10,16 @@ use mina_signer::{BaseField, PubKey};
 use o1_utils::FieldHelpers;
 use std::{str::FromStr, sync::Arc};
 
+// Generate bindings for the DA layer contract from the ABI
 abigen!(DAContract, "src/DataAvailability.json");
 
+// Wrap second contract in a module to avoid name collisions of types
 mod da_proxy {
     use super::*;
     abigen!(Abi, "src/DataAvailabilityProxy.json");
 }
 
+// Struct holding context for executing transactions on the DA layer
 pub struct DALayerExecutor {
     wallet: LocalWallet,
     contract: DAContract<SignerMiddleware<Provider<Ws>, LocalWallet>>,
@@ -38,6 +41,8 @@ impl DALayerExecutor {
         Ok(Self { wallet, contract })
     }
 
+    // Deploys the DA layer contract and returns the address
+    // DA contract is a proxy contract that forwards calls to the implementation contract
     pub async fn deploy(
         da_websocket: &str,
         da_private_key: &str,
@@ -111,8 +116,9 @@ impl DALayerExecutor {
 
         match receipt {
             Some(receipt) => {
+                // We get the new location from the emmitted event (log)
                 let log = receipt.logs.first().ok_or("No logs")?;
-                // First topic is address, second topic is location
+                // First topic is address of a contract, second topic is location
                 let location = log.topics.get(1).ok_or("No location")?;
 
                 Ok(location.to_low_u64_be().to_string())
@@ -139,11 +145,12 @@ impl DALayerExecutor {
     }
 }
 
-pub struct DALayerCaller {
+// Struct holding context for reading DA layer state
+pub struct DALayerReader {
     contract: DAContract<Provider<Ws>>,
 }
 
-impl DALayerCaller {
+impl DALayerReader {
     pub async fn new(
         da_websocket: &str,
         da_contract_address: &str,

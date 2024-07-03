@@ -1,6 +1,6 @@
 mod da_layer;
 
-use da_layer::{DALayerCaller, DALayerExecutor};
+use da_layer::{DALayerExecutor, DALayerReader};
 use mina_signer::{BaseField, PubKey};
 use o1_utils::FieldHelpers;
 use std::{
@@ -54,6 +54,7 @@ pub unsafe extern "C" fn post_batch(
     output_ptr: *mut *mut c_char,
     error_ptr: *mut *mut c_char,
 ) -> bool {
+    // Convert C strings to &str
     let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
         Ok(s) => s,
         Err(err) => {
@@ -98,6 +99,7 @@ pub unsafe extern "C" fn post_batch(
         }
     };
 
+    // Convert C strings to Vec<BaseField>
     let sig_data = match (0..sig_data_len)
         .flat_map(|i: usize| unsafe { CStr::from_ptr(*sig_data.add(i)) }.to_str())
         .flat_map(|s| s.parse::<num_bigint::BigUint>())
@@ -146,6 +148,7 @@ pub unsafe extern "C" fn get_batch_data(
     output_ptr: *mut *mut c_char,
     error_ptr: *mut *mut c_char,
 ) -> bool {
+    // Convert C strings to &str
     let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
         Ok(s) => s,
         Err(err) => {
@@ -180,7 +183,7 @@ pub unsafe extern "C" fn get_batch_data(
     };
 
     create_runtime().block_on(async {
-        let da_layer = match DALayerCaller::new(da_websocket, da_contract_address).await {
+        let da_layer = match DALayerReader::new(da_websocket, da_contract_address).await {
             Ok(da_layer) => da_layer,
             Err(err) => {
                 set_c_string(error_ptr, &format!("{}", err));
@@ -213,6 +216,7 @@ pub unsafe extern "C" fn init_genesis_state(
     data: *const c_char,
     error_ptr: *mut *mut c_char,
 ) -> bool {
+    // Convert C strings to &str
     let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
         Ok(s) => s,
         Err(err) => {
@@ -288,6 +292,7 @@ pub unsafe extern "C" fn get_genesis_state(
     output_ptr: *mut *mut c_char,
     error_ptr: *mut *mut c_char,
 ) -> bool {
+    // Convert C strings to &str
     let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
         Ok(s) => s,
         Err(err) => {
@@ -311,7 +316,7 @@ pub unsafe extern "C" fn get_genesis_state(
     };
 
     create_runtime().block_on(async {
-        let da_layer = match DALayerCaller::new(da_websocket, da_contract_address).await {
+        let da_layer = match DALayerReader::new(da_websocket, da_contract_address).await {
             Ok(da_layer) => da_layer,
             Err(err) => {
                 set_c_string(error_ptr, &format!("{}", err));
@@ -346,6 +351,7 @@ pub unsafe extern "C" fn deploy(
     output_ptr: *mut *mut c_char,
     error_ptr: *mut *mut c_char,
 ) -> bool {
+    // Convert C strings to &str
     let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
         Ok(s) => s,
         Err(err) => {
@@ -368,6 +374,7 @@ pub unsafe extern "C" fn deploy(
         }
     };
 
+    // Convert C strings to Vec<PubKey>
     let validators = (0..validators_len)
         .flat_map(|i: usize| unsafe { CStr::from_ptr(*validators.add(i)) }.to_str())
         .flat_map(PubKey::from_address)

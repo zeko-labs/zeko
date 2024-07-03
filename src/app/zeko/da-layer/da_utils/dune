@@ -1,6 +1,9 @@
+; This dune file is used to build the Rust library that is used by the OCaml
+
 (dirs :standard \ target)
 
 (rule
+ ; This rule is used to find the root of the workspace
  (target dune-build-root)
  (deps
   (sandbox none))
@@ -8,6 +11,7 @@
   (system "printf \"%s\" $(realpath %{workspace_root}/..) > %{target}")))
 
 (rule
+ ; This rule is used to build the Rust library on MacOS
  (target libda_utils.dylib)
  (enabled_if
   (= %{ocaml-config:system} "macosx"))
@@ -26,6 +30,7 @@
    (run cp %{read:dune-build-root}/da_utils/release/libda_utils.dylib .))))
 
 (rule
+ ; This rule is used to build the Rust library on Linux
  (target libda_utils.so)
  (enabled_if
   (= %{ocaml-config:system} "linux"))
@@ -43,6 +48,7 @@
    (run cp %{read:dune-build-root}/da_utils/release/libda_utils.so .))))
 
 (rule
+ ; on MacOS you need to link against the CoreFoundation, SystemConfiguration and Security frameworks
  (target c_flags)
  (enabled_if
   (= %{ocaml-config:system} "macosx"))

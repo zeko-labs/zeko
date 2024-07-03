@@ -35,6 +35,7 @@ let run uri sk test_accounts_path () =
         L.create_new_account_exn ledger M.Inner.account_id
           M.Inner.initial_account ;
 
+        (* FIXME: This script should init the genesis state on the DA layer as well as deploy the DA contract *)
         (* ( match test_accounts_path with
            | None ->
                ()

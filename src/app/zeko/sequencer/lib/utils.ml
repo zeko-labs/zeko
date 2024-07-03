@@ -77,6 +77,7 @@ let get_state_transition pk command =
   in
   Some (source, target)
 
+(* Get all the accounts that should have receipt_chain_hash updated for the command *)
 let accounts_with_receipt (command : User_command.t) =
   let account_ids =
     match command with
