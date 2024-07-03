@@ -848,14 +848,23 @@ let%test_unit "apply commands and commit" =
   let number_of_transactions = 5 in
   let zkapp_keypair = Signature_lib.Keypair.create () in
   let gql_uri =
-    { Cli_lib.Flag.Types.value = Uri.of_string "http://localhost:8080/graphql"
+    { Cli_lib.Flag.Types.value =
+        Uri.of_string
+        @@ Option.value ~default:"http://localhost:8080/graphql"
+        @@ Sys.getenv "L1_URI"
     ; name = "gql-uri"
     }
   in
-  let da_websocket = "ws://localhost:8546" in
-  let da_private_key =
-    "0x35f9400884bdd60fdd1a769ebf39fa1c5b148072e68a5b2c8bc9ac2227c192b2"
+  let da_websocket =
+    Option.value ~default:"ws://localhost:8546" @@ Sys.getenv "DA_WEBSOCKET"
   in
+  let da_private_key =
+    Option.value
+      ~default:
+        "0x35f9400884bdd60fdd1a769ebf39fa1c5b148072e68a5b2c8bc9ac2227c192b2"
+    @@ Sys.getenv "DA_PRIVATE_KEY"
+  in
+
   let validators = [ Signature_lib.Keypair.create () ] in
   let da_contract_address =
     match
