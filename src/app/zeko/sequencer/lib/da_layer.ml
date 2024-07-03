@@ -82,7 +82,7 @@ end
   
   The receipt chain hashes are used to verify the validity of the batch by the DA validators.
   The validator applies all the receipts to the chain hashes and compares with the target ledger.
-  If all of them match, they sign the target ledger hash together with the location.
+  If all of them match, they sign the target ledger hash together with the location and previous location.
 *)
 module Batch = struct
   [%%versioned

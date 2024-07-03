@@ -57,7 +57,7 @@ impl DALayerExecutor {
 
         let implementation_contract = DAContract::deploy(client.clone(), ())?.send().await?;
 
-        let proxy = da_proxy::Abi::deploy::<(Address, U256, Vec<MinaPublicKey>, Address)>(
+        let proxy = da_proxy::Abi::deploy::<(Address, U256, Vec<MinaPublicKey>)>(
             client,
             (
                 implementation_contract.address(),
@@ -80,7 +80,6 @@ impl DALayerExecutor {
                         }
                     })
                     .collect(),
-                wallet.address(),
             ),
         )?
         .send()

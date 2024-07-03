@@ -18,21 +18,12 @@ contract DataAvailability is MinaMultisig {
         uint256 signatureCount
     );
 
-    modifier onlySequencer() {
-        require(msg.sender == sequencer, "Only sequencer can call this function");
-        _;
-    }
-
     modifier postGenesis() {
         require(genesisInitialized, "First init the genesis state");
         _;
     }
 
-    function setSequencer(address sequencer_) external onlyMultisig {
-        sequencer = sequencer_;
-    }
-
-    function initGenesisState(string memory genesisState_) external onlySequencer {
+    function initGenesisState(string memory genesisState_) external {
         require(!genesisInitialized, "Genesis state already initialized");
 
         genesisState = genesisState_;
@@ -44,10 +35,7 @@ contract DataAvailability is MinaMultisig {
         batchesLength++;
     }
 
-    function postBatch(
-        string memory batchData,
-        bytes32[] memory sigData
-    ) external postGenesis onlySequencer {
+    function postBatch(string memory batchData, bytes32[] memory sigData) external postGenesis {
         RollupBatch storage batch = batches[batchesLength];
 
         batch.data = batchData;

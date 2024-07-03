@@ -92,37 +92,4 @@ describe("Batches DataAvailability", () => {
     console.log(dataAvailabilityContract.address);
     console.log(expectedLocation.toString());
   });
-
-  it("should fail if the proposer is not sequencer", async () => {
-    const validators = Array.from({ length: 5 }, () => PrivateKey.random());
-
-    const [fundedAccount] = await ethers.getSigners();
-    const sequencer = ethers.Wallet.createRandom().connect(ethers.provider);
-
-    await fundedAccount
-      .sendTransaction({
-        to: sequencer.address,
-        value: ethers.utils.parseEther("1"),
-      })
-      .then((tx) => tx.wait());
-
-    const dataAvailabilityContract = await deployDataAvailabilityContract(
-      validators.map((validator) => validator.toPublicKey()),
-      5,
-      sequencer.address
-    );
-
-    const genesisState = ethers.utils.randomBytes(randomInt(50, 100)).toString();
-    await dataAvailabilityContract
-      .connect(sequencer)
-      .initGenesisState(genesisState)
-      .then((tx) => tx.wait());
-
-    const batchData = ethers.utils.randomBytes(randomInt(50, 100)).toString();
-    const sigData = Array.from({ length: randomInt(5, 10) }, () => Field.random());
-
-    await expect(
-      dataAvailabilityContract.postBatch(batchData, sigData.map(fieldToHex))
-    ).to.be.revertedWith("Only sequencer can call this function");
-  });
 });

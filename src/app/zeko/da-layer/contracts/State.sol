@@ -82,7 +82,4 @@ abstract contract State {
     string public genesisState;
 
     mapping(HashedMinaPublicKey => mapping(uint256 => bool)) validatorSigned;
-
-    // we allow only sequencer to post batches for now
-    address public sequencer;
 }
