@@ -11,6 +11,7 @@ module Wire_types = Mina_wire_types.Transaction_snark
 
 let proof_cache = ref None
 
+(* ZEKO NOTE: issue #64 *)
 type env = < mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
 
 let dummy_env : env =

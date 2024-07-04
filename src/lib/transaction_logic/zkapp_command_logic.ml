@@ -702,8 +702,9 @@ module Eff = struct
         { account_update : 'account_update; account : 'account }
         -> ( 'account
            , < account_update : 'account_update ; account : 'account ; .. > )
-           t  (** ZEKO NOTE: issue #64 *)
-    | Get_shift_action_state :
+           t
+    | Get_shift_action_state
+        (* ZEKO NOTE: issue #64 *) :
         'account
         -> ('bool, < bool : 'bool ; account : 'account ; .. >) t
 end
