@@ -7,10 +7,12 @@
   This is needed for backwards compatibility in case we need to change the types in the future.
 *)
 
-open Async
 open Core_kernel
 open Mina_base
 open Mina_ledger
+open Signature_lib
+open Snark_params
+open Async
 
 module Config = struct
   type t =
@@ -242,6 +244,65 @@ module Batch = struct
     in
     Ok `Valid
 
-  (* TODO *)
-  let sign t keypair = ()
+  let to_message t ~location =
+    let { previous_location; target_ledger } = t in
+    let ledger_hash = Sparse_ledger.merkle_root target_ledger in
+    Random_oracle.Input.Chunked.field_elements
+      [| ledger_hash
+       ; Tick.Field.of_string previous_location
+       ; Tick.Field.of_string location
+      |]
+
+  let sign t ~location ~(keypair : Keypair.t) =
+    let message = to_message t ~location in
+    Schnorr.Chunked.sign keypair.private_key message
+end
+
+module Batch_signature = struct
+  let post (config : Config.t) ~location ~(signature : Signature.t) ~pk =
+    let sig_rx, sig_s = signature in
+    let open Snark_params in
+    Da_utils.post_batch_signature ~da_websocket:config.da_websocket
+      ~da_private_key:config.da_private_key
+      ~da_contract_address:config.da_contract_address ~location
+      ~mina_pk:(Public_key.Compressed.to_base58_check pk)
+      ~sig_rx:(Tick.Field.to_string sig_rx)
+      ~sig_s:(Tock.Field.to_string sig_s)
+
+  module Sol_types = struct
+    type sol_public_key = { x : string; y : string } [@@deriving yojson]
+
+    type sol_schnorr_signature =
+      { public_key : sol_public_key; rx : string; s : string }
+    [@@deriving yojson]
+
+    let of_yojson json : ((Public_key.t * Signature.t) list, Error.t) result =
+      let map_result = function
+        | Ok data ->
+            Ok data
+        | Error e ->
+            Error (Error.of_string e)
+      in
+      let%bind.Result raw_data =
+        [%of_yojson: sol_schnorr_signature list] json |> map_result
+      in
+      Ok
+        (List.map raw_data ~f:(fun { public_key; rx; s } ->
+             let pkx = Tick.Field.of_string public_key.x in
+             let pky = Tick.Field.of_string public_key.y in
+             let pk = (pkx, pky) in
+
+             let rx = Tick.Field.of_string rx in
+             let s = Tock.Field.of_string s in
+             let signature = (rx, s) in
+
+             (pk, signature) ) )
+  end
+
+  let get (config : Config.t) ~location =
+    let%bind.Deferred.Result data =
+      Da_utils.get_batch_signatures ~da_websocket:config.da_websocket
+        ~da_contract_address:config.da_contract_address ~location
+    in
+    return @@ Sol_types.of_yojson @@ Yojson.Safe.from_string data
 end

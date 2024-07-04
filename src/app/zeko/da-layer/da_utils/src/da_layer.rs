@@ -6,8 +6,9 @@ use ethers::{
     types::{Address, TransactionReceipt, U256},
     utils::hex::ToHexExt,
 };
-use mina_signer::{BaseField, PubKey};
-use o1_utils::FieldHelpers;
+use mina_curves::pasta::fields::{fp::Fp, fq::Fq};
+use mina_signer::{BaseField, PubKey, ScalarField};
+use o1_utils::{field_helpers::FieldHelpersError, FieldHelpers};
 use std::{str::FromStr, sync::Arc};
 
 // Generate bindings for the DA layer contract from the ABI
@@ -17,6 +18,65 @@ abigen!(DAContract, "src/DataAvailability.json");
 mod da_proxy {
     use super::*;
     abigen!(Abi, "src/DataAvailabilityProxy.json");
+}
+
+pub trait IntoSolidityType<T> {
+    fn into_solidity_type(self) -> T;
+}
+
+impl IntoSolidityType<MinaPublicKey> for PubKey {
+    fn into_solidity_type(self) -> MinaPublicKey {
+        let point = self.point();
+
+        let mut x_bytes = point.x.to_bytes();
+        let mut y_bytes = point.y.to_bytes();
+
+        x_bytes.resize(32, 0);
+        y_bytes.resize(32, 0);
+
+        MinaPublicKey {
+            x: x_bytes.try_into().expect("x coordinate is 32 bytes"),
+            y: y_bytes.try_into().expect("y coordinate is 32 bytes"),
+        }
+    }
+}
+
+impl IntoSolidityType<[u8; 32]> for Fq {
+    fn into_solidity_type(self) -> [u8; 32] {
+        let mut bytes = self.to_bytes();
+
+        bytes.resize(32, 0);
+
+        bytes.try_into().expect("field element is 32 bytes")
+    }
+}
+
+impl IntoSolidityType<[u8; 32]> for Fp {
+    fn into_solidity_type(self) -> [u8; 32] {
+        let mut bytes = self.to_bytes();
+
+        bytes.resize(32, 0);
+
+        bytes.try_into().expect("field element is 32 bytes")
+    }
+}
+
+// ethers-rs doesn't derive serde::Serialize trait for types generated from ABIs
+mod serializable {
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    pub struct MinaPublicKey {
+        pub x: String,
+        pub y: String,
+    }
+
+    #[derive(Serialize)]
+    pub struct MinaSchnorrSignature {
+        pub public_key: MinaPublicKey,
+        pub rx: String,
+        pub s: String,
+    }
 }
 
 // Struct holding context for executing transactions on the DA layer
@@ -142,6 +202,35 @@ impl DALayerExecutor {
             None => Err("Transaction failed".into()),
         }
     }
+
+    pub async fn post_batch_signature(
+        &self,
+        location: &str,
+        mina_pk: &str,
+        sig_rx: BaseField,
+        sig_s: ScalarField,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let signature = MinaSchnorrSignature {
+            public_key: PubKey::from_address(mina_pk)?.into_solidity_type(),
+            rx: sig_rx.into_solidity_type(),
+            s: sig_s.into_solidity_type(),
+        };
+
+        let tx = self
+            .contract
+            .add_batch_signature(U256::from_str(location)?, signature)
+            .from(self.wallet.address())
+            .legacy();
+
+        let pending_tx = tx.send().await?;
+
+        let receipt = pending_tx.await?;
+
+        match receipt {
+            Some(_) => Ok(()),
+            None => Err("Transaction failed".into()),
+        }
+    }
 }
 
 // Struct holding context for reading DA layer state
@@ -176,5 +265,35 @@ impl DALayerReader {
         let data = self.contract.genesis_state().await?;
 
         Ok(data)
+    }
+
+    pub async fn get_batch_signatures(
+        &self,
+        location: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let signatures = self
+            .contract
+            .get_batch_signatures(U256::from_str(location)?)
+            .await?;
+
+        let serializable = signatures
+            .iter()
+            .map(|sig| {
+                Ok(serializable::MinaSchnorrSignature {
+                    public_key: serializable::MinaPublicKey {
+                        x: BaseField::from_bytes(&sig.public_key.x)?
+                            .to_biguint()
+                            .to_string(),
+                        y: BaseField::from_bytes(&sig.public_key.y)?
+                            .to_biguint()
+                            .to_string(),
+                    },
+                    rx: BaseField::from_bytes(&sig.rx)?.to_biguint().to_string(),
+                    s: ScalarField::from_bytes(&sig.s)?.to_biguint().to_string(),
+                })
+            })
+            .collect::<Result<Vec<serializable::MinaSchnorrSignature>, FieldHelpersError>>()?;
+
+        Ok(serde_json::to_string(&serializable)?)
     }
 }

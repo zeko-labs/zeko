@@ -56,3 +56,31 @@ let deploy ~da_websocket ~da_private_key ~quorum ~validators :
   In_thread.run (fun () ->
       caml_deploy da_websocket da_private_key quorum validators
       |> Result.map_error ~f:(fun e -> Error.of_string e) )
+
+external caml_post_batch_signature :
+     string
+  -> string
+  -> string
+  -> string
+  -> string
+  -> string
+  -> string
+  -> (unit, string) result
+  = "caml_post_batch_signature" "caml_post_batch_signature_bytecode"
+
+let post_batch_signature ~da_websocket ~da_contract_address ~da_private_key
+    ~location ~mina_pk ~sig_rx ~sig_s : (unit, Error.t) result Deferred.t =
+  In_thread.run (fun () ->
+      caml_post_batch_signature da_websocket da_contract_address da_private_key
+        location mina_pk sig_rx sig_s
+      |> Result.map_error ~f:(fun e -> Error.of_string e) )
+
+external caml_get_batch_signatures :
+  string -> string -> string -> (string, string) result
+  = "caml_get_batch_signatures"
+
+let get_batch_signatures ~da_websocket ~da_contract_address ~location :
+    (string, Error.t) result Deferred.t =
+  In_thread.run (fun () ->
+      caml_get_batch_signatures da_websocket da_contract_address location
+      |> Result.map_error ~f:(fun e -> Error.of_string e) )

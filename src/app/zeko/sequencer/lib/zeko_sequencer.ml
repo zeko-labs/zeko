@@ -865,12 +865,17 @@ let%test_unit "apply commands and commit" =
     @@ Sys.getenv "DA_PRIVATE_KEY"
   in
 
-  let validators = [ Signature_lib.Keypair.create () ] in
+  let validators =
+    [ Signature_lib.Keypair.create ()
+    ; Signature_lib.Keypair.create ()
+    ; Signature_lib.Keypair.create ()
+    ]
+  in
   let da_contract_address =
     match
       Thread_safe.block_on_async_exn (fun () ->
           Da_layer.deploy ~da_websocket ~da_private_key
-            ~quorum:(Unsigned.UInt64.of_int 1)
+            ~quorum:(Unsigned.UInt64.of_int 2)
             ~validators:
               (List.map validators ~f:(fun keypair ->
                    Signature_lib.Public_key.(
@@ -895,21 +900,54 @@ let%test_unit "apply commands and commit" =
       in
       return () ) ;
 
-  let check_last_batch_for_validity () =
+  let sign_last_batch () =
     let%bind _, committed_location =
       Gql_client.infer_committed_state gql_uri
         ~zkapp_pk:Signature_lib.Public_key.(compress zkapp_keypair.public_key)
         ~signer_pk:Signature_lib.Public_key.(compress signer.public_key)
     in
-    match%bind
+    let%bind batch =
       Da_layer.Batch.get da_config ~location:committed_location
       >>= Fn.compose return Or_error.ok_exn
-      >>= Fn.compose return Da_layer.Batch.is_valid
-    with
-    | Ok `Valid ->
-        return ()
-    | Error reason ->
-        failwith reason
+    in
+    let () =
+      match Da_layer.Batch.is_valid batch with
+      | Ok `Valid ->
+          ()
+      | Error e ->
+          failwith e
+    in
+
+    (* Send signatures *)
+    let%bind () =
+      Deferred.List.iter validators ~f:(fun keypair ->
+          let signature =
+            Da_layer.Batch.sign batch ~location:committed_location ~keypair
+          in
+          let%bind () =
+            Da_layer.Batch_signature.post da_config ~location:committed_location
+              ~signature
+              ~pk:(Signature_lib.Public_key.compress keypair.public_key)
+            >>= Fn.compose return Or_error.ok_exn
+          in
+          return () )
+    in
+
+    (* Fetch signatures *)
+    let%bind signatures =
+      Da_layer.Batch_signature.get da_config ~location:committed_location
+      >>= Fn.compose return Or_error.ok_exn
+    in
+    (* Verify signatures *)
+    List.iter signatures ~f:(fun (pk, signature) ->
+        let valid =
+          Signature_lib.Schnorr.Chunked.verify signature
+            (Snark_params.Tick.Inner_curve.of_affine pk)
+            (Da_layer.Batch.to_message batch ~location:committed_location)
+        in
+        if not valid then failwith "Invalid signature" ) ;
+
+    return ()
   in
 
   let open Mina_transaction_logic.For_tests in
@@ -1085,8 +1123,7 @@ let%test_unit "apply commands and commit" =
               Deferred.unit ) ;
 
           (* Check that first batch on DA layer is valid *)
-          Thread_safe.block_on_async_exn (fun () ->
-              check_last_batch_for_validity () ) ;
+          Thread_safe.block_on_async_exn (fun () -> sign_last_batch ()) ;
 
           (* To test nonce inferring from pool *)
           (* The first commit is still in the pool *)
@@ -1190,8 +1227,7 @@ let%test_unit "apply commands and commit" =
           in
 
           (* Check that second batch on DA layer is valid *)
-          Thread_safe.block_on_async_exn (fun () ->
-              check_last_batch_for_validity () ) ;
+          Thread_safe.block_on_async_exn (fun () -> sign_last_batch ()) ;
 
           (* Try to bootstrap again *)
           Thread_safe.block_on_async_exn (fun () ->

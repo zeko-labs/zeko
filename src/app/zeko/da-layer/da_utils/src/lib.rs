@@ -1,7 +1,7 @@
 mod da_layer;
 
 use da_layer::{DALayerExecutor, DALayerReader};
-use mina_signer::{BaseField, PubKey};
+use mina_signer::{BaseField, PubKey, ScalarField};
 use o1_utils::FieldHelpers;
 use std::{
     ffi::{CStr, CString},
@@ -384,6 +384,193 @@ pub unsafe extern "C" fn deploy(
         match DALayerExecutor::deploy(da_websocket, da_private_key, quorum, validators).await {
             Ok(address) => {
                 set_c_string(output_ptr, &address);
+                true
+            }
+            Err(err) => {
+                set_c_string(error_ptr, &format!("{}", err));
+                false
+            }
+        }
+    })
+}
+
+/**
+ * # Safety
+ * this function dereferences C strings
+ */
+#[no_mangle]
+pub unsafe extern "C" fn post_batch_signature(
+    da_websocket: *const c_char,
+    da_contract_address: *const c_char,
+    da_private_key: *const c_char,
+    location: *const c_char,
+    mina_pk: *const c_char,
+    sig_rx: *const c_char,
+    sig_s: *const c_char,
+    error_ptr: *mut *mut c_char,
+) -> bool {
+    // Convert C strings to &str
+    let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
+        Ok(s) => s,
+        Err(err) => {
+            set_c_string(
+                error_ptr,
+                &format!("Failed to convert da_websocket to string: {}", err),
+            );
+            return false;
+        }
+    };
+
+    let da_contract_address = match unsafe { CStr::from_ptr(da_contract_address) }.to_str() {
+        Ok(s) => s,
+        Err(err) => {
+            set_c_string(
+                error_ptr,
+                &format!("Failed to convert da_contract_address to string: {}", err),
+            );
+            return false;
+        }
+    };
+
+    let da_private_key = match unsafe { CStr::from_ptr(da_private_key) }.to_str() {
+        Ok(s) => s,
+        Err(err) => {
+            set_c_string(
+                error_ptr,
+                &format!("Failed to convert da_private_key to string: {}", err),
+            );
+            return false;
+        }
+    };
+
+    let location = match unsafe { CStr::from_ptr(location) }.to_str() {
+        Ok(s) => s,
+        Err(err) => {
+            set_c_string(
+                error_ptr,
+                &format!("Failed to convert location to string: {}", err),
+            );
+            return false;
+        }
+    };
+
+    let mina_pk = match unsafe { CStr::from_ptr(mina_pk) }.to_str() {
+        Ok(s) => s,
+        Err(err) => {
+            set_c_string(
+                error_ptr,
+                &format!("Failed to convert location to string: {}", err),
+            );
+            return false;
+        }
+    };
+
+    let sig_rx = match unsafe { CStr::from_ptr(sig_rx) }
+        .to_str()
+        .ok()
+        .and_then(|s| s.parse::<num_bigint::BigUint>().ok())
+        .and_then(|uint| BaseField::from_biguint(&uint).ok())
+    {
+        Some(s) => s,
+        None => {
+            set_c_string(error_ptr, "Failed to convert sig_rx to BaseField");
+            return false;
+        }
+    };
+    let sig_s = match unsafe { CStr::from_ptr(sig_s) }
+        .to_str()
+        .ok()
+        .and_then(|s| s.parse::<num_bigint::BigUint>().ok())
+        .and_then(|uint| ScalarField::from_biguint(&uint).ok())
+    {
+        Some(s) => s,
+        None => {
+            set_c_string(error_ptr, "Failed to convert sig_s to ScalarField");
+            return false;
+        }
+    };
+
+    create_runtime().block_on(async {
+        let da_layer =
+            match DALayerExecutor::new(da_websocket, da_contract_address, da_private_key).await {
+                Ok(da_layer) => da_layer,
+                Err(err) => {
+                    set_c_string(error_ptr, &format!("{}", err));
+                    return false;
+                }
+            };
+
+        match da_layer
+            .post_batch_signature(location, mina_pk, sig_rx, sig_s)
+            .await
+        {
+            Ok(()) => true,
+            Err(err) => {
+                set_c_string(error_ptr, &format!("{}", err));
+                false
+            }
+        }
+    })
+}
+
+/**
+ * # Safety
+ * this function dereferences C strings
+ */
+#[no_mangle]
+pub unsafe extern "C" fn get_batch_signatures(
+    da_websocket: *const c_char,
+    da_contract_address: *const c_char,
+    location: *const c_char,
+    output_ptr: *mut *mut c_char,
+    error_ptr: *mut *mut c_char,
+) -> bool {
+    // Convert C strings to &str
+    let da_websocket = match unsafe { CStr::from_ptr(da_websocket) }.to_str() {
+        Ok(s) => s,
+        Err(err) => {
+            set_c_string(
+                error_ptr,
+                &format!("Failed to convert da_websocket to string: {}", err),
+            );
+            return false;
+        }
+    };
+
+    let da_contract_address = match unsafe { CStr::from_ptr(da_contract_address) }.to_str() {
+        Ok(s) => s,
+        Err(err) => {
+            set_c_string(
+                error_ptr,
+                &format!("Failed to convert da_contract_address to string: {}", err),
+            );
+            return false;
+        }
+    };
+
+    let location = match unsafe { CStr::from_ptr(location) }.to_str() {
+        Ok(s) => s,
+        Err(err) => {
+            set_c_string(
+                error_ptr,
+                &format!("Failed to convert location to string: {}", err),
+            );
+            return false;
+        }
+    };
+
+    create_runtime().block_on(async {
+        let da_layer = match DALayerReader::new(da_websocket, da_contract_address).await {
+            Ok(da_layer) => da_layer,
+            Err(err) => {
+                set_c_string(error_ptr, &format!("{}", err));
+                return false;
+            }
+        };
+
+        match da_layer.get_batch_signatures(location).await {
+            Ok(data) => {
+                set_c_string(output_ptr, &data);
                 true
             }
             Err(err) => {
