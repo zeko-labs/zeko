@@ -12,10 +12,10 @@ external caml_post_batch :
   = "caml_post_batch"
 
 let post_batch ~da_websocket ~da_contract_address ~da_private_key ~batch_data
-    ~sig_data : (string, Error.t) result Deferred.t =
+    ~sig_data_without_location : (string, Error.t) result Deferred.t =
   In_thread.run (fun () ->
       caml_post_batch da_websocket da_contract_address da_private_key batch_data
-        sig_data
+        sig_data_without_location
       |> Result.map_error ~f:(fun e -> Error.of_string e) )
 
 external caml_get_batch_data :
@@ -66,7 +66,7 @@ external caml_post_batch_signature :
   -> string
   -> string
   -> (unit, string) result
-  = "caml_post_batch_signature" "caml_post_batch_signature_bytecode"
+  = "caml_post_batch_signature_bytecode" "caml_post_batch_signature"
 
 let post_batch_signature ~da_websocket ~da_contract_address ~da_private_key
     ~location ~mina_pk ~sig_rx ~sig_s : (unit, Error.t) result Deferred.t =

@@ -151,9 +151,9 @@ impl DALayerExecutor {
     pub async fn post_batch(
         &self,
         data: &str,
-        sig_data: Vec<BaseField>,
+        sig_data_without_location: Vec<BaseField>,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let sig_data = sig_data
+        let sig_data_without_location = sig_data_without_location
             .iter()
             .map(BaseField::to_bytes)
             .map(|bytes| {
@@ -165,7 +165,7 @@ impl DALayerExecutor {
 
         let txn = self
             .contract
-            .post_batch(data.to_string(), sig_data)
+            .post_batch(data.to_string(), sig_data_without_location)
             .from(self.wallet.address())
             .legacy();
 

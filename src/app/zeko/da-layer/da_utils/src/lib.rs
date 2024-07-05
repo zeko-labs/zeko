@@ -49,7 +49,7 @@ pub unsafe extern "C" fn post_batch(
     da_contract_address: *const c_char,
     da_private_key: *const c_char,
     batch_data: *const c_char,
-    sig_data: *const *const c_char,
+    sig_data_without_location: *const *const c_char,
     sig_data_len: usize,
     output_ptr: *mut *mut c_char,
     error_ptr: *mut *mut c_char,
@@ -100,13 +100,13 @@ pub unsafe extern "C" fn post_batch(
     };
 
     // Convert C strings to Vec<BaseField>
-    let sig_data = match (0..sig_data_len)
-        .flat_map(|i: usize| unsafe { CStr::from_ptr(*sig_data.add(i)) }.to_str())
+    let sig_data_without_location = match (0..sig_data_len)
+        .flat_map(|i: usize| unsafe { CStr::from_ptr(*sig_data_without_location.add(i)) }.to_str())
         .flat_map(|s| s.parse::<num_bigint::BigUint>())
         .map(|uint| BaseField::from_biguint(&uint))
         .collect::<Result<Vec<BaseField>, _>>()
     {
-        Ok(sig_data) => sig_data,
+        Ok(sig_data_without_location) => sig_data_without_location,
         Err(err) => {
             set_c_string(error_ptr, &format!("{}", err));
             return false;
@@ -123,7 +123,10 @@ pub unsafe extern "C" fn post_batch(
                 }
             };
 
-        match da_layer.post_batch(batch_data, sig_data).await {
+        match da_layer
+            .post_batch(batch_data, sig_data_without_location)
+            .await
+        {
             Ok(data) => {
                 set_c_string(output_ptr, &data);
                 true

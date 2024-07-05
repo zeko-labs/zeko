@@ -45,16 +45,16 @@ extern int post_batch(
     const char* da_contract_address,
     const char* da_private_key,
     const char* batch_data,
-    char** sig_data,
+    char** sig_data_without_location,
     uintptr_t sig_data_len,
     char** output_ptr,
     char** error_ptr);
 
 // Ocaml function signature:
 // string -> string -> string -> string -> string list -> (string, string) result
-CAMLprim value caml_post_batch(value da_websocket, value da_contract_address, value da_private_key, value batch_data, value sig_data)
+CAMLprim value caml_post_batch(value da_websocket, value da_contract_address, value da_private_key, value batch_data, value sig_data_without_location)
 {
-    CAMLparam5(da_websocket, da_contract_address, da_private_key, batch_data, sig_data);
+    CAMLparam5(da_websocket, da_contract_address, da_private_key, batch_data, sig_data_without_location);
 
     // Convert the ocaml strings to C strings
     // This needs to happen before releasing the ocaml runtime system
@@ -65,7 +65,7 @@ CAMLprim value caml_post_batch(value da_websocket, value da_contract_address, va
 
     // Convert the ocaml list of strings to a C array of strings
     uintptr_t sig_data_len;
-    char** sig_data_cstr = caml_string_list_to_c_array(sig_data, &sig_data_len);
+    char** sig_data_cstr = caml_string_list_to_c_array(sig_data_without_location, &sig_data_len);
 
     // To make it work with async we need to release the ocaml runtime system
     caml_release_runtime_system();

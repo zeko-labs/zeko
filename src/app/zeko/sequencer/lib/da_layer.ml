@@ -103,21 +103,31 @@ module Batch = struct
     end
   end]
 
+  (* We don't know the location at the time of posting *)
+  let to_sig_fields_without_location t =
+    let { previous_location; target_ledger } = t in
+    let ledger_hash = Sparse_ledger.merkle_root target_ledger in
+    [ ledger_hash; Tick.Field.of_string previous_location ]
+
+  let to_message t ~location =
+    Random_oracle.Input.Chunked.field_elements @@ Array.of_list
+    @@ (Tick.Field.of_string location :: to_sig_fields_without_location t)
+
   let post (config : Config.t) ~previous_location ~commands
       ~receipt_chain_hashes ~target_ledger =
     let t =
       { previous_location; receipt_chain_hashes; commands; target_ledger }
     in
-    let sig_data =
-      [ Ledger_hash.to_decimal_string @@ Sparse_ledger.merkle_root target_ledger
-      ]
+    let sig_data_without_location =
+      List.map (to_sig_fields_without_location t) ~f:Tick.Field.to_string
     in
     let batch_data =
       Base64.encode_string @@ Binable.to_string (module Stable.Latest) t
     in
     Da_utils.post_batch ~da_websocket:config.da_websocket
       ~da_contract_address:config.da_contract_address
-      ~da_private_key:config.da_private_key ~batch_data ~sig_data
+      ~da_private_key:config.da_private_key ~batch_data
+      ~sig_data_without_location
 
   let get (config : Config.t) ~location =
     let%bind.Deferred.Result data =
@@ -243,15 +253,6 @@ module Batch = struct
                  account_id ) )
     in
     Ok `Valid
-
-  let to_message t ~location =
-    let { previous_location; target_ledger } = t in
-    let ledger_hash = Sparse_ledger.merkle_root target_ledger in
-    Random_oracle.Input.Chunked.field_elements
-      [| ledger_hash
-       ; Tick.Field.of_string previous_location
-       ; Tick.Field.of_string location
-      |]
 
   let sign t ~location ~(keypair : Keypair.t) =
     let message = to_message t ~location in

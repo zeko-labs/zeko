@@ -35,8 +35,19 @@ contract DataAvailability is MinaMultisig {
         batchesLength++;
     }
 
-    function postBatch(string memory batchData, bytes32[] memory sigData) external postGenesis {
+    function postBatch(
+        string memory batchData,
+        bytes32[] memory sigDataWithoutLocation
+    ) external postGenesis {
         RollupBatch storage batch = batches[batchesLength];
+
+        bytes32[] memory sigData = new bytes32[](sigDataWithoutLocation.length + 1);
+
+        // Add location to the signature data
+        sigData[0] = bytes32(batchesLength).swapEndianness();
+        for (uint256 i = 0; i < sigDataWithoutLocation.length; i++) {
+            sigData[i + 1] = sigDataWithoutLocation[i];
+        }
 
         batch.data = batchData;
         batch.sigData = sigData;

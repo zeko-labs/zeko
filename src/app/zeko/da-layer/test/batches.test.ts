@@ -2,7 +2,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { Field, PrivateKey, Signature } from "o1js";
 import { MinaSchnorrSignatureStruct } from "../typechain-types/contracts/DataAvailability";
-import { fieldToHex, hashPublicKey, signatureToStruct } from "../utils/mina";
+import { fieldToHex, hashPublicKey, hexToField, signatureToStruct } from "../utils/mina";
 import { deployDataAvailabilityContract } from "./fixtures";
 
 function randomInt(min: number, max: number) {
@@ -24,15 +24,16 @@ describe("Batches DataAvailability", () => {
     await dataAvailabilityContract.initGenesisState(genesisState).then((tx) => tx.wait());
 
     const batchData = ethers.utils.randomBytes(randomInt(50, 100)).toString();
-    const sigData = Array.from({ length: randomInt(5, 10) }, () => Field.random());
+    const sigDataWithoutLocation = Array.from({ length: randomInt(5, 10) }, () => Field.random());
 
     const proposalTx = await dataAvailabilityContract.postBatch(
       batchData,
-      sigData.map(fieldToHex)
+      sigDataWithoutLocation.map(fieldToHex)
     );
     const proposalReceipt = await proposalTx.wait();
 
     const expectedLocation = (await dataAvailabilityContract.batchesLength()).sub(1);
+    const sigData = [hexToField(expectedLocation.toHexString()), ...sigDataWithoutLocation];
 
     expect(
       proposalReceipt.events?.find(({ event }) => event === "BatchPosted")?.args?.location
@@ -88,8 +89,5 @@ describe("Batches DataAvailability", () => {
         s,
       }))
     ).to.deep.equal(expectedSignatures);
-
-    console.log(dataAvailabilityContract.address);
-    console.log(expectedLocation.toString());
   });
 });
