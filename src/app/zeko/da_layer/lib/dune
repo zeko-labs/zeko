@@ -1,0 +1,19 @@
+(library
+ (name da_layer)
+ (libraries
+  kvdb_base
+  ;; mina ;;
+  mina_base
+  mina_base.import
+  mina_ledger
+  signature_lib
+  daemon_rpcs
+  cli_lib
+  ;; opam libraries ;;
+  core
+  core_kernel
+  async_kernel
+  async
+  ppx_version.runtime)
+ (preprocess
+  (pps ppx_jane ppx_mina ppx_version)))
