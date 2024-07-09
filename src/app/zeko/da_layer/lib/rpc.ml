@@ -42,3 +42,21 @@ module Get_batch = struct
       ~bin_query:Ledger_hash.Stable.V1.bin_t
       ~bin_response:Response.Stable.V1.bin_t
 end
+
+(* val get_all_keys : unit -> Ledger_hash.t list *)
+module Get_all_keys = struct
+  module Response = struct
+    [%%versioned
+    module Stable = struct
+      module V1 = struct
+        type t = Ledger_hash.Stable.V1.t list
+
+        let to_latest = Fn.id
+      end
+    end]
+  end
+
+  let v1 : (unit, Response.t) Rpc.Rpc.t =
+    Rpc.Rpc.create ~name:"Get_all_keys" ~version:1 ~bin_query:Unit.bin_t
+      ~bin_response:Response.Stable.V1.bin_t
+end

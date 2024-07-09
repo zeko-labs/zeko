@@ -33,3 +33,6 @@ let post_batch ~logger ~node_location ~ledger_openings ~batch =
 let get_batch ~logger ~node_location ~ledger_hash :
     (Batch.t option, Error.t) result Deferred.t =
   dispatch ~logger node_location Rpc.Get_batch.v1 ledger_hash
+
+let get_all_keys ~logger ~node_location () =
+  dispatch ~logger node_location Rpc.Get_all_keys.v1 ()

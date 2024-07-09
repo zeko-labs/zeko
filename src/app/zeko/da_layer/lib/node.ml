@@ -47,8 +47,8 @@ module Db = struct
     let index = get_index t in
     if List.mem index ledger_hash ~equal:Ledger_hash.equal then `Already_exists
     else (
-      set_index t ~index:(ledger_hash :: index) ;
       set t ~key:(Batch ledger_hash) ~data:(Batch.to_bigstring batch) ;
+      set_index t ~index:(ledger_hash :: index) ;
       `Added )
 
   let get_batch t ~ledger_hash =
@@ -133,10 +133,54 @@ let post_batch t ~ledger_openings ~batch =
               , `String (Ledger_hash.to_decimal_string target_ledger_hash) )
             ]
   in
-
   Ok signature
 
 let get_batch t ~(ledger_hash : Ledger_hash.t) = Db.get_batch t.db ~ledger_hash
+
+let sync ~logger ~node_location t =
+  let open Async in
+  let%bind.Deferred.Result remote_keys =
+    Client.get_all_keys ~logger ~node_location ()
+    |> Deferred.map
+         ~f:(Result.map ~f:(List.dedup_and_sort ~compare:Ledger_hash.compare))
+  in
+  let my_keys = Db.get_index t.db in
+  let%bind () =
+    Deferred.List.iter remote_keys ~f:(fun remote_key ->
+        match List.mem my_keys remote_key ~equal:Ledger_hash.equal with
+        | true ->
+            return ()
+        | false -> (
+            let%bind batch =
+              match%bind
+                Client.get_batch ~logger ~node_location ~ledger_hash:remote_key
+              with
+              | Ok (Some batch) ->
+                  return batch
+              | Ok None ->
+                  failwithf
+                    "Syncing node claimed to have batch %s but it doesn't"
+                    (Ledger_hash.to_decimal_string remote_key)
+                    ()
+              | Error err ->
+                  failwithf "Failed syncing the batch %s, error: %s"
+                    (Ledger_hash.to_decimal_string remote_key)
+                    (Error.to_string_hum err) ()
+            in
+            match Db.add_batch t.db ~ledger_hash:remote_key ~batch with
+            | `Added ->
+                return
+                @@ [%log info] "Batch with target ledger hash $hash added"
+                     ~metadata:
+                       [ ( "hash"
+                         , `String (Ledger_hash.to_decimal_string remote_key) )
+                       ]
+            | `Already_exists ->
+                failwithf "Batch with target ledger hash %s already exists"
+                  (Ledger_hash.to_decimal_string remote_key)
+                  () ) )
+  in
+  return (Ok ())
 
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
@@ -152,9 +196,11 @@ let implementations t =
                 failwith (Error.to_string_hum e) )
       ; Async.Rpc.Rpc.implement Rpc.Get_batch.v1 (fun () query ->
             Async.return @@ get_batch t ~ledger_hash:query )
+      ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.v1 (fun () () ->
+            Async.return @@ Db.get_index t.db )
       ]
 
-let create_server ~port ~logger ~db_dir ~signer_sk =
+let create_server ?node_to_sync ~port ~logger ~db_dir ~signer_sk () =
   let open Async in
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
@@ -166,6 +212,19 @@ let create_server ~port ~logger ~db_dir ~signer_sk =
     ; logger
     }
   in
+
+  let%bind () =
+    match node_to_sync with
+    | None ->
+        return ()
+    | Some n -> (
+        match%bind sync ~logger ~node_location:n t with
+        | Ok () ->
+            return ()
+        | Error e ->
+            failwith (Error.to_string_hum e) )
+  in
+
   let implementations = implementations t in
   Tcp.Server.create
     ~on_handler_error:
