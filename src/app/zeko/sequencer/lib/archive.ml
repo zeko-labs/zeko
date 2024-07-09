@@ -104,7 +104,7 @@ module Archive = struct
       ^ Token_id.to_string (Account_id.token_id account_id) )
 
   let query_events t account_id =
-    let%bind events = Kvdb.get t ~key:(EVENTS account_id) in
+    let%bind events = Kvdb.get t ~key:(Events account_id) in
     let events =
       Option.value ~default:"[]" @@ Option.map ~f:Bigstring.to_string events
     in
@@ -113,7 +113,7 @@ module Archive = struct
       Yojson.Safe.(Util.to_list @@ from_string events)
 
   let query_actions t account_id =
-    let%bind actions = Kvdb.get t ~key:(ACTIONS account_id) in
+    let%bind actions = Kvdb.get t ~key:(Actions account_id) in
     let actions =
       Option.value ~default:"[]" @@ Option.map ~f:Bigstring.to_string actions
     in
@@ -127,7 +127,7 @@ module Archive = struct
       @@ `List (List.map ~f:Account_update_events.to_yojson events)
     in
     let%bind () =
-      Kvdb.set t ~key:(EVENTS account_id) ~data:(Bigstring.of_string events)
+      Kvdb.set t ~key:(Events account_id) ~data:(Bigstring.of_string events)
     in
     ()
 
@@ -137,7 +137,7 @@ module Archive = struct
       @@ `List (List.map ~f:Account_update_actions.to_yojson actions)
     in
     let%bind () =
-      Kvdb.set t ~key:(ACTIONS account_id) ~data:(Bigstring.of_string actions)
+      Kvdb.set t ~key:(Actions account_id) ~data:(Bigstring.of_string actions)
     in
     ()
 

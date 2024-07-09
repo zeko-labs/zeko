@@ -111,31 +111,31 @@ module Commits_store = struct
   let store_commit kvdb command ~source ~target =
     (* Update index *)
     let index =
-      Kvdb.get kvdb ~key:COMMIT_INDEX
+      Kvdb.get kvdb ~key:Commit_index
       |> Option.map ~f:(fun data ->
              ok_exn @@ index_of_yojson @@ Yojson.Safe.from_string
              @@ Bigstring.to_string data )
       |> Option.value ~default:[]
     in
     let index = (source, target) :: index in
-    Kvdb.set kvdb ~key:COMMIT_INDEX
+    Kvdb.set kvdb ~key:Commit_index
       ~data:
         (Bigstring.of_string @@ Yojson.Safe.to_string @@ index_to_yojson index) ;
 
     (* Store commit *)
     let commit_id = (source, target) in
-    Kvdb.set kvdb ~key:(COMMIT commit_id)
+    Kvdb.set kvdb ~key:(Commit commit_id)
       ~data:
         ( Bigstring.of_string @@ Yojson.Safe.to_string
         @@ Zkapp_command.to_yojson command )
 
   let load_commit_exn kvdb commit_id =
-    let data = Option.value_exn @@ Kvdb.get kvdb ~key:(COMMIT commit_id) in
+    let data = Option.value_exn @@ Kvdb.get kvdb ~key:(Commit commit_id) in
     ok_exn @@ Zkapp_command.of_yojson @@ Yojson.Safe.from_string
     @@ Bigstring.to_string data
 
   let get_index kvdb =
-    Kvdb.get kvdb ~key:COMMIT_INDEX
+    Kvdb.get kvdb ~key:Commit_index
     |> Option.map ~f:(fun data ->
            ok_exn @@ index_of_yojson @@ Yojson.Safe.from_string
            @@ Bigstring.to_string data )

@@ -3,6 +3,8 @@
  (inline_tests)
  (libraries
   zkapps_rollup
+  kvdb_base
+  da_layer
   ;; mina ;;
   mina_base
   mina_base.import

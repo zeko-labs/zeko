@@ -167,11 +167,11 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
     let persist_state ~kvdb t () =
-      Kvdb.set kvdb ~key:SNARK_QUEUE_STATE
+      Kvdb.set kvdb ~key:Snark_queue_state
         ~data:(Bigstring.of_string @@ Yojson.Safe.to_string @@ State.to_yojson t)
 
     let get_state ~kvdb =
-      let%bind.Option data = Kvdb.get kvdb ~key:SNARK_QUEUE_STATE in
+      let%bind.Option data = Kvdb.get kvdb ~key:Snark_queue_state in
       match
         State.of_yojson @@ Yojson.Safe.from_string @@ Bigstring.to_string data
       with
@@ -401,11 +401,11 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       Bigstring.of_string @@ Yojson.Safe.to_string
       @@ Mina_state.Protocol_state.value_to_yojson t.protocol_state
     in
-    Kvdb.(set (of_db t.db) ~key:PROTOCOL_STATE ~data)
+    Kvdb.(set (of_db t.db) ~key:Protocol_state ~data)
 
   let load_protocol_state_exn t =
     let data =
-      Kvdb.(get (of_db t.db) ~key:PROTOCOL_STATE) |> Option.value_exn
+      Kvdb.(get (of_db t.db) ~key:Protocol_state) |> Option.value_exn
     in
     match
       Mina_state.Protocol_state.value_of_yojson @@ Yojson.Safe.from_string
