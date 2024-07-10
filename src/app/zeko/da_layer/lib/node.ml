@@ -20,39 +20,54 @@ module Db = struct
     let of_bigstring = Binable.of_bigstring (module Stable.Latest)
   end
 
-  module Key = struct
-    type t = Batch of Ledger_hash.t | Batch_index
+  module Key_value = struct
+    type _ t =
+      | Batch : (Ledger_hash.t * Batch.t) t
+      | Batch_index : (unit * Index.t) t
 
-    let serialize = function
-      | Batch ledger_hash ->
+    let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
+     fun pair_type key ->
+      match pair_type with
+      | Batch ->
           Bigstring.concat
             [ Bigstring.of_string "batch"
-            ; Bigstring.of_string @@ Ledger_hash.to_decimal_string ledger_hash
+            ; Bigstring.of_string @@ Ledger_hash.to_decimal_string key
             ]
       | Batch_index ->
           Bigstring.of_string "batch_index"
+
+    let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
+     fun pair_type value ->
+      match pair_type with
+      | Batch ->
+          Batch.to_bigstring value
+      | Batch_index ->
+          Index.to_bigstring value
+
+    let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
+     fun pair_type data ->
+      match pair_type with
+      | Batch ->
+          Batch.of_bigstring data
+      | Batch_index ->
+          Index.of_bigstring data
   end
 
-  include Kvdb_base.Make (Key)
+  include Kvdb_base.Make (Key_value)
 
-  let set_index t ~index =
-    set t ~key:Batch_index ~data:(Index.to_bigstring index)
+  let set_index t ~index = set t Batch_index ~key:() ~data:index
 
-  let get_index t =
-    get t ~key:Batch_index
-    |> Option.map ~f:Index.of_bigstring
-    |> Option.value ~default:[]
+  let get_index t = get t Batch_index ~key:() |> Option.value ~default:[]
 
   let add_batch t ~ledger_hash ~batch =
     let index = get_index t in
     if List.mem index ledger_hash ~equal:Ledger_hash.equal then `Already_exists
     else (
-      set t ~key:(Batch ledger_hash) ~data:(Batch.to_bigstring batch) ;
+      set t Batch ~key:ledger_hash ~data:batch ;
       set_index t ~index:(ledger_hash :: index) ;
       `Added )
 
-  let get_batch t ~ledger_hash =
-    get t ~key:(Batch ledger_hash) |> Option.map ~f:Batch.of_bigstring
+  let get_batch t ~ledger_hash = get t Batch ~key:ledger_hash
 end
 
 type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }

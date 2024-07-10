@@ -144,9 +144,40 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         }
     end
 
+    module Kvdb = struct
+      let ok_exn x =
+        let open Ppx_deriving_yojson_runtime.Result in
+        match x with Ok x -> x | Error e -> failwith e
+
+      module Key_value = struct
+        type _ t = Snark_queue_state : (unit * State.t) t
+
+        let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
+         fun pair_type key ->
+          match pair_type with
+          | Snark_queue_state ->
+              Bigstring.of_string "snark_queue_state"
+
+        let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
+         fun pair_type value ->
+          match pair_type with
+          | Snark_queue_state ->
+              Bigstring.of_string @@ Yojson.Safe.to_string
+              @@ State.to_yojson value
+
+        let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
+         fun pair_type data ->
+          match pair_type with
+          | Snark_queue_state ->
+              ok_exn @@ State.of_yojson @@ Yojson.Safe.from_string
+              @@ Bigstring.to_string data
+      end
+
+      include Kvdb_base.Make (Key_value)
+    end
+
     type t =
       { q : unit Throttle.t
-      ; da_config : Da_layer.Config.t
       ; config : Config.t
       ; transfers_memory : Transfers_memory.t
       ; executor : Executor.t
@@ -167,18 +198,9 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
     let persist_state ~kvdb t () =
-      Kvdb.set kvdb ~key:Snark_queue_state
-        ~data:(Bigstring.of_string @@ Yojson.Safe.to_string @@ State.to_yojson t)
+      Kvdb.set kvdb Snark_queue_state ~key:() ~data:t
 
-    let get_state ~kvdb =
-      let%bind.Option data = Kvdb.get kvdb ~key:Snark_queue_state in
-      match
-        State.of_yojson @@ Yojson.Safe.from_string @@ Bigstring.to_string data
-      with
-      | Ok state ->
-          Some state
-      | Error e ->
-          failwith e
+    let get_state ~kvdb = Kvdb.get kvdb Snark_queue_state ~key:()
 
     let wrap_and_merge t txn_snark command =
       let%bind wrapped = M.Wrapper.wrap txn_snark in
@@ -384,11 +406,44 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let clear_staged_diffs t = t.staged_archive_diffs <- []
   end
 
+  module Kvdb = struct
+    let ok_exn x =
+      let open Ppx_deriving_yojson_runtime.Result in
+      match x with Ok x -> x | Error e -> failwith e
+
+    module Key_value = struct
+      type _ t = Protocol_state : (unit * Mina_state.Protocol_state.value) t
+
+      let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
+       fun pair_type key ->
+        match pair_type with
+        | Protocol_state ->
+            Bigstring.of_string "protocol_state"
+
+      let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
+       fun pair_type value ->
+        match pair_type with
+        | Protocol_state ->
+            Bigstring.of_string @@ Yojson.Safe.to_string
+            @@ Mina_state.Protocol_state.value_to_yojson value
+
+      let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
+       fun pair_type data ->
+        match pair_type with
+        | Protocol_state ->
+            ok_exn @@ Mina_state.Protocol_state.value_of_yojson
+            @@ Yojson.Safe.from_string @@ Bigstring.to_string data
+    end
+
+    include Kvdb_base.Make (Key_value)
+
+    let of_db = L.Db.kvdb
+  end
+
   type t =
     { db : L.Db.t
     ; archive : Archive.t
     ; config : Config.t
-    ; da_config : Da_layer.Config.t
     ; snark_q : Snark_queue.t
     ; stop : unit Ivar.t
     ; genesis_accounts : (Account_id.t * Account.t) list
@@ -397,24 +452,13 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     }
 
   let persist_protocol_state t =
-    let data =
-      Bigstring.of_string @@ Yojson.Safe.to_string
-      @@ Mina_state.Protocol_state.value_to_yojson t.protocol_state
-    in
-    Kvdb.(set (of_db t.db) ~key:Protocol_state ~data)
+    Kvdb.(set (of_db t.db) Protocol_state ~key:() ~data:t.protocol_state)
 
   let load_protocol_state_exn t =
     let data =
-      Kvdb.(get (of_db t.db) ~key:Protocol_state) |> Option.value_exn
+      Kvdb.(get (of_db t.db) Protocol_state ~key:()) |> Option.value_exn
     in
-    match
-      Mina_state.Protocol_state.value_of_yojson @@ Yojson.Safe.from_string
-      @@ Bigstring.to_string data
-    with
-    | Ok protocol_state ->
-        t.protocol_state <- protocol_state
-    | Error e ->
-        failwith e
+    t.protocol_state <- data
 
   let close t =
     L.Db.close t.db ;
