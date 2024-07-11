@@ -55,9 +55,9 @@ module type Full = sig
 
       val verify : (t * Sok_message.t) list -> unit Or_error.t Async.Deferred.t
 
-      val id : Pickles.Verification_key.Id.t Lazy.t
+      val id : Pickles.Verification_key.Id.t Async.Deferred.t Lazy.t
 
-      val verification_key : Pickles.Verification_key.t Lazy.t
+      val verification_key : Pickles.Verification_key.t Async.Deferred.t Lazy.t
 
       val verify_against_digest : t -> unit Or_error.t Async.Deferred.t
 
@@ -299,7 +299,7 @@ module type Full = sig
       -> ?permissions:Permissions.t
       -> constraint_constants:Genesis_constants.Constraint_constants.t
       -> Deploy_snapp_spec.t
-      -> Zkapp_command.t
+      -> Zkapp_command.t Async.Deferred.t
 
     module Single_account_update_spec : sig
       type t =
@@ -326,6 +326,7 @@ module type Full = sig
            * ( Pickles.Side_loaded.Verification_key.t
              , Snark_params.Tick.Field.t )
              With_hash.t
+             Async.Deferred.t
       -> chain:Mina_signature_kind.t
       -> constraint_constants:Genesis_constants.Constraint_constants.t
       -> Single_account_update_spec.t
@@ -366,6 +367,7 @@ module type Full = sig
            * ( Pickles.Side_loaded.Verification_key.t
              , Snark_params.Tick.Field.t )
              With_hash.t
+             Async.Deferred.t
       -> ?empty_sender:bool
       -> constraint_constants:Genesis_constants.Constraint_constants.t
       -> Update_states_spec.t
@@ -396,7 +398,9 @@ module type Full = sig
          ?unique_id:int
       -> constraint_constants:Genesis_constants.Constraint_constants.t
       -> unit
-      -> [> `VK of (Side_loaded_verification_key.t, Tick.Field.t) With_hash.t ]
+      -> [> `VK of
+            (Side_loaded_verification_key.t, Tick.Field.t) With_hash.t
+            Async.Deferred.t ]
          * [> `Prover of
               ( unit
               , unit

@@ -7,7 +7,7 @@ module Location : Merkle_ledger.Location_intf.S
 module Kvdb : Merkle_ledger.Intf.Key_value_database with type config := string
 
 module Db :
-  Merkle_ledger.Database_intf.S
+  Merkle_ledger.Intf.Ledger.DATABASE
     with module Location = Location
     with module Addr = Location.Addr
     with type root_hash := Ledger_hash.t
@@ -21,7 +21,7 @@ module Db :
      and type kvdb := Kvdb.t
 
 module Any_ledger :
-  Merkle_ledger.Any_ledger.S
+  Merkle_ledger.Intf.Ledger.ANY
     with module Location = Location
     with type account := Account.t
      and type key := Public_key.Compressed.t

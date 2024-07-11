@@ -15,7 +15,7 @@
   inputs.dream2nix.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.utils.url = "github:gytis-ivaskevicius/flake-utils-plus";
-  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable-small";
+  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-23.11-small";
 
   inputs.mix-to-nix.url = "github:serokell/mix-to-nix";
   inputs.nix-npm-buildPackage.url = "github:serokell/nix-npm-buildpackage";
@@ -76,14 +76,6 @@
               [ (inDirectory "src") "dune" "dune-project"
                 "./graphql_schema.json" "opam.export" ];
           };
-      ocaml-src-caqti-patched = pkgs:
-        pkgs.stdenv.mkDerivation ({
-          name = "mina-src-caqti-patched";
-          src = ocaml-src;
-          phases = [ "unpackPhase" "patchPhase" "installPhase" ];
-          patches = [ ./buildkite/scripts/caqti-upgrade-plus-archive-init-speedup.patch ];
-          installPhase = "cp -R . $out";
-        });
     in {
       overlays = {
         misc = import ./nix/misc.nix;
@@ -94,10 +86,6 @@
           ocamlPackages_mina = requireSubmodules (import ./nix/ocaml.nix {
             inherit inputs pkgs;
             src = ocaml-src;
-          });
-          ocamlPackages_mina_caqti_patched = requireSubmodules (import ./nix/ocaml.nix {
-            inherit inputs pkgs;
-            src = ocaml-src-caqti-patched prev;
           });
         };
       };
@@ -276,6 +264,11 @@
         };
     } // utils.lib.eachDefaultSystem (system:
       let
+	rocksdbOverlay = pkgs: prev:
+          if prev.stdenv.isDarwin then
+            { rocksdb-mina = pkgs.rocksdb; }
+          else { rocksdb-mina = pkgs.rocksdb511; };
+
         # nixpkgs with all relevant overlays applied
         pkgs = nixpkgs.legacyPackages.${system}.extend
           (nixpkgs.lib.composeManyExtensions ([
@@ -289,7 +282,7 @@
                   nodejs = pkgs.nodejs-16_x;
                 };
             })
-          ] ++ builtins.attrValues self.overlays));
+          ] ++ builtins.attrValues self.overlays ++ [ rocksdbOverlay ] ));
 
         checks = import ./nix/checks.nix inputs pkgs;
 
@@ -319,14 +312,12 @@
           };
           inherit (import ./src/app/zeko/default.nix inputs system) mina-geth mina-geth-helper;
           inherit (ocamlPackages)
-            mina devnet mainnet mina_tests mina-ocaml-format test_executive zeko-sequencer;
-          devnet-caqti-patched = pkgs.ocamlPackages_mina_caqti_patched.devnet;
-          mainnet-caqti-patched = pkgs.ocamlPackages_mina_caqti_patched.mainnet;
+            mina devnet mainnet mina_tests mina-ocaml-format mina_client_sdk test_executive with-instrumentation zeko-sequencer;
           inherit (pkgs)
             libp2p_helper kimchi_bindings_stubs snarky_js leaderboard
             validation trace-tool zkapp-cli;
           inherit (dockerImages)
-            mina-image-slim mina-image-full mina-archive-image-full;
+            mina-image-slim mina-image-full mina-archive-image-full mina-image-instr-full; 
           mina-deb = debianPackages.mina;
           default = mina;
         };
