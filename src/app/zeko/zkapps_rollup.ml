@@ -834,7 +834,9 @@ module Make (T' : Transaction_snark.S) = struct
                   (force Action_state_extension.tag)
               ] ) )
 
-    let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
+    let vk =
+      Async.Thread_safe.block_on_async_exn (fun () ->
+          Pickles.Side_loaded.Verification_key.of_compiled tag )
 
     let vk_hash = Zkapp_account.digest_vk vk
 
@@ -940,7 +942,9 @@ module Make (T' : Transaction_snark.S) = struct
                   (force Action_state_extension.tag)
               ] ) )
 
-    let vk = Pickles.Side_loaded.Verification_key.of_compiled tag
+    let vk =
+      Async.Thread_safe.block_on_async_exn (fun () ->
+          Pickles.Side_loaded.Verification_key.of_compiled tag )
 
     let vk_hash = Zkapp_account.digest_vk vk
 

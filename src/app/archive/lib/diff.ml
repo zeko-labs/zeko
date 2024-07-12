@@ -139,7 +139,8 @@ module Builder = struct
       ; sender_receipt_chains_from_parent_ledger
       }
 
-  let transaction_added
+  (* ZEKO NOTE: needed by archive relay *)
+  let zeko_transaction_added
       ~(constraint_constants : Genesis_constants.Constraint_constants.t)
       ~accounts_created ~new_state_hash ~protocol_state ~ledger ~txn =
     let advance_protocol_state ~protocol_state ~new_state_hash
@@ -236,7 +237,7 @@ module Builder = struct
     in
     let header =
       Mina_block.Header.create ~protocol_state
-        ~protocol_state_proof:Proof.blockchain_dummy
+        ~protocol_state_proof:(Lazy.force Proof.blockchain_dummy)
         ~delta_block_chain_proof:(State_hash.dummy, []) ()
     in
     let body =

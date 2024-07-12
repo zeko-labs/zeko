@@ -448,7 +448,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
   let dispatch_transaction t ~ledger ~accounts_created ~new_state_hash ~txn =
     let new_protocol_state, diff =
-      Archive_lib.Diff.Builder.transaction_added ~constraint_constants
+      Archive_lib.Diff.Builder.zeko_transaction_added ~constraint_constants
         ~accounts_created ~new_state_hash ~protocol_state:t.protocol_state
         ~ledger ~txn
     in
@@ -760,11 +760,12 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     in
     let t =
       { db
-      ; archive = Archive.create ~kvdb:(L.Db.kvdb db)
+      ; archive = Archive.create ~kvdb:(L.Db.zeko_kvdb db)
       ; config
       ; da_config
       ; snark_q =
-          Snark_queue.create ~da_config ~config ~signer ~kvdb:(L.Db.kvdb db)
+          Snark_queue.create ~da_config ~config ~signer
+            ~kvdb:(L.Db.zeko_kvdb db)
       ; stop = Ivar.create ()
       ; genesis_accounts
       ; protocol_state = compile_time_genesis_state
@@ -776,7 +777,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       else (
         load_protocol_state_exn t ;
 
-        Snark_queue.get_state ~kvdb:(L.Db.kvdb db)
+        Snark_queue.get_state ~kvdb:(L.Db.zeko_kvdb db)
         |> Option.iter ~f:(fun state -> t.snark_q.state <- state) ;
 
         printf "Staged %d commands \n%!"

@@ -62,7 +62,7 @@ module Types = struct
 
   let merkle_path_element :
       (_, [ `Left of Zkapp_basic.F.t | `Right of Zkapp_basic.F.t ] option) typ =
-    let field_elem = Mina_base_unix.Graphql_scalars.FieldElem.typ () in
+    let field_elem = Mina_base_graphql.Graphql_scalars.FieldElem.typ () in
     obj "MerklePathElement" ~fields:(fun _ ->
         [ field "left" ~typ:field_elem
             ~args:Arg.[]
@@ -447,13 +447,14 @@ module Types = struct
         ~fields:(fun _ ->
           [ field "verificationKey" ~doc:"verification key in Base64 format"
               ~typ:
-                (non_null @@ Pickles_unix.Graphql_scalars.VerificationKey.typ ())
+                ( non_null
+                @@ Pickles_graphql.Graphql_scalars.VerificationKey.typ () )
               ~args:Arg.[]
               ~resolve:(fun _ (vk : _ With_hash.t) -> vk.data)
           ; field "hash" ~doc:"Hash of verification key"
               ~typ:
                 ( non_null
-                @@ Pickles_unix.Graphql_scalars.VerificationKeyHash.typ () )
+                @@ Pickles_graphql.Graphql_scalars.VerificationKeyHash.typ () )
               ~args:Arg.[]
               ~resolve:(fun _ (vk : _ With_hash.t) -> vk.hash)
           ] )
@@ -583,7 +584,7 @@ module Types = struct
              ; field "zkappState"
                  ~typ:
                    ( list @@ non_null
-                   @@ Mina_base_unix.Graphql_scalars.FieldElem.typ () )
+                   @@ Mina_base_graphql.Graphql_scalars.FieldElem.typ () )
                  ~doc:
                    "The 8 field elements comprising the zkApp state associated \
                     with this account encoded as bignum strings"
@@ -624,7 +625,7 @@ module Types = struct
                  ~typ:
                    (list
                       ( non_null
-                      @@ Snark_params_unix.Graphql_scalars.Action.typ () ) )
+                      @@ Snark_params_graphql.Graphql_scalars.Action.typ () ) )
                  ~args:Arg.[]
                  ~resolve:(fun _ { account; _ } ->
                    Option.map account.Account.Poly.zkapp
@@ -635,7 +636,7 @@ module Types = struct
                  ~doc:
                    "The base58Check-encoded hash of this account to bootstrap \
                     the merklePath"
-                 ~typ:(Mina_base_unix.Graphql_scalars.FieldElem.typ ())
+                 ~typ:(Mina_base_graphql.Graphql_scalars.FieldElem.typ ())
                  ~args:Arg.[]
                  ~resolve:(fun _ { account; _ } ->
                    let open Option.Let_syntax in
@@ -668,8 +669,8 @@ module Types = struct
           ; field "failures"
               ~typ:
                 ( non_null @@ list @@ non_null
-                @@ Mina_base_unix.Graphql_scalars.TransactionStatusFailure.typ
-                     () )
+                @@ Mina_base_graphql.Graphql_scalars.TransactionStatusFailure
+                   .typ () )
               ~args:[]
               ~doc:
                 "Failure reason for the account update or any nested zkapp \
@@ -758,7 +759,8 @@ module Types = struct
               ~deprecated:(Deprecated (Some "use receiver field instead"))
           ; abstract_field "failureReason"
               ~typ:
-                (Mina_base_unix.Graphql_scalars.TransactionStatusFailure.typ ())
+                (Mina_base_graphql.Graphql_scalars.TransactionStatusFailure.typ
+                   () )
               ~args:[] ~doc:"null is no failure, reason for failure otherwise."
           ] )
 
@@ -879,7 +881,8 @@ module Types = struct
             AccountObj.get_best_ledger_account (Ledger.of_database t.db)
             @@ Signed_command.receiver cmd.With_hash.data )
       ; field "failureReason"
-          ~typ:(Mina_base_unix.Graphql_scalars.TransactionStatusFailure.typ ())
+          ~typ:
+            (Mina_base_graphql.Graphql_scalars.TransactionStatusFailure.typ ())
           ~args:[]
           ~doc:
             "null is no failure or status unknown, reason for failure \

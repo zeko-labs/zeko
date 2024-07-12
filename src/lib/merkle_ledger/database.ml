@@ -67,7 +67,8 @@ module Make (Inputs : Intf.Inputs.DATABASE) = struct
     ; detached_parent_signal = Async.Ivar.create ()
     }
 
-  let kvdb t = t.kvdb
+  (* ZEKO NOTE: we store actions here *)
+  let zeko_kvdb t = t.kvdb
 
   let create_checkpoint t ~directory_name () =
     let uuid = Uuid_unix.create () in

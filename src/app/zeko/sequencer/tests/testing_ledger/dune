@@ -32,8 +32,6 @@
   pickles
   pickles.backend
   pickles_types
-  kimchi_backend.pasta
-  kimchi_backend.pasta.basic
   transition_frontier
   transition_frontier_base
   base58_check

@@ -23,15 +23,6 @@
   genesis_constants
   hash_prefixes
   h_list
-  kimchi_backend
-  kimchi_backend.common
-  kimchi_backend_common
-  kimchi_backend.pasta
-  kimchi_backend.pasta.basic
-  kimchi_backend.pasta.constraint_system
-  kimchi_bindings
-  kimchi_pasta
-  kimchi_types
   logger
   mina_base
   mina_base.import
@@ -94,15 +85,6 @@
   genesis_constants
   hash_prefixes
   h_list
-  kimchi_backend
-  kimchi_backend.common
-  kimchi_backend_common
-  kimchi_backend.pasta
-  kimchi_backend.pasta.basic
-  kimchi_backend.pasta.constraint_system
-  kimchi_bindings
-  kimchi_pasta
-  kimchi_types
   logger
   mina_base
   mina_base.import
