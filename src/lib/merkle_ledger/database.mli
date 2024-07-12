@@ -10,3 +10,4 @@ module Make (Inputs : Intf.Inputs.DATABASE) :
      and type hash := Inputs.Hash.t
      and type account_id := Inputs.Account_id.t
      and type account_id_set := Inputs.Account_id.Set.t
+     and type zeko_kvdb := Inputs.Kvdb.t

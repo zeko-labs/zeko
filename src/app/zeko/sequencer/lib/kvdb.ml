@@ -4,7 +4,7 @@ module Db = Mina_ledger.Ledger.Kvdb
 
 type t = Db.t
 
-let of_db db = Mina_ledger.Ledger.Db.kvdb db
+let of_db db = Mina_ledger.Ledger.Db.zeko_kvdb db
 
 let of_dir dir = Mina_ledger.Ledger.Kvdb.create dir
 

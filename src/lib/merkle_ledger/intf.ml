@@ -486,6 +486,11 @@ module Ledger = struct
       val gen_account_location :
         ledger_depth:int -> Location.t Quickcheck.Generator.t
     end
+
+    type zeko_kvdb
+
+    (** ZEKO NOTE: we store actions here *)
+    val zeko_kvdb : t -> zeko_kvdb
   end
 end
 
