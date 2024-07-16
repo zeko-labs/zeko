@@ -60,3 +60,10 @@ module Get_all_keys = struct
     Rpc.Rpc.create ~name:"Get_all_keys" ~version:1 ~bin_query:Unit.bin_t
       ~bin_response:Response.Stable.V1.bin_t
 end
+
+module Get_batch_source = struct
+  let v1 : (Ledger_hash.t, Ledger_hash.t) Rpc.Rpc.t =
+    Rpc.Rpc.create ~name:"Get_batch_source" ~version:1
+      ~bin_query:Ledger_hash.Stable.V1.bin_t
+      ~bin_response:Ledger_hash.Stable.V1.bin_t
+end

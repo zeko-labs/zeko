@@ -1749,39 +1749,71 @@ module Make
         ~typ:Types.Committed_transactions.t
         ~args:Arg.[]
         ~resolve:(fun { ctx = sequencer; _ } () ->
-          match
-            Zeko_sequencer.(
-              sequencer.snark_q.state.previous_committed_ledger_hash)
-          with
-          | None ->
-              return (Ok None)
-          | Some last_committed_ledger_hash ->
-              let%bind commands =
-                Da_layer.get_batches
-                  Zeko_sequencer.(sequencer.da_config)
-                  ~to_:
-                    (Frozen_ledger_hash.to_decimal_string
-                       last_committed_ledger_hash )
-              in
-              return
-                (Ok
-                   (Some
-                      Types.Committed_transactions.
-                        { raw_committed_transactions =
-                            List.map commands ~f:(fun c ->
-                                User_command.to_base64 c )
-                        ; json_genesis_accounts =
-                            List.map
-                              Zeko_sequencer.(sequencer.genesis_accounts)
-                              ~f:(fun (id, acc) ->
-                                { account_id =
-                                    Yojson.Safe.to_string
-                                    @@ Account_id.to_yojson id
-                                ; account =
-                                    Yojson.Safe.to_string
-                                    @@ Account.to_yojson acc
-                                } )
-                        } ) ) )
+          let%bind ledger_hashes_chain =
+            Da_layer.Client.get_ledger_hashes_chain
+              ~logger:Zeko_sequencer.(sequencer.logger)
+              ~config:sequencer.da_client.config
+              ~depth:Zeko_sequencer.constraint_constants.ledger_depth
+              ~target_ledger_hash:
+                (Option.value
+                   ~default:(Zeko_sequencer.get_root sequencer)
+                   sequencer.da_client.last_distributed_batch )
+            |> Deferred.map ~f:Or_error.ok_exn
+          in
+          let%bind genesis_accounts =
+            let ledger_hash = List.hd_exn ledger_hashes_chain in
+            let%bind batch =
+              match%bind
+                Da_layer.Client.get_batch ~logger:sequencer.logger
+                  ~config:sequencer.da_client.config ~ledger_hash
+              with
+              | Ok (Some batch) ->
+                  return batch
+              | Ok None ->
+                  failwith "No genesis batch found"
+              | Error e ->
+                  Error.raise e
+            in
+            let diff = Da_layer.Batch.diff batch in
+            return
+            @@ List.map diff ~f:(fun (_, account) ->
+                   ( Account_id.create account.public_key account.token_id
+                   , account ) )
+          in
+          let%bind commands =
+            let ledger_hashes = List.tl_exn ledger_hashes_chain in
+            Deferred.List.filter_map ledger_hashes ~how:`Parallel
+              ~f:(fun ledger_hash ->
+                let%bind batch =
+                  match%bind
+                    Da_layer.Client.get_batch ~logger:sequencer.logger
+                      ~config:sequencer.da_client.config ~ledger_hash
+                  with
+                  | Ok (Some batch) ->
+                      return batch
+                  | Ok None ->
+                      failwith "No batch found"
+                  | Error e ->
+                      Error.raise e
+                in
+                return @@ Option.map ~f:fst
+                @@ Da_layer.Batch.command_with_action_step_flags batch )
+          in
+          return
+            (Ok
+               (Some
+                  Types.Committed_transactions.
+                    { raw_committed_transactions =
+                        List.map commands ~f:(fun c ->
+                            User_command.to_base64 c )
+                    ; json_genesis_accounts =
+                        List.map genesis_accounts ~f:(fun (id, acc) ->
+                            { account_id =
+                                Yojson.Safe.to_string @@ Account_id.to_yojson id
+                            ; account =
+                                Yojson.Safe.to_string @@ Account.to_yojson acc
+                            } )
+                    } ) ) )
 
     let token_owner =
       field "tokenOwner" ~doc:"Find the account that owns a given token"

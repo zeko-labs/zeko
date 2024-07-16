@@ -17,7 +17,7 @@ let committer =
              ~doc:"string Directory to store the database"
          in
          fun () ->
-           let kvdb = Kvdb.of_dir db_dir in
+           let kvdb = Executor.Commits_store.Kvdb.create db_dir in
            let indices = Executor.Commits_store.get_index kvdb in
            printf "Found %d transactions\n%!" (List.length indices) ;
            List.iter indices ~f:(fun (source, target) ->
@@ -41,7 +41,7 @@ let committer =
              ~doc:"string The target ledger of the transaction"
          in
          fun () ->
-           let kvdb = Kvdb.of_dir db_dir in
+           let kvdb = Executor.Commits_store.Kvdb.create db_dir in
            match
              Executor.Commits_store.get_commit kvdb
                ~source:(Frozen_ledger_hash.of_decimal_string source)
@@ -81,7 +81,7 @@ let committer =
          let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
            Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
          in
-         let kvdb = Kvdb.of_dir db_dir in
+         let kvdb = Executor.Commits_store.Kvdb.create db_dir in
          fun () ->
            Thread_safe.block_on_async_exn (fun () ->
                let command =
@@ -118,35 +118,6 @@ let committer =
       ~summary:"Script to manually send commiting transactions to L1"
       [ list; get; send ] )
 
-let da_layer =
-  let bootstrap_commands =
-    ( "bootstrap-commands"
-    , Command.basic ~summary:"List commands to be applied when bootstrapping"
-        (let%map_open.Command target =
-           flag "--target" (required string)
-             ~doc:"string The target ledger of the transaction (decimal string)"
-         and da_contract_address =
-           flag "--da-contract-address" (required string)
-             ~doc:"string The address of the DA contract"
-         in
-         fun () ->
-           Thread_safe.block_on_async_exn (fun () ->
-               let%bind commands =
-                 Da_layer.get_batches
-                   Da_layer.{ da_contract_address = Some da_contract_address }
-                   ~to_:target
-               in
-               printf "Found %d commands\n%!" (List.length commands) ;
-               return
-               @@ List.iter commands ~f:(fun command ->
-                      printf "%s\n\n%!"
-                        ( Yojson.Safe.pretty_to_string
-                        @@ User_command.to_yojson command ) ) ) ) )
-  in
-  ( "da-layer"
-  , Command.group ~summary:"Tool to interact with the DA layer of the sequencer"
-      [ bootstrap_commands ] )
-
 let snark_queue =
   let get_state =
     ( "get-state"
@@ -159,7 +130,7 @@ let snark_queue =
            flag "--pretty" no_arg ~doc:"string Pretty print the staged commands"
          in
          fun () ->
-           let kvdb = Kvdb.of_dir db_dir in
+           let kvdb = Executor.Commits_store.Kvdb.create db_dir in
            let (module T), (module M) =
              Lazy.force Zeko_sequencer.prover_modules
            in
@@ -185,7 +156,7 @@ let snark_queue =
              ~doc:"string Directory to store the database"
          in
          fun () ->
-           let kvdb = Kvdb.of_dir db_dir in
+           let kvdb = Executor.Commits_store.Kvdb.create db_dir in
            let (module T), (module M) =
              Lazy.force Zeko_sequencer.prover_modules
            in
@@ -233,5 +204,5 @@ let snark_queue =
       [ get_state; clear_queued_commands; clear_state ] )
 
 let () =
-  Command.group ~summary:"Sequencer CLI" [ committer; da_layer; snark_queue ]
+  Command.group ~summary:"Sequencer CLI" [ committer; snark_queue ]
   |> Command_unix.run

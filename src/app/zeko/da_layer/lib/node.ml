@@ -73,9 +73,12 @@ end
 type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
 
 (** 1. Check that [root ledger_openings = batch.source_ledger_hash].
-    2. Check that the indices in [batch.diff] are unique. 
-    3. Set each account in [batch.diff] to the [ledger_openings] and sign the resulting ledger hash.
-    4. Store the batch under the resulting ledger hash key *)
+    2. Check that [batch.source_ledger_hash] is either in the databse or an empty ledger.
+    3. Check that the indices in [batch.diff] are unique. 
+    4. Set each account in [batch.diff] to the [ledger_openings] and check that result equals [batch.target_ledger_hash].
+    5. Sign [batch.target_ledger_hash]
+    6. Check that after applying all the receipts of commands, the receipt chain hashes match the target ledegr.
+    7. Store the batch under the [batch.target_ledger_hash] *)
 let post_batch t ~ledger_openings ~batch =
   let logger = t.logger in
   (* 1 *)
@@ -95,6 +98,25 @@ let post_batch t ~ledger_openings ~batch =
   in
 
   (* 2 *)
+  let%bind.Result () =
+    match Db.get_batch t.db ~ledger_hash:(Batch.source_ledger_hash batch) with
+    | Some _ ->
+        Ok ()
+    | None ->
+        if
+          Ledger_hash.equal
+            (Batch.source_ledger_hash batch)
+            (Batch.empty_ledger_hash
+               ~depth:(Sparse_ledger.depth ledger_openings) )
+        then Ok ()
+        else
+          Error
+            (Error.create "Source ledger hash not found"
+               (Batch.source_ledger_hash batch)
+               Ledger_hash.sexp_of_t )
+  in
+
+  (* 3 *)
   let indices = List.map (Batch.diff batch) ~f:(fun (i, _) -> i) in
   let%bind.Result () =
     match List.contains_dup ~compare:Int.compare indices with
@@ -106,32 +128,129 @@ let post_batch t ~ledger_openings ~batch =
              [%sexp_of: Account.Index.t list] )
   in
 
-  (* 3 *)
+  (* 4 *)
   let%bind.Result target_ledger =
     List.fold_result (Batch.diff batch) ~init:ledger_openings
-      ~f:(fun ledger (index, account) ->
+      ~f:(fun ledger (diff_index, account) ->
         try
           (* Check that the index of the account matches the index in the diff *)
           let%bind.Result () =
-            if
+            let opening_index =
               Sparse_ledger.find_index_exn ledger_openings
               @@ Account.identifier account
-              = index
-            then Ok ()
+            in
+            if opening_index = diff_index then Ok ()
             else
               Error
-                (Error.create "Index mismatch" index Account.Index.sexp_of_t)
+                (Error.of_string
+                   (sprintf "Index mismatch %d <> %d" opening_index diff_index) )
           in
-          Ok (Sparse_ledger.set_exn ledger index account)
+          Ok (Sparse_ledger.set_exn ledger diff_index account)
         with e -> Error (Error.of_exn e) )
   in
-  let target_ledger_hash = Sparse_ledger.merkle_root target_ledger in
+  let target_ledger_hash = Batch.target_ledger_hash batch in
+  let%bind.Result () =
+    if
+      Ledger_hash.equal target_ledger_hash
+        (Sparse_ledger.merkle_root target_ledger)
+    then Ok ()
+    else
+      Error
+        (Error.create "Target ledger hash mismatch"
+           (target_ledger_hash, Sparse_ledger.merkle_root target_ledger)
+           [%sexp_of: Ledger_hash.t * Ledger_hash.t] )
+  in
+
+  (* 5 *)
   let message =
     Random_oracle.Input.Chunked.field_elements [| target_ledger_hash |]
   in
   let signature = Schnorr.Chunked.sign t.signer.private_key message in
 
-  (* 4 *)
+  (* 6 *)
+  let get_account ledger account_id =
+    try
+      let index = Sparse_ledger.find_index_exn ledger account_id in
+      Ok (Sparse_ledger.get_exn ledger index)
+    with e -> Error (Error.of_exn e)
+  in
+  (* First try to find in [map] and fallback to the [ledger_openings] *)
+  let get_account's_receipt_chain_hash map account_id =
+    match Account_id.Map.find map account_id with
+    | Some account ->
+        Ok account
+    | None ->
+        let%bind.Result account = get_account ledger_openings account_id in
+        Ok account.receipt_chain_hash
+  in
+  let%bind.Result applied_hashes =
+    match Batch.command_with_action_step_flags batch with
+    | None ->
+        Ok Account_id.Map.empty
+    | Some (Signed_command command, _) ->
+        (* For command only the fee payer gets the receipt *)
+        let account_id = Signed_command.fee_payer command in
+        let%bind.Result old_receipt_chain_hash =
+          get_account's_receipt_chain_hash Account_id.Map.empty account_id
+        in
+        let new_receipt_chain_hash =
+          Receipt.Chain_hash.cons_signed_command_payload
+            (Signed_command_payload (Signed_command.payload command))
+            old_receipt_chain_hash
+        in
+        Ok
+          (Account_id.Map.set Account_id.Map.empty ~key:account_id
+             ~data:new_receipt_chain_hash )
+    | Some (Zkapp_command command, _) ->
+        let _commitment, full_transaction_commitment =
+          Zkapp_command.get_transaction_commitments command
+        in
+        let%bind.Result _, acc =
+          List.fold_result (Zkapp_command.all_account_updates_list command)
+            ~init:(Unsigned.UInt32.zero, Account_id.Map.empty)
+            ~f:(fun (index, acc) account_update ->
+              (* Receipt chain hash is updated only for account updates authorised with Proof of Signature *)
+              match Account_update.authorization account_update with
+              | None_given ->
+                  Ok (Unsigned.UInt32.succ index, acc)
+              | Proof _ | Signature _ ->
+                  let account_id = Account_update.account_id account_update in
+                  let%bind.Result old_receipt_chain_hash =
+                    get_account's_receipt_chain_hash acc account_id
+                  in
+                  let new_receipt_chain_hash =
+                    Receipt.Chain_hash.cons_zkapp_command_commitment index
+                      (Zkapp_command_commitment full_transaction_commitment)
+                      old_receipt_chain_hash
+                  in
+                  Ok
+                    ( Unsigned.UInt32.succ index
+                    , Account_id.Map.set acc ~key:account_id
+                        ~data:new_receipt_chain_hash ) )
+        in
+        Ok acc
+  in
+  let%bind.Result () =
+    List.fold_result (Batch.diff batch) ~init:() ~f:(fun _ (_, account) ->
+        (* account's target_receipt_chain_hash needs to be either unchanged or the same as in [applied_hashes] *)
+        let account_id = Account.identifier account in
+        let%bind.Result target_account = get_account target_ledger account_id in
+        let target_receipt_chain_hash = target_account.receipt_chain_hash in
+        let%bind.Result applied_receipt_chain_hash =
+          get_account's_receipt_chain_hash applied_hashes account_id
+        in
+        if
+          Receipt.Chain_hash.equal target_receipt_chain_hash
+            applied_receipt_chain_hash
+        then Ok ()
+        else
+          Error
+            (Error.create "Receipt chain hash mismatch"
+               (target_receipt_chain_hash, applied_receipt_chain_hash)
+               [%sexp_of: Receipt.Chain_hash.t * Receipt.Chain_hash.t] ) )
+  in
+
+  (* 7 *)
   (* We ignore the result of [add_batch] because we don't want to overwrite existing batches *)
   let () =
     match Db.add_batch t.db ~ledger_hash:target_ledger_hash ~batch with
@@ -155,20 +274,21 @@ let get_batch t ~(ledger_hash : Ledger_hash.t) = Db.get_batch t.db ~ledger_hash
 let sync ~logger ~node_location t =
   let open Async in
   let%bind.Deferred.Result remote_keys =
-    Client.get_all_keys ~logger ~node_location ()
+    Client.query_all_keys ~logger ~node_location ()
     |> Deferred.map
          ~f:(Result.map ~f:(List.dedup_and_sort ~compare:Ledger_hash.compare))
   in
   let my_keys = Db.get_index t.db in
   let%bind () =
-    Deferred.List.iter remote_keys ~f:(fun remote_key ->
+    Deferred.List.iter ~how:`Parallel remote_keys ~f:(fun remote_key ->
         match List.mem my_keys remote_key ~equal:Ledger_hash.equal with
         | true ->
             return ()
         | false -> (
             let%bind batch =
               match%bind
-                Client.get_batch ~logger ~node_location ~ledger_hash:remote_key
+                Client.query_batch ~logger ~node_location
+                  ~ledger_hash:remote_key
               with
               | Ok (Some batch) ->
                   return batch
@@ -208,11 +328,24 @@ let implementations t =
             | Ok signature ->
                 Async.return signature
             | Error e ->
+                let logger = t.logger in
+                [%log warn] "Error posting batch: $error"
+                  ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
       ; Async.Rpc.Rpc.implement Rpc.Get_batch.v1 (fun () query ->
             Async.return @@ get_batch t ~ledger_hash:query )
       ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.v1 (fun () () ->
             Async.return @@ Db.get_index t.db )
+      ; Async.Rpc.Rpc.implement Rpc.Get_batch_source.v1 (fun () query ->
+            Async.return @@ Batch.source_ledger_hash
+            @@ Option.value_exn
+                 ~error:
+                   ( Error.of_string
+                   @@ sprintf
+                        "Get_batch_source exception: Batch not found for \
+                         ledger hash %s"
+                        (Ledger_hash.to_decimal_string query) )
+            @@ get_batch t ~ledger_hash:query )
       ]
 
 let create_server ?node_to_sync ~port ~logger ~db_dir ~signer_sk () =

@@ -1,5 +1,6 @@
 open Core
 open Async
+open Signature_lib
 
 let run_node =
   ( "run-node"
@@ -14,9 +15,14 @@ let run_node =
            ~doc:"int Port to listen on"
        and node_to_sync =
          flag "--node-to-sync" (optional string) ~doc:"string Node to sync with"
+       and testing_mode =
+         flag "--testing-mode" no_arg ~doc:" Run in testing mode"
        in
        fun () ->
-         let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let signer =
+           if testing_mode then Private_key.(create () |> to_base58_check)
+           else Sys.getenv_exn "MINA_PRIVATE_KEY"
+         in
          let logger = Logger.create () in
          let node_to_sync =
            Option.map node_to_sync ~f:(fun node_to_sync ->
