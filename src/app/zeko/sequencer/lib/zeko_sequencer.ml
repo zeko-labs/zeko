@@ -404,7 +404,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
     include Kvdb_base.Make (Key_value)
 
-    let of_db = L.Db.kvdb
+    let of_db = L.Db.zeko_kvdb
   end
 
   type t =
@@ -856,11 +856,11 @@ let prover_modules :
     ((module T), (module M)) )
 
 let%test_unit "apply commands and commit" =
+  Base.Backtrace.elide := false ;
   let logger = Logger.create () in
   let (module T), (module M) = Lazy.force prover_modules in
   let module Sequencer = Make (T) (M) in
   let open Sequencer in
-  Base.Backtrace.elide := false ;
   let number_of_transactions = 5 in
   let zkapp_keypair = Signature_lib.Keypair.create () in
   let gql_uri =

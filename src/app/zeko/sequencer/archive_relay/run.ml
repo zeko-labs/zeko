@@ -178,7 +178,7 @@ module Bootstrap = struct
                 in
                 Ledger.commit ledger ;
                 let new_protocol_state, diff =
-                  Archive_lib.Diff.Builder.transaction_added
+                  Archive_lib.Diff.Builder.zeko_transaction_added
                     ~constraint_constants
                     ~accounts_created:
                       (Ledger.Transaction_applied.new_accounts txn_applied)
