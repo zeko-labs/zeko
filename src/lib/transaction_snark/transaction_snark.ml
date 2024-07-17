@@ -1818,6 +1818,8 @@ module Make_str (A : Wire_types.Concrete) = struct
               Boolean.not (Zkapp_basic.Or_ignore.Checked.is_check valid_while)
           | Check_protocol_state_precondition (protocol_state, _global_state)
             -> (
+              (* ZEKO NOTE: we shittily check if the precondition
+                 is the default one. *)
               let open Zkapp_precondition.Protocol_state in
               let accept = constant typ accept in
               let (Typ typ) = typ in
@@ -1828,8 +1830,8 @@ module Make_str (A : Wire_types.Concrete) = struct
               in
               match zipped with
               | Ok zipped ->
-                  List.fold zipped ~init:Boolean.true_ ~f:(fun acc (x, y) ->
-                      Boolean.(acc || Field.equal x y) )
+                  (* All fields must be equal. *)
+                  Boolean.all (List.map zipped ~f:(fun (x, y) -> Field.equal x y))
               | Unequal_lengths ->
                   failwith "failed to compare protocol state precondition" )
           | Check_account_precondition

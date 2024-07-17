@@ -122,4 +122,5 @@
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
  (modules action_state_extension wrapper zkapps_rollup zkapps_rollup_intf)
+ (modules_without_implementation zkapps_rollup_intf)
  )
