@@ -17,8 +17,7 @@ let run_node =
          flag "--node-to-sync" (optional string) ~doc:"string Node to sync with"
        and testing_mode =
          flag "--testing-mode" no_arg
-           ~doc:
-             " Run in testing mode, the signer key will be generated randomly"
+           ~doc:"Run in testing mode, the signer key will be generated randomly"
        in
        fun () ->
          let signer =

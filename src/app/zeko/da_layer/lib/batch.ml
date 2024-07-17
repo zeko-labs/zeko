@@ -26,14 +26,10 @@ let create ~source_ledger_hash ~target_ledger_hash ~diff
   ; command_with_action_step_flags
   }
 
-let empty =
-  create ~source_ledger_hash:Ledger_hash.empty_hash
-    ~target_ledger_hash:Ledger_hash.empty_hash ~diff:[]
-    ~command_with_action_step_flags:None
-
 let to_bigstring = Binable.to_bigstring (module Stable.Latest)
 
 let of_bigstring = Binable.of_bigstring (module Stable.Latest)
 
+(** [Ledger_hash.empty_hash] is [zero], so we need this for the genesis state of the rollup *)
 let empty_ledger_hash ~depth =
   Ledger.merkle_root @@ Ledger.create_ephemeral ~depth ()

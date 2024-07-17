@@ -61,7 +61,7 @@ module Db = struct
 
   let add_batch t ~ledger_hash ~batch =
     let index = get_index t in
-    if List.mem index ledger_hash ~equal:Ledger_hash.equal then `Already_exists
+    if List.mem index ledger_hash ~equal:Ledger_hash.equal then `Already_existed
     else (
       set t Batch ~key:ledger_hash ~data:batch ;
       set_index t ~index:(ledger_hash :: index) ;
@@ -76,9 +76,9 @@ type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
     2. Check that [batch.source_ledger_hash] is either in the databse or an empty ledger.
     3. Check that the indices in [batch.diff] are unique. 
     4. Set each account in [batch.diff] to the [ledger_openings] and check that result equals [batch.target_ledger_hash].
-    5. Sign [batch.target_ledger_hash]
-    6. Check that after applying all the receipts of commands, the receipt chain hashes match the target ledegr.
-    7. Store the batch under the [batch.target_ledger_hash] *)
+    5. Sign [batch.target_ledger_hash].
+    6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
+    7. Store the batch under the [batch.target_ledger_hash]. *)
 let post_batch t ~ledger_openings ~batch =
   let logger = t.logger in
   (* 1 *)
@@ -92,7 +92,7 @@ let post_batch t ~ledger_openings ~batch =
         Ok ()
     | false ->
         Error
-          (Error.create "Ledger hash mismatch"
+          (Error.create "Source ledger hash mismatch"
              (Batch.source_ledger_hash batch)
              Ledger_hash.sexp_of_t )
   in
@@ -111,7 +111,7 @@ let post_batch t ~ledger_openings ~batch =
         then Ok ()
         else
           Error
-            (Error.create "Source ledger hash not found"
+            (Error.create "Source ledger not found in the database"
                (Batch.source_ledger_hash batch)
                Ledger_hash.sexp_of_t )
   in
@@ -156,7 +156,7 @@ let post_batch t ~ledger_openings ~batch =
     then Ok ()
     else
       Error
-        (Error.create "Target ledger hash mismatch"
+        (Error.create "ledger_openings + diff != target_ledger_hash"
            (target_ledger_hash, Sparse_ledger.merkle_root target_ledger)
            [%sexp_of: Ledger_hash.t * Ledger_hash.t] )
   in
@@ -251,10 +251,10 @@ let post_batch t ~ledger_openings ~batch =
   in
 
   (* 7 *)
-  (* We ignore the result of [add_batch] because we don't want to overwrite existing batches *)
+  (* We don't care if the batch already existed *)
   let () =
     match Db.add_batch t.db ~ledger_hash:target_ledger_hash ~batch with
-    | `Already_exists ->
+    | `Already_existed ->
         [%log warn] "Batch with target ledger hash $hash already exists"
           ~metadata:
             [ ( "hash"
@@ -269,8 +269,7 @@ let post_batch t ~ledger_openings ~batch =
   in
   Ok signature
 
-let get_batch t ~(ledger_hash : Ledger_hash.t) = Db.get_batch t.db ~ledger_hash
-
+(** Find missing keys and fetch corresponding batches *)
 let sync ~logger ~node_location t =
   let open Async in
   let%bind.Deferred.Result remote_keys =
@@ -307,8 +306,9 @@ let sync ~logger ~node_location t =
                    [ ( "hash"
                      , `String (Ledger_hash.to_decimal_string ledger_hash) )
                    ]
-        | `Already_exists ->
-            failwithf "Batch with target ledger hash %s already exists"
+        | `Already_existed ->
+            failwithf
+              "Batch with target ledger hash %s already existed during syncing"
               (Ledger_hash.to_decimal_string ledger_hash)
               () )
   in
@@ -317,11 +317,9 @@ let sync ~logger ~node_location t =
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
-      [ Async.Rpc.Rpc.implement Rpc.Post_batch.v1 (fun () query ->
-            match
-              post_batch t ~ledger_openings:query.ledger_openings
-                ~batch:query.batch
-            with
+      [ Async.Rpc.Rpc.implement Rpc.Post_batch.v1
+          (fun () { ledger_openings; batch } ->
+            match post_batch t ~ledger_openings ~batch with
             | Ok signature ->
                 Async.return signature
             | Error e ->
@@ -330,7 +328,7 @@ let implementations t =
                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
       ; Async.Rpc.Rpc.implement Rpc.Get_batch.v1 (fun () query ->
-            Async.return @@ get_batch t ~ledger_hash:query )
+            Async.return @@ Db.get_batch t.db ~ledger_hash:query )
       ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.v1 (fun () () ->
             Async.return @@ Db.get_index t.db )
       ; Async.Rpc.Rpc.implement Rpc.Get_batch_source.v1 (fun () query ->
@@ -342,7 +340,7 @@ let implementations t =
                         "Get_batch_source exception: Batch not found for \
                          ledger hash %s"
                         (Ledger_hash.to_decimal_string query) )
-            @@ get_batch t ~ledger_hash:query )
+            @@ Db.get_batch t.db ~ledger_hash:query )
       ; Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.v1 (fun () () ->
             Async.return @@ Public_key.compress @@ t.signer.public_key )
       ]
@@ -360,6 +358,7 @@ let create_server ?node_to_sync ~port ~logger ~db_dir ~signer_sk () =
     }
   in
 
+  (* Syncing of the node is optional, the first one can't sync *)
   let%bind () =
     match node_to_sync with
     | None ->

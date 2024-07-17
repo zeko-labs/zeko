@@ -62,6 +62,7 @@ module Get_all_keys = struct
       ~bin_response:Response.Stable.V1.bin_t
 end
 
+(* val get_batch_source : Ledger_hash.t -> Ledger_hash.t *)
 module Get_batch_source = struct
   let v1 : (Ledger_hash.t, Ledger_hash.t) Rpc.Rpc.t =
     Rpc.Rpc.create ~name:"Get_batch_source" ~version:1
@@ -69,6 +70,7 @@ module Get_batch_source = struct
       ~bin_response:Ledger_hash.Stable.V1.bin_t
 end
 
+(* val get_signer_public_key : unit -> Public_key.Compressed.t *)
 module Get_signer_public_key = struct
   let v1 : (unit, Public_key.Compressed.t) Rpc.Rpc.t =
     Rpc.Rpc.create ~name:"Get_signer_public_key" ~version:1

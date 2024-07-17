@@ -69,6 +69,8 @@ let distribute_batch ~logger ~config ~ledger_openings ~batch ~quorum =
   if List.length signatures >= quorum then return (Ok signatures)
   else return (Error (Error.of_string "Quorum not reached"))
 
+(** This module ensures that batches are sent in order. 
+    Signatures can be collected as [Deferred.t] via [get_signatures] *)
 module Sequencer = struct
   type t =
     { logger : Logger.t
@@ -89,24 +91,25 @@ module Sequencer = struct
     }
 
   let enqueue_distribute_batch t ~ledger_openings ~batch =
+    let deferred =
+      Throttle.enqueue t.q (fun () ->
+          let logger = t.logger in
+          match%bind
+            distribute_batch ~logger ~config:t.config ~ledger_openings ~batch
+              ~quorum:t.quorum
+          with
+          | Ok signatures ->
+              t.last_distributed_batch <- Some (Batch.target_ledger_hash batch) ;
+              return signatures
+          | Error e ->
+              [%log error] "Error distributing batch: $error"
+                ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+              Error.raise e )
+    in
     t.signatures <-
       Ledger_hash.Map.set t.signatures
         ~key:(Batch.target_ledger_hash batch)
-        ~data:
-          (Throttle.enqueue t.q (fun () ->
-               let logger = t.logger in
-               match%bind
-                 distribute_batch ~logger ~config:t.config ~ledger_openings
-                   ~batch ~quorum:t.quorum
-               with
-               | Ok signatures ->
-                   t.last_distributed_batch <-
-                     Some (Batch.target_ledger_hash batch) ;
-                   return signatures
-               | Error e ->
-                   [%log error] "Error distributing batch: $error"
-                     ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
-                   Error.raise e ) )
+        ~data:deferred
 
   let get_signatures t ~ledger_hash =
     match Ledger_hash.Map.find t.signatures ledger_hash with
@@ -116,6 +119,7 @@ module Sequencer = struct
         return None
 end
 
+(** Useful for querying data, will fallback to the next node in list in case the first one fails *)
 let try_all_nodes ~config ~f =
   let rec try_first ~accum_errors = function
     | [] ->
@@ -129,6 +133,7 @@ let try_all_nodes ~config ~f =
   in
   try_first ~accum_errors:[] (Config.nodes config)
 
+(** Get the chain of ledger hashes from empty ledger hash to [target_ledger_hash]  *)
 let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
   let rec go current =
     if Ledger_hash.equal current (Batch.empty_ledger_hash ~depth) then
@@ -141,13 +146,14 @@ let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
       let%bind.Deferred.Result next = go source in
       return (Ok (current :: next))
   in
-  let%bind.Deferred.Result from_start_to_end = go target_ledger_hash in
-  return (Ok (List.rev from_start_to_end))
+  let%bind.Deferred.Result from_target_to_genesis = go target_ledger_hash in
+  return (Ok (List.rev from_target_to_genesis))
 
 let get_batch ~logger ~config ~ledger_hash =
   try_all_nodes ~config ~f:(fun ~node_location () ->
       query_batch ~logger ~node_location ~ledger_hash )
 
+(** Distribute batch of initial accounts *)
 let distribute_genesis_batch ~logger ~config ~ledger =
   let%bind account_ids =
     Ledger.accounts ledger |> Deferred.map ~f:Account_id.Set.to_list
@@ -158,6 +164,7 @@ let distribute_genesis_batch ~logger ~config ~ledger =
         let account = Ledger.get_at_index_exn ledger index in
         (index, account) )
   in
+  (* openings lead to empty accounts *)
   let ledger_openings =
     List.fold diff ~init:(Sparse_ledger.of_ledger_subset_exn ledger account_ids)
       ~f:(fun acc (index, _) -> Sparse_ledger.set_exn acc index Account.empty)
