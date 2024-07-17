@@ -279,41 +279,38 @@ let sync ~logger ~node_location t =
          ~f:(Result.map ~f:(List.dedup_and_sort ~compare:Ledger_hash.compare))
   in
   let my_keys = Db.get_index t.db in
+  let missing_keys =
+    let set1 = Set.of_list (module Ledger_hash) remote_keys in
+    let set2 = Set.of_list (module Ledger_hash) my_keys in
+    Set.diff set1 set2 |> Set.to_list
+  in
   let%bind () =
-    Deferred.List.iter ~how:`Parallel remote_keys ~f:(fun remote_key ->
-        match List.mem my_keys remote_key ~equal:Ledger_hash.equal with
-        | true ->
-            return ()
-        | false -> (
-            let%bind batch =
-              match%bind
-                Client.query_batch ~logger ~node_location
-                  ~ledger_hash:remote_key
-              with
-              | Ok (Some batch) ->
-                  return batch
-              | Ok None ->
-                  failwithf
-                    "Syncing node claimed to have batch %s but it doesn't"
-                    (Ledger_hash.to_decimal_string remote_key)
-                    ()
-              | Error err ->
-                  failwithf "Failed syncing the batch %s, error: %s"
-                    (Ledger_hash.to_decimal_string remote_key)
-                    (Error.to_string_hum err) ()
-            in
-            match Db.add_batch t.db ~ledger_hash:remote_key ~batch with
-            | `Added ->
-                return
-                @@ [%log info] "Batch with target ledger hash $hash added"
-                     ~metadata:
-                       [ ( "hash"
-                         , `String (Ledger_hash.to_decimal_string remote_key) )
-                       ]
-            | `Already_exists ->
-                failwithf "Batch with target ledger hash %s already exists"
-                  (Ledger_hash.to_decimal_string remote_key)
-                  () ) )
+    Deferred.List.iter ~how:`Parallel missing_keys ~f:(fun ledger_hash ->
+        let%bind batch =
+          match%bind Client.query_batch ~logger ~node_location ~ledger_hash with
+          | Ok (Some batch) ->
+              return batch
+          | Ok None ->
+              failwithf "Syncing node claimed to have batch %s but it doesn't"
+                (Ledger_hash.to_decimal_string ledger_hash)
+                ()
+          | Error err ->
+              failwithf "Failed syncing the batch %s, error: %s"
+                (Ledger_hash.to_decimal_string ledger_hash)
+                (Error.to_string_hum err) ()
+        in
+        match Db.add_batch t.db ~ledger_hash ~batch with
+        | `Added ->
+            return
+            @@ [%log info] "Batch with target ledger hash $hash added"
+                 ~metadata:
+                   [ ( "hash"
+                     , `String (Ledger_hash.to_decimal_string ledger_hash) )
+                   ]
+        | `Already_exists ->
+            failwithf "Batch with target ledger hash %s already exists"
+              (Ledger_hash.to_decimal_string ledger_hash)
+              () )
   in
   return (Ok ())
 
