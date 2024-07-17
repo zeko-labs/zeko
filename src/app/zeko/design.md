@@ -526,7 +526,7 @@ let do_finalize_cancelled_deposit ~deposit ~actions_after_deposit ~action_state_
       ; { public_key = deposit.recipient
         ; token_id = Account_id.{ public_key = zeko_pk, token_id = default }
         ; app_state =
-          { next_cancelled_deposit = action_state_before_deposit.length
+          { next_cancelled_deposit = action_state_before_deposit.length + 1
           }
         ; preconditions =
           { app_state =
@@ -564,7 +564,7 @@ let do_finalize_withdrawal ~withdrawal ~actions_after_withdrawal ~action_state_b
       ; { public_key = withdrawal.recipient
         ; token_id = Account_id.{ public_key = zeko_pk, token_id = default }
         ; app_state =
-          { next_withdrawal = action_state_before_withdrawal.length
+          { next_withdrawal = action_state_before_withdrawal.length + 1
           }
         ; preconditions =
           { app_state =
@@ -661,7 +661,7 @@ let do_finalize_token_deposit ~sender ~deposit ~actions_after_deposit ~action_st
         ; use_full_commitment = true
         ; balance_change = deposit.amount
         ; app_state =
-          { next_deposit = action_state_before_deposit.length
+          { next_deposit = action_state_before_deposit.length + 1
           }
         ; preconditions =
           { app_state =
@@ -699,7 +699,7 @@ let do_finalize_cancelled_token_deposit ~sender ~deposit ~actions_after_deposit 
             ; use_full_commitment = true
             ; authorization_kind = Signature
             ; app_state =
-              { next_cancelled_deposit = action_state_before_deposit.length
+              { next_cancelled_deposit = action_state_before_deposit.length + 1
               }
             ; preconditions =
               { app_state =
@@ -752,7 +752,7 @@ let do_finalize_token_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~
             ; use_full_commitment = true
             ; authorization_kind = Signature
             ; app_state =
-              { next_withdrawal = action_state_before_withdrawal.length
+              { next_withdrawal = action_state_before_withdrawal.length + 1
               }
             ; preconditions =
               { app_state =
