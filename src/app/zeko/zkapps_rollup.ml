@@ -817,7 +817,7 @@ module Make (T' : Transaction_snark.S) = struct
         , _
         , Pickles.Provers.[ step_; submit_withdrawal_; process_deposit_ ] ) =
       time "Inner.compile" (fun () ->
-          Pickles.compile () ~cache:Cache_dir.cache
+          compile_sync () ~cache:Cache_dir.cache
             ~override_wrap_domain:Pickles_base.Proofs_verified.N1
             ~public_input:(Output Zkapp_statement.typ)
             ~auxiliary_typ:(Prover_value.typ ())
@@ -894,7 +894,7 @@ module Make (T' : Transaction_snark.S) = struct
 
       let tag, _, _, Pickles.Provers.[ prove_ ] =
         time "Extensions_wrapper.compile" (fun () ->
-            Pickles.compile ()
+            compile_sync ()
               ~override_wrap_domain:Pickles_base.Proofs_verified.N1
               ~cache:Cache_dir.cache ~public_input:(Output Stmt.typ)
               ~auxiliary_typ:Typ.unit
@@ -925,8 +925,7 @@ module Make (T' : Transaction_snark.S) = struct
         , _
         , Pickles.Provers.[ step_; submit_deposit_; process_withdrawal_ ] ) =
       time "Outer.compile" (fun () ->
-          Pickles.compile ()
-            ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+          compile_sync () ~override_wrap_domain:Pickles_base.Proofs_verified.N1
             ~cache:Cache_dir.cache ~public_input:(Output Zkapp_statement.typ)
             ~auxiliary_typ:(Prover_value.typ ())
             ~branches:(module Nat.N3)

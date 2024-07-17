@@ -313,3 +313,18 @@ let assert_var_checked label expr =
 
 let ref_of_v (x : 'a V.t) : 'a As_prover.Ref.t =
   As_prover.Ref.create (fun () -> V.get x)
+
+(** The compilation is async while it mutates the global state, so we want to run compilations synchronously *)
+let compile_sync ?self ?cache ?storables ?proof_cache ?disk_keys
+    ?override_wrap_domain ?num_chunks ~public_input ~auxiliary_typ ~branches
+    ~max_proofs_verified ~name ?constraint_constants ?commit ~choices () =
+  let ((tag, _, _, _) as result) =
+    Pickles.compile ?self ?cache ?storables ?proof_cache ?disk_keys
+      ?override_wrap_domain ?num_chunks ~public_input ~auxiliary_typ ~branches
+      ~max_proofs_verified ~name ?constraint_constants ?commit ~choices ()
+  in
+  let (_ : Pickles.Side_loaded.Verification_key.t) =
+    Async.Thread_safe.block_on_async_exn (fun () ->
+        Pickles.Side_loaded.Verification_key.of_compiled tag )
+  in
+  result
