@@ -21,6 +21,9 @@ DUNE_PROFILE=devnet dune build
 # Run local network to imitate L1
 DUNE_PROFILE=devnet dune exec ./tests/local_network/run.exe -- --db-dir l1_db
 
+# Run da node
+DUNE_PROFILE=devnet dune exec ../da_layer/cli.exe -- run-node --port 8555 --testing-mode
+
 DUNE_PROFILE=devnet dune runtest
 ```
 
@@ -29,8 +32,6 @@ DUNE_PROFILE=devnet dune runtest
 Running the sequencer exposes the Graphql API on the port `-p`. The Graphql schema is a subset of the L1 Graphql API joined with the L1 Graphql API for fetching of actions/events.
 
 ```bash
-export DA_PROVIDER="da evm provider"
-export DA_PRIVATE_KEY="da layer private key"
 export MINA_PRIVATE_KEY="base58 signer private key"
 export DUNE_PROFILE=devnet
 dune exec ./run.exe -- \
@@ -39,9 +40,10 @@ dune exec ./run.exe -- \
     --zkapp-pk <string> \
     --max-pool-size <int?> \
     --commitment-period <float?> \
-    --da-contract-address <string?> \
+    --da-node <string list> \
+    --da-quorum <int> \
     --db-dir <string?> \
-    --test-accounts-path <string?>
+    --network-id <string?>
 ```
 
 Run help to see the options:
@@ -58,8 +60,9 @@ The following script deploys the rollup contract on the L1 with the initial stat
 export MINA_PRIVATE_KEY="base58 signer private key"
 export DUNE_PROFILE=devnet
 dune exec ./deploy.exe -- \
-    --rest-server <string>
-    --test-accounts-path <string?>
+    --rest-server <string> \
+    --test-accounts-path <string?> \
+    --da-node <string list>
 ```
 
 Run help to see the options:
