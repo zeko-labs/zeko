@@ -6,7 +6,7 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-    ~db_dir ~l1_uri ~signer ~test_accounts_path ~network_id () =
+    ~db_dir ~l1_uri ~signer ~network_id () =
   let (module T), (module M) = Lazy.force Zeko_sequencer.prover_modules in
   let module Sequencer = Zeko_sequencer.Make (T) (M) in
   let module Gql = Gql.Make (T) (M) (Sequencer) in
@@ -19,8 +19,7 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
     Thread_safe.block_on_async_exn (fun () ->
         Sequencer.create ~logger:(Logger.create ()) ~zkapp_pk ~max_pool_size
           ~da_config ~da_quorum ~db_dir:(Some db_dir) ~l1_uri
-          ~test_accounts_path ~commitment_period_sec:commitment_period
-          ~network_id
+          ~commitment_period_sec:commitment_period ~network_id
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
@@ -73,9 +72,6 @@ let () =
        flag "--db-dir"
          (optional_with_default "db" string)
          ~doc:"string Directory to store the database"
-     and test_accounts_path =
-       flag "--test-accounts-path" (optional string)
-         ~doc:"string Path to the test genesis accounts file"
      and network_id =
        flag "--network-id"
          (optional_with_default "testnet" string)
@@ -85,5 +81,5 @@ let () =
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in
 
      run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-       ~db_dir ~l1_uri ~signer ~test_accounts_path ~network_id )
+       ~db_dir ~l1_uri ~signer ~network_id )
   |> Command_unix.run
