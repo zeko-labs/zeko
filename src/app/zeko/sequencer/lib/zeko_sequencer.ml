@@ -581,9 +581,17 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       Da_layer.Batch.create
         ~source_ledger_hash:(Sparse_ledger.merkle_root first_pass_ledger)
         ~target_ledger_hash ~diff
-        ~command_with_action_step_flags:(Some (command, []))
+        ~command_with_action_step_flags:
+          (Some
+             ( command
+             , match command with
+               | Signed_command _ ->
+                   []
+               | Zkapp_command command ->
+                   Zkapp_command.all_account_updates_list command
+                   |> List.map ~f:(fun _ -> true) ) )
     in
-    Da_layer.Client.Sequencer.distribute_batch t.da_client
+    Da_layer.Client.Sequencer.enqueue_distribute_batch t.da_client
       ~ledger_openings:first_pass_ledger ~batch ;
 
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =

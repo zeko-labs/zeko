@@ -85,7 +85,7 @@ module Sequencer = struct
     ; last_distributed_batch = None
     }
 
-  let distribute_batch t ~ledger_openings ~batch =
+  let enqueue_distribute_batch t ~ledger_openings ~batch =
     t.signatures <-
       Ledger_hash.Map.set t.signatures
         ~key:(Batch.target_ledger_hash batch)
