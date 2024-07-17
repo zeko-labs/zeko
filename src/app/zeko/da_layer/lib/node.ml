@@ -343,6 +343,8 @@ let implementations t =
                          ledger hash %s"
                         (Ledger_hash.to_decimal_string query) )
             @@ get_batch t ~ledger_hash:query )
+      ; Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.v1 (fun () () ->
+            Async.return @@ Public_key.compress @@ t.signer.public_key )
       ]
 
 let create_server ?node_to_sync ~port ~logger ~db_dir ~signer_sk () =

@@ -2,6 +2,7 @@ open Core_kernel
 open Async
 open Mina_ledger
 open Mina_base
+open Signature_lib
 
 (* val post_batch : ledger_openings:Sparse_ledger.t -> batch:Batch.t -> Signature.t *)
 module Post_batch = struct
@@ -66,4 +67,10 @@ module Get_batch_source = struct
     Rpc.Rpc.create ~name:"Get_batch_source" ~version:1
       ~bin_query:Ledger_hash.Stable.V1.bin_t
       ~bin_response:Ledger_hash.Stable.V1.bin_t
+end
+
+module Get_signer_public_key = struct
+  let v1 : (unit, Public_key.Compressed.t) Rpc.Rpc.t =
+    Rpc.Rpc.create ~name:"Get_signer_public_key" ~version:1
+      ~bin_query:Unit.bin_t ~bin_response:Public_key.Compressed.Stable.V1.bin_t
 end

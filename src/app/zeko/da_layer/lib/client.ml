@@ -42,6 +42,9 @@ let query_all_keys ~logger ~node_location () =
 let query_batch_source ~logger ~node_location ~ledger_hash =
   dispatch ~logger node_location Rpc.Get_batch_source.v1 ledger_hash
 
+let query_node_public_key ~logger ~node_location () =
+  dispatch ~logger node_location Rpc.Get_signer_public_key.v1 ()
+
 module Config = struct
   type t = { nodes : Host_and_port.t Cli_lib.Flag.Types.with_name list }
   [@@deriving fields]
