@@ -213,7 +213,7 @@ module Make (Txn : Transaction_snark.S) = struct
 
   let tag, _cache_handle, _p, Pickles.Provers.[ wrap_; merge_ ] =
     time "Wrapper.compile" (fun () ->
-        Pickles.compile () ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+        compile_sync () ~override_wrap_domain:Pickles_base.Proofs_verified.N1
           ~cache:Cache_dir.cache ~public_input:(Output Stmt.typ)
           ~auxiliary_typ:Typ.unit
           ~branches:(module Nat.N2)

@@ -134,8 +134,7 @@ open Async_kernel
 let compilation_result =
   lazy
     (time "Action_state_extension.compile" (fun () ->
-         Pickles.compile ()
-           ~override_wrap_domain:Pickles_base.Proofs_verified.N1
+         compile_sync () ~override_wrap_domain:Pickles_base.Proofs_verified.N1
            ~cache:Cache_dir.cache ~public_input:(Output Stmt.typ)
            ~auxiliary_typ:Typ.unit
            ~branches:(module Nat.N2)
