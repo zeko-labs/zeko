@@ -6,6 +6,34 @@ module L = Ledger
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
+module Test_accounts = struct
+  type t = { pk : string; balance : int64 } [@@deriving yojson]
+
+  let parse_accounts_exn ~test_accounts_path : (Account_id.t * Account.t) list =
+    let accounts =
+      Yojson.Safe.(
+        from_file test_accounts_path
+        |> Util.to_list
+        |> List.map ~f:(fun t ->
+               match of_yojson t with
+               | Ppx_deriving_yojson_runtime.Result.Ok t ->
+                   t
+               | Ppx_deriving_yojson_runtime.Result.Error e ->
+                   failwith e ))
+    in
+    List.map accounts ~f:(fun { pk; balance } ->
+        let account_id =
+          Account_id.create
+            (Signature_lib.Public_key.Compressed.of_base58_check_exn pk)
+            Token_id.default
+        in
+        let account =
+          Account.create account_id
+            (Currency.Balance.of_uint64 (Unsigned.UInt64.of_int64 balance))
+        in
+        (account_id, account) )
+end
+
 module T = Transaction_snark.Make (struct
   let constraint_constants = constraint_constants
 
@@ -14,7 +42,7 @@ end)
 
 module M = Zkapps_rollup.Make (T)
 
-let run ~uri ~sk ~test_accounts_path ~da_nodes () =
+let run ~uri ~sk ~initial_state ~da_nodes () =
   let logger = Logger.create () in
   let sender_keypair =
     Signature_lib.(
@@ -32,26 +60,32 @@ let run ~uri ~sk ~test_accounts_path ~da_nodes () =
         Sequencer_lib.Gql_client.infer_nonce uri
           (Signature_lib.Public_key.compress sender_keypair.public_key) )
   in
-  let command, ledger =
-    L.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
-        L.create_new_account_exn ledger M.Inner.account_id
-          M.Inner.initial_account ;
 
-        ( match test_accounts_path with
-        | None ->
-            ()
-        | Some test_accounts_path ->
-            List.iter
-              (Sequencer_lib.Zeko_sequencer.Test_accounts.parse_accounts_exn
-                 ~test_accounts_path ) ~f:(fun (account_id, account) ->
-                L.create_new_account_exn ledger account_id account ) ) ;
-
-        ( Sequencer_lib.Deploy.deploy_command_exn ~signer:sender_keypair
-            ~zkapp:zkapp_keypair
-            ~fee:(Currency.Fee.of_mina_int_exn 1)
-            ~nonce ~constraint_constants ~initial_ledger:ledger
-            (module M)
-        , ledger ) )
+  let ledger =
+    let ledger =
+      L.create_ephemeral ~depth:constraint_constants.ledger_depth ()
+    in
+    L.create_new_account_exn ledger M.Inner.account_id M.Inner.initial_account ;
+    match initial_state with
+    | `None ->
+        ledger
+    | `Test_accounts test_accounts_path ->
+        List.fold ~init:ledger
+          (Test_accounts.parse_accounts_exn ~test_accounts_path)
+          ~f:(fun ledger (account_id, account) ->
+            L.create_new_account_exn ledger account_id account ;
+            ledger )
+    | `Db_dir db_dir ->
+        L.of_database
+        @@ L.Db.create ~directory_name:db_dir
+             ~depth:constraint_constants.ledger_depth ()
+  in
+  let command =
+    Sequencer_lib.Deploy.deploy_command_exn ~signer:sender_keypair
+      ~zkapp:zkapp_keypair
+      ~fee:(Currency.Fee.of_mina_int_exn 1)
+      ~nonce ~constraint_constants ~initial_ledger:ledger
+      (module M)
   in
 
   (* Post genesis batch *)
@@ -84,6 +118,9 @@ let () =
         and test_accounts_path =
           flag "--test-accounts-path" (optional string)
             ~doc:"string Path to the test genesis accounts file"
+        and init_db_dir =
+          flag "--init-db-dir" (optional string)
+            ~doc:"string Path to the initial db"
         and da_nodes =
           flag "--da-node" (listed string)
             ~doc:"string Address of the DA node, can be supplied multiple times"
@@ -96,4 +133,15 @@ let () =
                 ; name = sprintf "da-node-%d" i
                 } )
         in
-        run ~uri ~sk ~test_accounts_path ~da_nodes )
+        let initial_state =
+          match (test_accounts_path, init_db_dir) with
+          | Some _, Some _ ->
+              failwith "Cannot specify both test accounts and initial db"
+          | Some test_accounts_path, None ->
+              `Test_accounts test_accounts_path
+          | None, Some init_db_dir ->
+              `Db_dir init_db_dir
+          | None, None ->
+              `None
+        in
+        run ~uri ~sk ~initial_state ~da_nodes )

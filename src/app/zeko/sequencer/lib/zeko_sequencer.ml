@@ -8,34 +8,6 @@ module L = Ledger
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
-module Test_accounts = struct
-  type t = { pk : string; balance : int64 } [@@deriving yojson]
-
-  let parse_accounts_exn ~test_accounts_path : (Account_id.t * Account.t) list =
-    let accounts =
-      Yojson.Safe.(
-        from_file test_accounts_path
-        |> Util.to_list
-        |> List.map ~f:(fun t ->
-               match of_yojson t with
-               | Ppx_deriving_yojson_runtime.Result.Ok t ->
-                   t
-               | Ppx_deriving_yojson_runtime.Result.Error e ->
-                   failwith e ))
-    in
-    List.map accounts ~f:(fun { pk; balance } ->
-        let account_id =
-          Account_id.create
-            (Signature_lib.Public_key.Compressed.of_base58_check_exn pk)
-            Token_id.default
-        in
-        let account =
-          Account.create account_id
-            (Currency.Balance.of_uint64 (Unsigned.UInt64.of_int64 balance))
-        in
-        (account_id, account) )
-end
-
 module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
   let constraint_constants = constraint_constants
 
