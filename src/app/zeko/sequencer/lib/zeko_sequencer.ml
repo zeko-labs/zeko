@@ -4,6 +4,7 @@ open Async
 open Async_kernel
 open Mina_base
 open Mina_ledger
+open Signature_lib
 module L = Ledger
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
@@ -16,8 +17,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       { max_pool_size : int
       ; commitment_period_sec : float
       ; db_dir : string option
-      ; zkapp_pk : Signature_lib.Public_key.Compressed.t
-      ; signer : Signature_lib.Keypair.t
+      ; zkapp_pk : Public_key.Compressed.t
+      ; signer : Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; network_id : string
       }
@@ -49,12 +50,12 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     in
     compile_time_genesis.data
 
-  let keypair = Signature_lib.Keypair.create ()
+  let keypair = Keypair.create ()
 
   let sok_digest =
     Sok_message.digest
     @@ Sok_message.create ~fee:Currency.Fee.zero
-         ~prover:(Signature_lib.Public_key.compress keypair.public_key)
+         ~prover:(Public_key.compress keypair.public_key)
 
   module Snark_queue = struct
     module Command_witness = struct
@@ -301,7 +302,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                       { fee_payer =
                           { Account_update.Fee_payer.body =
                               { public_key =
-                                  Signature_lib.Public_key.compress
+                                  Public_key.compress
                                     t.executor.signer.public_key
                               ; fee = Currency.Fee.of_mina_int_exn 1
                               ; valid_until = None
@@ -640,7 +641,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           (* Setting public_key to empty results in a dummy fee payer with public key near 123456789 (dumb). *)
           (* FIXME: Do this a better way without hard-coding values. *)
           { Account_update.Fee_payer.body =
-              { public_key = Signature_lib.Public_key.Compressed.empty
+              { public_key = Public_key.Compressed.empty
               ; fee
               ; valid_until = None
               ; nonce = Account.Nonce.zero
@@ -696,7 +697,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
   let bootstrap ~logger ({ config; snark_q; _ } as t) da_config =
     let%bind committed_ledger_hash =
       Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
-        ~signer_pk:(Signature_lib.Public_key.compress config.signer.public_key)
+        ~signer_pk:(Public_key.compress config.signer.public_key)
     in
     printf "Fetched root: %s\n%!"
       Ledger_hash.(to_decimal_string committed_ledger_hash) ;
@@ -827,103 +828,133 @@ let prover_modules :
     let module M = Zkapps_rollup.Make (T) in
     ((module T), (module M)) )
 
-let%test_unit "apply commands and commit" =
-  Base.Backtrace.elide := false ;
-  let logger = Logger.create () in
-  let (module T), (module M) = Lazy.force prover_modules in
-  let module Sequencer = Make (T) (M) in
-  let open Sequencer in
-  let number_of_transactions = 5 in
-  let zkapp_keypair = Signature_lib.Keypair.create () in
-  let gql_uri =
-    { Cli_lib.Flag.Types.value = Uri.of_string "http://localhost:8080/graphql"
-    ; name = "gql-uri"
-    }
-  in
-  let da_config = Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555" ] in
+let%test_module "Sequencer tests" =
+  ( module struct
+    let () = Base.Backtrace.elide := false
 
-  (* Create signer *)
-  let signer = Signature_lib.Keypair.create () in
-  Thread_safe.block_on_async_exn (fun () ->
-      let%bind _res =
-        Gql_client.For_tests.create_account gql_uri
-          (Signature_lib.Public_key.compress signer.public_key)
-      in
-      return () ) ;
+    let logger = Logger.create ()
 
-  let open Mina_transaction_logic.For_tests in
-  Quickcheck.test ~trials:1
-    (Test_spec.mk_gen ~num_transactions:number_of_transactions ())
-    ~f:(fun { init_ledger; specs } ->
-      let genesis_accounts =
-        (M.Inner.account_id, M.Inner.initial_account)
-        :: ( Array.map init_ledger ~f:(fun (keypair, balance) ->
-                 let pk =
-                   Signature_lib.Public_key.compress keypair.public_key
-                 in
-                 let account_id = Account_id.create pk Token_id.default in
-                 let balance = Unsigned.UInt64.of_int64 balance in
-                 let account =
-                   Account.create account_id
-                     (Currency.Balance.of_uint64 balance)
-                 in
-                 (account_id, account) )
-           |> Array.to_list )
-      in
-      let batch1, batch2 = List.split_n specs 3 in
+    module T = Transaction_snark.Make (struct
+      let constraint_constants = constraint_constants
 
-      L.with_ledger ~depth:constraint_constants.ledger_depth
-        ~f:(fun expected_ledger ->
-          (* Init expected ledger *)
-          List.iter genesis_accounts ~f:(fun (aid, acc) ->
-              L.create_new_account_exn expected_ledger aid acc ) ;
+      let proof_level = Genesis_constants.Proof_level.Full
+    end)
 
-          printf "Expected init root: %s\n%!"
-            Ledger_hash.(to_decimal_string @@ L.merkle_root expected_ledger) ;
+    module M = Zkapps_rollup.Make (T)
+    module Sequencer = Make (T) (M)
+    open Sequencer
 
-          (* Post genesis batch *)
+    let number_of_transactions = 5
+
+    let gql_uri =
+      { Cli_lib.Flag.Types.value = Uri.of_string "http://localhost:8080/graphql"
+      ; name = "gql-uri"
+      }
+
+    let da_config = Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555" ]
+
+    module Test_spec = struct
+      type t =
+        { zkapp_keypair : Keypair.t
+        ; signer : Keypair.t
+        ; ephemeral_ledger : L.t
+        ; specs : Mina_transaction_logic.For_tests.Transaction_spec.t list
+        ; sequencer : Sequencer.t
+        }
+
+      let gen () =
+        let open Quickcheck.Generator.Let_syntax in
+        let zkapp_keypair = Keypair.create () in
+
+        (* Create signer *)
+        let signer = Keypair.create () in
+        Thread_safe.block_on_async_exn (fun () ->
+            let open Async in
+            let%bind _res =
+              Gql_client.For_tests.create_account gql_uri
+                (Public_key.compress signer.public_key)
+            in
+            return () ) ;
+
+        let%bind { init_ledger; specs } =
+          Mina_transaction_logic.For_tests.Test_spec.mk_gen
+            ~num_transactions:number_of_transactions ()
+        in
+
+        let genesis_accounts =
+          (M.Inner.account_id, M.Inner.initial_account)
+          :: ( Array.map init_ledger ~f:(fun (keypair, balance) ->
+                   let pk =
+                     Signature_lib.Public_key.compress keypair.public_key
+                   in
+                   let account_id = Account_id.create pk Token_id.default in
+                   let balance = Unsigned.UInt64.of_int64 balance in
+                   let account =
+                     Account.create account_id
+                       (Currency.Balance.of_uint64 balance)
+                   in
+                   (account_id, account) )
+             |> Array.to_list )
+        in
+
+        (* Init ephemeral ledger *)
+        let ephemeral_ledger =
+          L.create_ephemeral ~depth:constraint_constants.ledger_depth ()
+        in
+        List.iter genesis_accounts ~f:(fun (aid, acc) ->
+            L.create_new_account_exn ephemeral_ledger aid acc ) ;
+
+        (* Post genesis batch *)
+        Thread_safe.block_on_async_exn (fun () ->
+            let open Async in
+            match%bind
+              Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
+                ~ledger:ephemeral_ledger
+            with
+            | Ok _ ->
+                return ()
+            | Error e ->
+                Error.raise e ) ;
+
+        (* Deploy *)
+        Thread_safe.block_on_async_exn (fun () ->
+            let open Async in
+            ( print_endline
+            @@ Public_key.(
+                 Compressed.to_base58_check @@ compress zkapp_keypair.public_key)
+            ) ;
+            let%bind nonce =
+              Gql_client.infer_nonce gql_uri
+                (Public_key.compress signer.public_key)
+            in
+            let command =
+              Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
+                ~fee:(Currency.Fee.of_mina_int_exn 1)
+                ~nonce ~initial_ledger:ephemeral_ledger ~constraint_constants
+                (module M)
+            in
+            let%bind _ = Gql_client.send_zkapp gql_uri command in
+            let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+            return () ) ;
+
+        (* Init sequencer *)
+        let sequencer =
           Thread_safe.block_on_async_exn (fun () ->
-              match%bind
-                Da_layer.Client.distribute_genesis_diff ~logger
-                  ~config:da_config ~ledger:expected_ledger
-              with
-              | Ok _ ->
-                  return ()
-              | Error e ->
-                  Error.raise e ) ;
+              Sequencer.create ~logger
+                ~zkapp_pk:
+                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+                ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
+                ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~signer
+                ~network_id:"testnet" )
+        in
 
-          (* Deploy *)
-          Thread_safe.block_on_async_exn (fun () ->
-              ( print_endline
-              @@ Signature_lib.Public_key.(
-                   Compressed.to_base58_check
-                   @@ compress zkapp_keypair.public_key) ) ;
-              let%bind nonce =
-                Gql_client.infer_nonce gql_uri
-                  (Signature_lib.Public_key.compress signer.public_key)
-              in
-              let command =
-                Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
-                  ~fee:(Currency.Fee.of_mina_int_exn 1)
-                  ~nonce ~initial_ledger:expected_ledger ~constraint_constants
-                  (module M)
-              in
-              let%bind _ = Gql_client.send_zkapp gql_uri command in
-              let%bind _created =
-                Gql_client.For_tests.create_new_block gql_uri
-              in
-              return () ) ;
+        return { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer }
+    end
 
-          (* Init sequencer *)
-          let sequencer =
-            Thread_safe.block_on_async_exn (fun () ->
-                Sequencer.create ~logger
-                  ~zkapp_pk:
-                    Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-                  ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
-                  ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~signer
-                  ~network_id:"testnet" )
-          in
+    let%test_unit "apply commands and commit" =
+      Quickcheck.test ~trials:1 (Test_spec.gen ())
+        ~f:(fun { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer } ->
+          let batch1, batch2 = List.split_n specs 3 in
 
           (* Apply first batch *)
           let () =
@@ -931,17 +962,20 @@ let%test_unit "apply commands and commit" =
                 let source_ledger_hash = get_root sequencer in
 
                 [%test_eq: Ledger_hash.t] source_ledger_hash
-                  (L.merkle_root expected_ledger) ;
+                  (L.merkle_root ephemeral_ledger) ;
 
                 List.iteri batch1 ~f:(fun i spec ->
                     [%test_eq: Ledger_hash.t] (get_root sequencer)
-                      (L.merkle_root expected_ledger) ;
+                      (L.merkle_root ephemeral_ledger) ;
                     let result =
                       match i % 2 = 0 with
                       | true ->
-                          let command = account_update_send spec in
+                          let command =
+                            Mina_transaction_logic.For_tests.account_update_send
+                              spec
+                          in
                           ( match
-                              L.apply_zkapp_command_unchecked expected_ledger
+                              L.apply_zkapp_command_unchecked ephemeral_ledger
                                 command ~constraint_constants
                                 ~global_slot:
                                   Mina_numbers.Global_slot_since_genesis.zero
@@ -959,9 +993,11 @@ let%test_unit "apply commands and commit" =
 
                           apply_user_command sequencer (Zkapp_command command)
                       | false ->
-                          let command = command_send spec in
+                          let command =
+                            Mina_transaction_logic.For_tests.command_send spec
+                          in
                           ( match
-                              L.apply_user_command_unchecked expected_ledger
+                              L.apply_user_command_unchecked ephemeral_ledger
                                 command ~constraint_constants
                                 ~txn_global_slot:
                                   Mina_numbers.Global_slot_since_genesis.zero
@@ -996,7 +1032,7 @@ let%test_unit "apply commands and commit" =
                 let target_ledger_hash = get_root sequencer in
 
                 [%test_eq: Ledger_hash.t] target_ledger_hash
-                  (L.merkle_root expected_ledger) ;
+                  (L.merkle_root ephemeral_ledger) ;
 
                 let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
 
@@ -1023,10 +1059,8 @@ let%test_unit "apply commands and commit" =
               in
               let%bind committed_ledger_hash =
                 Gql_client.infer_committed_state gql_uri
-                  ~signer_pk:
-                    (Signature_lib.Public_key.compress signer.public_key)
-                  ~zkapp_pk:
-                    (Signature_lib.Public_key.compress zkapp_keypair.public_key)
+                  ~signer_pk:(Public_key.compress signer.public_key)
+                  ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
               in
               let target_ledger_hash = get_root sequencer in
               [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
@@ -1042,15 +1076,18 @@ let%test_unit "apply commands and commit" =
               let source_ledger_hash = get_root sequencer in
 
               [%test_eq: Ledger_hash.t] source_ledger_hash
-                (L.merkle_root expected_ledger) ;
+                (L.merkle_root ephemeral_ledger) ;
 
               List.iteri batch2 ~f:(fun i spec ->
                   let result =
                     match i % 2 = 0 with
                     | true ->
-                        let command = account_update_send spec in
+                        let command =
+                          Mina_transaction_logic.For_tests.account_update_send
+                            spec
+                        in
                         ( match
-                            L.apply_zkapp_command_unchecked expected_ledger
+                            L.apply_zkapp_command_unchecked ephemeral_ledger
                               command ~constraint_constants
                               ~global_slot:
                                 Mina_numbers.Global_slot_since_genesis.zero
@@ -1067,9 +1104,11 @@ let%test_unit "apply commands and commit" =
 
                         apply_user_command sequencer (Zkapp_command command)
                     | false ->
-                        let command = command_send spec in
+                        let command =
+                          Mina_transaction_logic.For_tests.command_send spec
+                        in
                         ( match
-                            L.apply_user_command_unchecked expected_ledger
+                            L.apply_user_command_unchecked ephemeral_ledger
                               command ~constraint_constants
                               ~txn_global_slot:
                                 Mina_numbers.Global_slot_since_genesis.zero
@@ -1103,7 +1142,7 @@ let%test_unit "apply commands and commit" =
               let target_ledger_hash = get_root sequencer in
 
               [%test_eq: Ledger_hash.t] target_ledger_hash
-                (L.merkle_root expected_ledger) ;
+                (L.merkle_root ephemeral_ledger) ;
 
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
 
@@ -1154,4 +1193,5 @@ let%test_unit "apply commands and commit" =
               in
               return
               @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
-                   final_ledger_hash ) ) )
+                   final_ledger_hash ) )
+  end )
