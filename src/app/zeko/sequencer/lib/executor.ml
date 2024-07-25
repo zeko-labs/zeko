@@ -16,7 +16,7 @@ type t =
   ; mutable nonce : Account.Nonce.t option
   ; max_attempts : int
   ; delay : Time_ns.Span.t
-  ; kvdb : Kvdb.t
+  ; kvdb : Mina_ledger.Ledger.Kvdb.t
   }
 
 let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce ~l1_uri
@@ -108,38 +108,69 @@ module Commits_store = struct
 
   type index = commit_id list [@@deriving yojson]
 
+  module Kvdb = struct
+    module Key_value = struct
+      type _ t =
+        | Commit : (commit_id * Zkapp_command.t) t
+        | Commit_index : (unit * index) t
+
+      let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
+       fun pair_type key ->
+        match pair_type with
+        | Commit ->
+            let hash1, hash2 = key in
+            Bigstring.(
+              concat
+                [ of_string "commit"
+                ; of_string
+                    ( Frozen_ledger_hash.to_base58_check hash1
+                    ^ "-"
+                    ^ Frozen_ledger_hash.to_base58_check hash2 )
+                ])
+        | Commit_index ->
+            Bigstring.of_string "commit_index"
+
+      let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
+       fun pair_type value ->
+        match pair_type with
+        | Commit ->
+            Bigstring.of_string @@ Yojson.Safe.to_string
+            @@ Zkapp_command.to_yojson value
+        | Commit_index ->
+            Bigstring.of_string @@ Yojson.Safe.to_string
+            @@ index_to_yojson value
+
+      let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
+       fun pair_type data ->
+        match pair_type with
+        | Commit ->
+            ok_exn @@ Zkapp_command.of_yojson @@ Yojson.Safe.from_string
+            @@ Bigstring.to_string data
+        | Commit_index ->
+            ok_exn @@ index_of_yojson @@ Yojson.Safe.from_string
+            @@ Bigstring.to_string data
+    end
+
+    include Kvdb_base.Make (Key_value)
+  end
+
   let store_commit kvdb command ~source ~target =
     (* Update index *)
     let index =
-      Kvdb.get kvdb ~key:COMMIT_INDEX
-      |> Option.map ~f:(fun data ->
-             ok_exn @@ index_of_yojson @@ Yojson.Safe.from_string
-             @@ Bigstring.to_string data )
-      |> Option.value ~default:[]
+      Kvdb.get kvdb Commit_index ~key:() |> Option.value ~default:[]
     in
     let index = (source, target) :: index in
-    Kvdb.set kvdb ~key:COMMIT_INDEX
-      ~data:
-        (Bigstring.of_string @@ Yojson.Safe.to_string @@ index_to_yojson index) ;
+    Kvdb.set kvdb Commit_index ~key:() ~data:index ;
 
     (* Store commit *)
     let commit_id = (source, target) in
-    Kvdb.set kvdb ~key:(COMMIT commit_id)
-      ~data:
-        ( Bigstring.of_string @@ Yojson.Safe.to_string
-        @@ Zkapp_command.to_yojson command )
+    Kvdb.set kvdb Commit ~key:commit_id ~data:command
 
   let load_commit_exn kvdb commit_id =
-    let data = Option.value_exn @@ Kvdb.get kvdb ~key:(COMMIT commit_id) in
-    ok_exn @@ Zkapp_command.of_yojson @@ Yojson.Safe.from_string
-    @@ Bigstring.to_string data
+    Option.value_exn @@ Kvdb.get kvdb Commit ~key:commit_id
 
   let get_index kvdb =
-    Kvdb.get kvdb ~key:COMMIT_INDEX
-    |> Option.map ~f:(fun data ->
-           ok_exn @@ index_of_yojson @@ Yojson.Safe.from_string
-           @@ Bigstring.to_string data )
-    |> Option.value ~default:[]
+    Kvdb.get kvdb Commit_index ~key:() |> Option.value ~default:[]
 
   let get_commit kvdb ~source ~target =
     let index = get_index kvdb in

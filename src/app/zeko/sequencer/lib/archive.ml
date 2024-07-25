@@ -91,55 +91,80 @@ module Account_update_actions = struct
   [@@deriving sexp, yojson]
 end
 
+module Kvdb = struct
+  module Key_value = struct
+    type _ t =
+      | Events : (Account_id.t * Account_update_events.t list) t
+      | Actions : (Account_id.t * Account_update_actions.t list) t
+
+    let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
+     fun pair_type key ->
+      match pair_type with
+      | Events ->
+          Bigstring.(
+            concat
+              [ of_string "events"
+              ; of_string
+                  ( Signature_lib.Public_key.Compressed.to_base58_check
+                      (Account_id.public_key key)
+                  ^ "-"
+                  ^ Token_id.to_string (Account_id.token_id key) )
+              ])
+      | Actions ->
+          Bigstring.(
+            concat
+              [ of_string "actions"
+              ; of_string
+                  ( Signature_lib.Public_key.Compressed.to_base58_check
+                      (Account_id.public_key key)
+                  ^ "-"
+                  ^ Token_id.to_string (Account_id.token_id key) )
+              ])
+
+    let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
+     fun pair_type value ->
+      match pair_type with
+      | Events ->
+          Bigstring.of_string @@ Yojson.Safe.to_string
+          @@ `List (List.map value ~f:Account_update_events.to_yojson)
+      | Actions ->
+          Bigstring.of_string @@ Yojson.Safe.to_string
+          @@ `List (List.map value ~f:Account_update_actions.to_yojson)
+
+    let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
+     fun pair_type data ->
+      match pair_type with
+      | Events ->
+          Bigstring.to_string data |> Yojson.Safe.from_string
+          |> Yojson.Safe.Util.to_list
+          |> List.map ~f:(fun event ->
+                 ok_exn @@ Account_update_events.of_yojson event )
+      | Actions ->
+          Bigstring.to_string data |> Yojson.Safe.from_string
+          |> Yojson.Safe.Util.to_list
+          |> List.map ~f:(fun action ->
+                 ok_exn @@ Account_update_actions.of_yojson action )
+  end
+
+  include Kvdb_base.Make (Key_value)
+end
+
 module Archive = struct
   type t = Kvdb.t
 
   let create ~kvdb : t = kvdb
 
-  let serialize_key account_id =
-    Bigstring.of_string
-      ( Signature_lib.Public_key.Compressed.to_base58_check
-          (Account_id.public_key account_id)
-      ^ "-"
-      ^ Token_id.to_string (Account_id.token_id account_id) )
-
   let query_events t account_id =
-    let%bind events = Kvdb.get t ~key:(EVENTS account_id) in
-    let events =
-      Option.value ~default:"[]" @@ Option.map ~f:Bigstring.to_string events
-    in
-    List.map
-      ~f:(fun event -> ok_exn @@ Account_update_events.of_yojson event)
-      Yojson.Safe.(Util.to_list @@ from_string events)
+    Kvdb.get t Events ~key:account_id |> Option.value ~default:[]
 
   let query_actions t account_id =
-    let%bind actions = Kvdb.get t ~key:(ACTIONS account_id) in
-    let actions =
-      Option.value ~default:"[]" @@ Option.map ~f:Bigstring.to_string actions
-    in
-    List.map
-      ~f:(fun event -> ok_exn @@ Account_update_actions.of_yojson event)
-      Yojson.Safe.(Util.to_list @@ from_string actions)
+    Kvdb.get t Actions ~key:account_id |> Option.value ~default:[]
 
   let store_events t account_id events =
-    let events =
-      Yojson.Safe.to_string
-      @@ `List (List.map ~f:Account_update_events.to_yojson events)
-    in
-    let%bind () =
-      Kvdb.set t ~key:(EVENTS account_id) ~data:(Bigstring.of_string events)
-    in
-    ()
+    Kvdb.set t Events ~key:account_id ~data:events
 
   let store_actions t account_id actions =
-    let actions =
-      Yojson.Safe.to_string
-      @@ `List (List.map ~f:Account_update_actions.to_yojson actions)
-    in
-    let%bind () =
-      Kvdb.set t ~key:(ACTIONS account_id) ~data:(Bigstring.of_string actions)
-    in
-    ()
+    Kvdb.set t Actions ~key:account_id ~data:actions
 
   let add_actions t (account_update : Account_update.t) transaction_info
       (account : Account.t) =
