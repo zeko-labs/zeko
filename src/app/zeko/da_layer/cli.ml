@@ -14,7 +14,8 @@ let run_node =
            (optional_with_default 8080 int)
            ~doc:"int Port to listen on"
        and node_to_sync =
-         flag "--node-to-sync" (optional string) ~doc:"string Node to sync with"
+         flag "--da-node-to-sync" (optional string)
+           ~doc:"string Node to sync with"
        and testing_mode =
          flag "--random-sk" no_arg
            ~doc:"Run in testing mode, the signer key will be generated randomly"
