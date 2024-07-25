@@ -262,7 +262,7 @@ let post_batch t ~ledger_openings ~batch =
 let sync ~logger ~node_location t =
   let open Async in
   let%bind.Deferred.Result remote_keys =
-    Client.query_all_keys ~logger ~node_location ()
+    Client.Rpc.get_all_keys ~logger ~node_location ()
     |> Deferred.map
          ~f:(Result.map ~f:(List.dedup_and_sort ~compare:Ledger_hash.compare))
   in
@@ -275,7 +275,9 @@ let sync ~logger ~node_location t =
   let%bind () =
     Deferred.List.iter ~how:`Parallel missing_keys ~f:(fun ledger_hash ->
         let%bind batch =
-          match%bind Client.query_batch ~logger ~node_location ~ledger_hash with
+          match%bind
+            Client.Rpc.get_batch ~logger ~node_location ~ledger_hash
+          with
           | Ok (Some batch) ->
               return batch
           | Ok None ->

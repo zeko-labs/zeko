@@ -3,47 +3,50 @@ open Async_kernel
 open Mina_base
 open Mina_ledger
 
-let dispatch ?(max_tries = 5) ~logger
-    (node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) rpc data =
-  let rec go tries_left errs =
-    if Int.( <= ) tries_left 0 then
-      let e = Error.of_list (List.rev errs) in
-      return
-        (Error
-           (Error.tag_arg e
-              (sprintf
-                 "Could not send query to da node after %d tries. The process \
-                  may not be running, please check the daemon-argument"
-                 max_tries )
-              ( ("host_and_port", node_location.value)
-              , ("daemon-argument", node_location.name) )
-              [%sexp_of: (string * Host_and_port.t) * (string * string)] ) )
-    else
-      match%bind Daemon_rpcs.Client.dispatch rpc data node_location.value with
-      | Ok result ->
-          return (Ok result)
-      | Error e ->
-          [%log error] "Error sending data to the da node $error. Retrying..."
-            ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
-          go (tries_left - 1) (e :: errs)
-  in
-  go max_tries []
+module Rpc = struct
+  let dispatch ?(max_tries = 5) ~logger
+      (node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) rpc data =
+    let rec go tries_left errs =
+      if Int.( <= ) tries_left 0 then
+        let e = Error.of_list (List.rev errs) in
+        return
+          (Error
+             (Error.tag_arg e
+                (sprintf
+                   "Could not send query to da node after %d tries. The \
+                    process may not be running, please check the \
+                    daemon-argument"
+                   max_tries )
+                ( ("host_and_port", node_location.value)
+                , ("daemon-argument", node_location.name) )
+                [%sexp_of: (string * Host_and_port.t) * (string * string)] ) )
+      else
+        match%bind Daemon_rpcs.Client.dispatch rpc data node_location.value with
+        | Ok result ->
+            return (Ok result)
+        | Error e ->
+            [%log error] "Error sending data to the da node $error. Retrying..."
+              ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+            go (tries_left - 1) (e :: errs)
+    in
+    go max_tries []
 
-let post_batch ~logger ~node_location ~ledger_openings ~batch =
-  dispatch ~logger node_location Rpc.Post_batch.v1 { ledger_openings; batch }
+  let post_batch ~logger ~node_location ~ledger_openings ~batch =
+    dispatch ~logger node_location Rpc.Post_batch.v1 { ledger_openings; batch }
 
-let query_batch ~logger ~node_location ~ledger_hash :
-    (Batch.t option, Error.t) result Deferred.t =
-  dispatch ~logger node_location Rpc.Get_batch.v1 ledger_hash
+  let get_batch ~logger ~node_location ~ledger_hash :
+      (Batch.t option, Error.t) result Deferred.t =
+    dispatch ~logger node_location Rpc.Get_batch.v1 ledger_hash
 
-let query_all_keys ~logger ~node_location () =
-  dispatch ~logger node_location Rpc.Get_all_keys.v1 ()
+  let get_all_keys ~logger ~node_location () =
+    dispatch ~logger node_location Rpc.Get_all_keys.v1 ()
 
-let query_batch_source ~logger ~node_location ~ledger_hash =
-  dispatch ~logger node_location Rpc.Get_batch_source.v1 ledger_hash
+  let get_batch_source ~logger ~node_location ~ledger_hash =
+    dispatch ~logger node_location Rpc.Get_batch_source.v1 ledger_hash
 
-let query_node_public_key ~logger ~node_location () =
-  dispatch ~logger node_location Rpc.Get_signer_public_key.v1 ()
+  let get_node_public_key ~logger ~node_location () =
+    dispatch ~logger node_location Rpc.Get_signer_public_key.v1 ()
+end
 
 module Config = struct
   type t = { nodes : Host_and_port.t Cli_lib.Flag.Types.with_name list }
@@ -64,7 +67,7 @@ let distribute_batch ~logger ~config ~ledger_openings ~batch ~quorum =
   let%bind signatures =
     Deferred.List.map ~how:`Parallel (Config.nodes config)
       ~f:(fun node_location ->
-        post_batch ~logger ~node_location ~ledger_openings ~batch )
+        Rpc.post_batch ~logger ~node_location ~ledger_openings ~batch )
     |> Deferred.map ~f:(List.filter_map ~f:Result.ok)
   in
   if List.length signatures >= quorum then return (Ok signatures)
@@ -140,7 +143,7 @@ let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
     else
       let%bind.Deferred.Result source =
         try_all_nodes ~config ~f:(fun ~node_location () ->
-            query_batch_source ~logger ~node_location ~ledger_hash:current )
+            Rpc.get_batch_source ~logger ~node_location ~ledger_hash:current )
       in
       let%bind.Deferred.Result next = go source in
       return (Ok (current :: next))
@@ -148,9 +151,10 @@ let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
   let%bind.Deferred.Result from_target_to_genesis = go target_ledger_hash in
   return (Ok (List.rev from_target_to_genesis))
 
+(** Try to get the batch from the first node in the list, if it fails, try the next one *)
 let get_batch ~logger ~config ~ledger_hash =
   try_all_nodes ~config ~f:(fun ~node_location () ->
-      query_batch ~logger ~node_location ~ledger_hash )
+      Rpc.get_batch ~logger ~node_location ~ledger_hash )
 
 (** Distribute batch of initial accounts *)
 let distribute_genesis_batch ~logger ~config ~ledger =
