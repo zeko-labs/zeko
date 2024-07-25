@@ -39,7 +39,7 @@ The api is exposed as `Async.Rpc` which is a typesafe ocaml rpc with binprot ser
 ### Running the node
 
 ```bash
-MINA_PRIVATE_KEY=<opaque> dune exec ./cli.exe -- run-node --port 8001 --node-to-sync http://localhost:8000
+MINA_PRIVATE_KEY=<opaque> dune exec ./cli.exe -- run-node --port 8002 --da-node-to-sync http://localhost:8000 --da-node-to-sync http://localhost:8001
 ```
 
 To see all the options run:

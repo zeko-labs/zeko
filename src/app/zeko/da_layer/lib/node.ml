@@ -337,7 +337,7 @@ let implementations t =
             Async.return @@ Public_key.compress @@ t.signer.public_key )
       ]
 
-let create_server ?node_to_sync ~port ~logger ~db_dir ~signer_sk () =
+let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
   let open Async in
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
@@ -350,16 +350,17 @@ let create_server ?node_to_sync ~port ~logger ~db_dir ~signer_sk () =
     }
   in
 
-  (* Syncing of the node is optional, the first one can't sync *)
   let%bind () =
-    match node_to_sync with
-    | None ->
-        return ()
-    | Some n -> (
+    Deferred.List.iter ~how:`Sequential nodes_to_sync ~f:(fun n ->
         match%bind sync ~logger ~node_location:n t with
         | Ok () ->
             return ()
         | Error e ->
+            [%log error] "Exception while syncing the node $node: $error"
+              ~metadata:
+                [ ("error", `String (Error.to_string_hum e))
+                ; ("node", `String n.name)
+                ] ;
             failwith (Error.to_string_hum e) )
   in
 
