@@ -59,6 +59,7 @@ module Config = struct
     }
 end
 
+(** Send the batch to all the nodes in the [~config] *)
 let distribute_batch ~logger ~config ~ledger_openings ~batch ~quorum =
   let%bind signatures =
     Deferred.List.map ~how:`Parallel (Config.nodes config)
