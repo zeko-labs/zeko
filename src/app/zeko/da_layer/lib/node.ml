@@ -198,7 +198,7 @@ let post_diff t ~ledger_openings ~diff =
           List.fold_result (Zkapp_command.all_account_updates_list command)
             ~init:(Unsigned.UInt32.zero, Account_id.Map.empty)
             ~f:(fun (index, acc) account_update ->
-              (* Receipt chain hash is updated only for account updates authorised with Proof of Signature *)
+              (* Receipt chain hash is updated only for account updates authorised with Proof or Signature *)
               match Account_update.authorization account_update with
               | None_given ->
                   Ok (Unsigned.UInt32.succ index, acc)
