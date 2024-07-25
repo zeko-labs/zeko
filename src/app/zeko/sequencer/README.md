@@ -22,7 +22,7 @@ DUNE_PROFILE=devnet dune build
 DUNE_PROFILE=devnet dune exec ./tests/local_network/run.exe -- --db-dir l1_db
 
 # Run da node
-DUNE_PROFILE=devnet dune exec ../da_layer/cli.exe -- run-node --port 8555 --testing-mode
+DUNE_PROFILE=devnet dune exec ../da_layer/cli.exe -- run-node --port 8555 --random-sk
 
 DUNE_PROFILE=devnet dune runtest
 ```
