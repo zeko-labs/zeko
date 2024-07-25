@@ -80,9 +80,12 @@ module Sequencer = struct
     { logger : Logger.t
     ; config : Config.t
     ; quorum : int
-    ; q : unit Async.Sequencer.t
+          (** The amount of signatures needed when distributing batch *)
+    ; q : unit Async.Sequencer.t  (** Queue of batches to be distributed *)
     ; mutable signatures : Signature.t list Deferred.t Ledger_hash.Map.t
+          (** Mapping of [target_ledger_hash] to list of deferred signatures *)
     ; mutable last_distributed_batch : Ledger_hash.t option
+          (** [target_ledger_hash] of last processed batch in queue *)
     }
 
   let create ~logger ~config ~quorum =
