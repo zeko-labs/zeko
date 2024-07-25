@@ -31,18 +31,18 @@ module Rpc = struct
     in
     go max_tries []
 
-  let post_batch ~logger ~node_location ~ledger_openings ~batch =
-    dispatch ~logger node_location Rpc.Post_batch.v1 { ledger_openings; batch }
+  let post_diff ~logger ~node_location ~ledger_openings ~diff =
+    dispatch ~logger node_location Rpc.Post_diff.v1 { ledger_openings; diff }
 
-  let get_batch ~logger ~node_location ~ledger_hash :
-      (Batch.t option, Error.t) result Deferred.t =
-    dispatch ~logger node_location Rpc.Get_batch.v1 ledger_hash
+  let get_diff ~logger ~node_location ~ledger_hash :
+      (Diff.t option, Error.t) result Deferred.t =
+    dispatch ~logger node_location Rpc.Get_diff.v1 ledger_hash
 
   let get_all_keys ~logger ~node_location () =
     dispatch ~logger node_location Rpc.Get_all_keys.v1 ()
 
-  let get_batch_source ~logger ~node_location ~ledger_hash =
-    dispatch ~logger node_location Rpc.Get_batch_source.v1 ledger_hash
+  let get_diff_source ~logger ~node_location ~ledger_hash =
+    dispatch ~logger node_location Rpc.Get_diff_source.v1 ledger_hash
 
   let get_node_public_key ~logger ~node_location () =
     dispatch ~logger node_location Rpc.Get_signer_public_key.v1 ()
@@ -62,30 +62,30 @@ module Config = struct
     }
 end
 
-(** Send the batch to all the nodes in the [~config] *)
-let distribute_batch ~logger ~config ~ledger_openings ~batch ~quorum =
+(** Send the diff to all the nodes in the [~config] *)
+let distribute_diff ~logger ~config ~ledger_openings ~diff ~quorum =
   let%bind signatures =
     Deferred.List.map ~how:`Parallel (Config.nodes config)
       ~f:(fun node_location ->
-        Rpc.post_batch ~logger ~node_location ~ledger_openings ~batch )
+        Rpc.post_diff ~logger ~node_location ~ledger_openings ~diff )
     |> Deferred.map ~f:(List.filter_map ~f:Result.ok)
   in
   if List.length signatures >= quorum then return (Ok signatures)
   else return (Error (Error.of_string "Quorum not reached"))
 
-(** This module ensures that batches are sent in order. 
+(** This module ensures that diffes are sent in order. 
     Signatures can be collected as [Deferred.t] via [get_signatures] *)
 module Sequencer = struct
   type t =
     { logger : Logger.t
     ; config : Config.t
     ; quorum : int
-          (** The amount of signatures needed when distributing batch *)
-    ; q : unit Async.Sequencer.t  (** Queue of batches to be distributed *)
+          (** The amount of signatures needed when distributing diff *)
+    ; q : unit Async.Sequencer.t  (** Queue of diffs to be distributed *)
     ; mutable signatures : Signature.t list Deferred.t Ledger_hash.Map.t
           (** Mapping of [target_ledger_hash] to list of deferred signatures *)
-    ; mutable last_distributed_batch : Ledger_hash.t option
-          (** [target_ledger_hash] of last processed batch in queue *)
+    ; mutable last_distributed_diff : Ledger_hash.t option
+          (** [target_ledger_hash] of last processed diff in queue *)
     }
 
   let create ~logger ~config ~quorum =
@@ -94,22 +94,22 @@ module Sequencer = struct
     ; quorum
     ; q = Async.Sequencer.create ~continue_on_error:false ()
     ; signatures = Ledger_hash.Map.empty
-    ; last_distributed_batch = None
+    ; last_distributed_diff = None
     }
 
-  let enqueue_distribute_batch t ~ledger_openings ~batch ~target_ledger_hash =
+  let enqueue_distribute_diff t ~ledger_openings ~diff ~target_ledger_hash =
     let deferred =
       Throttle.enqueue t.q (fun () ->
           let logger = t.logger in
           match%bind
-            distribute_batch ~logger ~config:t.config ~ledger_openings ~batch
+            distribute_diff ~logger ~config:t.config ~ledger_openings ~diff
               ~quorum:t.quorum
           with
           | Ok signatures ->
-              t.last_distributed_batch <- Some target_ledger_hash ;
+              t.last_distributed_diff <- Some target_ledger_hash ;
               return signatures
           | Error e ->
-              [%log error] "Error distributing batch: $error"
+              [%log error] "Error distributing diff: $error"
                 ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
               Error.raise e )
     in
@@ -141,12 +141,12 @@ let try_all_nodes ~config ~f =
 (** Get the chain of ledger hashes from empty ledger hash to [target_ledger_hash]  *)
 let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
   let rec go current =
-    if Ledger_hash.equal current (Batch.empty_ledger_hash ~depth) then
+    if Ledger_hash.equal current (Diff.empty_ledger_hash ~depth) then
       return (Ok [])
     else
       let%bind.Deferred.Result source =
         try_all_nodes ~config ~f:(fun ~node_location () ->
-            Rpc.get_batch_source ~logger ~node_location ~ledger_hash:current )
+            Rpc.get_diff_source ~logger ~node_location ~ledger_hash:current )
       in
       let%bind.Deferred.Result next = go source in
       return (Ok (current :: next))
@@ -154,17 +154,17 @@ let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
   let%bind.Deferred.Result from_target_to_genesis = go target_ledger_hash in
   return (Ok (List.rev from_target_to_genesis))
 
-(** Try to get the batch from the first node in the list, if it fails, try the next one *)
-let get_batch ~logger ~config ~ledger_hash =
+(** Try to get the diff from the first node in the list, if it fails, try the next one *)
+let get_diff ~logger ~config ~ledger_hash =
   try_all_nodes ~config ~f:(fun ~node_location () ->
-      Rpc.get_batch ~logger ~node_location ~ledger_hash )
+      Rpc.get_diff ~logger ~node_location ~ledger_hash )
 
-(** Distribute batch of initial accounts *)
-let distribute_genesis_batch ~logger ~config ~ledger =
+(** Distribute diff of initial accounts *)
+let distribute_genesis_diff ~logger ~config ~ledger =
   let%bind account_ids =
     Ledger.accounts ledger |> Deferred.map ~f:Account_id.Set.to_list
   in
-  let diff =
+  let changed_accounts =
     List.map account_ids ~f:(fun aid ->
         let index = Ledger.index_of_account_exn ledger aid in
         let account = Ledger.get_at_index_exn ledger index in
@@ -172,12 +172,13 @@ let distribute_genesis_batch ~logger ~config ~ledger =
   in
   (* openings lead to empty accounts *)
   let ledger_openings =
-    List.fold diff ~init:(Sparse_ledger.of_ledger_subset_exn ledger account_ids)
+    List.fold changed_accounts
+      ~init:(Sparse_ledger.of_ledger_subset_exn ledger account_ids)
       ~f:(fun acc (index, _) -> Sparse_ledger.set_exn acc index Account.empty)
   in
-  let batch =
-    Batch.create
-      ~source_ledger_hash:(Batch.empty_ledger_hash ~depth:(Ledger.depth ledger))
-      ~diff ~command_with_action_step_flags:None
+  let diff =
+    Diff.create
+      ~source_ledger_hash:(Diff.empty_ledger_hash ~depth:(Ledger.depth ledger))
+      ~changed_accounts ~command_with_action_step_flags:None
   in
-  distribute_batch ~logger ~config ~ledger_openings ~batch ~quorum:0
+  distribute_diff ~logger ~config ~ledger_openings ~diff ~quorum:0

@@ -8,7 +8,7 @@ module Stable = struct
     type t =
       { source_ledger_hash : Ledger_hash.Stable.V1.t
             (** Source ledger hash of the diff *)
-      ; diff : (int * Account.Stable.V2.t) list
+      ; changed_accounts : (int * Account.Stable.V2.t) list
             (** List of changed accounts with corresponding index in the ledger *)
       ; command_with_action_step_flags :
           (User_command.Stable.V2.t * bool list) option
@@ -20,8 +20,9 @@ module Stable = struct
   end
 end]
 
-let create ~source_ledger_hash ~diff ~command_with_action_step_flags =
-  { source_ledger_hash; diff; command_with_action_step_flags }
+let create ~source_ledger_hash ~changed_accounts ~command_with_action_step_flags
+    =
+  { source_ledger_hash; changed_accounts; command_with_action_step_flags }
 
 let to_bigstring = Binable.to_bigstring (module Stable.Latest)
 

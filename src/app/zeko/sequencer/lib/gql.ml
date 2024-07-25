@@ -1757,26 +1757,26 @@ module Make
               ~target_ledger_hash:
                 (Option.value
                    ~default:(Zeko_sequencer.get_root sequencer)
-                   sequencer.da_client.last_distributed_batch )
+                   sequencer.da_client.last_distributed_diff )
             |> Deferred.map ~f:Or_error.ok_exn
           in
           let%bind genesis_accounts =
             let ledger_hash = List.hd_exn ledger_hashes_chain in
-            let%bind batch =
+            let%bind diff =
               match%bind
-                Da_layer.Client.get_batch ~logger:sequencer.logger
+                Da_layer.Client.get_diff ~logger:sequencer.logger
                   ~config:sequencer.da_client.config ~ledger_hash
               with
-              | Ok (Some batch) ->
-                  return batch
+              | Ok (Some diff) ->
+                  return diff
               | Ok None ->
-                  failwith "No genesis batch found"
+                  failwith "No genesis diff found"
               | Error e ->
                   Error.raise e
             in
-            let diff = Da_layer.Batch.diff batch in
+            let changed_accounts = Da_layer.Diff.changed_accounts diff in
             return
-            @@ List.map diff ~f:(fun (_, account) ->
+            @@ List.map changed_accounts ~f:(fun (_, account) ->
                    ( Account_id.create account.public_key account.token_id
                    , account ) )
           in
@@ -1784,20 +1784,20 @@ module Make
             let ledger_hashes = List.tl_exn ledger_hashes_chain in
             Deferred.List.filter_map ledger_hashes ~how:`Parallel
               ~f:(fun ledger_hash ->
-                let%bind batch =
+                let%bind diff =
                   match%bind
-                    Da_layer.Client.get_batch ~logger:sequencer.logger
+                    Da_layer.Client.get_diff ~logger:sequencer.logger
                       ~config:sequencer.da_client.config ~ledger_hash
                   with
-                  | Ok (Some batch) ->
-                      return batch
+                  | Ok (Some diff) ->
+                      return diff
                   | Ok None ->
-                      failwith "No batch found"
+                      failwith "No diff found"
                   | Error e ->
                       Error.raise e
                 in
                 return @@ Option.map ~f:fst
-                @@ Da_layer.Batch.command_with_action_step_flags batch )
+                @@ Da_layer.Diff.command_with_action_step_flags diff )
           in
           return
             (Ok

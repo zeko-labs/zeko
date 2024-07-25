@@ -92,7 +92,7 @@ let run ~uri ~sk ~initial_state ~da_nodes () =
   Thread_safe.block_on_async_exn (fun () ->
       let config = Da_layer.Client.Config.{ nodes = da_nodes } in
       match%bind
-        Da_layer.Client.distribute_genesis_batch ~logger ~config ~ledger
+        Da_layer.Client.distribute_genesis_diff ~logger ~config ~ledger
       with
       | Ok _ ->
           return ()

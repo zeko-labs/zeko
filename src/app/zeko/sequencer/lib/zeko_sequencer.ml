@@ -543,16 +543,16 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ~txn:(L.Transaction_applied.transaction txn_applied) ;
 
     (* Post transaction to the DA layer *)
-    let diff =
+    let changed_accounts =
       let account_ids = User_command.accounts_referenced command in
       List.map account_ids ~f:(fun id ->
           let index = L.index_of_account_exn l id in
           (index, L.get_at_index_exn l index) )
     in
-    let batch =
-      Da_layer.Batch.create
+    let diff =
+      Da_layer.Diff.create
         ~source_ledger_hash:(Sparse_ledger.merkle_root first_pass_ledger)
-        ~diff
+        ~changed_accounts
         ~command_with_action_step_flags:
           (Some
              ( command
@@ -563,8 +563,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                    Zkapp_command.all_account_updates_list command
                    |> List.map ~f:(fun _ -> true) ) )
     in
-    Da_layer.Client.Sequencer.enqueue_distribute_batch t.da_client
-      ~ledger_openings:first_pass_ledger ~batch ~target_ledger_hash ;
+    Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
+      ~ledger_openings:first_pass_ledger ~diff ~target_ledger_hash ;
 
     let pc : Transaction_snark.Pending_coinbase_stack_state.t =
       (* No coinbase to add to the stack. *)
@@ -703,7 +703,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
     printf "Init root: %s\n%!" Ledger_hash.(to_decimal_string (get_root t)) ;
 
-    (* apply batches from DA layer *)
+    (* apply diffs from DA layer *)
     let%bind ledger_hashes_chain =
       Da_layer.Client.get_ledger_hashes_chain ~logger ~config:da_config
         ~depth:constraint_constants.ledger_depth
@@ -713,21 +713,21 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let%bind () =
       Deferred.List.iter ~how:`Sequential ledger_hashes_chain
         ~f:(fun ledger_hash ->
-          let%bind batch : Da_layer.Batch.t Deferred.t =
-            Da_layer.Client.get_batch ~logger ~config:da_config ~ledger_hash
+          let%bind diff : Da_layer.Diff.t Deferred.t =
+            Da_layer.Client.get_diff ~logger ~config:da_config ~ledger_hash
             |> Deferred.map ~f:(fun r -> Option.value_exn @@ Or_error.ok_exn r)
           in
           assert (
             Ledger_hash.equal
-              (Da_layer.Batch.source_ledger_hash batch)
+              (Da_layer.Diff.source_ledger_hash diff)
               (get_root t) ) ;
-          match Da_layer.Batch.command_with_action_step_flags batch with
+          match Da_layer.Diff.command_with_action_step_flags diff with
           | None ->
               (* Apply accounts diff *)
               let mask = L.of_database t.db in
-              let diff = Da_layer.Batch.diff batch in
-              printf "Setting %d accounts\n%!" (List.length diff) ;
-              List.iter diff ~f:(fun (index, account) ->
+              let changed_accounts = Da_layer.Diff.changed_accounts diff in
+              printf "Setting %d accounts\n%!" (List.length changed_accounts) ;
+              List.iter changed_accounts ~f:(fun (index, account) ->
                   L.set_at_index_exn mask index account ) ;
               L.Mask.Attached.commit mask ;
               return ()
@@ -884,7 +884,7 @@ let%test_unit "apply commands and commit" =
           (* Post genesis batch *)
           Thread_safe.block_on_async_exn (fun () ->
               match%bind
-                Da_layer.Client.distribute_genesis_batch ~logger
+                Da_layer.Client.distribute_genesis_diff ~logger
                   ~config:da_config ~ledger:expected_ledger
               with
               | Ok _ ->

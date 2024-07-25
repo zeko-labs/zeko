@@ -4,7 +4,7 @@ open Mina_ledger
 open Signature_lib
 
 module Db = struct
-  (** Holds keys to all the batches *)
+  (** Holds keys to all the diffes *)
   module Index = struct
     [%%versioned
     module Stable = struct
@@ -22,102 +22,102 @@ module Db = struct
 
   module Key_value = struct
     type _ t =
-      | Batch : (Ledger_hash.t * Batch.t) t
-      | Batch_index : (unit * Index.t) t
+      | Diff : (Ledger_hash.t * Diff.t) t
+      | Diff_index : (unit * Index.t) t
 
     let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
      fun pair_type key ->
       match pair_type with
-      | Batch ->
+      | Diff ->
           Bigstring.concat
-            [ Bigstring.of_string "batch"
+            [ Bigstring.of_string "diff"
             ; Bigstring.of_string @@ Ledger_hash.to_decimal_string key
             ]
-      | Batch_index ->
-          Bigstring.of_string "batch_index"
+      | Diff_index ->
+          Bigstring.of_string "diff_index"
 
     let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
      fun pair_type value ->
       match pair_type with
-      | Batch ->
-          Batch.to_bigstring value
-      | Batch_index ->
+      | Diff ->
+          Diff.to_bigstring value
+      | Diff_index ->
           Index.to_bigstring value
 
     let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
      fun pair_type data ->
       match pair_type with
-      | Batch ->
-          Batch.of_bigstring data
-      | Batch_index ->
+      | Diff ->
+          Diff.of_bigstring data
+      | Diff_index ->
           Index.of_bigstring data
   end
 
   include Kvdb_base.Make (Key_value)
 
-  let set_index t ~index = set t Batch_index ~key:() ~data:index
+  let set_index t ~index = set t Diff_index ~key:() ~data:index
 
-  let get_index t = get t Batch_index ~key:() |> Option.value ~default:[]
+  let get_index t = get t Diff_index ~key:() |> Option.value ~default:[]
 
-  let add_batch t ~ledger_hash ~batch =
+  let add_diff t ~ledger_hash ~diff =
     let index = get_index t in
     if List.mem index ledger_hash ~equal:Ledger_hash.equal then `Already_existed
     else (
-      set t Batch ~key:ledger_hash ~data:batch ;
+      set t Diff ~key:ledger_hash ~data:diff ;
       set_index t ~index:(ledger_hash :: index) ;
       `Added )
 
-  let get_batch t ~ledger_hash = get t Batch ~key:ledger_hash
+  let get_diff t ~ledger_hash = get t Diff ~key:ledger_hash
 end
 
 type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
 
-(** 1. Check that [root ledger_openings = batch.source_ledger_hash].
-    2. Check that [batch.source_ledger_hash] is either in the databse or an empty ledger.
-    3. Check that the indices in [batch.diff] are unique. 
-    4. Set each account in [batch.diff] to the [ledger_openings] and call the resulting ledger hash [target_ledger_hash].
+(** 1. Check that [root ledger_openings = diff.source_ledger_hash].
+    2. Check that [diff.source_ledger_hash] is either in the databse or an empty ledger.
+    3. Check that the indices in [diff.diff] are unique. 
+    4. Set each account in [diff.diff] to the [ledger_openings] and call the resulting ledger hash [target_ledger_hash].
     5. Sign [target_ledger_hash].
     6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
-    7. Store the batch under the [target_ledger_hash]. *)
-let post_batch t ~ledger_openings ~batch =
+    7. Store the diff under the [target_ledger_hash]. *)
+let post_diff t ~ledger_openings ~diff =
   let logger = t.logger in
   (* 1 *)
   let%bind.Result () =
     match
       Ledger_hash.equal
         (Sparse_ledger.merkle_root ledger_openings)
-        (Batch.source_ledger_hash batch)
+        (Diff.source_ledger_hash diff)
     with
     | true ->
         Ok ()
     | false ->
         Error
           (Error.create "Source ledger hash mismatch"
-             (Batch.source_ledger_hash batch)
+             (Diff.source_ledger_hash diff)
              Ledger_hash.sexp_of_t )
   in
 
   (* 2 *)
   let%bind.Result () =
-    match Db.get_batch t.db ~ledger_hash:(Batch.source_ledger_hash batch) with
+    match Db.get_diff t.db ~ledger_hash:(Diff.source_ledger_hash diff) with
     | Some _ ->
         Ok ()
     | None ->
         if
           Ledger_hash.equal
-            (Batch.source_ledger_hash batch)
-            (Batch.empty_ledger_hash
+            (Diff.source_ledger_hash diff)
+            (Diff.empty_ledger_hash
                ~depth:(Sparse_ledger.depth ledger_openings) )
         then Ok ()
         else
           Error
             (Error.create "Source ledger not found in the database"
-               (Batch.source_ledger_hash batch)
+               (Diff.source_ledger_hash diff)
                Ledger_hash.sexp_of_t )
   in
 
   (* 3 *)
-  let indices = List.map (Batch.diff batch) ~f:(fun (i, _) -> i) in
+  let indices = List.map (Diff.changed_accounts diff) ~f:(fun (i, _) -> i) in
   let%bind.Result () =
     match List.contains_dup ~compare:Int.compare indices with
     | false ->
@@ -130,7 +130,7 @@ let post_batch t ~ledger_openings ~batch =
 
   (* 4 *)
   let%bind.Result target_ledger =
-    List.fold_result (Batch.diff batch) ~init:ledger_openings
+    List.fold_result (Diff.changed_accounts diff) ~init:ledger_openings
       ~f:(fun ledger (diff_index, account) ->
         try
           (* Check that the index of the account matches the index in the diff *)
@@ -173,7 +173,7 @@ let post_batch t ~ledger_openings ~batch =
         Ok account.receipt_chain_hash
   in
   let%bind.Result applied_hashes =
-    match Batch.command_with_action_step_flags batch with
+    match Diff.command_with_action_step_flags diff with
     | None ->
         Ok Account_id.Map.empty
     | Some (Signed_command command, _) ->
@@ -220,7 +220,8 @@ let post_batch t ~ledger_openings ~batch =
         Ok acc
   in
   let%bind.Result () =
-    List.fold_result (Batch.diff batch) ~init:() ~f:(fun _ (_, account) ->
+    List.fold_result (Diff.changed_accounts diff) ~init:()
+      ~f:(fun _ (_, account) ->
         (* account's target_receipt_chain_hash needs to be either unchanged or the same as in [applied_hashes] *)
         let account_id = Account.identifier account in
         let%bind.Result target_account = get_account target_ledger account_id in
@@ -240,17 +241,17 @@ let post_batch t ~ledger_openings ~batch =
   in
 
   (* 7 *)
-  (* We don't care if the batch already existed *)
+  (* We don't care if the diff already existed *)
   let () =
-    match Db.add_batch t.db ~ledger_hash:target_ledger_hash ~batch with
+    match Db.add_diff t.db ~ledger_hash:target_ledger_hash ~diff with
     | `Already_existed ->
-        [%log warn] "Batch with target ledger hash $hash already exists"
+        [%log warn] "Diff with target ledger hash $hash already exists"
           ~metadata:
             [ ( "hash"
               , `String (Ledger_hash.to_decimal_string target_ledger_hash) )
             ]
     | `Added ->
-        [%log info] "Batch with target ledger hash $hash added to the database"
+        [%log info] "Diff with target ledger hash $hash added to the database"
           ~metadata:
             [ ( "hash"
               , `String (Ledger_hash.to_decimal_string target_ledger_hash) )
@@ -258,7 +259,7 @@ let post_batch t ~ledger_openings ~batch =
   in
   Ok signature
 
-(** Find missing keys and fetch corresponding batches *)
+(** Find missing keys and fetch corresponding diffes *)
 let sync ~logger ~node_location t =
   let open Async in
   let%bind.Deferred.Result remote_keys =
@@ -274,32 +275,32 @@ let sync ~logger ~node_location t =
   in
   let%bind () =
     Deferred.List.iter ~how:`Parallel missing_keys ~f:(fun ledger_hash ->
-        let%bind batch =
+        let%bind diff =
           match%bind
-            Client.Rpc.get_batch ~logger ~node_location ~ledger_hash
+            Client.Rpc.get_diff ~logger ~node_location ~ledger_hash
           with
-          | Ok (Some batch) ->
-              return batch
+          | Ok (Some diff) ->
+              return diff
           | Ok None ->
-              failwithf "Syncing node claimed to have batch %s but it doesn't"
+              failwithf "Syncing node claimed to have diff %s but it doesn't"
                 (Ledger_hash.to_decimal_string ledger_hash)
                 ()
           | Error err ->
-              failwithf "Failed syncing the batch %s, error: %s"
+              failwithf "Failed syncing the diff %s, error: %s"
                 (Ledger_hash.to_decimal_string ledger_hash)
                 (Error.to_string_hum err) ()
         in
-        match Db.add_batch t.db ~ledger_hash ~batch with
+        match Db.add_diff t.db ~ledger_hash ~diff with
         | `Added ->
             return
-            @@ [%log info] "Batch with target ledger hash $hash added"
+            @@ [%log info] "Diff with target ledger hash $hash added"
                  ~metadata:
                    [ ( "hash"
                      , `String (Ledger_hash.to_decimal_string ledger_hash) )
                    ]
         | `Already_existed ->
             failwithf
-              "Batch with target ledger hash %s already existed during syncing"
+              "Diff with target ledger hash %s already existed during syncing"
               (Ledger_hash.to_decimal_string ledger_hash)
               () )
   in
@@ -308,30 +309,30 @@ let sync ~logger ~node_location t =
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
-      [ Async.Rpc.Rpc.implement Rpc.Post_batch.v1
-          (fun () { ledger_openings; batch } ->
-            match post_batch t ~ledger_openings ~batch with
+      [ Async.Rpc.Rpc.implement Rpc.Post_diff.v1
+          (fun () { ledger_openings; diff } ->
+            match post_diff t ~ledger_openings ~diff with
             | Ok signature ->
                 Async.return signature
             | Error e ->
                 let logger = t.logger in
-                [%log warn] "Error posting batch: $error"
+                [%log warn] "Error posting diff: $error"
                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
-      ; Async.Rpc.Rpc.implement Rpc.Get_batch.v1 (fun () query ->
-            Async.return @@ Db.get_batch t.db ~ledger_hash:query )
+      ; Async.Rpc.Rpc.implement Rpc.Get_diff.v1 (fun () query ->
+            Async.return @@ Db.get_diff t.db ~ledger_hash:query )
       ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.v1 (fun () () ->
             Async.return @@ Db.get_index t.db )
-      ; Async.Rpc.Rpc.implement Rpc.Get_batch_source.v1 (fun () query ->
-            Async.return @@ Batch.source_ledger_hash
+      ; Async.Rpc.Rpc.implement Rpc.Get_diff_source.v1 (fun () query ->
+            Async.return @@ Diff.source_ledger_hash
             @@ Option.value_exn
                  ~error:
                    ( Error.of_string
                    @@ sprintf
-                        "Get_batch_source exception: Batch not found for \
-                         ledger hash %s"
+                        "Get_diff_source exception: Diff not found for ledger \
+                         hash %s"
                         (Ledger_hash.to_decimal_string query) )
-            @@ Db.get_batch t.db ~ledger_hash:query )
+            @@ Db.get_diff t.db ~ledger_hash:query )
       ; Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.v1 (fun () () ->
             Async.return @@ Public_key.compress @@ t.signer.public_key )
       ]
