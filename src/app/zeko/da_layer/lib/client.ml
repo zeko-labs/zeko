@@ -90,7 +90,7 @@ module Sequencer = struct
     ; last_distributed_batch = None
     }
 
-  let enqueue_distribute_batch t ~ledger_openings ~batch =
+  let enqueue_distribute_batch t ~ledger_openings ~batch ~target_ledger_hash =
     let deferred =
       Throttle.enqueue t.q (fun () ->
           let logger = t.logger in
@@ -99,7 +99,7 @@ module Sequencer = struct
               ~quorum:t.quorum
           with
           | Ok signatures ->
-              t.last_distributed_batch <- Some (Batch.target_ledger_hash batch) ;
+              t.last_distributed_batch <- Some target_ledger_hash ;
               return signatures
           | Error e ->
               [%log error] "Error distributing batch: $error"
@@ -107,9 +107,7 @@ module Sequencer = struct
               Error.raise e )
     in
     t.signatures <-
-      Ledger_hash.Map.set t.signatures
-        ~key:(Batch.target_ledger_hash batch)
-        ~data:deferred
+      Ledger_hash.Map.set t.signatures ~key:target_ledger_hash ~data:deferred
 
   let get_signatures t ~ledger_hash =
     match Ledger_hash.Map.find t.signatures ledger_hash with
@@ -172,7 +170,6 @@ let distribute_genesis_batch ~logger ~config ~ledger =
   let batch =
     Batch.create
       ~source_ledger_hash:(Batch.empty_ledger_hash ~depth:(Ledger.depth ledger))
-      ~target_ledger_hash:(Ledger.merkle_root ledger)
       ~diff ~command_with_action_step_flags:None
   in
   distribute_batch ~logger ~config ~ledger_openings ~batch ~quorum:0

@@ -7,7 +7,6 @@ module Stable = struct
   module V1 = struct
     type t =
       { source_ledger_hash : Ledger_hash.Stable.V1.t
-      ; target_ledger_hash : Ledger_hash.Stable.V1.t
       ; diff : (int * Account.Stable.V2.t) list
       ; command_with_action_step_flags :
           (User_command.Stable.V2.t * bool list) option
@@ -18,13 +17,8 @@ module Stable = struct
   end
 end]
 
-let create ~source_ledger_hash ~target_ledger_hash ~diff
-    ~command_with_action_step_flags =
-  { source_ledger_hash
-  ; target_ledger_hash
-  ; diff
-  ; command_with_action_step_flags
-  }
+let create ~source_ledger_hash ~diff ~command_with_action_step_flags =
+  { source_ledger_hash; diff; command_with_action_step_flags }
 
 let to_bigstring = Binable.to_bigstring (module Stable.Latest)
 

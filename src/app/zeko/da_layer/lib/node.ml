@@ -75,10 +75,10 @@ type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
 (** 1. Check that [root ledger_openings = batch.source_ledger_hash].
     2. Check that [batch.source_ledger_hash] is either in the databse or an empty ledger.
     3. Check that the indices in [batch.diff] are unique. 
-    4. Set each account in [batch.diff] to the [ledger_openings] and check that result equals [batch.target_ledger_hash].
-    5. Sign [batch.target_ledger_hash].
+    4. Set each account in [batch.diff] to the [ledger_openings] and call the resulting ledger hash [target_ledger_hash].
+    5. Sign [target_ledger_hash].
     6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
-    7. Store the batch under the [batch.target_ledger_hash]. *)
+    7. Store the batch under the [target_ledger_hash]. *)
 let post_batch t ~ledger_openings ~batch =
   let logger = t.logger in
   (* 1 *)
@@ -148,18 +148,7 @@ let post_batch t ~ledger_openings ~batch =
           Ok (Sparse_ledger.set_exn ledger diff_index account)
         with e -> Error (Error.of_exn e) )
   in
-  let target_ledger_hash = Batch.target_ledger_hash batch in
-  let%bind.Result () =
-    if
-      Ledger_hash.equal target_ledger_hash
-        (Sparse_ledger.merkle_root target_ledger)
-    then Ok ()
-    else
-      Error
-        (Error.create "ledger_openings + diff != target_ledger_hash"
-           (target_ledger_hash, Sparse_ledger.merkle_root target_ledger)
-           [%sexp_of: Ledger_hash.t * Ledger_hash.t] )
-  in
+  let target_ledger_hash = Sparse_ledger.merkle_root target_ledger in
 
   (* 5 *)
   let message =
