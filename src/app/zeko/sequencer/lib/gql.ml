@@ -1599,7 +1599,7 @@ module Make
                 | None ->
                     return (Error "Signature verification failed") )
           in
-          match
+          match%bind
             Zeko_sequencer.apply_user_command sequencer
               (Signed_command (Signed_command.forget_check command))
           with
@@ -1630,7 +1630,7 @@ module Make
         ~args:
           Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
         ~resolve:(fun { ctx = sequencer; _ } () zkapp_command ->
-          match
+          match%bind
             Zeko_sequencer.apply_user_command sequencer
               (Zkapp_command zkapp_command)
           with
