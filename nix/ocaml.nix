@@ -197,6 +197,7 @@ let
             src/app/zeko/sequencer/deploy.exe \
             src/app/zeko/sequencer/cli.exe \
             src/app/zeko/sequencer/tests/testing_ledger/run.exe \
+            src/app/zeko/da_layer/cli.exe \
             src/app/logproc/logproc.exe \
             src/app/cli/src/mina.exe \
             src/app/batch_txn_tool/batch_txn_tool.exe \
@@ -264,6 +265,7 @@ let
           cp src/app/zeko/sequencer/deploy.exe $zeko/bin/zeko-deploy
           cp src/app/zeko/sequencer/cli.exe $zeko/bin/zeko-cli
           cp src/app/zeko/sequencer/tests/testing_ledger/run.exe $localnet/bin/mina-localnet
+          cp src/app/zeko/da_layer/cli.exe $zeko/bin/da-cli
           cp -R _doc/_html $out/share/doc/html
           # cp src/lib/mina_base/sample_keypairs.json $sample/share/mina
           popd
