@@ -1,252 +1,112 @@
 # Internal design of circuits
 
-## Rough outline and motivation
+## Outline
 
-We have one account for the rollup,
-which we refer to as the _outer_ account.
-The reason for this is that there is a corresponding
-_inner_ account on the inside of the rollup,
-which is a special account.
-We have helper accounts per user on both sides,
-they keep track of per-user deposits and withdrawals.
-The inner accounts allows users on the inside to interact with
-the rollup itself without extending account updates.
+We wish to have a rollup.
+A nested instantiation of the Mina ledger on top of itself,
+as a zkApp account.
+We wish to support communication between the "outside" (L1) and "inside" (L2).
+It should be possible to transfer value.
+It should be possible to upgrade the contract when the time comes.
+It should be possible to have a stake in the rollup.
+And above all, it should be secure.
 
-The outer account keeps track of three things:
-- Ledger hash (Merkle tree of accounts / account db)
-- Inner account action state (withdrawal requests)
-- Deposit requests (as actions)
-- Commits (as actions)
+To that end, here is a summary of the core protocol:
+- The core rollup protocol does not handle transfer of value/MINA.
+- There is a sequencer auction on L1.
+- There is an associated token called ZEKO, using the fungible
+  token standard, minted on the L1.
+- Auctions are bid in ZEKO.
+- People pay fees in whatever currency they like to sequencer.
+- Data availability is ensured by having a public key that must have
+  sign the hashes used.
+- Communication happens by posting actions to the zkApp account on the L1.
+  This account is referred to as the _outer_ account.
+  There is a corresponding _inner_ account on the L2,
+  whereto you can post actions to communicate the other way.
+  On commit, the action states are synchronised.
+  Notably, the outer action state is synchronised _up to some point_,
+  to ensure that sequencer does not waste work synchronising something that
+  might be rolled back immediately.
+- Actions on the outside:
+  + Witness (witness arbitrary account update)
+  + Bid (sequencer bid)
+  + Commit (sequencer committed)
+  + Time (match time, can be emulated by Witness
+    technically, included for efficiency of token transfer)
+- Governance is done tallying votes based on how much ZEKO
+  the voter holds on the L1 and L2 combined.
+  Delegation is done by having a token account that
+  has a field that can point to another public key
+  (which might delegate recursively!) to delegate voting control to.
+- There is a backup special committee that can pause the rollup.
+  Being paused is indicated by a field on the outer account.
 
-The inner account keeps track of
-- Outer action state (deposit requests and commits)
-- Withdrawal requests
+How can we implement transfers of tokens on top of this?
+Consider the coremost MINA case:
+There is a special account on the L2 that is initialized with maximum MINA.
+There is a corresponding account the L1, to which you can deposit MINA.
+You witness the deposit, and can thus correspondingly take out the MINA on the L2.
+Double spending is prevented by tracking a token account on the L2 the index of
+the last deposit processed.
+The index is the index of the witness action on the outer account in the merkle list
+of actions.
+Withdrawals happen correspondingly, the other way around.
+We also wish to support timeouts on deposits.
+We do this by regarding a deposit as having three states:
+- Unknown
+- Accepted
+- Rejected
 
-The goal is to do "Mina on Mina", whereby we
-can apply commands to the inner ledger (L2) and keep track of
-it on the outside (L1) too.
+It starts by default as Unknown. Iterate through all actions that come after,
+and if there is a Time action where the lower bound is higher than the timeout,
+it's marked as Rejected.
+If there is a Commit action that commits an action state that contains the deposit
+before it times out (marked by a Time action), then it's marked as Accepted.
 
-The "keeping track" part is what we refer to as a _commit_,
-i.e., we commit to the inner state on the L1.
-The party that does the commit, i.e. submits the transaction upstream
-is called the _sequencer_.
+We handle cancelled deposits the same way as withdrawals.
+The index of the last cancelled deposit withdrawn is stored in a token account
+on the L1 as with for withdrawals.
 
-We call the act of transferring/briding MINA in as deposits,
-and the opposite as withdrawals.
-Though they seem symmetric, their behavior is slightly asymmetric.
+In addition, withdrawal logic must assert that the rollup is not paused.
 
-Considerations:
-- Deposits must have a timeout.
-- Withdrawals must be delayed.
-- Emergency pause must be possible.
-- Emergency state change must be possible.
-- Data availability should be maintained.
-- User should mostly never lose fees when interacting on the outside.
-- On the inside it is impossible to lose fees (we change zkapp command logic).
-- We don't wish to support anything other than signed commands and zkapp commands.
-- We don't wish to support account timing.
-- We don't wish to support network preconditions.
-- We _do_ wish to support time preconditions, to some extent.
-- In the event that a commit is missed (e.g. rollback, censored by block producer),
-  the amount of SNARK work wasted by sequencer should be minimal.
-- We wish to support transfers/bridging of MINA only for now.
+## Synchronization
 
-### Synchronization
+We wish to support transfer of information between L1 and L2.
+To that end we have the special inner account.
+The inner account has a field which contains the outer action state.
 
-First we must have a field that keeps track of the ledger hash on the outer account.
-Whenever we commit, we must prove that a valid transition from the old hash to the new hash exists.
-We must also synchronize the outer account and inner account,
-transferring the information the inner account holds to the outer
-account, and vice versa.
-This is done by checking the state of the inner account in the outer account's
-circuit and checking that it matches what it should be.
-But the inner account may have been updated many times during one commit,
-and to check that not just the latest value was correct,
-the circuit for the inner account must check that each update was
-also correct, such that correctness for each is implied from the final check
-in the outer account's circuit.
+The outer circuit checks whether the inner app state field matches
+a predecessor of the outer action state.
+However, inner app state may have been updated many times.
+Thus, inner circuit also checks that stored
+outer action state only moves forward.
+Correctness of each individual step is implied by this.
 
-The action state is also synchronised, such that the outer action state
-is stored on the inner account, and the inner action state on the outer account.
-But, we do only a partial synchronisation.
-We post an old version of the outer action state to the inner account,
-and verify this by proving that the old version is a predecessor of
-the current action state.
-This is done such that in the case that the action state on the L1 changes,
-e.g. a rollback happens, we can still reuse most of our proofs (notably,
-the proofs for the transition, since the outer action state is included in the
-ledger, and thus affects all proofs).
+We check that it matches a predecessor instead of the actual action state
+such that sequencer can avoid making SNARKs that are invalidated in the event
+of a rollback.
 
-However, this also means that naively, you can match on any arbitrary
-previous action state, possibly _reverting_ the outer action state
-as recorded on the inner account!
-This is made impossible by the inner account's circuit,
-since it only allows the outer action state contained to move forward.
+Consider, however, the case where the sequencer does not move
+the recorded outer action state forward enough.
+This would mean communication is delayed (and is one reason why timeouts are
+important!).
+We wish to incentivize sequencers to move the recorded action state forward
+as much as possible.
 
-This still isn't perfect:
-What if sequencers refuse to move it forward?
-There is after all no economic incentive for them.
-Thus we change the behavior we expect from the sequencer:
-The sequencer should synchronize the outer action state
-to the inner account at the _beginning_ of the batch,
-to maximize their own profits, by giving themselves the opportunity to reap
-the fees of people finalizing their deposits.
-They can choose to continually update it after that,
-but at the end, they are still as always forced to synchronize
-the latest inner action state to the outer account (but they are free
-to block commands that add actions to the inner action state if they
-wished to do so.)
+This is already the case, in fact, since as a sequencer you want to
+reap in as many fees as possible.
+To that end it is optimal to move the action state forward at the very beginning,
+such that people can process their withdrawals, use their funds, and pay
+the sequencer fees.
 
-### Deposits
+### FIXME: Store multiple action states? (#177)
 
-Deposits are made by posting an action on the outer account,
-along with sending the funds to the account (verified by proof).
-The user specifies an upper bound (slot) after which point if not
-processed, the deposit will timeout and the funds will be recoverible.
+We only store _one_ of the action states,
+meaning that if you don't prove fast enough you could
+miss your chance to submit your transaction.
 
-On commit, also post an action on the outer account that details
-what kind of commit we made, along with the slot bounds.
-We force the size of the slot bound to be no more than a constant,
-such that the sequencer can't choose a range too wide.
-
-On the inner side, the user can finalize a deposit that has been accepted.
-A user deposit is accepted if there is a "commit" action after it
-with suitable slot bounds such that the upper bound on the commit is less
-than the timeout,
-AND if there is no "time" action between them, which like a
-"commit" action, is posted alongside its slot bounds, such that
-the timeout is less than the lower bound of the "time" action.
-
-We must however prevent double spends, thus the user must also provide
-their helper account in the context (as a child),
-and prove that they haven't processed it already.
-This is done by storing in the account the index of the deposit last processed.
-The index stored must be less than the index of the new deposit to be finalized.
-After this, the index is updated to be the index of the new deposit.
-Notably, it is possible to "skip" a deposit erroneously, but it is on the user
-not to do this accidentally.
-
-In this process we must match on the outer action state as stored
-in the inner account. This value can change, and cause the preconditions
-to fail, but this is of no worry since failed transactions are feeless on Zeko.
-
-### Withdrawals
-
-To do withdrawals, we similarly post an action on the inner action state.
-Unlike with deposits, there is only one type of action on the inner account.
-On synchronization the inner account action state is stored on the outer account.
-
-To withdraw, a constant number of slots must have roughly passed since the
-withdrawal was added. To support this, in the "commit" actions, we also store
-the inner action state as it was during that commit.
-Given this, the user can prove an upper bound for when their withdrawal was added
-by taking some commit that includes their action and using its upper slot bound.
-There is however an issue here:
-As with the deposit case, we must match on the inner action state stored on the
-outer account's app state.
-This might change.
-Currently we don't work around this.
-FIXME: fix #177.
-
-As in the deposit case, we need to prevent double spends, thus similarly,
-we have helper accounts on the outside too.
-As with deposits, the helper account keeps track of the index of the last withdrawal
-processed.
-We also have to consider emergency changes.
-The inner action state might "roll back" and procede in another direction
-due to this, and this is why we store the inner action state in the outer
-account explicitly instead of just as an action.
-In addition to proving that it is contained in the inner action state stored
-in the outer action state's "commit" action, we must prove that it's
-also contained in the inner action state recorded in the outer app state.
-
-### Cancelled deposits
-
-There is however one more kind of transfer:
-Cancelled deposits.
-A cancelled deposit can be finalized analogously to deposits,
-but on the outer side, by proving that the action corresponding to the
-deposit has been followed by an "time" action, which lower slot bound
-exceeds the timeout slot, while no "commit" action which upper bound is less than
-the timeout slot precedes it but comes after the deposit's action.
-
-Analogously, to prevent double spends, we must keep track of this.
-We use the same helper account as for withdrawals,
-thus the helper account on the outside keeps track of two indices,
-one for the index of the last withdrawal processed, and
-one for the index of the last cancelled deposit processed.
-
-### Time/network preconditions
-
-We don't support any network preconditions,
-but we do support `valid_while`.
-The transaction snark circuit keeps track of the most conservative
-`valid_while` that would satisfy all transactions included in the
-transition, i.e. time preconditions on the inside are translated
-to time preconditions on the outside.
-Thus, time on the L2 tracks time on the L1 in some sense.
-
-The sequencer should take care not to admit time preconditions
-that are too risky, since any SNARK work done after that precondition
-will be invalidated if the precondition fails on the L1 (for example,
-due to censorship by the block producer chosen for that slot).
-
-### ZEKO token (unimplemented)
-
-The ZEKO token will use the
-[fungible token standard](https://github.com/MinaFoundation/mina-fungible-token),
-which, interestingly, is also an implementation.
-This is to enable third parties to use the token without importing foreign code
-to generate the proof; every token uses the same vk, so you only need to use known
-code.
-
-We can however choose a vk that controls minting.
-In our case, the vk delegates control the the outer account,
-and the current policy of the outer account is to disallow minting
-entirely.
-
-The allocation is for now fixed, and determined when the token is deployed.
-
-### Forced account update (unimplemented)
-
-(NB: permissions on account might be set to Either,
-so this isn't necessarily the only way of doing a forced update).
-
-If more than 2/3 vote yes on an account update (by signing it),
-we permit it to pass.
-We know the total amount of ZEKO,
-and can prove how much ZEKO a public key owns by
-setting a network precondition on `staking_epoch_data`,
-from which we get the ledger used for the current epoch.
-Then we can open the ledger and check how much ZEKO each account
-owns.
-Notably, we do not need to check _all_ accounts,
-since we already know how much the total is.
-We only need to calculate enough to get 2/3.
-
-Since we can't expect everyone to be online,
-we also allow delegation.
-Delegation works by setting the public key
-in the _helper_ account.
-Since we can't know if someone delegates
-without checking this account,
-you are forced to set this,
-but you can set it to yourself.
-Delegation can also be recursive,
-such that the delegatee can delegate again.
-
-Thus, given a signature on the account update,
-to prove its weight, you start with accounts that
-delegate to it, and then accounts that delegate to
-those, and so on.
-
-We however special-case the outer account of the rollup itself,
-and instead consider the ledger inside the outer account
-as a second ledger, used in the same way as above.
-
-Of course, this assumes that you can transfer ZEKO.
-
-### Sequencer election
+## Sequencer election
 
 Sequencer election works by doing an auction,
 where the currency is ZEKO.
@@ -296,34 +156,243 @@ If however, this should still happen,
 then anyone can sequence in this slot.
 Effectively, it becomes a free-for-all.
 
-## Transferring custom information
+## ZEKO token (unimplemented)
 
-We can transfer information too.
-We support a type of action on the outer accounts
-that includes the hash of its children in the action,
-such that you can witness arbitrary information about the L1.
+The ZEKO token will use the
+[fungible token standard](https://github.com/MinaFoundation/mina-fungible-token),
+which, interestingly, is also an implementation.
+This is to enable third parties to use the token without importing foreign code
+to generate the proof; every token uses the same vk, so you only need to use known
+code.
 
-You can implement custom token transfers this way,
-by creating a two accounts, one on the inside, and one
-on the outside.
+We can however choose a vk that controls minting.
+In our case, the vk delegates control the the outer account,
+and the current policy of the outer account is to disallow minting
+entirely.
 
-The inside one is a token owner and mints
-the token when you can prove that you've deposit the token on the outside
-to the outer special account.
+The allocation is for now fixed, and determined when the token is deployed.
 
-You can implement timeouts too, using the same "time" action,
-and withdrawals can be delayed the same way.
+## Forced account update / govvernance (unimplemented)
 
-This will be used to transfer ZEKO.
-This will not replace the native transfer mechanism for MINA,
-since MINA is special-cased.
-Contrary to the other ones,
-MINA doesn't have a token owner, and thus can't be minted.
-Neither does it use the fungible token standard.
+(NB: permissions on account might be set to Either,
+so this isn't necessarily the only way of doing a forced update).
+
+If more than 2/3 vote yes on an account update (by signing it),
+we permit it to pass.
+We know the total amount of ZEKO,
+and can prove how much ZEKO a public key owns by
+setting a network precondition on `staking_epoch_data`,
+from which we get the ledger used for the current epoch.
+Then we can open the ledger and check how much ZEKO each account
+owns.
+Notably, we do not need to check _all_ accounts,
+since we already know how much the total is.
+We only need to calculate enough to get 2/3.
+
+Since we can't expect everyone to be online,
+we also allow delegation.
+Delegation works by setting the public key
+in a helper account.
+Since we can't know if someone delegates
+without checking this account,
+you are forced to set this,
+but you can set it to yourself.
+Delegation can also be recursive,
+such that the delegatee can delegate again.
+
+Thus, given a signature on the account update,
+to prove its weight, you start with accounts that
+delegate to it, and then accounts that delegate to
+those, and so on.
+
+We however special-case the outer account of the rollup itself,
+and instead consider the ledger inside the outer account
+as a second ledger, used in the same way as above.
+
+Of course, this assumes that you can transfer ZEKO.
+
+## Our changes to transaction logic
+
+We do not support processing failed transactions,
+thus, you can not take fees from failed transactions.
+
+Neither do we support any network preconditions currently.
+We might support a subset in the future to allow checking the ledger hash.
+
+We support time preconditions.
+There is however not a single global slot when proving transactions.
+There is a range, and that range (or a tighter one) must be used as precondition when committing.
+
+The sequencer should however not accept transactions that have tight time bounds,
+since the commit would be likely to fail, wasting work potentially.
+
+## Committing
+
+On commit, the sequencer must present a transaction snark
+that represents the transition from the old ledger hash
+stored in the outer account to the new one.
+It must also submit an action that contains the ledger hash
+committed, along with the inner action state and processed outer
+action state at the time of the commit.
+
+Deposits (albeit external to the system) use this mechanism to
+figure out if they've been rejected or not.
+
+Thus, the commit must also include the slot range used at the time
+of the commit.
+If the slot range's upper bound is lower than the deposit's timeout,
+then it must have been processed.
+
+However, the sequencer doesn't always have any good incentive to choose
+a tight bound, since choosing a tight bound means that _future_ sequencers
+can profit from those deposits being processed.
+
+To prevent this from happening, we also specify a maximum size for the slot range.
+
+## Emergency pause
+
+There is a public key that can pause the rollup.
+The public key is stored in the app state and can be changed via governance.
 
 ## Notable missing features
 
-- Force withdrawing funds, bypassing sequencer (seems hard?)
+- Forcing a transaction to happen, bypassing the sequencer,
+  to e.g. initiate and process a withdrawal.
+
+# Token transfer/bridge contract
+
+The transferring/bridging of tokens is done in a separate contract
+entirely.
+The gist is that an outer account works as a bank,
+which when deposited to, mints corresponding promissory
+notes from a corresponding inner account.
+
+These accounts are separate from the outer and inner account of the rollup.
+We will thus refer to this new pair of accounts as the token outer and inner accounts.
+For disambiguation purposes, the ones for the rollup are prefixed with rollup.
+
+## Deposits
+
+Deposits are made by posting an action on the rollup outer account,
+along with sending the funds to the token outer account (verified by proof).
+The user specifies an upper bound (slot) after which point if not
+processed, the deposit will timeout and the funds will be recoverible.
+The action will be a Witness action that witnesses the deposit to the
+token outer account.
+
+As explained above, on commit, the sequencer will also post an action on the
+rollup outer account that details what kind of commit we made, along with the
+slot bounds for the commit itself.
+
+On the inside, the user can finalize a deposit that has been accepted.
+A user deposit is accepted if there is a "commit" action after it
+with suitable slot bounds such that the upper bound on the commit is less
+than the timeout,
+AND if there is no "time" action between them, which like a
+"commit" action, is posted alongside its slot bounds, such that
+the timeout is less than the lower bound of the "time" action.
+
+We must however prevent double spends, thus the user must also provide
+their helper account in the context (as a child),
+and prove that they haven't processed it already.
+This is done by storing in the account the index of the deposit last processed.
+The index stored must be less than the index of the new deposit to be finalized.
+After this, the index is updated to be the index of the new deposit.
+Notably, it is possible to "skip" a deposit erroneously, but it is on the user
+not to do this accidentally.
+
+In this process we must match on the rollup outer action state as stored
+in the inner account. This value can change, and cause the preconditions
+to fail, but this is of no worry since failed transactions are feeless on Zeko.
+
+The funds are then minted or sent by the token inner account,
+depending on what kind of token it is.
+
+## Withdrawals
+
+To do withdrawals, we similarly post an action on the rollup inner action state.
+We use the Witness action to show that we've either burned or sent the tokens
+back to the token inner account.
+
+To withdraw, a constant number of slots must have roughly passed since the
+withdrawal was added. We figure out when a withdrawal was processed
+by using the Commit actions added by the sequencer.
+It does not matter which Commit action included it first.
+
+Given this, the user can prove an upper bound for when their withdrawal was added
+by taking some commit that includes their action and using its upper slot bound.
+There is however an issue here:
+As with the deposit case, we must match on the rollup inner action state stored on the
+rollup outer account's app state.
+This might change, invalidating the transaction.
+Currently we don't work around this.
+FIXME: fix #177.
+
+As in the deposit case, we need to prevent double spends, thus similarly,
+we have helper accounts on the outside too.
+As with deposits, the helper account keeps track of the index of the last withdrawal
+processed.
+We also have to consider emergency changes.
+The rollup inner action state might "roll back" and procede in another direction
+due to this, and this is why we store the inner action state in the outer
+account explicitly instead of just as an action.
+This can happen via e.g. governance.
+In addition to proving that it is contained in the rollup inner action state stored
+in the rollup outer action state's "commit" action, we must prove that it's
+also contained in the inner action state recorded in the outer app state.
+
+## Cancelled deposits
+
+There is however one more kind of transfer:
+Cancelled deposits.
+A cancelled deposit can be finalized analogously to deposits,
+but on the outside, by proving that the action corresponding to the
+deposit has been followed by an "time" action, which lower slot bound
+exceeds the timeout slot, while no "commit" action which upper bound is less than
+the timeout slot precedes it but comes after the deposit's action.
+
+Analogously, to prevent double spends, we must keep track of this.
+We use the same helper account as for withdrawals,
+thus the helper account on the outside keeps track of two indices,
+one for the index of the last withdrawal processed, and
+one for the index of the last cancelled deposit processed.
+
+## Governance (separate)
+
+For a non-canonical bridge zkapp, governance is separate.
+There is however the issue that the token inner account and
+token outer account should be changed at the same time.
+We can't ensure this, but we can instead have both circuits
+verify that the vk of the other side is what it should be.
+This is possible since every account update necessarily includes
+the vk hash used as a precondition.
+On the token outer account side, when a withdrawal action is only
+valid if the token inner account update included in the Witness action
+uses the correct vk hash,
+and the same the other way around, that is,
+a deposit is only valid if done with the expected vk hash.
+
+This however creates a dangerous limbo state:
+What if the token inner account is updated first,
+but we do a deposit to the token outer account?
+Those funds would be irreceivably lost.
+The new circuit could accept both the new vk hash
+and the one before that, if it's not a security vulnerability.
+
+The same can be done the other way around when doing withdrawals.
+
+## Governance (shared)
+
+If the same governance controls both the rollup and the bridge zkapp,
+then we want both the rollup and bridge to be updated at the same time.
+Note that governance can not access the full transaction commitment,
+since this is not made available to zkapps.
+Instead, you can capture a subset by creating a helper token owner that creates
+its own helper token account.
+The helper token owner can have as children each of the outer accounts,
+and those account updates can have as children the helper token account,
+with permissions set to Parents_own_token at the first level and inherit
+at the second.
 
 ## Pseudo-code spec
 
@@ -720,7 +789,7 @@ let do_finalize_cancelled_token_deposit ~sender ~deposit ~actions_after_deposit 
 
 val token_withdrawal_delay : nat
 
-let do_finalize_token_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~action_state_before_withdrawal ~actions_after_commit ~action_state_before_commit ~prev_next_withdrawal =
+let do_finalize_token_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~action_state_before_withdrawal ~actions_after_commit ~action_state_before_commit ~commit ~prev_next_withdrawal =
   assert prev_next_withdrawal <= action_state_before_withdrawal.length ;
   let inner_action_state =
     extend_action_state
