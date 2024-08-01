@@ -394,7 +394,41 @@ and those account updates can have as children the helper token account,
 with permissions set to Parents_own_token at the first level and inherit
 at the second.
 
-## Pseudo-code spec
+## Withdrawal failsafe
+
+Consider the possibility that there is a bug in our token outer circuit,
+allowing the user to withdraw all the deposited funds without doing a corresponding
+withdrawal on the inside.
+We do this by creating _two_ (or more, possibly) token outer accounts.
+When you deposit your funds, you choose which one.
+Half the time, only one of them is usable.
+Specifically, half the time, the send permission will be Impossible,
+and the vk will allow changing the vk (and permission) back during the other
+portion of the time.
+The other vk will implement similar logic, failing to work in the period when it
+should be Impossible, transferring control back and resetting the permission.
+
+Notably, you can still _deposit_ even when the send permission is Impossible.
+You just can't withdraw from it.
+
+Effectively, this means during a hack, if someone finds a vulnerability
+in the withdrawal-allowing vk, it will only affect one of the accounts.
+The other account is a separate circuit, and will need a separate vulnerability
+to compromise.
+It is much simpler, however, heavily reducing the surface for such bugs.
+
+# Pseudo-code specs (unsynchronized, incorrect)
+
+Rough OCaml-y specs follow.
+You are meant to read the account update generating functions
+as generating the account updates you are meant to use
+to interact with the system.
+Any account update not generated for the zkapps here is meant to be invalid.
+Thus, you can infer the circuit behavior from this.
+Anything that is impossible to check, e.g. the parent account update,
+is simply not part of the circuit.
+
+## Core rollup spec
 
 ```ocaml
 type ledger (* merkle tree *)
