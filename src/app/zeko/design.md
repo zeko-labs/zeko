@@ -111,50 +111,92 @@ miss your chance to submit your transaction.
 Sequencer election works by doing an auction,
 where the currency is ZEKO.
 
-We do one auction per _Zeko_ epoch.
-The length of a Zeko epoch is a constant number of slots,
-and may not be aligned with L1 epochs.
-However, it is probably a good idea to make it a constant factor
-of L1 epochs and align it for ease of understanding.
+We must know who the sequencer is for some range of slots
+well beforehand, such that it's finalized by then.
+This is to prevent wasted work when proving.
 
-The auction happens in the epoch 2 epochs
-before the one for which it applies.
-Thus, there is a space of 1 auction epoch where the results
-are known to anyone.
+Bids are published for a range of macroslots as an action,
+along with a per macroslot price. The price is in ZEKO.
 
-For each slot in that epoch, the sequencer that can do a commit
-in that slot is determined by the auction for that epoch.
+A macroslot is defined as N slots, for some N.
 
-In an auction, participants post (by posting an action to
-the outer account), what they bid _per slot_,
-and how many slots they would like to buy.
-Slot preconditions enforce that it's done within the epoch.
-Sequencers deposit their funds to a special account from which
-they can withdraw the unused ZEKO.
+The bid is not atomic, that is, it is possible for only part
+of the bid to be accepted.
 
-The auction is _not_ private,
-everyone can see what everyone else posts.
-Making it private would be a non-trivial task.
+The bid must be made no less than N slots before,
+and no more than M slots before, for some N and M.
 
-Slot allocation could happen in many ways,
-and it's not clear that there is an optimal best way.
+When doing a commit during the macroslot, it must be shown
+that a corresponding bid was made, and that it was the winning
+bid, by folding over all bids within the time frame (deduced
+by checking slot bounds of surrounding actions).
 
-Given the list of bids (many may exist for same public key),
-iterate through the bids from highest slot rate to lowest,
-and allocate from the beginning of the epoch,
-starting with the highest bid, going for as many slots
-as the bid buys, and then continuing until the next bid,
-stopping when there are no more slots left.
-
-Any unused ZEKO is refundible.
+If the sequencer makes a bid, but loses, they can get
+the ZEKO they used back.
+They can do this while posting another bid too,
+before the macroslot bid for has passed.
 
 There should not be any unbid slots,
 since for any sequencer it would make sense
-to submit another bid for all slots for 0 ZEKO.
+to submit a bid for all slots for minimum ZEKO.
 
 If however, this should still happen,
 then anyone can sequence in this slot.
 Effectively, it becomes a free-for-all.
+
+## Sequencer API
+
+Sequencers should publish a GQL endpoint which users can use
+to communicate with the sequencer.
+This endpoint should at the very least support:
+- Querying current ledger hash scheduled to be committed
+- Posting transactions
+
+Users can from the ledger hash get the current state of the ledger
+from the DA layer.
+
+There is no built-in way for users to find the sequencer.
+Sequencers could post the IP address or domain name
+as transaction metadata, they could use yggdrasil, etc.
+
+It is in the interest of the sequencer not to publish this
+information too early to avoid being DoSed.
+
+### Sequencer slashing
+
+There is a state of limbo when control
+is transferred from one sequencer to the other.
+
+The next sequencer needs to begin proving as soon as possible,
+but needs to know the present state of the rollup
+to begin proving.
+
+They can not necessarily trust what the sequencer responds
+with as the ledger hash to be committed,
+since they can at the end of their turn submit new transactions
+to the DA layer, and commit one of the resultant ledgers,
+without telling anyone which directly.
+
+The next sequencer can not begin proving, because there is more
+than 1 possibility given the DA (in general, for N transactions,
+N possibilities, not astronomical, but enough that it's infeasible.).
+
+This problem is however made much worse when you consider the weak finality
+of Mina, and the # of possible branches it can take.
+What if there are 2 block producers, and the sequencer
+presents a slightly different commit to each
+(with a constant amount of extra proving work?).
+
+What if multiple forks develop in parallel because of networking issues
+in the network?
+
+To prevent sequencers from committing to more than one ledger,
+we have slashing.
+In the event that commit to more than one ledger,
+they will lose the amount equal to the ZEKO paid for the
+next slot multiplied by some constant factor.
+
+If the next slot has no sequencer, the amount is 0 (of course).
 
 ## ZEKO token (unimplemented)
 
@@ -172,7 +214,7 @@ entirely.
 
 The allocation is for now fixed, and determined when the token is deployed.
 
-## Forced account update / govvernance (unimplemented)
+## Forced account update / governance (unimplemented)
 
 (NB: permissions on account might be set to Either,
 so this isn't necessarily the only way of doing a forced update).
@@ -427,29 +469,31 @@ Any account update not generated for the zkapps here is meant to be invalid.
 Thus, you can infer the circuit behavior from this.
 Anything that is impossible to check, e.g. the parent account update,
 is simply not part of the circuit.
+In certain places we use X instead of hash of X.
+Hash of X is implied where it's not feasible to use X itself,
+(e.g. storing the ledger in the app state of an account).
 
 ## Core rollup spec
 
 ```ocaml
-type ledger (* merkle tree *)
+type ledger
 
-type commit = { ledger : ledger ; inner_action_state ; action_state ; slot_range : slot_range }
-type deposit = { amount : nat ; recipient : PublicKey.t ; timeout : slot }
-type withdrawal = { amount : nat ; recipient : PublicKey.t }
-type match_ = { data : hash ; children : account_update_forest }
+type action
+
+type action_state = action list
+
+type commit = { ledger : ledger ; inner_action_state ; action_state ; valid_while : valid_while }
+type witness = { aux : field ; children : account_update_forest }
 
 type outer_action =
   | Commit of commit
-  | Bid of { rate : nat ; count : nat }
-  | Match of match_
-  | Time of { slot_range : slot_range } (* specialization of Match *)
-  | Deposit of deposit
+  | Bid of { rate : nat ; start : nat ; stop : nat ; valid_while : valid_while }
+  | Witness of witness
+  | Time of { valid_while : valid_while } (* specialization of Witness *)
 
 type inner_action =
   | Withdraw of withdrawal
-  | Match of match_
-
-type action_state
+  | Witness of witness
 
 type outer_app_state =
   { ledger : ledger
@@ -460,20 +504,10 @@ type inner_app_state =
   { outer_action_state : action_state
   }
 
-type outer_helper_state =
-  { next_withdrawal : nat
-  ; next_cancelled_deposit : nat
-  }
-
-type inner_helper_state =
-  { next_deposit : nat
-  }
-
-let do_inner_step ~source_action_state ~actionss =
-  let target_action_state = List.fold ~init:source_action_state ~f:Actionss.push actionss
+let do_inner_step ~source_action_state ~actions =
   [ { public_key = inner_pk
     ; app_state =
-      { outer_action_state = target_action_state
+      { outer_action_state = List.append actions source_action_state
       }
     ; preconditions =
       { outer_action_state = Some source_action_state
@@ -481,22 +515,25 @@ let do_inner_step ~source_action_state ~actionss =
     }
   ]
 
-val max_slot_range_size : nat
+val max_valid_while_size : nat
 
-let do_commit ~txn_snark ~slot_range ~new_actionss =
-  assert slot_range.upper - slot_range.lower <= max_slot_range_size ;
+type outer_app_state =
+  { ledger : ledger
+  ; inner_action_state : action_state
+  }
+
+let do_commit ~txn_snark ~valid_while ~new_actions =
+  assert valid_while.upper - valid_while.lower <= max_valid_while_size ;
   let old_inner = get_account inner_pk txn_snark.source in
   let new_inner = get_account inner_pk txn_snark.target in
   let action_state =
     (* We don't force sequencer to match on latest action state,
        since it's unreliable and might roll back. *)
-    List.fold
-      ~init:new_inner.app_state.outer_action_state
-      ~f:Actionss.push new_actionss in
+    List.append new_actions new_inner.app_state.outer_action_state in
   let ledger = txn_snark.target in
   let inner_action_state = new_inner.action_state in
   [ { public_key = zeko_pk
-    ; actions = [ Commit { ledger ; inner_action_state ; ~slot_range } ]
+    ; actions = Commit { ledger ; inner_action_state ; ~valid_while }
     ; app_state =
       { ledger
       ; inner_action_state
@@ -507,33 +544,33 @@ let do_commit ~txn_snark ~slot_range ~new_actionss =
         ; inner_action_state = Some old_inner.action_state
           (* technically unneeded, but added for good measure *)
         }
-      ; valid_while = slot_range
+      ; valid_while
       ; action_state
       }
     }
   ]
 
-let do_time ~slot_range =
+let do_time ~valid_while =
   [ { public_key = zeko_pk
-    ; actions = [ Time { slot_range } ]
+    ; actions = [ Time { valid_while } ]
     ; preconditions =
-      { valid_while = slot_range
+      { valid_while = valid_while
       }
     }
   ]
 
-let do_match_outer ~data ~children =
+let do_witness_inner ~aux ~children =
   [ { public_key = zeko_pk
-    ; actions = [ Match { data ; children } ]
+    ; actions = [ Witness { aux ; children } ]
     ; preconditions =
       { children
       }
     }
   ]
 
-let do_match_inner ~data ~children =
+let do_witness_inner ~aux ~children =
   [ { public_key = inner_pk
-    ; actions = [ Match { data ; children } ]
+    ; actions = [ Witness { aux ; children } ]
     ; preconditions =
       { children
       }
@@ -558,12 +595,12 @@ let check_accepted ~timeout ~actions_after_deposit =
   let f acc action = match acc with
     | `Unknown -> match action with
       | Deposit _ -> `Unknown
-      | Commit { slot_range ; _ } ->
-        if slot_range.upper < timeout
+      | Commit { valid_while ; _ } ->
+        if valid_while.upper < timeout
           then `Accepted
           else `Unknown
-      | Time { slot_range } ->
-        if slot_range.lower > timeout
+      | Time { valid_while } ->
+        if valid_while.lower > timeout
           then `Rejected
           else `Unknown
     | `Accepted -> `Accepted
@@ -656,7 +693,7 @@ let do_finalize_withdrawal ~withdrawal ~actions_after_withdrawal ~action_state_b
   [ { public_key = zeko_pk
     ; preconditions =
       { app_state = { inner_action_state }
-      ; valid_while = { lower = commit.slot_range.upper + withdrawal_delay ; upper = infinity }
+      ; valid_while = { lower = commit.valid_while.upper + withdrawal_delay ; upper = infinity }
       ; action_state = outer_action_state
       }
     ; balance_change = -deposit.amount
@@ -845,7 +882,7 @@ let do_finalize_token_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~
               { action_state = outer_action_state
               ; app_state = { inner_action_state }
               ; valid_while =
-                { lower = commit.slot_range.upper + token_withdrawal_delay
+                { lower = commit.valid_while.upper + token_withdrawal_delay
                 ; upper = infinity }
               }
             }
