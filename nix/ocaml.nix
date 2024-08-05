@@ -263,7 +263,7 @@ let
         '';
 
         buildPhase = ''
-          dune build --display=short src/app/zeko/sequencer/run.exe src/app/zeko/sequencer/deploy.exe
+          dune build --display=short src/app/zeko/sequencer/run.exe src/app/zeko/sequencer/deploy.exe src/app/zeko/sequencer/dump_db.exe
         '';
 
         outputs = [
@@ -275,6 +275,7 @@ let
           pushd _build/default
           cp src/app/zeko/sequencer/run.exe $out/bin/zeko-run
           cp src/app/zeko/sequencer/deploy.exe $out/bin/zeko-deploy
+          cp src/app/zeko/sequencer/dump_db.exe $out/bin/zeko-dump-db
           popd
           remove-references-to -t $(dirname $(dirname $(command -v ocaml))) $out/bin/*
         '';
