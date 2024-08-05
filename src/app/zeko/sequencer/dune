@@ -82,3 +82,37 @@
  (preprocess
   (pps ppx_jane))
  (modules cli))
+
+(executable
+ (name dump_db)
+ (libraries
+  sequencer_lib
+  zkapps_rollup
+  ;; mina ;;
+  mina_base
+  mina_numbers
+  mina_ledger
+  pickles
+  pickles_types
+  init
+  signature_lib
+  currency
+  genesis_constants
+  transaction_snark
+  cli_lib
+  ;; opam libraries ;;
+  uri
+  yojson
+  cohttp
+  cohttp-async
+  graphql
+  graphql-async
+  core
+  core_kernel
+  async_kernel
+  async
+  async_unix
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_jane ppx_mina))
+ (modules dump_db))

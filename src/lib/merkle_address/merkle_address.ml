@@ -75,7 +75,8 @@ module Stable = struct
     let t_of_sexp =
       let of_string buf =
         String.to_list buf
-        |> List.map ~f:(Fn.compose Direction.of_int_exn Char.to_int)
+        |> List.map ~f:(fun ch ->
+               Direction.of_int_exn @@ Int.of_string @@ Char.to_string ch )
         |> of_directions
       in
       Fn.compose of_string string_of_sexp
