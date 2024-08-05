@@ -6,6 +6,8 @@ module L = Mina_ledger.Ledger
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
+let () = Core.eprintf "Ledger depth: %d\n%!" constraint_constants.ledger_depth
+
 let run f = Thread_safe.block_on_async_exn f
 
 type account_record = L.Db.Location.t * Mina_base.Account.t [@@deriving sexp]
