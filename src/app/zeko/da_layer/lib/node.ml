@@ -220,24 +220,28 @@ let post_diff t ~ledger_openings ~diff =
         Ok acc
   in
   let%bind.Result () =
-    List.fold_result (Diff.changed_accounts diff) ~init:()
-      ~f:(fun _ (_, account) ->
-        (* account's target_receipt_chain_hash needs to be either unchanged or the same as in [applied_hashes] *)
-        let account_id = Account.identifier account in
-        let%bind.Result target_account = get_account target_ledger account_id in
-        let target_receipt_chain_hash = target_account.receipt_chain_hash in
-        let%bind.Result applied_receipt_chain_hash =
-          get_account's_receipt_chain_hash applied_hashes account_id
-        in
-        if
-          Receipt.Chain_hash.equal target_receipt_chain_hash
-            applied_receipt_chain_hash
-        then Ok ()
-        else
-          Error
-            (Error.create "Receipt chain hash mismatch"
-               (target_receipt_chain_hash, applied_receipt_chain_hash)
-               [%sexp_of: Receipt.Chain_hash.t * Receipt.Chain_hash.t] ) )
+    if Option.is_none (Diff.command_with_action_step_flags diff) then Ok ()
+    else
+      List.fold_result (Diff.changed_accounts diff) ~init:()
+        ~f:(fun _ (_, account) ->
+          (* account's target_receipt_chain_hash needs to be either unchanged or the same as in [applied_hashes] *)
+          let account_id = Account.identifier account in
+          let%bind.Result target_account =
+            get_account target_ledger account_id
+          in
+          let target_receipt_chain_hash = target_account.receipt_chain_hash in
+          let%bind.Result applied_receipt_chain_hash =
+            get_account's_receipt_chain_hash applied_hashes account_id
+          in
+          if
+            Receipt.Chain_hash.equal target_receipt_chain_hash
+              applied_receipt_chain_hash
+          then Ok ()
+          else
+            Error
+              (Error.create "Receipt chain hash mismatch"
+                 (target_receipt_chain_hash, applied_receipt_chain_hash)
+                 [%sexp_of: Receipt.Chain_hash.t * Receipt.Chain_hash.t] ) )
   in
 
   (* 7 *)
