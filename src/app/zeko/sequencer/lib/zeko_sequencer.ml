@@ -388,7 +388,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     ; snark_q : Snark_queue.t
     ; stop : unit Ivar.t
     ; da_client : Da_layer.Client.Sequencer.t
-    ; verifier : Verifier.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
     ; mutable protocol_state : Mina_state.Protocol_state.value
@@ -555,21 +554,14 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           in
           let%bind.Deferred.Result valid =
             match%bind
-              Verifier.verify_commands t.verifier
-                [ { data = verifiable; status = Applied } ]
+              Verifier.verify_command { data = verifiable; status = Applied }
             with
-            | Ok [ result ] -> (
-                match result with
-                | `Valid valid ->
-                    return (Ok valid)
-                | `Valid_assuming _ ->
-                    failwith
-                      "Bug, this shouldn't happen since Verifier.Prod with \
-                       ~proof_level:Full verifies all the proofs"
-                | #Verifier.invalid as invalid ->
-                    return (Error (Verifier.invalid_to_error invalid)) )
-            | Ok _ ->
-                failwith "Bug, there should be only one result"
+            | Ok (`Valid valid) ->
+                return (Ok valid)
+            | Ok (`Valid_assuming _) ->
+                return (Error (Error.of_string "Invalid proof"))
+            | Ok (#Verifier.invalid as invalid) ->
+                return (Error (Verifier.invalid_to_error invalid))
             | Error e ->
                 return (Error e)
           in
@@ -835,12 +827,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       Da_layer.Client.Sequencer.create ~logger ~config:da_config
         ~quorum:da_quorum
     in
-    let%bind verifier =
-      Verifier.create ~logger ~proof_level:Full ~constraint_constants
-        ~conf_dir:None
-        ~pids:(Child_processes.Termination.create_pid_table ())
-        ()
-    in
     let t =
       { db
       ; logger
@@ -851,7 +837,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           Snark_queue.create ~da_client ~config ~signer
             ~kvdb:(L.Db.zeko_kvdb db)
       ; stop = Ivar.create ()
-      ; verifier
       ; apply_q = Sequencer.create ()
       ; protocol_state = compile_time_genesis_state
       ; subscriptions = Subscriptions.create ()
