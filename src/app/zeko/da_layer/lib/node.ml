@@ -117,15 +117,13 @@ let post_diff t ~ledger_openings ~diff =
   in
 
   (* 3 *)
-  let indices = List.map (Diff.changed_accounts diff) ~f:(fun (i, _) -> i) in
+  let indices = List.map (Diff.changed_accounts diff) ~f:fst in
   let%bind.Result () =
     match List.contains_dup ~compare:Int.compare indices with
     | false ->
         Ok ()
     | true ->
-        Error
-          (Error.create "Duplicate indices" indices
-             [%sexp_of: Account.Index.t list] )
+        Error (Error.create "Duplicate indices" diff [%sexp_of: Diff.t])
   in
 
   (* 4 *)
