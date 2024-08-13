@@ -581,7 +581,9 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
           (* Post transaction to the DA layer *)
           let changed_accounts =
-            let account_ids = User_command.accounts_referenced command in
+            let account_ids =
+              User_command.accounts_referenced command |> List.stable_dedup
+            in
             List.map account_ids ~f:(fun id ->
                 let index = L.index_of_account_exn l id in
                 (index, L.get_at_index_exn l index) )
