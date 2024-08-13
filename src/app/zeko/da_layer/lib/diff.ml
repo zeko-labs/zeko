@@ -14,7 +14,7 @@ module Stable = struct
           (User_command.Stable.V2.t * bool list) option
             (** Optionally add command with corresponding action steps to store the history *)
       }
-    [@@deriving yojson, fields]
+    [@@deriving yojson, fields, sexp_of]
 
     let to_latest = Fn.id
   end
