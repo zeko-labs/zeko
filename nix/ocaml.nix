@@ -225,6 +225,7 @@ let
         outputs = [
           "out"
           "zeko"
+          "zeko-da"
           "localnet"
           "archive"
           "generate_keypair"
@@ -265,7 +266,7 @@ let
           cp src/app/zeko/sequencer/deploy.exe $zeko/bin/zeko-deploy
           cp src/app/zeko/sequencer/cli.exe $zeko/bin/zeko-cli
           cp src/app/zeko/sequencer/tests/testing_ledger/run.exe $localnet/bin/mina-localnet
-          cp src/app/zeko/da_layer/cli.exe $zeko/bin/da-cli
+          cp src/app/zeko/da_layer/cli.exe $zeko-da/bin/zeko-da
           cp -R _doc/_html $out/share/doc/html
           # cp src/lib/mina_base/sample_keypairs.json $sample/share/mina
           popd
