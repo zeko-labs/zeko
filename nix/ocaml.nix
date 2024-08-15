@@ -225,7 +225,7 @@ let
         outputs = [
           "out"
           "zeko"
-          "zeko-da"
+          "zeko_da"
           "localnet"
           "archive"
           "generate_keypair"
@@ -241,7 +241,7 @@ let
           mkdir -p $out/bin $archive/bin $sample/share/mina $out/share/doc $generate_keypair/bin $mainnet/bin $testnet/bin $genesis/bin $genesis/var/lib/coda $batch_txn_tool/bin $berkeley_migration/bin
           # TODO uncomment when genesis is generated above
           # mv _build/coda_cache_dir/genesis* $genesis/var/lib/coda
-          mkdir -p $zeko/bin $zeko-da/bin $localnet/bin
+          mkdir -p $zeko/bin $zeko_da/bin $localnet/bin
           pushd _build/default
           cp src/app/cli/src/mina.exe $out/bin/mina
           cp src/app/logproc/logproc.exe $out/bin/logproc
@@ -266,7 +266,7 @@ let
           cp src/app/zeko/sequencer/deploy.exe $zeko/bin/zeko-deploy
           cp src/app/zeko/sequencer/cli.exe $zeko/bin/zeko-cli
           cp src/app/zeko/sequencer/tests/testing_ledger/run.exe $localnet/bin/mina-localnet
-          cp src/app/zeko/da_layer/cli.exe $zeko-da/bin/zeko-da
+          cp src/app/zeko/da_layer/cli.exe $zeko_da/bin/zeko-da
           cp -R _doc/_html $out/share/doc/html
           # cp src/lib/mina_base/sample_keypairs.json $sample/share/mina
           popd
