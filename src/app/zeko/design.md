@@ -141,26 +141,8 @@ since for any sequencer it would make sense
 to submit a bid for all slots for minimum ZEKO.
 
 If however, this should still happen,
-then anyone can sequence in this slot.
-Effectively, it becomes a free-for-all.
-
-## Sequencer API
-
-Sequencers should publish a GQL endpoint which users can use
-to communicate with the sequencer.
-This endpoint should at the very least support:
-- Querying current ledger hash scheduled to be committed
-- Posting transactions
-
-Users can from the ledger hash get the current state of the ledger
-from the DA layer.
-
-There is no built-in way for users to find the sequencer.
-Sequencers could post the IP address or domain name
-as transaction metadata, they could use yggdrasil, etc.
-
-It is in the interest of the sequencer not to publish this
-information too early to avoid being DoSed.
+then the macroslot is given to the sequencer
+for the last macroslot.
 
 ### Sequencer slashing
 
@@ -192,11 +174,44 @@ in the network?
 
 To prevent sequencers from committing to more than one ledger,
 we have slashing.
-In the event that commit to more than one ledger,
-they will lose the amount equal to the ZEKO paid for the
-next slot multiplied by some constant factor.
+In the event they commit to more than one ledger,
+they will lose the amount equal to the ZEKO paid x N for some N.
 
-If the next slot has no sequencer, the amount is 0 (of course).
+Really, it should depend on the price of the next slot,
+but this is much harder to do, because we also need to deposit
+the funds we slash at some point, and that deposit needs to be
+a reliable transaction that isn't rolled back either.
+
+With this approach we can simply make the bid take N times the amount
+the bid is for, making it easily slashible and refundible.
+
+The funds used for slashing can be withdrawn at any point after the macroslot
+once someone has made a new commit.
+
+## Committing
+
+On commit, the sequencer must present a transaction snark
+that represents the transition from the old ledger hash
+stored in the outer account to the new one.
+It must also submit an action that contains the ledger hash
+committed, along with the inner action state and processed outer
+action state at the time of the commit.
+
+Deposits (albeit external to the system) use this mechanism to
+figure out if they've been rejected or not.
+
+Thus, the commit must also include the slot range used at the time
+of the commit.
+If the slot range's upper bound is lower than the deposit's timeout,
+then it must have been processed.
+
+However, the sequencer doesn't always have any good incentive to choose
+a tight bound, since choosing a tight bound means that _future_ sequencers
+can profit from those deposits being processed.
+
+To prevent this from happening, we also specify a maximum size for the slot range.
+
+The commit can only happen if the sequencer has won the auction for the macroslot.
 
 ## ZEKO token (unimplemented)
 
@@ -251,7 +266,10 @@ We however special-case the outer account of the rollup itself,
 and instead consider the ledger inside the outer account
 as a second ledger, used in the same way as above.
 
-Of course, this assumes that you can transfer ZEKO.
+FIXME: If DA fails right around the epoch switch,
+then people who have their ZEKO inside Zeko will not be able to vote.
+Figure out a good way of using the `staking_epoch_data` before
+the current one.
 
 ## Our changes to transaction logic
 
@@ -268,38 +286,125 @@ There is a range, and that range (or a tighter one) must be used as precondition
 The sequencer should however not accept transactions that have tight time bounds,
 since the commit would be likely to fail, wasting work potentially.
 
-## Committing
-
-On commit, the sequencer must present a transaction snark
-that represents the transition from the old ledger hash
-stored in the outer account to the new one.
-It must also submit an action that contains the ledger hash
-committed, along with the inner action state and processed outer
-action state at the time of the commit.
-
-Deposits (albeit external to the system) use this mechanism to
-figure out if they've been rejected or not.
-
-Thus, the commit must also include the slot range used at the time
-of the commit.
-If the slot range's upper bound is lower than the deposit's timeout,
-then it must have been processed.
-
-However, the sequencer doesn't always have any good incentive to choose
-a tight bound, since choosing a tight bound means that _future_ sequencers
-can profit from those deposits being processed.
-
-To prevent this from happening, we also specify a maximum size for the slot range.
-
 ## Emergency pause
 
 There is a public key that can pause the rollup.
 The public key is stored in the app state and can be changed via governance.
 
+## Sequencer API
+
+Sequencers should publish a GQL endpoint which users can use
+to communicate with the sequencer.
+This endpoint should at the very least support:
+- Querying current ledger hash scheduled to be committed
+- Posting transactions
+
+Users can from the ledger hash get the current state of the ledger
+from the DA layer.
+
+There is no built-in way for users to find the sequencer.
+Sequencers could post the IP address or domain name
+as transaction metadata, they could use yggdrasil, etc.
+
+It is in the interest of the sequencer not to publish this
+information too early to avoid being DoSed.
+
+Once the sequencer has "signed" the last commit for the macroslot,
+users should send their commands to the next sequencer, who can then
+begin proving.
+
 ## Notable missing features
 
 - Forcing a transaction to happen, bypassing the sequencer,
   to e.g. initiate and process a withdrawal.
+
+## Soundness
+
+### Assumptions
+
+- We assume an honest majority of ZEKO token holders
+  (weighted by their stake) (somewhat reasonable).
+- We assume the L1 is secure (reasonable).
+- We assume the L1 has reliable finality after X blocks (reasonable).
+- We assume that during a macroslot, not all block producers censor
+  the sequencer.
+
+### Censorship
+
+The last one is especially dangerous.
+Not only does the sequencer pay for the macroslot,
+it's also possible that they will be slashed if they
+don't commit at all.
+
+Someone could bribe the block producers to censor the sequencer.
+It's not clear if there's a good incentive for this though.
+
+### MEV
+
+The sequencer can also exploit MEV, but the amount they can exploit for
+is reduced by the auction, any increase in revenue
+would mean they have more to spend on the auction,
+which they will if there is a competitive market.
+
+### Cost of running a sequencer
+
+Spinning a sequencer up and down is also not free,
+so there is more profit if the sequencer has many slots
+in a row, since they can utilize the hardware for longer.
+
+### L1 forks
+
+We want Zeko to have stability even if the L1 forks.
+This is both good UX, but also necessary to avoid
+making sequencers wasting work.
+
+If during a macroslot, there are two possible states of Zeko,
+the next sequencer has two possible states to build on top of,
+doubling the amount of proving work they have to do if they
+want to build on both forks.
+
+If they knew which fork would win, this would not be an issue,
+but they don't in the case of Nakamoto-style consensus
+as used in Mina.
+
+This is why we have slashing.
+
+### Erroneous slashing
+
+We don't want good actors to be slashed.
+There is a danger of this happening when the sequencer
+for the previous macroslot makes multiple commits,
+since the commit made by the next sequencer may not be
+valid in some of the forks.
+FIXME: fix this.
+
+### Sequencer API lying (to implement)
+
+Currently the sequencer can lie about the current state of the rollup.
+There is nothing forcing people to use the API instead of the DA layer
+directly, but even then, they need to get the current ledger has from the DA.
+We can solve this by having the sequencer sign in-progress ledger hashes,
+along with a number to denote how many transactions have been applied.
+The sequencer would then show that the response is correct by including
+the opening into the Merkle tree that is the ledger, along with the signature.
+If the sequencer lied, and committed a ledger which history did not include the
+signed ledger, then they would be subject to slashing.
+The sequencer could however still present an old version of the ledger
+in the response.
+It would nonetheless still be better than no guarantees at all.
+FIXME: implement this.
+This is also complicated by the fact that the sequencer might accept a transaction
+which is later found out not to be provable due to discrepancies between
+the code that accepts the transaction and the code that proves it.
+
+### DoS attacks
+
+It might be in the interest of other competing sequencers
+to DoS the sequencer currently elected to prevent them from
+participating in the auction.
+This is more likely if the sequencers don't have a stake in Zeko,
+in the form of ZEKO.
+FIXME: enforce that sequencers have a stake in Zeko.
 
 # Token transfer/bridge contract
 
@@ -436,7 +541,7 @@ and those account updates can have as children the helper token account,
 with permissions set to Parents_own_token at the first level and inherit
 at the second.
 
-## Withdrawal failsafe
+## Withdrawal failsafe (unimplemented)
 
 Consider the possibility that there is a bug in our token outer circuit,
 allowing the user to withdraw all the deposited funds without doing a corresponding
@@ -473,6 +578,9 @@ In certain places we use X instead of hash of X.
 Hash of X is implied where it's not feasible to use X itself,
 (e.g. storing the ledger in the app state of an account).
 
+We don't fill out all the fields for account updates.
+Assume an implicit `with default`.
+
 ## Core rollup spec
 
 ```ocaml
@@ -482,22 +590,29 @@ type action
 
 type action_state = action list
 
-type commit = { ledger : ledger ; inner_action_state ; action_state ; valid_while : valid_while }
+val macroslot_size : nat (* probably around 1 day *)
+
+type macroslot = nat
+
+type commit = { ledger : ledger ; inner_action_state ; action_state ; macroslot : nat }
 type witness = { aux : field ; children : account_update_forest }
 
 type outer_action =
   | Commit of commit
-  | Bid of { rate : nat ; start : nat ; stop : nat ; valid_while : valid_while }
+  | Bid of { sequencer : public_key ; rate : nat ; start : nat ; stop : nat ; valid_while : valid_while }
   | Witness of witness
   | Time of { valid_while : valid_while } (* specialization of Witness *)
 
 type inner_action =
-  | Withdraw of withdrawal
   | Witness of witness
 
 type outer_app_state =
   { ledger : ledger
   ; inner_action_state : action_state
+  ; sequencer : public_key
+  ; macroslot : macroslot
+  ; bid_rate : nat
+  ; finalized : bool
   }
 
 type inner_app_state =
@@ -517,35 +632,348 @@ let do_inner_step ~source_action_state ~actions =
 
 val max_valid_while_size : nat
 
-type outer_app_state =
-  { ledger : ledger
-  ; inner_action_state : action_state
-  }
+val bid_min_time_before : nat (* probably 1 day *)
+val bid_max_time_before : nat (* probably 2 days *)
 
-let do_commit ~txn_snark ~valid_while ~new_actions =
+val bid_deposit_factor : nat
+
+val zeko_token_owner : account_id
+
+let do_bid ~rate ~start ~stop ~valid_while =
+  assert start - valid_while.upper > bid_min_time_before ;
+  assert stop - valid_while.lower < bid_max_time_before ;
+  [ { public_key = zeko_pk
+    ; actions = Bid { rate ; start ; stop ; valid_while }
+    ; preconditions = { valid_while }
+    ; children =
+      [ { account_id = zeko_token_owner
+        ; public_key = zeko_pk
+        ; 
+        }
+      ]
+    }
+  ]
+
+let macroslot_upper macroslot = macroslot * (macroslot_size + 1)
+let macroslot_lower macroslot = macroslot * macroslot_size
+
+let get_winning_bid
+  ~action_state_before_bid
+  ~time_action
+  ~actions_for_bid
+  ~macroslot =
+  (* bid logic *)
+  let action_state = (actions_for_bid ++ (time_action :: action_state_before_bid)) in
+
+  (* We only consider bids that have been made after some slot,
+     time_action is an action before the bids begin that
+     has a time bound before the bids are valid. *)
+  (match time_action with
+    | Witness _ -> assert false
+    | Bid { valid_while ; _ } -> valid_while.upper < macroslot_lower macroslot - bid_max_time_before
+    | Time { valid_while } -> valid_while.upper < macroslot_lower macroslot - bid_max_time_before
+    | Commit { valid_while ; _ } -> valid_while.upper < macroslot_lower macroslot - bid_max_time_before
+  )
+
+  let Some (sequencer, rate) = List.fold actions_for_bid ~init:None ~f:(fun acc -> function
+    | Bid { sequencer ; rate ; start ; stop ; _ } ->
+      if start <= macroslot & stop > macroslot
+        then (match acc with
+          None -> (sequencer, rate)
+          Some (sequencer', rate') ->
+            if rate > rate'
+              then (sequencer, rate)
+              else (sequencer', rate')
+        )
+        else acc
+    | _ -> acc
+  ) in
+  (action_state, sequencer, rate)
+
+
+(* The case where we switch the sequencer peacefully,
+   the previous sequencer has finalized, but we assume
+   that it's stable, and continue working from that point.
+*)
+let do_switch_sequencer
+  ~macroslot
+  ~action_state_before_bid
+  ~actions_for_bid
+  ~time_action
+  ~old_sequencer
+  ~old_rate
+  ~ledger
+  =
+  let (action_state, sequencer, rate) =
+    get_winning_bid
+      ~macroslot
+      ~action_state_before_bid
+      ~actions_for_bid
+      ~time_action
+      ~action_state
+  in
+  let inner_action_state = (get_account inner_pk ledger).action_state in
+  [ { public_key = zeko_pk
+    ; app_state =
+      { ledger
+      ; inner_action_state
+      ; macroslot
+      ; sequencer
+      ; bid_rate = rate
+      ; finalized = false
+      }
+    ; preconditions =
+      { app_state =
+        { ledger
+        ; inner_action_state
+          (* technically unneeded, but added for good measure *)
+        ; macroslot = macroslot - 1
+        ; sequencer = previous_sequencer
+        ; bid_rate = old_rate
+        ; finalized = true
+        }
+      ; valid_while =
+        { lower = macroslot_lower (macroslot - 1)
+          (* We allow using this in the previous macroslot too,
+             since if they've finalized their turn we can begin
+             ours early. *)
+        ; upper = macroslot_upper macroslot
+        }
+      }
+    ; children =
+      [ { account_id = zeko_token_owner
+        ; children =
+          [ { token_id = zeko_token_owner
+            ; public_key = sequencer
+            ; amount = -rate * bid_deposit_factor
+            }
+          ; { token_id = zeko_token_owner
+            ; public_key = zeko_kp
+            ; amount =
+              rate * bid_deposit_factor
+              -
+              old_rate * (bid_deposit_factor - 1)
+            }
+          ; { token_id = zeko_token_owner
+            ; public_key = old_sequencer
+            ; amount = old_rate * (bid_deposit_factor - 1)
+            }
+          ]
+        }
+      ]
+    }
+  ]
+
+(* The case where we switch the sequencer,
+   but the previous sequencer has not finalized their turn.
+   NB: We must make sure that we are exactly in our macroslot,
+   unlike the other cases.
+*)
+let do_switch_sequencer_penalize_unfinalized
+  ~macroslot
+  ~action_state_before_bid
+  ~actions_for_bid
+  ~time_action
+  ~old_sequencer
+  ~old_rate
+  ~ledger
+  =
+  let (action_state, sequencer, rate) =
+    get_winning_bid
+      ~macroslot
+      ~action_state_before_bid
+      ~actions_for_bid
+      ~time_action
+      ~action_state
+  in
+  let inner_action_state = (get_account inner_pk ledger).action_state in
+  [ { public_key = zeko_pk
+    ; app_state =
+      { ledger
+      ; inner_action_state
+      ; macroslot
+      ; sequencer
+      ; bid_rate = rate
+      ; finalized = false
+      }
+    ; preconditions =
+      { app_state =
+        { ledger
+        ; inner_action_state
+          (* technically unneeded, but added for good measure *)
+        ; macroslot = macroslot - 1
+        ; sequencer = previous_sequencer
+        ; bid_rate = old_rate
+        ; finalized = false
+        }
+      ; valid_while
+      ; action_state
+      }
+    ; children =
+      [ { account_id = zeko_token_owner
+        ; children =
+          [ { token_id = zeko_token_owner
+            ; public_key = sequencer
+            ; amount = -rate * bid_deposit_factor
+            }
+          ; { token_id = zeko_token_owner
+            ; public_key = zeko_kp
+            ; amount =
+              rate * bid_deposit_factor
+            }
+          ]
+        }
+      ]
+    }
+  ]
+
+(* The case where we switch the sequencer,
+   but the previous sequencer has not finalized more than once.
+*)
+let do_switch_sequencer_penalize_double_finalized
+  ~macroslot
+  ~action_state_before_bid
+  ~actions_for_bid
+  ~time_action
+  ~old_sequencer
+  ~old_rate
+  ~ledger
+  ~signature
+  ~other_ledger
+  =
+  assert verify_signature ~signature ~public_key:old_sequencer ~data:(other_ledger, macroslot - 1)
+  let (action_state, sequencer, rate) =
+    get_winning_bid
+      ~macroslot
+      ~action_state_before_bid
+      ~actions_for_bid
+      ~time_action
+      ~action_state
+  in
+  let inner_action_state = (get_account inner_pk ledger).action_state in
+  [ { public_key = zeko_pk
+    ; app_state =
+      { ledger
+      ; inner_action_state
+      ; macroslot
+      ; sequencer
+      ; bid_rate = rate
+      ; finalized = false
+      }
+    ; preconditions =
+      { app_state =
+        { ledger
+        ; inner_action_state
+          (* technically unneeded, but added for good measure *)
+        ; macroslot = macroslot - 1
+        ; sequencer = previous_sequencer
+        ; bid_rate = old_rate
+        ; finalized = true
+        }
+      ; valid_while
+      ; action_state
+      }
+    ; children =
+      [ { account_id = zeko_token_owner
+        ; children =
+          [ { token_id = zeko_token_owner
+            ; public_key = sequencer
+            ; amount = -rate * bid_deposit_factor
+            }
+          ; { token_id = zeko_token_owner
+            ; public_key = zeko_kp
+            ; amount =
+              rate * bid_deposit_factor
+            }
+          ]
+        }
+      ]
+    }
+  ]
+
+(* Commit work to L1. *)
+let do_commit
+  ~txn_snark
+  ~macroslot
+  ~valid_while
+  ~new_actions
+  =
   assert valid_while.upper - valid_while.lower <= max_valid_while_size ;
+  assert valid_while.lower >= macroslot_lower (macroslot - 1)
+    (* The sequencer can start committing in the macroslot before,
+       provided that the previous sequencer has finalized *) ;
+  assert valid_while.upper < macroslot_upper macroslot ;
+
   let old_inner = get_account inner_pk txn_snark.source in
   let new_inner = get_account inner_pk txn_snark.target in
+
   let action_state =
     (* We don't force sequencer to match on latest action state,
        since it's unreliable and might roll back. *)
     List.append new_actions new_inner.app_state.outer_action_state in
+
   let ledger = txn_snark.target in
   let inner_action_state = new_inner.action_state in
+
   [ { public_key = zeko_pk
     ; actions = Commit { ledger ; inner_action_state ; ~valid_while }
     ; app_state =
       { ledger
       ; inner_action_state
+      ; macroslot
+      ; sequencer
+      ; bid_rate
+      ; finalized = false
       }
     ; preconditions =
       { app_state =
         { ledger = Some txn_snark.source
         ; inner_action_state = Some old_inner.action_state
           (* technically unneeded, but added for good measure *)
+        ; macroslot
+        ; sequencer
+        ; bid_rate
+        ; finalized = false
         }
       ; valid_while
       ; action_state
+      }
+    }
+  ]
+
+(* End our turn *)
+let do_finalize_macroslot
+  ~sequencer
+  ~macroslot
+  ~bid_rate
+  ~ledger
+  ~signature
+  =
+  assert verify_signature ~signature ~public_key:sequencer ~data:(ledger, macroslot)
+  let inner_action_state = (get_account inner_pk ledger).action_state in
+  [ { public_key = zeko_pk
+    ; events = signature
+    ; app_state =
+      { ledger
+      ; inner_action_state
+      ; macroslot
+      ; sequencer
+      ; bid_rate = rate
+      ; finalized = true
+      }
+    ; preconditions =
+      { app_state =
+        { ledger
+        ; inner_action_state
+        ; macroslot
+        ; sequencer
+        ; bid_rate
+        ; finalized = false
+        }
+      ; valid_while =
+        { lower = macroslot_lower macroslot
+        ; upper = macroslot_upper macroslot
+        }
       }
     }
   ]
@@ -559,7 +987,7 @@ let do_time ~valid_while =
     }
   ]
 
-let do_witness_inner ~aux ~children =
+let do_witness_outer ~aux ~children =
   [ { public_key = zeko_pk
     ; actions = [ Witness { aux ; children } ]
     ; preconditions =
@@ -577,144 +1005,6 @@ let do_witness_inner ~aux ~children =
     }
   ]
 
-let do_deposit (deposit : deposit) =
-  [ { public_key = zeko_pk
-    ; actions = Deposit deposit
-    ; balance_change = deposit.amount
-    }
-  ]
-
-let do_withdraw ~withdrawal =
-  [ { public_key = inner_pk
-    ; actions = Withdraw withdrawal
-    ; balance_change = withdrawal.amount
-    }
-  ]
-
-let check_accepted ~timeout ~actions_after_deposit =
-  let f acc action = match acc with
-    | `Unknown -> match action with
-      | Deposit _ -> `Unknown
-      | Commit { valid_while ; _ } ->
-        if valid_while.upper < timeout
-          then `Accepted
-          else `Unknown
-      | Time { valid_while } ->
-        if valid_while.lower > timeout
-          then `Rejected
-          else `Unknown
-    | `Accepted -> `Accepted
-    | `Rejected -> `Rejected
-  List.fold ~init:`Unknown ~f actions_after_deposit
-
-let do_finalize_deposit ~deposit ~actions_after_deposit ~action_state_before_deposit ~prev_next_deposit =
-  assert check_accepted ~timeout:deposit.timeout ~actions_after_deposit = `Accepted ;
-  assert prev_next_deposit <= action_state_before_deposit.length ;
-  let outer_action_state =
-    extend_action_state
-      ~source:action_state_before_deposit
-      ~actions:(Deposit deposit :: actions_after_deposit) in
-  [ { public_key = inner_pk
-    ; preconditions =
-      { app_state =
-        { outer_action_state
-        }
-      }
-    ; balance_change = -deposit.amount
-    ; children =
-      [ { public_key = deposit.recipient
-        ; use_full_commitment = true
-          (* We shouldn't have to care about whether it's a proof
-             or signature it's authorized by,
-             but unfortunately there is no way to do a "full commitment"
-             with a proof.
-             There is a circular dependency, in that the recipient
-             must confirm us, but we must also confirm
-             that the recipient is confirming us. *)
-        }
-      ; { public_key = deposit.recipient
-        ; token_id = Account_id.{ public_key = inner_pk, token_id = default }
-        ; app_state =
-          { next_deposit = action_state_before_deposit.length + 1
-          }
-        ; preconditions =
-          { app_state =
-            { next_deposit = Some prev_next_deposit
-            }
-          }
-        }
-      ]
-    }
-  ]
-
-let do_finalize_cancelled_deposit ~deposit ~actions_after_deposit ~action_state_before_deposit ~prev_next_cancelled_deposit =
-  assert check_accepted ~deposit ~actions_after_deposit = `Rejected ;
-  assert prev_next_cancelled_deposit <= action_state_before_deposit.length ;
-  let outer_action_state =
-    extend_action_state
-      ~source:action_state_before_deposit
-      ~actions:(Deposit deposit :: actions_after_deposit) in
-  [ { public_key = zeko_pk
-    ; preconditions =
-      { action_state = outer_action_state
-      }
-    ; balance_change = -deposit.amount
-    ; children =
-      [ { public_key = deposit.recipient
-        ; use_full_commitment = true
-        }
-      ; { public_key = deposit.recipient
-        ; token_id = Account_id.{ public_key = zeko_pk, token_id = default }
-        ; app_state =
-          { next_cancelled_deposit = action_state_before_deposit.length + 1
-          }
-        ; preconditions =
-          { app_state =
-            { next_cancelled_deposit = Some prev_next_cancelled_deposit
-            }
-          }
-        }
-      ]
-    }
-  ]
-
-val withdrawal_delay : nat
-
-let do_finalize_withdrawal ~withdrawal ~actions_after_withdrawal ~action_state_before_withdrawal ~prev_next_withdrawal ~commit ~actions_after_commit ~action_state_before_commit =
-  assert prev_next_withdrawal <= action_state_before_withdrawal.length ;
-  let inner_action_state =
-    extend_action_state
-      ~source:action_state_before_withdrawal
-      ~actions:(Withdraw withdrawal :: actions_after_withdrawal) in
-  let outer_action_state =
-    extend_action_state
-      ~source:action_state_before_commit
-      ~actions:(Commit commit :: actions_after_commit) in
-  [ { public_key = zeko_pk
-    ; preconditions =
-      { app_state = { inner_action_state }
-      ; valid_while = { lower = commit.valid_while.upper + withdrawal_delay ; upper = infinity }
-      ; action_state = outer_action_state
-      }
-    ; balance_change = -deposit.amount
-    ; children =
-      [ { public_key = withdrawal.recipient
-        ; use_full_commitment = true
-        }
-      ; { public_key = withdrawal.recipient
-        ; token_id = Account_id.{ public_key = zeko_pk, token_id = default }
-        ; app_state =
-          { next_withdrawal = action_state_before_withdrawal.length + 1
-          }
-        ; preconditions =
-          { app_state =
-            { next_withdrawal = Some prev_next_withdrawal
-            }
-          }
-        }
-      ]
-    }
-  ]
 ```
 
 ## Pseudo-code example spec for token transfer smart contract
@@ -725,8 +1015,8 @@ TODO: use fungible token standard contract
 val public_key : PublicKey.t
 val token_id : TokenId.t
 
-type token_deposit = { amount : nat ; recipient : PublicKey.t ; timeout : slot }
-type token_withdrawal = { amount : nat ; recipient : PublicKey.t }
+type deposit = { amount : nat ; recipient : PublicKey.t ; timeout : slot }
+type withdrawal = { amount : nat ; recipient : PublicKey.t }
 
 type token_outer_helper_state =
   { next_withdrawal : nat
@@ -737,7 +1027,7 @@ type token_inner_helper_state =
   { next_deposit : nat
   }
 
-let token_deposit_action ~(sender : PublicKey.t) (deposit : token_deposit) : outer_action =
+let deposit_action ~(sender : PublicKey.t) (deposit : deposit) : outer_action =
   let children =
     [ { account_id = token_id (* token owner *)
       ; children =
@@ -758,14 +1048,14 @@ let token_deposit_action ~(sender : PublicKey.t) (deposit : token_deposit) : out
   Match { data = deposit ; children }
 
 
-let do_token_deposit ~sender (deposit : token_deposit) =
+let do_deposit ~sender (deposit : deposit) =
   [ { public_key = zeko_pk
-    ; actions = [ token_deposit_action ~sender deposit ]
+    ; actions = [ deposit_action ~sender deposit ]
     ; children
     }
   ]
 
-let token_withdraw_action ~(sender : PublicKey.t) (withdrawal : token_withdrawal) : inner_action =
+let withdraw_action ~(sender : PublicKey.t) (withdrawal : withdrawal) : inner_action =
   let children =
     [ { public_key
       ; children =
@@ -779,20 +1069,20 @@ let token_withdraw_action ~(sender : PublicKey.t) (withdrawal : token_withdrawal
   in
   Match { data = withdrawal ; children }
 
-let do_token_withdrawal ~sender (withdrawal : token_withdrawal) =
+let do_withdrawal ~sender (withdrawal : withdrawal) =
   [ { public_key = inner_pk
-    ; actions = [ token_withdraw_action ~sender withdrawal ]
+    ; actions = [ withdraw_action ~sender withdrawal ]
     ; children
     }
   ]
 
-let do_finalize_token_deposit ~sender ~deposit ~actions_after_deposit ~action_state_before_deposit ~prev_next_deposit =
+let do_finalize_deposit ~sender ~deposit ~actions_after_deposit ~action_state_before_deposit ~prev_next_deposit =
   assert check_accepted ~deposit ~actions_after_deposit = `Accepted ;
   assert prev_next_deposit <= action_state_before_deposit.length ;
   let outer_action_state =
-    extend_action_state
-      ~source:action_state_before_deposit
-      ~actions:(token_deposit_action ~sender deposit :: actions_after_deposit) in
+    (deposit_action ~sender deposit :: actions_after_deposit)
+    ++ action_state_before_deposit
+  in
   [ { public_key
     ; children =
       [ { public_key = deposit.recipient
@@ -805,7 +1095,7 @@ let do_finalize_token_deposit ~sender ~deposit ~actions_after_deposit ~action_st
           }
         ; preconditions =
           { app_state =
-            { next_deposit = Some prev_next_deposit
+            { next_deposit = prev_next_deposit
             }
           }
         }
@@ -816,13 +1106,13 @@ let do_finalize_token_deposit ~sender ~deposit ~actions_after_deposit ~action_st
     }
   ]
 
-let do_finalize_cancelled_token_deposit ~sender ~deposit ~actions_after_deposit ~action_state_before_deposit ~prev_next_cancelled_deposit =
+let do_finalize_cancelled_deposit ~sender ~deposit ~actions_after_deposit ~action_state_before_deposit ~prev_next_cancelled_deposit =
   assert check_accepted ~deposit ~actions_after_deposit = `Rejected ;
   assert prev_next_cancelled_deposit <= action_state_before_deposit.length ;
   let outer_action_state =
-    extend_action_state
-      ~source:action_state_before_deposit
-      ~actions:(token_deposit_action ~sender deposit :: actions_after_deposit) in
+    (deposit_action ~sender deposit :: actions_after_deposit)
+    ++ action_state_before_deposit
+  in
   [ { account_id = token_id
     ; children =
       [ { public_key
@@ -858,18 +1148,18 @@ let do_finalize_cancelled_token_deposit ~sender ~deposit ~actions_after_deposit 
     }
   ]
 
-val token_withdrawal_delay : nat
+val withdrawal_delay : nat
 
-let do_finalize_token_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~action_state_before_withdrawal ~actions_after_commit ~action_state_before_commit ~commit ~prev_next_withdrawal =
+let do_finalize_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~action_state_before_withdrawal ~actions_after_commit ~action_state_before_commit ~commit ~prev_next_withdrawal =
   assert prev_next_withdrawal <= action_state_before_withdrawal.length ;
   let inner_action_state =
-    extend_action_state
-      ~source:action_state_before_withdrawal
-      ~actions:(token_withdraw_action ~sender withdrawal :: actions_after_withdrawal) in
+    actions_after_withdrawal
+    ++ withdraw_action ~sender withdrawal :: action_state_before_withdrawal
+  in
   let outer_action_state =
-    extend_action_state
-      ~source:action_state_before_commit
-      ~actions:(Commit commit :: actions_after_commit) in
+    actions_after_commit
+    ++ Commit commit :: action_state_before_commit
+  in
   [ { account_id = token_id
     ; children =
       [ { public_key
@@ -882,7 +1172,7 @@ let do_finalize_token_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~
               { action_state = outer_action_state
               ; app_state = { inner_action_state }
               ; valid_while =
-                { lower = commit.valid_while.upper + token_withdrawal_delay
+                { lower = commit.valid_while.upper + withdrawal_delay
                 ; upper = infinity }
               }
             }
