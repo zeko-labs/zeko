@@ -30,12 +30,52 @@ let attach_control : Account_update.Body.t -> Zkapp_call_forest.account_update =
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
+(** Converts a value to its constituent fields *)
+let value_to_fields (type var value) (typ : (var, value) Typ.t) (x : value) :
+    field array =
+  let (Typ typ) = typ in
+  let fields, _aux = typ.value_to_fields x in
+  fields
+
 (** Converts a variable to its constituent fields *)
 let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :
     Field.t array =
   let (Typ typ) = typ in
   let fields, _aux = typ.var_to_fields x in
   fields
+
+(** Converts a variable to its constituent field. Fails if typ doesn't fit. *)
+let var_to_field (type var value) (typ : (var, value) Typ.t) (x : var) : Field.t
+    =
+  let (Typ typ) = typ in
+  let fields, _aux = typ.var_to_fields x in
+  assert (Int.(Array.length fields = 1)) ;
+  fields.(0)
+
+(** Converts the fields back into a variable.
+    NB! The behavior is undefined if the variable carries
+        state beyond its constituent fields. *)
+let unsaf_var_of_fields (type var value) (typ : (var, value) Typ.t)
+    (fields : Field.t array) : var =
+  let (Typ typ) = typ in
+  let x = typ.var_of_fields (fields, typ.constraint_system_auxiliary ()) in
+  x
+
+(** Converts the fields back into a variable.
+    NB! The behavior is undefined if the variable carries
+        state beyond its constituent fields.
+        In this case you want to use a custom function
+        to recreate the state at proving time. *)
+let unsafe_var_of_fields (type var value) (typ : (var, value) Typ.t)
+    (fields : Field.t array) : var =
+  let (Typ typ) = typ in
+  let x = typ.var_of_fields (fields, typ.constraint_system_auxiliary ()) in
+  x
+
+let unsafe_var_of_app_state (type var value) (typ : (var, value) Typ.t)
+    (app_state : Field.t Zkapp_state.V.t) : var =
+  app_state |> Zkapp_state.V.to_list |> Array.of_list
+  |> unsafe_var_of_fields typ
 
 (** Default permissions for deployments *)
 let proof_permissions : Permissions.t =
@@ -132,7 +172,7 @@ let naive_hash_string_to_field (s : string) =
     @@ String.to_array s )
 
 (** Generic function for turning variables into 8 of something  *)
-let var_to_state (some : Field.t -> 'option) (none : 'option)
+let var_to_state_generic (some : Field.t -> 'option) (none : 'option)
     (typ : ('var, 'value) Typ.t) (x : 'var) : 'option Zkapp_state.V.t =
   let fields = var_to_fields typ x in
   assert (Array.length fields <= 8) ;
@@ -144,19 +184,54 @@ let var_to_state (some : Field.t -> 'option) (none : 'option)
 
 (** Used for turning variables into app state for updates *)
 let var_to_app_state typ x =
-  var_to_state Set_or_keep.Checked.set
+  var_to_state_generic Set_or_keep.Checked.set
     (Set_or_keep.Checked.keep ~dummy:Field.zero)
     typ x
 
 (** Used for turning variables into preconditions *)
-let var_to_precondition_state typ x =
-  var_to_state
+let var_to_precondition typ x =
+  var_to_state_generic
     (Or_ignore.Checked.make_unsafe Boolean.true_)
     (Or_ignore.Checked.make_unsafe Boolean.false_ Field.zero)
     typ x
 
-(** Same as var_to_state but for values *)
-let value_to_state (some : field -> 'option) (none : 'option)
+module Var_to_precondition_fine = struct
+  type t =
+    | [] : t
+    | (::) :
+        (('var, 't) Typ.t * 'var option) * t
+        -> t
+end
+
+let var_to_precondition_fine :
+    Var_to_precondition_fine.t -> Field.t Or_ignore.Checked.t Zkapp_state.V.t =
+  let rec go : Var_to_precondition_fine.t -> Field.t Or_ignore.Checked.t list =
+    function
+    | [] ->
+        []
+    | (typ, Some var) :: rest ->
+        List.append
+          ( var_to_fields typ var |> Array.to_list
+          |> List.map ~f:(Or_ignore.Checked.make_unsafe Boolean.true_) )
+          (go rest)
+    | (typ, None) :: rest ->
+        List.append
+          (let (Typ typ) = typ in
+           List.init typ.size_in_field_elements ~f:(fun _ -> ignore) )
+          (go rest)
+  in
+  fun x ->
+    let r = go x in
+    if List.length r > 8 then
+      failwith
+        "var_to_precondition_fine used with more than 8 fields, too big for \
+         zkapp state!"
+    else
+      let r' = List.(append r (init ~f:(fun _ -> ignore) (length r - 8))) in
+      Zkapp_state.V.of_list_exn r'
+
+(** Same as var_to_state_generic but for values *)
+let value_to_state_generic (some : field -> 'option) (none : 'option)
     (typ : ('var, 'value) Typ.t) (x : 'value) : 'option Zkapp_state.V.t =
   let (Typ typ) = typ in
   let fields, _aux = typ.value_to_fields x in
@@ -169,10 +244,10 @@ let value_to_state (some : field -> 'option) (none : 'option)
 
 (** "id" transformation, but if less than 8 fields, rest are turned into zero *)
 let value_to_init_state typ x =
-  value_to_state (fun f -> f) Field.Constant.zero typ x
+  value_to_state_generic (fun f -> f) Field.Constant.zero typ x
 
 let value_to_app_state typ x =
-  value_to_state (fun f -> Set_or_keep.Set f) Set_or_keep.Keep typ x
+  value_to_state_generic (fun f -> Set_or_keep.Set f) Set_or_keep.Keep typ x
 
 let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) : Actions.var =
   let empty_actions = Zkapp_account.Actions.(constant typ []) in
@@ -213,24 +288,25 @@ struct
   let typ : (var, t) Typ.t = V.typ ()
 end
 
+module type SnarkType = sig
+  type t
+
+  type var
+
+  val typ : (var, t) Typ.t
+end
+
 (** A list of `length` `t`s *)
-module SnarkList (T : sig
-  module T : sig
-    type t
-
-    type var
-
-    val typ : (var, t) Typ.t
-  end
-
-  val length : int
-end) =
+module SnarkList
+    (T : SnarkType) (Len : sig
+      val length : int
+    end) =
 struct
-  type t = T.T.t list
+  type t = T.t list
 
-  type var = T.T.var list
+  type var = T.var list
 
-  let typ : (var, t) Typ.t = Typ.list ~length:T.length T.T.typ
+  let typ : (var, t) Typ.t = Typ.list ~length:Len.length T.typ
 end
 
 (** Reference to Proof  *)
@@ -244,14 +320,7 @@ module Boolean = struct
 end
 
 (** Helper to construct snarky handler from type *)
-module MkHandler (Witness : sig
-  type t
-
-  type var
-
-  val typ : (var, t) Typ.t
-end) =
-struct
+module MkHandler (Witness : SnarkType) = struct
   open Snarky_backendless.Request
 
   type _ t += Witness : Witness.t t

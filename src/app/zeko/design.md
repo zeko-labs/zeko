@@ -594,7 +594,7 @@ val macroslot_size : nat (* probably around 1 day *)
 
 type macroslot = nat
 
-type commit = { ledger : ledger ; inner_action_state ; action_state ; macroslot : nat }
+type commit = { ledger : ledger ; inner_action_state : action_state ; sequencer : sequencer ; macroslot : macroslot ; bid_rate : nat ; valid_while : valid_while }
 type witness = { aux : field ; children : account_update_forest }
 
 type outer_action =
@@ -937,6 +937,10 @@ let do_commit
         }
       ; valid_while
       ; action_state
+      }
+    ; children =
+      { public_key = sequencer
+      ; use_full_commitment = true
       }
     }
   ]

@@ -47,15 +47,7 @@ module MkStep (N : sig
   val n : int
 end) =
 struct
-  module Actionss' = struct
-    module T = F
-    (* This should be treated as an instance of Actions,
-       however, Outside_hash_image.t is reserved, and is ignored *)
-
-    let length = N.n
-  end
-
-  module Actionss = SnarkList (Actionss')
+  module Actionss = SnarkList (F) (struct let length = N.n end)
 
   module Witness = struct
     type t = { actionss : Actionss.t; prev : T.t } [@@deriving snarky]
