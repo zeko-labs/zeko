@@ -6,6 +6,7 @@ open Mina_base
 open Mina_ledger
 open Signature_lib
 module L = Ledger
+module Field = Snark_params.Tick.Field
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -20,6 +21,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; zkapp_pk : Public_key.Compressed.t
       ; signer : Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
+      ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; network_id : string
       }
   end
@@ -291,10 +293,20 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                       Option.value_exn t.state.previous_committed_ledger
                     in
                     let new_inner_ledger = target_ledger in
+                    let%bind new_deposits =
+                      let old_deposits_state =
+                        Utils.get_inner_deposits_state_exn
+                          (module M)
+                          old_inner_ledger
+                      in
+                      Gql_client.fetch_transfers t.config.archive_uri
+                        ~from_action_state:old_deposits_state t.config.zkapp_pk
+                    in
                     let%bind account_update =
                       M.Outer.step
                         (Option.value_exn t.state.last)
-                        ~outer_public_key:t.config.zkapp_pk ~new_deposits:[]
+                        ~outer_public_key:t.config.zkapp_pk
+                        ~new_deposits:(List.map new_deposits ~f:fst)
                         ~unprocessed_deposits:[] ~old_inner_ledger
                         ~new_inner_ledger
                     in
@@ -676,38 +688,56 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           | _ ->
               failwith "Invalid command" )
 
-  (* let apply_deposits t =
-     let%bind inner_account_update =
-       M.Inner.step ~all_deposits:Zkapp_account.Actions.empty_state_element
-     in
-     let fee = Currency.Fee.of_mina_int_exn 0 in
-     let command : Zkapp_command.t =
-       { fee_payer =
-           (* Setting public_key to empty results in a dummy fee payer with public key near 123456789 (dumb). *)
-           (* FIXME: Do this a better way without hard-coding values. *)
-           { Account_update.Fee_payer.body =
-               { public_key = Public_key.Compressed.empty
-               ; fee
-               ; valid_until = None
-               ; nonce = Account.Nonce.zero
-               }
-           ; authorization = Signature.dummy
-           }
-       ; account_updates =
-           Zkapp_command.Call_forest.cons_tree inner_account_update []
-       ; memo = Signed_command_memo.empty
-       }
-     in
-     let _, command_witness =
-       Result.ok_exn
-       @@ Result.map_error ~f:Error.to_exn
-       @@ apply_user_command t (Zkapp_command command)
-     in
-     Snark_queue.enqueue_prove_command t.snark_q command_witness *)
+  let update_inner_account t =
+    let old_all_deposits =
+      Utils.get_inner_deposits_state_exn
+        (module M)
+        (Sparse_ledger.of_ledger_subset_exn
+           L.(of_database t.db)
+           [ M.Inner.account_id ] )
+    in
+    let%bind all_deposits =
+      Gql_client.fetch_action_state t.config.l1_uri t.config.zkapp_pk
+    in
+    if Field.equal old_all_deposits all_deposits then return ()
+    else
+      let%bind inner_account_update = M.Inner.step ~all_deposits in
+      let fee = Currency.Fee.of_mina_int_exn 0 in
+      let command : Zkapp_command.t =
+        { fee_payer =
+            (* Setting public_key to empty results in a dummy fee payer with public key near 123456789 (dumb). *)
+            (* FIXME: Do this a better way without hard-coding values. *)
+            { Account_update.Fee_payer.body =
+                { public_key = Public_key.Compressed.empty
+                ; fee
+                ; valid_until = None
+                ; nonce = Account.Nonce.zero
+                }
+            ; authorization = Signature.dummy
+            }
+        ; account_updates =
+            Zkapp_command.Call_forest.cons_tree inner_account_update []
+        ; memo = Signed_command_memo.empty
+        }
+      in
+      let%bind command_witness =
+        match%bind apply_user_command t (Zkapp_command command) with
+        | Ok (status, witness) -> (
+            match L.Transaction_applied.transaction_status status with
+            | Applied ->
+                return witness
+            | Failed failure ->
+                failwithf
+                  !"Failed to apply inner account update \
+                    %{sexp:Transaction_status.Failure.Collection.t}"
+                  failure () )
+        | Error e ->
+            Error.raise e
+      in
+      Snark_queue.enqueue_prove_command t.snark_q command_witness
 
   let commit t =
-    (* FIXME: disable only for internal MVP *)
-    (* let%bind () = apply_deposits t in *)
+    let%bind () = update_inner_account t in
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.db)
@@ -809,7 +839,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
-      ~da_quorum ~db_dir ~l1_uri ~signer ~network_id =
+      ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~network_id =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -820,6 +850,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         ; commitment_period_sec
         ; db_dir
         ; l1_uri
+        ; archive_uri
         ; zkapp_pk
         ; signer
         ; network_id
@@ -997,8 +1028,8 @@ let%test_module "Sequencer tests" =
                 ~zkapp_pk:
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                 ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
-                ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~signer
-                ~network_id:"testnet" )
+                ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
+                ~signer ~network_id:"testnet" )
         in
 
         Quickcheck.Generator.return
@@ -1246,8 +1277,8 @@ let%test_module "Sequencer tests" =
                   ~zkapp_pk:
                     Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                   ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
-                  ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~signer
-                  ~network_id:"testnet"
+                  ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
+                  ~signer ~network_id:"testnet"
               in
               return
               @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)

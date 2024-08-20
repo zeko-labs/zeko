@@ -2,6 +2,7 @@ open Core_kernel
 open Async_kernel
 open Mina_base
 open Init
+module Field = Snark_params.Tick.Field
 
 let fetch_nonce uri pk =
   let q =
@@ -27,6 +28,103 @@ let fetch_nonce uri pk =
   let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.Util.(result |> member "account" |> member "nonce" |> to_string)
   |> Int.of_string |> Unsigned.UInt32.of_int
+
+let fetch_action_state uri pk =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!) {
+              account(publicKey: $pk){
+                actionState
+              }
+            } 
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
+            )
+          ]
+    end
+  in
+  let%map result = Graphql_client.query_json_exn q uri in
+  Yojson.Safe.Util.(
+    result |> member "account" |> member "actionState" |> index 0 |> to_string)
+  |> Field.of_string
+
+let fetch_transfers uri ?from_action_state pk =
+  let ok_exn = function
+    | Ppx_deriving_yojson_runtime.Result.Ok x ->
+        x
+    | Error e ->
+        failwith e
+  in
+  let module M = struct
+    type action_data = { data : string list } [@@deriving yojson]
+
+    type block_info = { height : int } [@@deriving yojson]
+
+    type action = { actionData : action_data list; blockInfo : block_info }
+    [@@deriving yojson]
+
+    type actions = { actions : action list } [@@deriving yojson]
+  end in
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!) {
+              actions(input: {address: $pk, fromActionState: $fromActionState}) {
+                actionData {
+                  data
+                }
+                blockInfo {
+                  height
+                }
+              }
+            } 
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
+            )
+          ; ( "fromActionState"
+            , match from_action_state with
+              | Some from ->
+                  `String (Field.to_string from)
+              | None ->
+                  `Null )
+          ]
+    end
+  in
+  let%map result = Graphql_client.query_json_exn q uri in
+  let result = M.actions_of_yojson result |> ok_exn in
+  List.map result.actions ~f:(fun { actionData; blockInfo } ->
+      let block_height = blockInfo.height in
+      List.map actionData ~f:(fun { data } ->
+          let amount = List.nth_exn data 0 in
+          let public_key_x = List.nth_exn data 1 in
+          let is_odd = List.nth_exn data 2 |> Int.of_string in
+          ( Zkapps_rollup.TR.
+              { amount = Currency.Amount.of_string amount
+              ; recipient =
+                  Signature_lib.Public_key.Compressed.
+                    { x = Field.of_string public_key_x
+                    ; is_odd = (match is_odd with 0 -> false | _ -> true)
+                    }
+              }
+          , block_height ) ) )
+  |> List.join
+
+(* stiahnut transfery a pridat to outer.step *)
+(* pustit inner.step *)
+(* exposnut api na posielanie withdrawalov a provovanie depositov *)
 
 let fetch_pooled_zkapp_commands uri pk =
   let q =
