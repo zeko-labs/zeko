@@ -951,6 +951,32 @@ module Types = struct
           ] )
   end
 
+  let block : (State.t, Unsigned.uint32 option) typ =
+    let consensus_state =
+      obj "ConsensusState" ~fields:(fun _ ->
+          [ field "blockHeight" ~typ:(non_null length)
+              ~doc:"Height of the blockchain at this block"
+              ~args:Arg.[]
+              ~resolve:(fun _ asd -> asd)
+          ] )
+    in
+    let protocol_state =
+      obj "ProtocolState" ~fields:(fun _ ->
+          [ field "consensusState"
+              ~doc:
+                "State specific to the minaboros Proof of Stake consensus \
+                 algorithm"
+              ~typ:(non_null @@ consensus_state)
+              ~args:Arg.[]
+              ~resolve:(fun _ -> Fn.id)
+          ] )
+    in
+    obj "Block" ~fields:(fun _ ->
+        [ field "protocolState" ~typ:(non_null protocol_state)
+            ~args:Arg.[]
+            ~resolve:(fun _ -> Fn.id)
+        ] )
+
   module Payload = struct
     let send_payment =
       obj "SendPaymentPayload" ~fields:(fun _ ->
@@ -1783,6 +1809,31 @@ module Queries = struct
                | _ ->
                    None ) )
 
+  let best_chain =
+    io_field "bestChain"
+      ~doc:
+        "Retrieve a list of blocks from transition frontier's root to the \
+         current best tip. Returns an error if the system is bootstrapping."
+      ~typ:(list @@ non_null Types.block)
+      ~args:
+        Arg.
+          [ arg "maxLength"
+              ~doc:
+                "The maximum number of blocks to return. If there are more \
+                 blocks in the transition frontier from root to tip, the n \
+                 blocks closest to the best tip will be returned"
+              ~typ:int
+          ]
+      ~resolve:(fun { ctx = state; _ } () max_length ->
+        let block_length =
+          Ok (Some [ Unsigned.UInt32.of_int state.block_height ])
+        in
+        match max_length with
+        | Some 1 | None ->
+            return block_length
+        | _ ->
+            return (Error "Supported only maxLength of 1") )
+
   module Archive = struct
     let actions =
       field "actions"
@@ -1825,6 +1876,7 @@ module Queries = struct
     ; zkapp_command
     ; pooled_user_commands
     ; pooled_zkapp_commands
+    ; best_chain
     ]
     @ Archive.commands
 end

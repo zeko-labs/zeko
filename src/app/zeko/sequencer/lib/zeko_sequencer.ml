@@ -23,6 +23,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; network_id : string
+      ; deposit_delay_blocks : int
       }
   end
 
@@ -314,6 +315,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                       Option.value_exn t.state.previous_committed_ledger
                     in
                     let new_inner_ledger = target_ledger in
+
                     let%bind new_deposits =
                       let old_deposits_state =
                         Utils.get_inner_deposits_state_exn
@@ -323,12 +325,27 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                       Gql_client.fetch_transfers t.config.archive_uri
                         ~from_action_state:old_deposits_state t.config.zkapp_pk
                     in
+                    let%bind current_height =
+                      Gql_client.fetch_block_height t.config.l1_uri
+                    in
+                    let split_new_deposits_for_delay current_height =
+                      List.fold ~init:([], [])
+                        ~f:(fun (processed, skipped) (transfer, block_height) ->
+                          if
+                            block_height + t.config.deposit_delay_blocks
+                            <= current_height
+                          then (transfer :: processed, skipped)
+                          else (processed, transfer :: skipped) )
+                    in
+                    let new_deposits, unprocessed_deposits =
+                      split_new_deposits_for_delay current_height new_deposits
+                    in
+
                     let%bind account_update =
                       M.Outer.step
                         (Option.value_exn t.state.last)
-                        ~outer_public_key:t.config.zkapp_pk
-                        ~new_deposits:(List.map new_deposits ~f:fst)
-                        ~unprocessed_deposits:[] ~old_inner_ledger
+                        ~outer_public_key:t.config.zkapp_pk ~new_deposits
+                        ~unprocessed_deposits ~old_inner_ledger
                         ~new_inner_ledger
                     in
                     let command : Zkapp_command.t =
@@ -860,7 +877,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
-      ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~network_id =
+      ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~network_id
+      ~deposit_delay_blocks =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -875,6 +893,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         ; zkapp_pk
         ; signer
         ; network_id
+        ; deposit_delay_blocks
         }
     in
     let da_client =
@@ -1050,7 +1069,7 @@ let%test_module "Sequencer tests" =
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                 ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
                 ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
-                ~signer ~network_id:"testnet" )
+                ~signer ~network_id:"testnet" ~deposit_delay_blocks:0 )
         in
 
         Quickcheck.Generator.return
@@ -1299,7 +1318,7 @@ let%test_module "Sequencer tests" =
                     Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                   ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
                   ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
-                  ~signer ~network_id:"testnet"
+                  ~signer ~network_id:"testnet" ~deposit_delay_blocks:0
               in
               return
               @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)

@@ -6,7 +6,7 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-    ~db_dir ~l1_uri ~archive_uri ~signer ~network_id () =
+    ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks () =
   let (module T), (module M) = Lazy.force Zeko_sequencer.prover_modules in
   let module Sequencer = Zeko_sequencer.Make (T) (M) in
   let module Gql = Gql.Make (T) (M) (Sequencer) in
@@ -20,6 +20,7 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
         Sequencer.create ~logger:(Logger.create ()) ~zkapp_pk ~max_pool_size
           ~da_config ~da_quorum ~db_dir:(Some db_dir) ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~network_id
+          ~deposit_delay_blocks
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
@@ -78,6 +79,10 @@ let () =
        flag "--network-id"
          (optional_with_default "testnet" string)
          ~doc:"string Network id"
+     and deposit_delay_blocks =
+       flag "--deposit-delay-blocks"
+         (optional_with_default 5 int)
+         ~doc:"int Number of blocks to wait before processing deposits"
      in
      let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in
@@ -89,5 +94,5 @@ let () =
          { value = Uri.of_string archive_uri; name = "archive-uri" }
      in
      run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-       ~db_dir ~l1_uri ~archive_uri ~signer ~network_id )
+       ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks )
   |> Command_unix.run
