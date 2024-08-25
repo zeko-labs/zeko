@@ -1,15 +1,13 @@
 open Async_kernel
+(*
 open Mina_base
 open Signature_lib
 open Snark_params.Tick
 open Zeko_util
+*)
 
 module type S = sig
   type t
-
-  module TR : sig
-    type t
-  end
 
   module Wrapper : sig
     (** Wrap a ledger transition.
@@ -28,6 +26,8 @@ module type S = sig
     (** Merge two wrapped ledger transitions, they must connect or this will fail. *)
     val merge : t -> t -> t Deferred.t
   end
+    
+  (*
 
   module Inner : sig
     val vk : Pickles.Side_loaded.Verification_key.t
@@ -91,9 +91,12 @@ module type S = sig
     (** Create an account update update for deploying the zkapp, given a ledger hash for it. If ledger hash is invalid rollup will be borked. *)
     val unsafe_deploy : Ledger_hash.t -> Account_update.Update.t
   end
+  
+  *)
 end
 
 module type Intf = sig
+  (*
   type t [@@deriving yojson]
 
   val source_ledger : t -> Frozen_ledger_hash.t
@@ -132,4 +135,5 @@ module type Intf = sig
 
   (** Public key of inner account, closest point to 123456789 *)
   val inner_public_key : Public_key.Compressed.t
+  *)
 end

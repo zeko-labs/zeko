@@ -7,16 +7,9 @@ end
 
 type t [@@deriving snarky]
 
-val statement_var : var -> Stmt.var
+val get : ?check:Boolean.var -> var -> Stmt.var * (Stmt.var, Pickles_types.Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t
 
 val statement : t -> Stmt.t
-
-val verify :
-     ?check:Boolean.var
-  -> var
-  -> ( Stmt.var
-     , Pickles_types.Nat.N2.n )
-     Pickles.Inductive_rule.Previous_proof_statement.t
 
 val tag :
   ( Stmt.var

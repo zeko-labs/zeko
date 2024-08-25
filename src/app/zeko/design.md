@@ -647,8 +647,12 @@ let do_bid ~rate ~start ~stop ~valid_while =
     ; preconditions = { valid_while }
     ; children =
       [ { account_id = zeko_token_owner
-        ; public_key = zeko_pk
-        ; 
+        ; children =
+          [ { token_id = zeko_token_owner
+            ; public_key = zeko_pk
+            ; balance_change = rate
+            }
+          ]
         }
       ]
     }

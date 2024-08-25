@@ -1,68 +1,6 @@
 (env (_ (flags (:standard -w @a-42-40-44-70-45-41-9))))
 
 (library
- (name zeko_util)
- (libraries
-  ;; opam libraries
-  base
-  core_kernel
-  async_kernel
-  ;; local libraries
-  allocation_functor
-  base58_check
-  block_time
-  cache_dir
-  crypto_params
-  currency
-  consensus
-  genesis_ledger
-  staged_ledger_diff
-  data_hash_lib
-  fields_derivers
-  fields_derivers_zkapps
-  genesis_constants
-  hash_prefixes
-  h_list
-  logger
-  mina_base
-  mina_base.import
-  mina_ledger
-  mina_numbers
-  mina_signature_kind
-  mina_state
-  mina_transaction
-  mina_transaction_logic
-  mina_wire_types
-  pasta_bindings
-  pickles
-  pickles.backend
-  pickles_base
-  pickles.limb_vector
-  pickles_types
-  ppx_version.runtime
-  random_oracle
-  random_oracle_input
-  sgn
-  signature_lib
-  snark_keys_header
-  snark_params
-  snarky.backendless
-  sponge
-  transaction_snark
-  tuple_lib
-  unsigned_extended
-  with_hash
-  outside_hash_image
-  zkapps_examples)
- (inline_tests)
- (instrumentation
-  (backend bisect_ppx))
- (preprocess
-  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules zeko_util)
- )
- 
-(library
  (name zkapps_rollup)
  (libraries
   ;; opam libraries
@@ -115,12 +53,12 @@
   unsigned_extended
   with_hash
   outside_hash_image
-  zeko_util)
+  )
  (inline_tests)
  (instrumentation
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules action_state_extension wrapper zkapps_rollup zkapps_rollup_intf)
+ (modules zeko_util macroslot folder action_state_extension wrapper zkapps_rollup zkapps_rollup_intf)
  (modules_without_implementation zkapps_rollup_intf)
  )

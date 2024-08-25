@@ -123,28 +123,50 @@ type call_forest_tree =
   , Zkapp_command.Digest.Forest.t )
   Zkapp_command.Call_forest.Tree.t
 
+module Calls = struct
+  type t = [] | ( :: ) of (Account_update.Checked.t * t) * t
+end
+
 (** Given calls the zkapp wishes to make, constructs output that can be used to construct a full account update *)
-let make_outputs account_update calls =
-  let account_update_digest =
-    Zkapp_command.Call_forest.Digest.Account_update.Checked.create
-      account_update
+let make_outputs :
+       Account_update.Checked.t
+    -> Calls.t
+    -> Zkapp_statement.Checked.t
+       * ( Account_update.Body.t
+         * Zkapp_command.Digest.Account_update.t
+         * call_forest )
+         V.t =
+  let rec create_call_forest : Calls.t -> Zkapp_call_forest.Checked.t = function
+    | [] ->
+        Zkapp_call_forest.Checked.empty ()
+    | (account_update, nested_calls) :: tail ->
+        Zkapp_call_forest.Checked.push
+          ~account_update:(attach_control_var account_update)
+          ~calls:(create_call_forest nested_calls)
+          (create_call_forest tail)
   in
-  let public_output : Zkapp_statement.Checked.t =
-    { account_update = (account_update_digest :> Field.t)
-    ; calls = (Zkapp_call_forest.Checked.hash calls :> Field.t)
-    }
-  in
-  let auxiliary_output =
-    Prover_value.create (fun () ->
-        let account_update = As_prover.read (Body.typ ()) account_update in
-        let account_update_digest =
-          As_prover.read Zkapp_command.Call_forest.Digest.Account_update.typ
-            account_update_digest
-        in
-        let calls = Prover_value.get calls.data in
-        (account_update, account_update_digest, calls) )
-  in
-  (public_output, auxiliary_output)
+  fun account_update calls ->
+    let calls = create_call_forest calls in
+    let account_update_digest =
+      Zkapp_command.Call_forest.Digest.Account_update.Checked.create
+        account_update
+    in
+    let public_output : Zkapp_statement.Checked.t =
+      { account_update = (account_update_digest :> Field.t)
+      ; calls = (Zkapp_call_forest.Checked.hash calls :> Field.t)
+      }
+    in
+    let auxiliary_output =
+      Prover_value.create (fun () ->
+          let account_update = As_prover.read (Body.typ ()) account_update in
+          let account_update_digest =
+            As_prover.read Zkapp_command.Call_forest.Digest.Account_update.typ
+              account_update_digest
+          in
+          let calls = Prover_value.get calls.data in
+          (account_update, account_update_digest, calls) )
+    in
+    (public_output, auxiliary_output)
 
 (** Takes output from make_outputs and makes it usable *)
 let mktree (account_update, account_update_digest, calls) proof =
@@ -196,11 +218,7 @@ let var_to_precondition typ x =
     typ x
 
 module Var_to_precondition_fine = struct
-  type t =
-    | [] : t
-    | (::) :
-        (('var, 't) Typ.t * 'var option) * t
-        -> t
+  type t = [] : t | ( :: ) : (('var, 't) Typ.t * 'var option) * t -> t
 end
 
 let var_to_precondition_fine :
@@ -382,3 +400,39 @@ let assert_var_checked label expr =
 
 let ref_of_v (x : 'a V.t) : 'a As_prover.Ref.t =
   As_prover.Ref.create (fun () -> V.get x)
+
+let default_account_update =
+  let dummy' = { Body.dummy with use_full_commitment = true } in
+  constant (Body.typ ()) dummy'
+
+let if_var : ('var, 't) Typ.t -> Boolean.var -> then_:'var -> else_:'var -> 'var
+    =
+ fun (Typ typ) cond ~then_ ~else_ ->
+  let then_fields, then_aux = typ.var_to_fields then_ in
+  let else_fields, else_aux = typ.var_to_fields else_ in
+  let fields =
+    Array.zip_exn then_fields else_fields
+    |> Array.map ~f:(fun (then_, else_) -> Field.if_ cond ~then_ ~else_)
+  in
+  let aux =
+    if As_prover.in_prover_block () then
+      if As_prover.read Boolean.typ cond then then_aux else else_aux
+    else typ.constraint_system_auxiliary ()
+  in
+  typ.var_of_fields (fields, aux)
+
+module Slot = struct
+  include Mina_numbers.Global_slot_since_genesis
+
+  type var = Checked.t
+end
+
+module Slot_range = struct
+  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky]
+
+  module Checked = struct
+    let to_valid_while (t : var) : Zkapp_precondition.Valid_while.Checked.t =
+      Or_ignore.Checked.make_unsafe Boolean.true_
+        { Zkapp_precondition.Closed_interval.lower = t.lower; upper = t.upper }
+  end
+end

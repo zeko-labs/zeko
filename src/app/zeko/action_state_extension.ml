@@ -20,8 +20,8 @@ module T = struct
   [@@deriving snarky]
 
   (* Do some checking here to avoid having two create unnecessary proofs, see issue #101 *)
-  let verify ?check ({ source; target; proof } : var) :
-      (Stmt.var, Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t =
+  let get ?check ({ source; target; proof } : var) :
+      Stmt.var * (Stmt.var, Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t =
     let proof_must_verify = Boolean.not (Field.equal source target) in
     let proof_must_verify =
       match check with
@@ -30,12 +30,10 @@ module T = struct
       | None ->
           proof_must_verify
     in
-    { public_input = { source; target }
+    ({ source ; target}, { public_input = { source; target }
     ; proof_must_verify (* Don't check proof if source == target *)
     ; proof = ref_of_v proof
-    }
-
-  let statement_var ({ source; target } : var) : Stmt.var = { source; target }
+    })
 
   let statement ({ source; target } : t) : Stmt.t = { source; target }
 end
@@ -64,7 +62,8 @@ struct
          ~f:(fun _ -> Outside_hash_image.t) )
 
   let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-    let Witness.{ actionss; prev = { source } as prev } = exists_witness () in
+    let Witness.{ actionss; prev } = exists_witness () in
+    let ({ source ; _ } : Stmt.var), verify = get prev in
     let f actions target' =
       (* Bad unsafe use, with mismatching data and hash, but it works *)
       let actions' =
@@ -78,7 +77,7 @@ struct
     in
     let target' = List.fold_right ~init:source ~f actionss in
     Pickles.Inductive_rule.
-      { previous_proof_statements = [ verify prev ]
+      { previous_proof_statements = [ verify ]
       ; public_output = Stmt.{ source; target = target' }
       ; auxiliary_output = ()
       }
@@ -101,9 +100,11 @@ module Merge = struct
 
   let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
     let Witness.{ left; right } = exists_witness () in
+    let left, verify_left = get left in
+    let right, verify_right = get right in
     Field.Assert.equal left.target right.source ;
     Pickles.Inductive_rule.
-      { previous_proof_statements = [ verify left; verify right ]
+      { previous_proof_statements = [ verify_left; verify_right ]
       ; public_output = Stmt.{ source = left.source; target = right.target }
       ; auxiliary_output = ()
       }
