@@ -736,6 +736,7 @@ let do_switch_sequencer
         ; bid_rate = old_rate
         ; finalized = true
         }
+      ; action_state
       ; valid_while =
         { lower = macroslot_lower (macroslot - 1)
           (* We allow using this in the previous macroslot too,
