@@ -59,6 +59,6 @@
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules zeko_util macroslot folder action_state_extension wrapper zkapps_rollup zkapps_rollup_intf)
+ (modules rule_commit rule_peaceful_transfer rule_submit_bid outer rule_inner_sync inner macroslot action_state_extension zkapps_rollup zkapps_rollup_intf folder zeko_util)
  (modules_without_implementation zkapps_rollup_intf)
  )

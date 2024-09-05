@@ -1,15 +1,16 @@
-open Snark_params.Tick
-open Zeko_util
+[@@@warning "-67"]
 
-module Stmt : sig
-  type t = { source : F.t; target : F.t } [@@deriving show, snarky]
+open Zeko_util
+open Snark_params.Tick
+
+module Action_state : sig
+  type t = { action_state : F.t } [@@deriving snarky]
 end
 
-type t [@@deriving snarky]
-
-val get : ?check:Boolean.var -> var -> Stmt.var * (Stmt.var, Pickles_types.Nat.N2.n) Pickles.Inductive_rule.Previous_proof_statement.t
-
-val statement : t -> Stmt.t
+module Stmt : sig
+  type t = { source : Action_state.t; target : Action_state.t }
+  [@@deriving snarky]
+end
 
 val tag :
   ( Stmt.var
@@ -19,10 +20,22 @@ val tag :
   Pickles.Tag.t
   lazy_t
 
-val prove :
-     ?dummy:bool
-  -> source:F.t
-  -> Mina_base.Zkapp_account.Actions.t list (** head newest, tail oldest *)
-  -> t Async_kernel.Deferred.t
+module Make : functor
+  (Inputs : sig
+     val get_iterations : int
+   end)
+  -> sig
+  include SnarkType
 
-val merge : t -> t -> t Async_kernel.Deferred.t
+  val get :
+       ?check:Boolean.var
+    -> var
+    -> ( Stmt.var
+       * ( Stmt.var
+         , Pickles_types.Nat.N2.n )
+         Pickles.Inductive_rule.Previous_proof_statement.t )
+       Checked.t
+
+  val prove :
+    Action_state.t -> Mina_base.Zkapp_account.Actions.t list -> t Async.Deferred.t
+end
