@@ -50,8 +50,8 @@ let get_state_transition pk command =
 
 let get_inner_deposits_state_exn (module M : Zkapps_rollup.S) l =
   let (old_deposits_commit :: _) =
-    let idx = Mina_ledger.Sparse_ledger.find_index_exn l M.Inner.account_id in
-    let inner_acc = Mina_ledger.Sparse_ledger.get_exn l idx in
+    let idx = Mina_ledger.Ledger.index_of_account_exn l M.Inner.account_id in
+    let inner_acc = Mina_ledger.Ledger.get_at_index_exn l idx in
     (Option.value_exn inner_acc.zkapp).app_state
   in
   old_deposits_commit

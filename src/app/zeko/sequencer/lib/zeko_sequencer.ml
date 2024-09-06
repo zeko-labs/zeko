@@ -293,7 +293,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           Transfers_memory.add t.transfers_memory key forest ;
           return () )
 
-    let enqueue_prove_commit t ~target_ledger =
+    let enqueue_prove_commit t ~target_ledger ~old_deposits_pointer
+        ~processed_deposits_pointer =
       enqueue t (fun () ->
           match List.is_empty t.state.staged_commands with
           | true ->
@@ -315,32 +316,21 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                       Option.value_exn t.state.previous_committed_ledger
                     in
                     let new_inner_ledger = target_ledger in
-
+                    (* FIXME: we've fetched these already in [commit], unprocessed could have changed though
+                       so we should only fetch the potentially new deposits *)
                     let%bind new_deposits =
-                      let old_deposits_state =
-                        Utils.get_inner_deposits_state_exn
-                          (module M)
-                          old_inner_ledger
-                      in
                       Gql_client.fetch_transfers t.config.archive_uri
-                        ~from_action_state:old_deposits_state t.config.zkapp_pk
+                        ~from_action_state:old_deposits_pointer
+                        ~end_action_state:processed_deposits_pointer
+                        t.config.zkapp_pk
+                      |> Deferred.map ~f:(List.map ~f:fst)
                     in
-                    let%bind current_height =
-                      Gql_client.fetch_block_height t.config.l1_uri
+                    let%bind unprocessed_deposits =
+                      Gql_client.fetch_transfers t.config.archive_uri
+                        ~from_action_state:processed_deposits_pointer
+                        t.config.zkapp_pk
+                      |> Deferred.map ~f:(List.map ~f:fst)
                     in
-                    let split_new_deposits_for_delay current_height =
-                      List.fold ~init:([], [])
-                        ~f:(fun (processed, skipped) (transfer, block_height) ->
-                          if
-                            block_height + t.config.deposit_delay_blocks
-                            <= current_height
-                          then (transfer :: processed, skipped)
-                          else (processed, transfer :: skipped) )
-                    in
-                    let new_deposits, unprocessed_deposits =
-                      split_new_deposits_for_delay current_height new_deposits
-                    in
-
                     let%bind account_update =
                       M.Outer.step
                         (Option.value_exn t.state.last)
@@ -727,19 +717,30 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
               failwith "Invalid command" )
 
   let update_inner_account t =
-    let old_all_deposits =
-      Utils.get_inner_deposits_state_exn
-        (module M)
-        (Sparse_ledger.of_ledger_subset_exn
-           L.(of_database t.db)
-           [ M.Inner.account_id ] )
+    let old_deposits_state =
+      Utils.get_inner_deposits_state_exn (module M) (L.of_database t.db)
     in
-    let%bind all_deposits =
-      Gql_client.fetch_action_state t.config.l1_uri t.config.zkapp_pk
+    let%bind new_deposits =
+      Gql_client.fetch_transfers t.config.archive_uri
+        ~from_action_state:old_deposits_state t.config.zkapp_pk
     in
-    if Field.equal old_all_deposits all_deposits then return ()
+    let%bind current_height = Gql_client.fetch_block_height t.config.l1_uri in
+    (* Find pointer for deposits to be processed *)
+    let processed_pointer =
+      List.fold new_deposits ~init:old_deposits_state
+        ~f:(fun curr_state (transfer, block_height) ->
+          if block_height + t.config.deposit_delay_blocks <= current_height then
+            Zkapp_account.Actions.push_events curr_state
+              (Zkapps_rollup.TR.to_actions transfer)
+          else curr_state )
+    in
+    if Field.equal old_deposits_state processed_pointer then
+      (* In case no new deposits are to process, we don't need to update inner account *)
+      return (old_deposits_state, old_deposits_state)
     else
-      let%bind inner_account_update = M.Inner.step ~all_deposits in
+      let%bind inner_account_update =
+        M.Inner.step ~all_deposits:processed_pointer
+      in
       let fee = Currency.Fee.of_mina_int_exn 0 in
       let command : Zkapp_command.t =
         { fee_payer =
@@ -772,10 +773,13 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         | Error e ->
             Error.raise e
       in
-      Snark_queue.enqueue_prove_command t.snark_q command_witness
+      let%bind () =
+        Snark_queue.enqueue_prove_command t.snark_q command_witness
+      in
+      return (old_deposits_state, processed_pointer)
 
   let commit t =
-    let%bind () = update_inner_account t in
+    let%bind old_deposits_pointer, processed_pointer = update_inner_account t in
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.db)
@@ -783,6 +787,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     in
     Subscriptions.clear_staged_diffs t.subscriptions ;
     Snark_queue.enqueue_prove_commit t.snark_q ~target_ledger
+      ~old_deposits_pointer ~processed_deposits_pointer:processed_pointer
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()

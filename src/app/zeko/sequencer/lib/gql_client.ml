@@ -55,7 +55,7 @@ let fetch_action_state uri pk =
     result |> member "account" |> member "actionState" |> index 0 |> to_string)
   |> Field.of_string
 
-let fetch_transfers uri ?from_action_state pk =
+let fetch_transfers uri ?from_action_state ?end_action_state pk =
   let ok_exn = function
     | Ppx_deriving_yojson_runtime.Result.Ok x ->
         x
@@ -78,7 +78,13 @@ let fetch_transfers uri ?from_action_state pk =
         String.substr_replace_all ~pattern:"\n" ~with_:" "
           {|
             query ($pk: PublicKey!) {
-              actions(input: {address: $pk, fromActionState: $fromActionState}) {
+              actions(
+                input: {
+                  address: $pk
+                  fromActionState: $fromActionState
+                  endActionState: $endActionState
+                }
+              ) {
                 actionData {
                   data
                 }
@@ -98,6 +104,12 @@ let fetch_transfers uri ?from_action_state pk =
             , match from_action_state with
               | Some from ->
                   `String (Field.to_string from)
+              | None ->
+                  `Null )
+          ; ( "endActionState"
+            , match end_action_state with
+              | Some end_ ->
+                  `String (Field.to_string end_)
               | None ->
                   `Null )
           ]
