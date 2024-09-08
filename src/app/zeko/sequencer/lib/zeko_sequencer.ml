@@ -305,60 +305,39 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
               match%bind
                 try_with (fun () ->
-                    let%bind _signatures =
+                    let%bind signatures =
                       Da_layer.Client.Sequencer.get_signatures t.da_client
                         ~ledger_hash:(Sparse_ledger.merkle_root target_ledger)
+                      |> Deferred.map ~f:(fun x -> Option.value_exn x)
                     in
                     printf "Received %d signatures from da layer\n%!"
-                      (List.length @@ Option.value_exn _signatures) ;
+                      (List.length signatures) ;
 
                     let old_inner_ledger =
                       Option.value_exn t.state.previous_committed_ledger
                     in
                     let new_inner_ledger = target_ledger in
-                    (* FIXME: we've fetched these already in [commit], unprocessed could have changed though
-                       so we should only fetch the potentially new deposits *)
-                    let%bind new_deposits =
-                      Gql_client.fetch_transfers t.config.archive_uri
-                        ~from_action_state:old_deposits_pointer
-                        ~end_action_state:processed_deposits_pointer
-                        t.config.zkapp_pk
-                      |> Deferred.map ~f:(List.map ~f:fst)
-                    in
-                    let%bind unprocessed_deposits =
-                      Gql_client.fetch_transfers t.config.archive_uri
-                        ~from_action_state:processed_deposits_pointer
-                        t.config.zkapp_pk
-                      |> Deferred.map ~f:(List.map ~f:fst)
-                    in
-                    let%bind account_update =
-                      M.Outer.step
-                        (Option.value_exn t.state.last)
-                        ~outer_public_key:t.config.zkapp_pk ~new_deposits
-                        ~unprocessed_deposits ~old_inner_ledger
-                        ~new_inner_ledger
-                    in
-                    let command : Zkapp_command.t =
-                      { fee_payer =
-                          { Account_update.Fee_payer.body =
-                              { public_key =
-                                  Public_key.compress
-                                    t.executor.signer.public_key
-                              ; fee = Currency.Fee.of_mina_int_exn 1
-                              ; valid_until = None
-                              ; nonce = Unsigned.UInt32.zero
-                              }
-                          ; authorization = Signature.dummy
-                          }
-                      ; account_updates =
-                          Zkapp_command.Call_forest.cons_tree account_update []
-                      ; memo = Signed_command_memo.empty
+                    let commit_witness : Committer.Commit_witness.t =
+                      { old_inner_ledger
+                      ; new_inner_ledger
+                      ; old_deposits_pointer
+                      ; processed_deposits_pointer
+                      ; signatures
+                      ; last_snark = Option.value_exn t.state.last
                       }
                     in
+                    Committer.Store.store_commit t.kvdb commit_witness
+                      ~source:(Sparse_ledger.merkle_root old_inner_ledger)
+                      ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
+
+                    let%bind command =
+                      Committer.prove_commit
+                        (module M)
+                        ~executor:t.executor ~zkapp_pk:t.config.zkapp_pk
+                        ~archive_uri:t.config.archive_uri commit_witness
+                    in
                     return @@ don't_wait_for
-                    @@ Executor.send_commit t.executor command
-                         ~source:(Sparse_ledger.merkle_root old_inner_ledger)
-                         ~target:(Sparse_ledger.merkle_root new_inner_ledger) )
+                    @@ Executor.send_zkapp_command t.executor command )
               with
               | Ok _ ->
                   t.state <- State.reset_for_new_batch t.state target_ledger ;
@@ -944,7 +923,10 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         return () )
     in
     let%bind () =
-      Executor.recommit_all t.snark_q.executor ~zkapp_pk:config.zkapp_pk
+      Committer.recommit_all
+        (module M)
+        ~executor:t.snark_q.executor ~db ~zkapp_pk:config.zkapp_pk
+        ~archive_uri:config.archive_uri
     in
     return t
 end
