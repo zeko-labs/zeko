@@ -2,6 +2,7 @@
  (name da_layer)
  (libraries
   kvdb_base
+  zkapps_rollup
   ;; mina ;;
   mina_base
   mina_base.import

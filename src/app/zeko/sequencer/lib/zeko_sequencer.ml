@@ -541,7 +541,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     (first_pass_ledger, second_pass_ledger, txn_applied, target_ledger_hash)
 
   (** Apply user command to the sequencer's state, including the check of command validity *)
-  let apply_user_command t (command : User_command.t) =
+  let apply_user_command t ?(skip_validity_check = false)
+      (command : User_command.t) =
     if Throttle.num_jobs_waiting_to_start t.apply_q >= t.config.max_pool_size
     then
       return
@@ -563,27 +564,31 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           in
           let l = L.of_database t.db in
 
-          let%bind.Deferred.Result verifiable =
-            return
-            @@ User_command.to_verifiable ~failed:false
-                 ~find_vk:
-                   (Zkapp_command.Verifiable.load_vk_from_ledger ~get:(L.get l)
-                      ~location_of_account:(L.location_of_account l) )
-                 command
+          let%bind.Deferred.Result () =
+            if skip_validity_check then return (Ok ())
+            else
+              let%bind.Deferred.Result verifiable =
+                return
+                @@ User_command.to_verifiable ~failed:false
+                     ~find_vk:
+                       (Zkapp_command.Verifiable.load_vk_from_ledger
+                          ~get:(L.get l)
+                          ~location_of_account:(L.location_of_account l) )
+                     command
+              in
+              match%bind
+                Verifier.verify_command { data = verifiable; status = Applied }
+              with
+              | Ok (`Valid _) ->
+                  return (Ok ())
+              | Ok (`Valid_assuming _) ->
+                  return (Error (Error.of_string "Invalid proof"))
+              | Ok (#Verifier.invalid as invalid) ->
+                  return (Error (Verifier.invalid_to_error invalid))
+              | Error e ->
+                  return (Error e)
           in
-          let%bind.Deferred.Result valid =
-            match%bind
-              Verifier.verify_command { data = verifiable; status = Applied }
-            with
-            | Ok (`Valid valid) ->
-                return (Ok valid)
-            | Ok (`Valid_assuming _) ->
-                return (Error (Error.of_string "Invalid proof"))
-            | Ok (#Verifier.invalid as invalid) ->
-                return (Error (Verifier.invalid_to_error invalid))
-            | Error e ->
-                return (Error e)
-          in
+
           let%bind.Deferred.Result ( first_pass_ledger
                                    , second_pass_ledger
                                    , txn_applied
@@ -601,7 +606,12 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           (* Post transaction to the DA layer *)
           let changed_accounts =
             let account_ids =
-              User_command.accounts_referenced command |> List.stable_dedup
+              User_command.accounts_referenced command
+              |> List.map ~f:(fun id ->
+                     if Public_key.Compressed.(Account_id.public_key id = empty)
+                     then M.Inner.account_id
+                     else id )
+              |> List.stable_dedup
             in
             List.map account_ids ~f:(fun id ->
                 let index = L.index_of_account_exn l id in
@@ -638,12 +648,12 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
           return
           @@
-          match (command, valid) with
-          | Signed_command signed_command, Signed_command with_valid_signature
-            ->
+          match command with
+          | Signed_command signed_command ->
               let user_command_in_block =
                 { Transaction_protocol_state.Poly.transaction =
-                    with_valid_signature
+                    Signed_command.check_only_for_signature signed_command
+                    |> Option.value_exn
                 ; block_data = state_body
                 ; global_slot
                 }
@@ -671,7 +681,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                 ( txn_applied
                 , Snark_queue.Command_witness.Signed_command
                     (first_pass_ledger, user_command_in_block, statement) )
-          | Zkapp_command zkapp_command, _ ->
+          | Zkapp_command zkapp_command ->
               let witnesses =
                 Transaction_snark.zkapp_command_witnesses_exn
                   ~constraint_constants ~global_slot ~state_body
@@ -691,9 +701,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
               Result.return
                 ( txn_applied
                 , Snark_queue.Command_witness.Zkapp_command
-                    (witnesses, zkapp_command) )
-          | _ ->
-              failwith "Invalid command" )
+                    (witnesses, zkapp_command) ) )
 
   let update_inner_account t =
     let old_deposits_state =
@@ -739,7 +747,10 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         }
       in
       let%bind command_witness =
-        match%bind apply_user_command t (Zkapp_command command) with
+        match%bind
+          (* Skip validity check because dummy fee payer triggers invalid public key error *)
+          apply_user_command t ~skip_validity_check:true (Zkapp_command command)
+        with
         | Ok (status, witness) -> (
             match L.Transaction_applied.transaction_status status with
             | Applied ->
@@ -752,8 +763,9 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         | Error e ->
             Error.raise e
       in
-      let%bind () =
-        Snark_queue.enqueue_prove_command t.snark_q command_witness
+      let () =
+        don't_wait_for
+        @@ Snark_queue.enqueue_prove_command t.snark_q command_witness
       in
       return (old_deposits_state, processed_pointer)
 
@@ -977,7 +989,7 @@ let%test_module "Sequencer tests" =
         ; sequencer : Sequencer.t
         }
 
-      let gen () =
+      let gen ?(delay_deposit = 0) () =
         let zkapp_keypair = Keypair.create () in
 
         (* Create signer *)
@@ -1056,12 +1068,82 @@ let%test_module "Sequencer tests" =
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                 ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
                 ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
-                ~signer ~network_id:"testnet" ~deposit_delay_blocks:0 )
+                ~signer ~network_id:"testnet"
+                ~deposit_delay_blocks:delay_deposit )
         in
 
         Quickcheck.Generator.return
           { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer }
     end
+
+    let sign_cmd (cmd : Zkapp_command.t) (keys : Keypair.t list) :
+        Zkapp_command.t =
+      let full_commitment =
+        Zkapp_command.Transaction_commitment.create_complete
+          (Zkapp_command.commitment cmd)
+          ~memo_hash:(Signed_command_memo.hash cmd.memo)
+          ~fee_payer_hash:
+            (Zkapp_command.Digest.Account_update.create
+               (Account_update.of_fee_payer cmd.fee_payer) )
+      in
+      let sign_raw (pk : Public_key.Compressed.t) msg =
+        printf "Signing for %s\n" (Public_key.Compressed.to_base58_check pk) ;
+        let rec go (keys : Keypair.t list) msg =
+          match keys with
+          | (kp : Keypair.t) :: keys ->
+              if
+                Public_key.Compressed.equal
+                  (Public_key.compress kp.public_key)
+                  pk
+              then (
+                printf "key found\n" ;
+                Signature_lib.Schnorr.Chunked.sign
+                  ~signature_kind:Mina_signature_kind.Testnet kp.private_key
+                  (Random_oracle.Input.Chunked.field msg) )
+              else (
+                printf "not equal to %s\n"
+                  Public_key.(
+                    kp.public_key |> compress |> Compressed.to_base58_check) ;
+                go keys msg )
+          | [] ->
+              failwithf "key not found: %s\n"
+                (Public_key.Compressed.to_base58_check pk)
+                ()
+        in
+        go keys msg
+      in
+      let rec sign_tree (tree : Zeko_util.call_forest_tree) :
+          Zeko_util.call_forest_tree =
+        { tree with
+          account_update =
+            { tree.account_update with
+              authorization =
+                ( match tree.account_update.body.authorization_kind with
+                | Signature ->
+                    assert tree.account_update.body.use_full_commitment ;
+                    Signature
+                      (sign_raw tree.account_update.body.public_key
+                         full_commitment )
+                | _ ->
+                    tree.account_update.authorization )
+            }
+        ; calls = sign_forest tree.calls
+        }
+      and sign_forest (forest : Zeko_util.call_forest) : Zeko_util.call_forest =
+        List.map ~f:(fun tree -> { tree with elt = sign_tree tree.elt }) forest
+      in
+      { cmd with
+        fee_payer =
+          { cmd.fee_payer with
+            authorization =
+              ( if
+                Public_key.Compressed.(
+                  equal empty cmd.fee_payer.body.public_key)
+              then cmd.fee_payer.authorization
+              else sign_raw cmd.fee_payer.body.public_key full_commitment )
+          }
+      ; account_updates = sign_forest cmd.account_updates
+      }
 
     let%test_unit "apply commands and commit" =
       Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ())
@@ -1346,4 +1428,175 @@ let%test_module "Sequencer tests" =
               failwith "Transaction should have failed"
           | Error unexpected_error ->
               Error.raise unexpected_error )
+
+    let%test_unit "deposits" =
+      Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~delay_deposit:2 ())
+        ~f:(fun { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer } ->
+          (* Create l1 accounts *)
+          let l1_accounts =
+            Array.create ~len:5 ()
+            |> Array.map ~f:Signature_lib.Keypair.create
+            |> Array.to_list
+          in
+          Thread_safe.block_on_async_exn (fun () ->
+              Deferred.List.iter l1_accounts ~f:(fun keypair ->
+                  let%bind _res =
+                    Gql_client.For_tests.create_account gql_uri
+                      (Signature_lib.Public_key.compress keypair.public_key)
+                  in
+                  return () ) ) ;
+
+          (* Send deposits *)
+          let deposits =
+            Thread_safe.block_on_async_exn (fun () ->
+                let submit_deposit ~fee (signer : Keypair.t) deposit =
+                  let%bind nonce =
+                    Gql_client.fetch_nonce gql_uri
+                      (Signature_lib.Public_key.compress signer.public_key)
+                  in
+                  let fee_payer =
+                    Account_update.Fee_payer.
+                      { body =
+                          { public_key = Public_key.compress signer.public_key
+                          ; fee = Currency.Fee.of_mina_int_exn fee
+                          ; valid_until = None
+                          ; nonce = Account.Nonce.of_uint32 nonce
+                          }
+                      ; authorization = Signature.dummy
+                      }
+                  in
+                  let%bind transfer_update =
+                    M.Outer.submit_deposit
+                      ~outer_public_key:
+                        (Public_key.compress zkapp_keypair.public_key)
+                      ~deposit
+                  in
+                  let transferrer_update : Account_update.t =
+                    { body =
+                        { Account_update.Body.dummy with
+                          public_key = Public_key.compress signer.public_key
+                        ; balance_change =
+                            Currency.Amount.Signed.(
+                              negate @@ of_unsigned deposit.amount)
+                        ; use_full_commitment = true
+                        ; authorization_kind = Signature
+                        }
+                    ; authorization = Signature Signature.dummy
+                    }
+                  in
+                  let transfer_cmd : Zkapp_command.t =
+                    { fee_payer
+                    ; account_updates =
+                        Zkapp_command.Call_forest.(
+                          cons_tree transfer_update @@ accumulate_hashes'
+                          @@ of_account_updates
+                               ~account_update_depth:(fun _ -> 0)
+                               [ transferrer_update ])
+                    ; memo = Signed_command_memo.empty
+                    }
+                  in
+                  return @@ sign_cmd transfer_cmd [ signer ]
+                in
+                let account1 = List.nth_exn l1_accounts 0 in
+                let account2 = List.nth_exn l1_accounts 1 in
+                let account3 = List.nth_exn l1_accounts 2 in
+                let account4 = List.nth_exn l1_accounts 3 in
+                let account5 = List.nth_exn l1_accounts 4 in
+
+                let deposit1 : Zkapps_rollup.TR.t =
+                  { recipient = Public_key.compress account1.public_key
+                  ; amount = Currency.Amount.of_mina_int_exn 10
+                  }
+                in
+                let deposit2 : Zkapps_rollup.TR.t =
+                  { recipient = Public_key.compress account2.public_key
+                  ; amount = Currency.Amount.of_mina_int_exn 20
+                  }
+                in
+                let deposit3 : Zkapps_rollup.TR.t =
+                  { recipient = Public_key.compress account3.public_key
+                  ; amount = Currency.Amount.of_mina_int_exn 30
+                  }
+                in
+                let deposit4 : Zkapps_rollup.TR.t =
+                  { recipient = Public_key.compress account4.public_key
+                  ; amount = Currency.Amount.of_mina_int_exn 40
+                  }
+                in
+                let deposit5 : Zkapps_rollup.TR.t =
+                  { recipient = Public_key.compress account5.public_key
+                  ; amount = Currency.Amount.of_mina_int_exn 50
+                  }
+                in
+
+                (* Send deposits for accounts 1 and 2 *)
+                let%bind _ =
+                  submit_deposit ~fee:5 account1 deposit1
+                  >>= Gql_client.send_zkapp gql_uri
+                in
+                let%bind _ =
+                  submit_deposit ~fee:4 account2 deposit2
+                  >>= Gql_client.send_zkapp gql_uri
+                in
+
+                (* Create 2 new blocks for delay *)
+                let%bind _created =
+                  Gql_client.For_tests.create_new_block gql_uri
+                in
+                let%bind _created =
+                  Gql_client.For_tests.create_new_block gql_uri
+                in
+
+                (* Send deposits for accounts 3, 4 and 5 which won't be processed *)
+                let%bind _ =
+                  submit_deposit ~fee:3 account3 deposit3
+                  >>= Gql_client.send_zkapp gql_uri
+                in
+                let%bind _ =
+                  submit_deposit ~fee:2 account4 deposit4
+                  >>= Gql_client.send_zkapp gql_uri
+                in
+                let%bind _ =
+                  submit_deposit ~fee:1 account5 deposit5
+                  >>= Gql_client.send_zkapp gql_uri
+                in
+                let%bind _created =
+                  Gql_client.For_tests.create_new_block gql_uri
+                in
+                return [ deposit1; deposit2; deposit3; deposit4; deposit5 ] )
+          in
+
+          (* Commit should process first 2 deposits *)
+          Thread_safe.block_on_async_exn (fun () ->
+              let%bind () = commit sequencer in
+              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+              let%bind () =
+                Executor.wait_to_finish sequencer.snark_q.executor
+              in
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
+              in
+              let%bind committed_ledger_hash =
+                Gql_client.fetch_committed_state gql_uri
+                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              in
+              let target_ledger_hash = get_root sequencer in
+              [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
+
+              return () ) ;
+
+          let deposits_state =
+            Utils.get_inner_deposits_state_exn
+              (module M)
+              (L.of_database sequencer.db)
+          in
+          let expected_deposits_state =
+            (* Expected should be only first 2 deposits *)
+            List.take deposits 2
+            |> List.fold ~init:Zkapp_account.Actions.empty_state_element
+                 ~f:(fun acc transfer ->
+                   Zkapp_account.Actions.push_events acc
+                     (Zkapps_rollup.TR.to_actions transfer) )
+          in
+          [%test_eq: Field.t] deposits_state expected_deposits_state )
   end )

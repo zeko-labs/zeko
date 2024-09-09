@@ -76,7 +76,8 @@ let apply_command t ~command =
                     ~f:(Ledger.get l)
                   |> join |> value_exn)
               in
-              Archive.add_account_update t.archive update account
+              Archive.add_account_update t.archive ~height:t.block_height update
+                account
                 (Some
                    Archive.Transaction_info.
                      { status = Applied

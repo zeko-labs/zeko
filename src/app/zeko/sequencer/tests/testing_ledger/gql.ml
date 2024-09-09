@@ -1845,11 +1845,12 @@ module Queries = struct
                   (non_null Types.Input.Archive.ActionFilterOptionsInput.arg_typ)
             ]
         ~resolve:(fun { ctx = t; _ } ()
-                      (public_key, token_id, from_action_state, _) ->
+                      (public_key, token_id, from_action_state, end_action_state)
+                      ->
           let token_id = Option.value ~default:Token_id.default token_id in
           Archive.get_actions t.archive
             (Account_id.create public_key token_id)
-            from_action_state )
+            ~from:from_action_state ~to_:end_action_state )
 
     let events =
       field "events"
