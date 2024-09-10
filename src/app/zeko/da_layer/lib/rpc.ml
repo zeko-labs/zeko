@@ -76,3 +76,22 @@ module Get_signer_public_key = struct
     Rpc.Rpc.create ~name:"Get_signer_public_key" ~version:1
       ~bin_query:Unit.bin_t ~bin_response:Public_key.Compressed.Stable.V1.bin_t
 end
+
+(* val get_signature : Ledger_hash.t -> Signature.t option *)
+module Get_signature = struct
+  module Response = struct
+    [%%versioned
+    module Stable = struct
+      module V1 = struct
+        type t = Signature.Stable.V1.t option
+
+        let to_latest = Fn.id
+      end
+    end]
+  end
+
+  let v1 : (Ledger_hash.t, Signature.t option) Rpc.Rpc.t =
+    Rpc.Rpc.create ~name:"Get_signature" ~version:1
+      ~bin_query:Ledger_hash.Stable.V1.bin_t
+      ~bin_response:Response.Stable.V1.bin_t
+end

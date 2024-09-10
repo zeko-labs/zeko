@@ -308,6 +308,11 @@ let sync ~logger ~node_location t =
   in
   return (Ok ())
 
+let get_signature t ~ledger_hash =
+  let%bind.Option _diff = Db.get_diff t.db ~ledger_hash in
+  let message = Random_oracle.Input.Chunked.field_elements [| ledger_hash |] in
+  Some (Schnorr.Chunked.sign t.signer.private_key message)
+
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
@@ -337,6 +342,8 @@ let implementations t =
             @@ Db.get_diff t.db ~ledger_hash:query )
       ; Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.v1 (fun () () ->
             Async.return @@ Public_key.compress @@ t.signer.public_key )
+      ; Async.Rpc.Rpc.implement Rpc.Get_signature.v1 (fun () query ->
+            Async.return @@ get_signature t ~ledger_hash:query )
       ]
 
 let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
