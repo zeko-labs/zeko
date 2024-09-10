@@ -201,7 +201,12 @@ let post_diff t ~ledger_openings ~diff =
               | None_given ->
                   Ok (Unsigned.UInt32.succ index, acc)
               | Proof _ | Signature _ ->
-                  let account_id = Account_update.account_id account_update in
+                  let account_id =
+                    let aid = Account_update.account_id account_update in
+                    if Public_key.Compressed.(Account_id.public_key aid = empty)
+                    then Zkapps_rollup.inner_account_id
+                    else aid
+                  in
                   let%bind.Result old_receipt_chain_hash =
                     get_account's_receipt_chain_hash acc account_id
                   in

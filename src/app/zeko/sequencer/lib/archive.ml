@@ -166,15 +166,16 @@ module Archive = struct
   let store_actions t account_id actions =
     Kvdb.set t Actions ~key:account_id ~data:actions
 
-  let add_actions t (account_update : Account_update.t) transaction_info
-      (account : Account.t) =
+  let add_actions t ?(height = 0) (account_update : Account_update.t)
+      transaction_info (account : Account.t) =
     match account_update.body.actions with
     | [] ->
         ()
     | actions ->
         let zkapp : Zkapp_account.t = Option.value_exn account.zkapp in
         let action =
-          { Account_update_actions.block_info = Some Block_info.dummy
+          { Account_update_actions.block_info =
+              Some { Block_info.dummy with height }
           ; transaction_info
           ; action_state = zkapp.action_state
           ; account_update_id = 0
@@ -188,13 +189,15 @@ module Archive = struct
         let previous = query_actions t account in
         store_actions t account (action :: previous)
 
-  let add_events t (account_update : Account_update.t) transaction_info =
+  let add_events t ?(height = 0) (account_update : Account_update.t)
+      transaction_info =
     match account_update.body.events with
     | [] ->
         ()
     | events ->
         let event =
-          { Account_update_events.block_info = Some Block_info.dummy
+          { Account_update_events.block_info =
+              Some { Block_info.dummy with height }
           ; transaction_info
           ; events
           }
@@ -206,27 +209,37 @@ module Archive = struct
         let previous = query_events t account in
         store_events t account (event :: previous)
 
-  let add_account_update t (account_update : Account_update.t) account
-      transaction_info =
-    add_actions t account_update transaction_info account ;
-    add_events t account_update transaction_info
+  let add_account_update t ?(height = 0) (account_update : Account_update.t)
+      account transaction_info =
+    add_actions t ~height account_update transaction_info account ;
+    add_events t ~height account_update transaction_info
 
-  let get_actions t account_id from =
+  let get_actions t account_id ~from ~to_ =
     let open Account_update_actions in
-    let rec filter_start from actions =
-      match actions with
-      | [] ->
-          []
-      | ({ action_state; _ } as action) :: rest
-        when Stdlib.(Pickles_types.Vector.nth action_state 0 = from) ->
-          action :: rest
-      | _ :: rest ->
-          filter_start from rest
-    in
+    let open Snark_params.Tick in
     let all = List.rev @@ query_actions t account_id in
-    (* If the `from` wasn't found return all *)
+    let filtered_from =
+      match from with
+      | Some from
+        when Field.equal from Zkapp_account.Actions.empty_state_element ->
+          all
+      | None ->
+          all
+      | _ ->
+          List.drop_while all ~f:(fun { action_state; _ } ->
+              Stdlib.(Pickles_types.Vector.nth action_state 0 <> from) )
+    in
+    let filtered_to =
+      List.fold_until filtered_from ~init:[] ~finish:Fn.id
+        ~f:(fun acc ({ action_state; _ } as action) ->
+          if Stdlib.(Pickles_types.Vector.nth action_state 0 = to_) then
+            Stop (action :: acc)
+          else Continue (action :: acc) )
+      |> List.rev
+    in
+    (* If the filtered actions are empty return all *)
     (* Weird, but it's the same way in archive node *)
-    match filter_start from all with [] -> all | actions -> actions
+    match filtered_to with [] -> all | actions -> actions
 
   let get_events t account_id = List.rev @@ query_events t account_id
 end

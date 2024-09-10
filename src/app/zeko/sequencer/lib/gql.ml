@@ -1293,28 +1293,76 @@ module Make
               ]
       end
 
-      module Transfer = struct
-        type input = Zeko_sequencer.Transfer.t
+      module Bridge = struct
+        module Direction = struct
+          let arg_typ =
+            enum "TransferDirection"
+              ~values:
+                [ enum_value "DEPOSIT" ~value:Zeko_sequencer.Transfer.Deposit
+                ; enum_value "WITHDRAW" ~value:Zeko_sequencer.Transfer.Withdraw
+                ]
+        end
 
-        let arg_typ =
-          obj "TransferInput"
-            ~coerce:(fun address amount direction ->
-              (address, amount, direction) )
-            ~split:(fun f (x : input) -> f x.address x.amount x.direction)
-            ~fields:
-              [ arg "address" ~typ:(non_null PublicKey.arg_typ)
-              ; arg "amount" ~typ:(non_null UInt64.arg_typ)
-              ; arg "direction"
-                  ~typ:
-                    ( non_null
-                    @@ enum "TransferDirection"
-                         ~values:
-                           [ enum_value "DEPOSIT"
-                               ~value:Zeko_sequencer.Transfer.Deposit
-                           ; enum_value "WITHDRAW"
-                               ~value:Zeko_sequencer.Transfer.Withdraw
-                           ] )
-              ]
+        module Transfer = struct
+          type input = Zkapps_rollup.TR.t
+
+          let arg_typ =
+            obj "TransferInput"
+              ~coerce:(fun amount recipient ->
+                Zkapps_rollup.TR.{ amount = Amount.of_uint64 amount; recipient }
+                )
+              ~split:(fun f (x : input) ->
+                f (Currency.Amount.to_uint64 x.amount) x.recipient )
+              ~fields:
+                [ arg "amount" ~typ:(non_null UInt64.arg_typ)
+                ; arg "recipient" ~typ:(non_null PublicKey.arg_typ)
+                ]
+        end
+
+        module Request = struct
+          type input = Zeko_sequencer.Transfer.t
+
+          let arg_typ =
+            obj "TransferRequestInput"
+              ~coerce:(fun transfer direction ->
+                Zeko_sequencer.Transfer.{ transfer; direction } )
+              ~split:(fun f ({ transfer; direction } : input) ->
+                f transfer direction )
+              ~fields:
+                [ arg "transfer" ~typ:(non_null Transfer.arg_typ)
+                ; arg "direction" ~typ:(non_null @@ Direction.arg_typ)
+                ]
+        end
+
+        module Claim = struct
+          open Snark_params.Tick
+
+          type input = Zeko_sequencer.Transfer.claim
+
+          let arg_typ =
+            obj "TransferRequestInput"
+              ~coerce:(fun is_new pointer before after transfer ->
+                Zeko_sequencer.Transfer.
+                  { is_new
+                  ; pointer = Field.of_string pointer
+                  ; before
+                  ; after
+                  ; transfer
+                  } )
+              ~split:(fun f (x : input) ->
+                f x.is_new
+                  (Field.to_string x.pointer)
+                  x.before x.after x.transfer )
+              ~fields:
+                [ arg "isNew" ~typ:(non_null bool)
+                ; arg "pointer" ~typ:(non_null string)
+                ; arg "before"
+                    ~typ:(non_null (list @@ non_null Transfer.arg_typ))
+                ; arg "after"
+                    ~typ:(non_null (list @@ non_null Transfer.arg_typ))
+                ; arg "transfer" ~typ:(non_null Request.arg_typ)
+                ]
+        end
       end
 
       module Archive = struct
@@ -1654,20 +1702,34 @@ module Make
               in
               return (Ok cmd_with_hash) )
 
-    let prove_transfer =
-      io_field "proveTransfer" ~doc:"Prove rollup transfer"
+    let prove_transfer_request =
+      io_field "proveTransferRequest" ~doc:"Prove rollup transfer request"
         ~typ:(non_null Types.Payload.prove_transfer)
-        ~args:Arg.[ arg "input" ~typ:(non_null Types.Input.Transfer.arg_typ) ]
-        ~resolve:(fun { ctx = sequencer; _ } () (address, amount, direction) ->
+        ~args:
+          Arg.[ arg "input" ~typ:(non_null Types.Input.Bridge.Request.arg_typ) ]
+        ~resolve:(fun { ctx = sequencer; _ } () transfer ->
           let key = Int.to_string @@ Random.int Int.max_value in
           don't_wait_for
-          @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer
+          @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer_request
                Zeko_sequencer.(sequencer.snark_q)
-               ~key
-               ~transfer:Zeko_sequencer.Transfer.{ address; amount; direction } ;
+               ~key ~transfer ;
           return (Ok key) )
 
-    let commands = [ send_payment; send_zkapp; prove_transfer ]
+    let prove_transfer_claim =
+      io_field "proveTransferClaim" ~doc:"Prove rollup transfer claim"
+        ~typ:(non_null Types.Payload.prove_transfer)
+        ~args:
+          Arg.[ arg "input" ~typ:(non_null Types.Input.Bridge.Claim.arg_typ) ]
+        ~resolve:(fun { ctx = sequencer; _ } () claim ->
+          let key = Int.to_string @@ Random.int Int.max_value in
+          don't_wait_for
+          @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer_claim
+               Zeko_sequencer.(sequencer.snark_q)
+               ~key ~claim ;
+          return (Ok key) )
+
+    let commands =
+      [ send_payment; send_zkapp; prove_transfer_request; prove_transfer_claim ]
   end
 
   module Queries = struct
@@ -1723,8 +1785,8 @@ module Make
             ]
         ~resolve:(fun _ () _ -> [])
 
-    let transfer =
-      field "transfer"
+    let transfer_account_update =
+      field "transferAccountUpdate"
         ~doc:"Query proved account update for transfer in a JSON format"
         ~typ:string
         ~args:Arg.[ arg "key" ~typ:(non_null string) ]
@@ -1841,11 +1903,14 @@ module Make
                        Types.Input.Archive.ActionFilterOptionsInput.arg_typ )
               ]
           ~resolve:(fun { ctx = sequencer; _ } ()
-                        (public_key, token_id, from_action_state, _) ->
+                        ( public_key
+                        , token_id
+                        , from_action_state
+                        , end_action_state ) ->
             let token_id = Option.value ~default:Token_id.default token_id in
             Archive.get_actions sequencer.archive
               (Account_id.create public_key token_id)
-              from_action_state )
+              ~from:from_action_state ~to_:end_action_state )
 
       let events =
         field "events"
@@ -1870,7 +1935,7 @@ module Make
       ; daemon_status
       ; account
       ; accounts_for_pk
-      ; transfer
+      ; transfer_account_update
       ; committed_transaction
       ; token_owner
       ; network_id

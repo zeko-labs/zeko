@@ -875,7 +875,8 @@ module Make (T' : Transaction_snark.S) = struct
       { Account.empty with
         public_key
       ; balance = Currency.Balance.max_int
-      ; permissions = proof_permissions
+      ; permissions =
+          { proof_permissions with access = Permissions.Auth_required.None }
       ; zkapp =
           Some
             { Zkapp_account.default with
@@ -1023,7 +1024,7 @@ module Make (T' : Transaction_snark.S) = struct
           (Action_state_extension.statement all_deposits).target
           new_all_deposits ) ;
       let%bind delay_extension =
-        Action_state_extension.prove ~dummy:true ~source:new_all_deposits
+        Action_state_extension.prove ~source:new_all_deposits
           (List.map ~f:(value_to_actions TR.typ) unprocessed_deposits)
       in
       let%bind actions_extensions =
