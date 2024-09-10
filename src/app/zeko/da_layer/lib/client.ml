@@ -46,6 +46,9 @@ module Rpc = struct
 
   let get_node_public_key ~logger ~node_location () =
     dispatch ~logger node_location Rpc.Get_signer_public_key.v1 ()
+
+  let get_signature ~logger ~node_location ~ledger_hash =
+    dispatch ~logger node_location Rpc.Get_signature.v1 ledger_hash
 end
 
 module Config = struct
@@ -121,7 +124,15 @@ module Sequencer = struct
     | Some d ->
         Deferred.map d ~f:Option.some
     | None ->
-        return None
+        let%bind signatures =
+          Deferred.List.map ~how:`Parallel (Config.nodes t.config)
+            ~f:(fun node_location ->
+              Rpc.get_signature ~logger:t.logger ~node_location ~ledger_hash )
+          |> Deferred.map ~f:(List.filter_map ~f:Result.ok)
+          |> Deferred.map ~f:(List.filter_map ~f:Fn.id)
+        in
+        if List.length signatures >= t.quorum then return (Some signatures)
+        else return None
 end
 
 (** Useful for querying data, will fallback to the next node in list in case the first one fails *)
