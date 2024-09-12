@@ -1774,7 +1774,6 @@ module Make
           Types.AccountObj.Partial_account.of_full_account account
           |> Types.AccountObj.lift )
 
-    (* TODO *)
     let accounts_for_pk =
       field "accounts" ~doc:"Find all accounts for a public key"
         ~typ:(non_null (list (non_null Types.AccountObj.account)))
@@ -1783,7 +1782,16 @@ module Make
             [ arg "publicKey" ~doc:"Public key to find accounts for"
                 ~typ:(non_null Types.Input.PublicKey.arg_typ)
             ]
-        ~resolve:(fun _ () _ -> [])
+        ~resolve:(fun { ctx = sequencer; _ } () pk ->
+          let ledger = Ledger.of_database sequencer.db in
+          let tokens = Ledger.tokens ledger pk |> Set.to_list in
+          List.filter_map tokens ~f:(fun token ->
+              let%bind.Option location =
+                Ledger.location_of_account ledger (Account_id.create pk token)
+              in
+              let%map.Option account = Ledger.get ledger location in
+              Types.AccountObj.Partial_account.of_full_account account
+              |> Types.AccountObj.lift ) )
 
     let transfer_account_update =
       field "transferAccountUpdate"
