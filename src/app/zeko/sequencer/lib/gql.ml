@@ -129,6 +129,15 @@ module Make
                     Some timing_info.vesting_increment )
           ] )
 
+    let genesis_constants =
+      obj "GenesisConstants" ~fields:(fun _ ->
+          [ field "accountCreationFee" ~typ:(non_null fee)
+              ~doc:"The fee charged to create a new account"
+              ~args:Arg.[]
+              ~resolve:(fun _ () ->
+                Zeko_sequencer.constraint_constants.account_creation_fee )
+          ] )
+
     module AccountObj = struct
       module AnnotatedBalance = struct
         type t =
@@ -1816,6 +1825,15 @@ module Make
                    |> Types.AccountObj.lift
                  else None ) ) )
 
+    let genesis_constants =
+      field "genesisConstants"
+        ~doc:
+          "The constants used to determine the configuration of the genesis \
+           block and all of its transitive dependencies"
+        ~args:Arg.[]
+        ~typ:(non_null Types.genesis_constants)
+        ~resolve:(fun _ () -> ())
+
     let transfer_account_update =
       field "transferAccountUpdate"
         ~doc:"Query proved account update for transfer in a JSON format"
@@ -1967,6 +1985,7 @@ module Make
       ; account
       ; accounts_for_pk
       ; token_accounts
+      ; genesis_constants
       ; transfer_account_update
       ; committed_transaction
       ; token_owner
