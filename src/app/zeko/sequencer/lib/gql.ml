@@ -1793,6 +1793,29 @@ module Make
               Types.AccountObj.Partial_account.of_full_account account
               |> Types.AccountObj.lift ) )
 
+    let token_accounts =
+      io_field "tokenAccounts" ~doc:"Find all accounts for a token ID"
+        ~typ:(non_null (list (non_null Types.AccountObj.account)))
+        ~args:
+          Arg.
+            [ arg "tokenId" ~doc:"Token ID to find accounts for"
+                ~typ:(non_null Types.Input.TokenId.arg_typ)
+            ]
+        ~resolve:(fun { ctx = mina; _ } () token_id ->
+          let ledger = Ledger.of_database mina.db in
+          let%map account_ids = Ledger.accounts ledger in
+          Ok
+            (List.filter_map (Set.to_list account_ids) ~f:(fun account_id ->
+                 let token_id' = Account_id.token_id account_id in
+                 if Token_id.equal token_id token_id' then
+                   let%bind.Option location =
+                     Ledger.location_of_account ledger account_id
+                   in
+                   let%map.Option account = Ledger.get ledger location in
+                   Types.AccountObj.Partial_account.of_full_account account
+                   |> Types.AccountObj.lift
+                 else None ) ) )
+
     let transfer_account_update =
       field "transferAccountUpdate"
         ~doc:"Query proved account update for transfer in a JSON format"
@@ -1943,6 +1966,7 @@ module Make
       ; daemon_status
       ; account
       ; accounts_for_pk
+      ; token_accounts
       ; transfer_account_update
       ; committed_transaction
       ; token_owner
