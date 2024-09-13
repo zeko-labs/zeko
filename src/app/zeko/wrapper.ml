@@ -52,30 +52,6 @@ module Wrap = struct
 
   include MkHandler (Witness)
 
-  let dummy_pc_init = Pending_coinbase.Stack.empty
-
-  let genesis_constants = Genesis_constants.compiled
-
-  let consensus_constants =
-    Consensus.Constants.create ~constraint_constants
-      ~protocol_constants:genesis_constants.protocol
-
-  (** Dummy state body, network preconditions are disabled anyway *)
-  let dummy_state_body =
-    let compile_time_genesis =
-      Mina_state.Genesis_protocol_state.t
-        ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-        ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-        ~constraint_constants ~consensus_constants
-        ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-    in
-    Mina_state.Protocol_state.body compile_time_genesis.data
-
-  let dummy_pc =
-    Pending_coinbase.Stack.push_state
-      (Mina_state.Protocol_state.Body.hash dummy_state_body)
-      Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
-
   let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
     let Witness.{ txn_snark } = exists_witness () in
     let txn_snark_stmt =
@@ -98,57 +74,6 @@ module Wrap = struct
         @@ Ledger_hash.assert_equal stmt.target_ledger
              txn_snark_stmt.target.second_pass_ledger ) ;
 
-    (* Check that pending_coinbase_stack is correctly set. This also constrains
-       protocol state. See check_protocol_state in transaction_snark.ml. *)
-    let dummy_pc = constant Pending_coinbase.Stack.typ dummy_pc in
-    with_label __LOC__ (fun () ->
-        Boolean.Assert.is_true @@ run
-        @@ Pending_coinbase.Stack.equal_var dummy_pc
-             txn_snark_stmt.source.pending_coinbase_stack ) ;
-    with_label __LOC__ (fun () ->
-        Boolean.Assert.is_true @@ run
-        @@ Pending_coinbase.Stack.equal_var dummy_pc
-             txn_snark_stmt.target.pending_coinbase_stack ) ;
-
-    (* Check that transactions have been completely applied *)
-    let empty_state = Local_state.(constant typ @@ empty ()) in
-    with_label __LOC__ (fun () ->
-        Local_state.Checked.assert_equal empty_state
-          txn_snark_stmt.source.local_state ) ;
-    with_label __LOC__ (fun () ->
-        Local_state.Checked.assert_equal empty_state
-          txn_snark_stmt.target.local_state ) ;
-
-    (* Check that first and second passes are connected *)
-    with_label __LOC__ (fun () ->
-        run
-        @@ Ledger_hash.assert_equal txn_snark_stmt.target.first_pass_ledger
-             txn_snark_stmt.source.second_pass_ledger ) ;
-
-    (* Check that it's a complete transaction (a "block") *)
-    with_label __LOC__ (fun () ->
-        run
-        @@ Ledger_hash.assert_equal txn_snark_stmt.target.first_pass_ledger
-             txn_snark_stmt.connecting_ledger_right ) ;
-    with_label __LOC__ (fun () ->
-        run
-        @@ Ledger_hash.assert_equal txn_snark_stmt.source.second_pass_ledger
-             txn_snark_stmt.connecting_ledger_left ) ;
-
-    (* We don't check fee_excess because it's up to the sequencer what they do with it. *)
-    (* The supply however must not increase. *)
-    let is_neg =
-      Sgn.Checked.is_neg @@ run
-      @@ CAS.Checked.sgn txn_snark_stmt.supply_increase
-    in
-    let is_zero =
-      run
-      @@ CA.Checked.equal CA.(constant typ zero)
-      @@ run
-      @@ CAS.Checked.magnitude txn_snark_stmt.supply_increase
-    in
-    with_label __LOC__ (fun () ->
-        Boolean.Assert.is_true Boolean.(is_neg || is_zero) ) ;
 
     Pickles.Inductive_rule.
       { previous_proof_statements =

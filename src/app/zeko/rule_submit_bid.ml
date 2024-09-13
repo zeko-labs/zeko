@@ -1,3 +1,4 @@
+(*
 open Core_kernel
 open Zeko_util
 open Snark_params.Tick
@@ -80,9 +81,10 @@ struct
       { previous_proof_statements = []; public_output; auxiliary_output }
 
   let rule : _ Pickles.Inductive_rule.t =
-    { identifier = "zeko submit transfer"
+    { identifier = "zeko submit bid"
     ; prevs = []
     ; main = (fun x -> main x |> Run.run_checked)
     ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
     }
 end
+*)

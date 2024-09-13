@@ -248,7 +248,7 @@ struct
              ~public_input:(Output Transition.Stmt.typ) ~auxiliary_typ:Typ.unit
              ~branches:(module Pickles_types.Nat.N2)
              ~max_proofs_verified:(module Pickles_types.Nat.N2)
-             ~name:"action state extension"
+             ~name:(name ^ ".compile")
              ~constraint_constants:
                (Genesis_constants.Constraint_constants.to_snark_keys_header
                   constraint_constants )

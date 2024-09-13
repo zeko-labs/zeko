@@ -30,7 +30,7 @@ module Action : sig
     val of_field_var : Field.Var.t -> var
   end
 
-  val to_actions_var : var -> Mina_base.Zkapp_account.Actions.var
+  val to_actions_var : var -> Mina_base.Zkapp_account.Actions.var Checked.t
 
-  val push_var : var -> State.var -> State.var
+  val push_var : var -> State.var -> State.var Checked.t
 end

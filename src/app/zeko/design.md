@@ -574,7 +574,7 @@ Any account update not generated for the zkapps here is meant to be invalid.
 Thus, you can infer the circuit behavior from this.
 Anything that is impossible to check, e.g. the parent account update,
 is simply not part of the circuit.
-In certain places we use X instead of hash of X.
+In general we use X instead of hash of X.
 Hash of X is implied where it's not feasible to use X itself,
 (e.g. storing the ledger in the app state of an account).
 
@@ -582,6 +582,8 @@ We don't fill out all the fields for account updates.
 Assume an implicit `with default`.
 
 ## Core rollup spec
+
+Everything besides `do_inner_step` happens on the L1, i.e. host ledger.
 
 ```ocaml
 type ledger
@@ -595,7 +597,7 @@ val macroslot_size : nat (* probably around 1 day *)
 type macroslot = nat
 
 type commit = { ledger : ledger ; inner_action_state : action_state ; sequencer : sequencer ; macroslot : macroslot ; bid_rate : nat ; valid_while : valid_while }
-type witness = { aux : field ; children : account_update_forest }
+type witness = { aux : 'a ; children : account_update_forest }
 
 type outer_action =
   | Commit of commit
@@ -619,6 +621,7 @@ type inner_app_state =
   { outer_action_state : action_state
   }
 
+(* happens inside rollup, on L2 *)
 let do_inner_step ~source_action_state ~actions =
   [ { public_key = inner_pk
     ; app_state =
@@ -1016,16 +1019,36 @@ let do_witness_inner ~aux ~children =
 
 ```
 
-## Pseudo-code example spec for token transfer smart contract
+## Pseudo-code example spec for token bridge smart contract
 
-TODO: use fungible token standard contract
+Each account-update generating function specifies whether it's meant
+to be used on the L1 or L2, L1 being the host ledger, L2 being the ledger we're
+embedding into L1.
+
+TODO: Use fungible token standard contract for L2 tokens.
+
+The zkApp on L1 acts as a bank for the token in question,
+emitting a note essentially that allows you to withdraw from
+a corresponding bank on the L2.
+
+Account updates that have authorization_kind = Proof,
+where the account id is `account_id_l1`, or where the token id is `account_id_l1`,
+define the circuit for the verification key for the L1-side of the bridge contract.
+Likewise, the ones for `account_id_l2` define the circuit for the L2-side.
 
 ```ocaml
-val public_key : PublicKey.t
-val token_id : TokenId.t
+val public_key_l1 : Public_key.t
+val public_key_l2 : Public_key.t
+val token_id_l1 : Token_id.t
+val token_id_l2 : Token_id.t
+val holder_accounts_l1 : Public_key.t list
+val window_size : nat
 
-type deposit = { amount : nat ; recipient : PublicKey.t ; timeout : slot }
-type withdrawal = { amount : nat ; recipient : PublicKey.t }
+let account_id_l1 = Account_id.create public_key_l1 token_id_l1
+let account_id_l2 = Account_id.create public_key_l2 token_id_l2
+
+type deposit = { amount : nat ; recipient : Public_key.t ; timeout : slot }
+type withdrawal = { amount : nat ; recipient : Public_key.t }
 
 type token_outer_helper_state =
   { next_withdrawal : nat
@@ -1036,55 +1059,66 @@ type token_inner_helper_state =
   { next_deposit : nat
   }
 
-let deposit_action ~(sender : PublicKey.t) (deposit : deposit) : outer_action =
-  let children =
-    [ { account_id = token_id (* token owner *)
-      ; children =
-        [ { public_key = sender
-          ; token_id
-          ; balance_change = -deposit.amount
-          ; may_use_token = Parents_own_token
-          }
-        ; { public_key
-          ; token_id
-          ; balance_change = deposit.amount
-          ; may_use_token = Parents_own_token
-          }
-        ]
-      }
-    ]
-  in
-  Match { data = deposit ; children }
-
-
-let do_deposit ~sender (deposit : deposit) =
-  [ { public_key = zeko_pk
-    ; actions = [ deposit_action ~sender deposit ]
-    ; children
+(* L1 *)
+let deposit_action
+  ~call_data
+  ~authorization_kind
+  ~nested_children
+  ~children
+  ~holder_account_l1
+  ~(sender : Public_key.t)
+  (deposit : deposit) : outer_action =
+  let a =
+    { public_key = holder_account_l1
+    ; token_id = token_id_l1
+    ; balance_change = deposit.amount
+    ; may_use_token = Parents_own_token
+    ; authorization_kind = None
     }
-  ]
-
-let withdraw_action ~(sender : PublicKey.t) (withdrawal : withdrawal) : inner_action =
-  let children =
-    [ { public_key
-      ; children =
-        [ { public_key = sender
-          ; token_id = AccountId.create public_key TokenId.default
-          ; balance_change = -withdrawal.amount
-          ; may_use_token = Parents_own_token
-          }
-      }
-    ]
   in
-  Match { data = withdrawal ; children }
+  let a' =
+    if token_id_l1 == Token_id.default
+    then a
+    else
+      { account_id = token_id_l1 (* token owner *)
+      ; call_data
+      ; authorization_kind
+      ; children = a :: nested_children
+      }
+  in
+  let children = a' :: children in
+  Witness { aux = deposit ; children }
 
-let do_withdrawal ~sender (withdrawal : withdrawal) =
-  [ { public_key = inner_pk
-    ; actions = [ withdraw_action ~sender withdrawal ]
-    ; children
+(* L2 *)
+let withdraw_action
+  ~call_data
+  ~authorization_kind
+  ~nested_children
+  ~children
+  ~(sender : Public_key.t)
+  (withdrawal : withdrawal) : inner_action =
+  let a =
+    { public_key = public_key_l2
+    ; token_id = token_id_l2
+    ; balance_change = withdrawal.amount
+    ; may_use_token = Parents_own_token
+    ; authorization_kind = None
     }
-  ]
+  in
+  let a' =
+    if token_id == Token_id.default
+    then a
+    else
+      { account_id = token_id_l2 (* token owner *)
+      ; call_data
+      ; authorization_kind
+      ; children = a
+      }
+  in
+  let children = a' :: children in
+  Witness { aux = withdrawal ; children }
 
+(* L2 *)
 let do_finalize_deposit ~sender ~deposit ~actions_after_deposit ~action_state_before_deposit ~prev_next_deposit =
   assert check_accepted ~deposit ~actions_after_deposit = `Accepted ;
   assert prev_next_deposit <= action_state_before_deposit.length ;
@@ -1092,29 +1126,33 @@ let do_finalize_deposit ~sender ~deposit ~actions_after_deposit ~action_state_be
     (deposit_action ~sender deposit :: actions_after_deposit)
     ++ action_state_before_deposit
   in
-  [ { public_key
-    ; children =
-      [ { public_key = deposit.recipient
-        ; token_id = AccountId.create public_key TokenId.default
-        ; authorization_kind = Signature
-        ; use_full_commitment = true
-        ; balance_change = deposit.amount
-        ; app_state =
-          { next_deposit = action_state_before_deposit.length + 1
-          }
-        ; preconditions =
-          { app_state =
-            { next_deposit = prev_next_deposit
-            }
+  { account_id = account_id_l2
+  ; balance_change = -deposit.amount
+  ; may_use_token = Parents_own_token
+  ; authorization_kind = Proof
+  ; children =
+    [ { public_key = deposit.recipient
+      ; token_id = account_id_l2
+      ; authorization_kind = Signature
+      ; use_full_commitment = true
+      ; may_use_token = Parents_own_token
+      ; app_state =
+        { next_deposit = action_state_before_deposit.length + 1
+        }
+      ; preconditions =
+        { app_state =
+          { next_deposit = prev_next_deposit
           }
         }
-      ; { public_key = inner_pk
-        ; preconditions = { app_state = { outer_action_state } }
-        }
-      ]
-    }
-  ]
+      }
+    ; { public_key = inner_pk
+      ; preconditions = { app_state = { outer_action_state } }
+      ; authorization_kind = None
+      }
+    ]
+  }
 
+(* L1 *)
 let do_finalize_cancelled_deposit ~sender ~deposit ~actions_after_deposit ~action_state_before_deposit ~prev_next_cancelled_deposit =
   assert check_accepted ~deposit ~actions_after_deposit = `Rejected ;
   assert prev_next_cancelled_deposit <= action_state_before_deposit.length ;
@@ -1122,43 +1160,35 @@ let do_finalize_cancelled_deposit ~sender ~deposit ~actions_after_deposit ~actio
     (deposit_action ~sender deposit :: actions_after_deposit)
     ++ action_state_before_deposit
   in
-  [ { account_id = token_id
-    ; children =
-      [ { public_key
-        ; token_id
-        ; may_use_token = Parents_own_token
-        ; balance_change = -deposit.amount
-        ; children =
-          [ { public_key = zeko_pk
-            ; preconditions = { action_state = outer_action_state }
-            }
-          ; { public_key = deposit.recipient
-            ; token_id = Account_id.create public_key token_id
-            ; may_use_token = Parents_own_token
-            ; use_full_commitment = true
-            ; authorization_kind = Signature
-            ; app_state =
-              { next_cancelled_deposit = action_state_before_deposit.length + 1
-              }
-            ; preconditions =
-              { app_state =
-                { next_cancelled_deposit = Some prev_next_cancelled_deposit
-                }
-              }
-            }
-          ]
+  { account_id = account_id_l1
+  ; balance_change = -deposit.amount
+  ; may_use_token = Parents_own_token
+  ; authorization_kind = Proof
+  ; children =
+    [ { public_key = deposit.recipient
+      ; token_id = account_id_l1
+      ; authorization_kind = Signature
+      ; use_full_commitment = true
+      ; may_use_token = Parents_own_token
+      ; app_state =
+        { next_cancelled_deposit = action_state_before_deposit.length + 1
         }
-      ; { public_key = deposit.recipient
-        ; token_id
-        ; may_use_token = Parents_own_token
-        ; balance_change = deposit.amount
+      ; preconditions =
+        { app_state =
+          { next_cancelled_deposit = prev_next_deposit
+          }
         }
-      ]
-    }
-  ]
+      }
+    ; { public_key = zeko_pk
+      ; preconditions = { action_state = outer_action_state }
+      ; authorization_kind = None
+      }
+    ]
+  }
 
 val withdrawal_delay : nat
 
+(* L1 *)
 let do_finalize_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~action_state_before_withdrawal ~actions_after_commit ~action_state_before_commit ~commit ~prev_next_withdrawal =
   assert prev_next_withdrawal <= action_state_before_withdrawal.length ;
   let inner_action_state =
@@ -1169,44 +1199,35 @@ let do_finalize_withdrawal ~sender ~withdrawal ~actions_after_withdrawal ~action
     actions_after_commit
     ++ Commit commit :: action_state_before_commit
   in
-  [ { account_id = token_id
-    ; children =
-      [ { public_key
-        ; token_id
-        ; may_use_token = Parents_own_token
-        ; balance_change = -withdrawal.amount
-        ; children =
-          [ { public_key = zeko_pk
-            ; preconditions =
-              { action_state = outer_action_state
-              ; app_state = { inner_action_state }
-              ; valid_while =
-                { lower = commit.valid_while.upper + withdrawal_delay
-                ; upper = infinity }
-              }
-            }
-          ; { public_key = withdrawal.recipient
-            ; token_id = Account_id.create public_key token_id
-            ; may_use_token = Parents_own_token
-            ; use_full_commitment = true
-            ; authorization_kind = Signature
-            ; app_state =
-              { next_withdrawal = action_state_before_withdrawal.length + 1
-              }
-            ; preconditions =
-              { app_state =
-                { next_withdrawal = Some prev_next_withdrawal
-                }
-              }
-            }
-          ]
+  { account_id = account_id_l1
+  ; balance_change = -withdrawal.amount
+  ; may_use_token = Parents_own_token
+  ; authorization_kind = Proof
+  ; children =
+    [ { public_key = withdrawal.recipient
+      ; token_id = account_id_l1
+      ; authorization_kind = Signature
+      ; use_full_commitment = true
+      ; may_use_token = Parents_own_token
+      ; app_state =
+        { next_withdrawal = action_state_before_withdrawal.length + 1
         }
-      ; { public_key = withdrawal.recipient
-        ; token_id
-        ; may_use_token = Parents_own_token
-        ; balance_change = withdrawal.amount
+      ; preconditions =
+        { app_state =
+          { next_withdrawal = prev_next_withdrawal
+          }
         }
-      ]
-    }
-  ]
+      }
+    ; { public_key = zeko_pk
+      ; authorization_kind = None
+      ; preconditions =
+        { action_state = outer_action_state
+        ; app_state = { inner_action_state }
+        ; valid_while =
+          { lower = commit.valid_while.upper + withdrawal_delay
+          ; upper = infinity }
+        }
+      }
+    ]
+  }
 ```

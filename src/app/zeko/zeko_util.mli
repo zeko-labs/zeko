@@ -158,6 +158,8 @@ module V : sig
   val typ : ('a t, 'a) Snark_params.Tick.Typ.t
 
   val get : 'a t -> 'a As_prover.t
+
+  val create : 'a As_prover.t -> 'a t Checked.t
 end
 
 module MkV : functor
@@ -257,6 +259,11 @@ val ( let+ ) :
   -> ('a -> 'b Snark_params.Tick.As_prover.t)
   -> 'b Snark_params.Tick.As_prover.t
 
+val ( let+| ) :
+     'a Snark_params.Tick.As_prover.t
+  -> ('a -> 'b)
+  -> 'b Snark_params.Tick.As_prover.t
+
 module Slot : sig
   include module type of Mina_numbers.Global_slot_since_genesis
 
@@ -271,3 +278,6 @@ module Slot_range : sig
       var -> Mina_base.Zkapp_precondition.Valid_while.Checked.t
   end
 end
+
+val assert_equal :
+  ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t

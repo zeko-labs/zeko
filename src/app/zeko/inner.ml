@@ -17,7 +17,8 @@ module State = struct
   type t = { outer_action_state : F.t  (** Action state of outer account. *) }
   [@@deriving snarky]
 
-  let default : t = { outer_action_state = Zkapp_account.Actions.empty_state_element }
+  let default : t =
+    { outer_action_state = Zkapp_account.Actions.empty_state_element }
 
   let var_of_app_state (outer_action_state :: _ : F.var Zkapp_state.V.t) : var =
     { outer_action_state }
@@ -60,8 +61,10 @@ module Action = struct
   let to_actions_var (x : var) =
     var_to_actions Typ.(F.typ * typ) (Field.of_int 0 |> Field.Var.constant, x)
 
-  let push_var : var -> State.var -> State.var =
+  let push_var : var -> State.var -> State.var Checked.t =
    fun x xs ->
-    Zkapp_account.Actions.push_events_checked (State.to_field_var xs) (to_actions_var x)
-    |> State.of_field_var
+    let open Checked in
+    to_actions_var x
+    >>| Zkapp_account.Actions.push_events_checked (State.to_field_var xs)
+    >>| State.of_field_var
 end

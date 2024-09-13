@@ -6,6 +6,14 @@ open Snark_params.Tick
 module Or_ignore = Zkapp_basic.Or_ignore
 module Set_or_keep = Zkapp_basic.Set_or_keep
 
+let ( let* ) = Checked.Let_syntax.( >>= )
+
+let ( let*| ) = Checked.Let_syntax.( >>| )
+
+let ( let+ ) = As_prover.Let_syntax.( >>= )
+
+let ( let+| ) = As_prover.Let_syntax.( >>| )
+
 let attach_control_var :
     Account_update.Body.Checked.t -> Zkapp_call_forest.Checked.account_update =
  fun account_update ->
@@ -87,10 +95,10 @@ let proof_permissions : Permissions.t =
   ; set_zkapp_uri = Proof
   ; edit_action_state = Proof
   ; set_token_symbol = Proof
-  ; increment_nonce = None
+  ; increment_nonce = Proof
   ; set_voting_for = Proof
   ; set_timing = Proof
-  ; access = Proof
+  ; access = None
   }
 
 (* Intended to be used for custom token accounts *)
@@ -247,6 +255,15 @@ module V = struct
         failwith "Shouldn't be possible! MkRef.get run with Circuit_mode."
     | Proving_mode t ->
         t
+
+  let create (x : 'a As_prover.t) : 'a t Checked.t =
+    let r = ref None in
+    let*| () =
+      as_prover
+        (let+| x in
+         r := Some x )
+    in
+    match !r with None -> Circuit_mode | Some x -> Proving_mode x
 end
 
 module type V_S = sig
@@ -369,14 +386,6 @@ let default_account_update =
   let dummy' = { Account_update.Body.dummy with use_full_commitment = true } in
   constant (Account_update.Body.typ ()) dummy'
 
-let ( let* ) = Checked.Let_syntax.( >>= )
-
-let ( let*| ) = Checked.Let_syntax.( >>| )
-
-let ( let+ ) = As_prover.Let_syntax.( >>= )
-
-let ( let+| ) = As_prover.Let_syntax.( >>| )
-
 module Slot = struct
   include Mina_numbers.Global_slot_since_genesis
 
@@ -472,3 +481,14 @@ let mktree (account_update, account_update_digest, calls) proof =
   in
   Zkapp_command.Call_forest.Tree.
     { account_update; account_update_digest; calls }
+
+let assert_equal :
+    ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t =
+ fun ?label (Typ typ) x y ->
+  let x, _ = typ.var_to_fields x in
+  let y, _ = typ.var_to_fields y in
+  let f (x, y) = Constraint.equal ?label x y in
+  let constraints =
+    List.map ~f (List.zip_exn (Array.to_list x) (Array.to_list y))
+  in
+  assert_all ?label constraints

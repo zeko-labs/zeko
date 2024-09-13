@@ -47,7 +47,7 @@ let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
     }
   in
   let* public_output, auxiliary_output = make_outputs account_update [] in
-  let*| auxiliary_output = create_prover_value auxiliary_output in
+  let*| auxiliary_output = V.create auxiliary_output in
   Pickles.Inductive_rule.
     { previous_proof_statements = [ verify_ext ]
     ; public_output
