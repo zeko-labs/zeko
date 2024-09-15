@@ -1826,14 +1826,10 @@ module Make_str (A : Wire_types.Concrete) = struct
               let fields, _ = typ.var_to_fields protocol_state in
               let fields', _ = typ.var_to_fields accept in
               let zipped =
-                List.zip (Array.to_list fields) (Array.to_list fields')
+                List.zip_exn (Array.to_list fields) (Array.to_list fields')
               in
-              match zipped with
-              | Ok zipped ->
-                  (* All fields must be equal. *)
-                  Boolean.all (List.map zipped ~f:(fun (x, y) -> Field.equal x y))
-              | Unequal_lengths ->
-                  failwith "failed to compare protocol state precondition" )
+              (* All fields must be equal. *)
+              (Boolean.all (List.map zipped ~f:(fun (x, y) -> Field.equal x y))))
           | Check_account_precondition
               ({ account_update; _ }, account, new_account, local_state) ->
               let local_state = ref local_state in
