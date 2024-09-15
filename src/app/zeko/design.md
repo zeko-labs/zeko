@@ -1009,21 +1009,20 @@ let do_witness_inner ~aux ~children =
 
 ## Pseudo-code example spec for token bridge smart contract
 
-Each account-update generating function specifies whether it's meant
-to be used on the L1 or L2, L1 being the host ledger, L2 being the ledger we're
-embedding into L1.
-
 TODO: Use fungible token standard contract for L2 tokens.
 
 The zkApp on L1 acts as a bank for the token in question,
 emitting a note essentially that allows you to withdraw from
 a corresponding bank on the L2.
+The bank on the L2 must be seeded with the appropriate amount of the token.
 
-FIXME: `account_id_l1` doesn't exist anymore.
 Account updates that have authorization_kind = Proof,
-where the account id is `account_id_l1`, or where the token id is `account_id_l1`,
-define the circuit for the verification key for the L1-side of the bridge contract.
+where the account id is `holder_account_l1`, or where the token id is `helper_token_id`,
+define the circuit for the verification keys for the L1-side of the bridge contract.
 Likewise, the ones for `account_id_l2` define the circuit for the L2-side.
+
+There is also an extra verification key for the disabled state of the holding accounts,
+to prevent catastrophic hacks.
 
 Things to consider:
 - State of rollup can arbitrarily change potentially through governance.
@@ -1315,3 +1314,12 @@ let do_enable =
   }
   }
 ```
+
+### Avoiding failing precondition on withdrawal
+
+We have a precondition on the `inner_app_state` in the rollup zkapp
+on withdrawals, which can obviously fail.
+We can cooperate with the sequencer and jointly construct a transaction
+such that a payment to the sequencer is included.
+The sequencer is then incentivized to align their commits such that this
+withdrawal transaction succeeds, otherwise they wouldn't get their fee.
