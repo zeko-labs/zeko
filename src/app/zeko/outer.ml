@@ -54,6 +54,7 @@ struct
       type t =
         { ledger : Ledger_hash.t
         ; inner_action_state : F.t
+        ; synchronized_outer_action_state : F.t
         ; sequencer : PC.t
         ; macroslot : Macroslot.t
         ; bid_amount : Currency.Amount.t
@@ -79,14 +80,12 @@ struct
     end
 
     module Witness = struct
-      type t = { aux : F.t; children : Zkapp_call_forest.t } [@@deriving snarky]
+      type t =
+        { aux : F.t; children : Zkapp_call_forest.t; slot_range : Slot_range.t }
+      [@@deriving snarky]
     end
 
-    type t =
-      | Commit of Commit.t
-      | Bid of Bid.t
-      | Witness of Witness.t
-      | Time of Slot_range.t
+    type t = Commit of Commit.t | Bid of Bid.t | Witness of Witness.t
 
     module Repr = struct
       (* NB: If you add more cases, make sure to fix check in `typ`. *)
@@ -97,8 +96,6 @@ struct
         ; case_bid : Bid.t
         ; is_witness : Boolean.t
         ; case_witness : Witness.t
-        ; is_time : Boolean.t
-        ; case_time : Slot_range.t
         }
       [@@deriving snarky]
 
@@ -111,7 +108,7 @@ struct
               (fun x ->
                 let%bind () = typ'.check x in
                 Boolean.Assert.exactly_one
-                  [ x.is_commit; x.is_bid; x.is_witness; x.is_time ] )
+                  [ x.is_commit; x.is_bid; x.is_witness ] )
           }
     end
 
@@ -120,6 +117,7 @@ struct
     let dummy_commit : Commit.t =
       { ledger = Outside_hash_image.t
       ; inner_action_state = Outside_hash_image.t
+      ; synchronized_outer_action_state = Outside_hash_image.t
       ; sequencer = PC.empty
       ; macroslot = Macroslot.zero
       ; bid_amount = Currency.Amount.zero
@@ -134,9 +132,10 @@ struct
       }
 
     let dummy_witness : Witness.t =
-      { aux = Field.zero; children = Zkapp_call_forest.empty () }
-
-    let dummy_time : Slot_range.t = { lower = Slot.zero; upper = Slot.zero }
+      { aux = Field.zero
+      ; children = Zkapp_call_forest.empty ()
+      ; slot_range = { lower = Slot.zero; upper = Slot.zero }
+      }
 
     let there : t -> Repr.t = function
       | Commit c ->
@@ -146,8 +145,6 @@ struct
           ; case_bid = dummy_bid
           ; is_witness = false
           ; case_witness = dummy_witness
-          ; is_time = false
-          ; case_time = dummy_time
           }
       | Bid b ->
           { is_commit = false
@@ -156,8 +153,6 @@ struct
           ; case_bid = b
           ; is_witness = false
           ; case_witness = dummy_witness
-          ; is_time = false
-          ; case_time = dummy_time
           }
       | Witness w ->
           { is_commit = false
@@ -166,8 +161,6 @@ struct
           ; case_bid = dummy_bid
           ; is_witness = true
           ; case_witness = w
-          ; is_time = false
-          ; case_time = dummy_time
           }
       | Time t ->
           { is_commit = false
@@ -176,8 +169,6 @@ struct
           ; case_bid = dummy_bid
           ; is_witness = false
           ; case_witness = dummy_witness
-          ; is_time = true
-          ; case_time = t
           }
 
     let back : Repr.t -> t =
@@ -186,31 +177,21 @@ struct
       | { is_commit = true
         ; is_bid = false
         ; is_witness = false
-        ; is_time = false
         ; _
         } ->
           Commit x.case_commit
       | { is_commit = false
         ; is_bid = true
         ; is_witness = false
-        ; is_time = false
         ; _
         } ->
           Bid x.case_bid
       | { is_commit = false
         ; is_bid = false
         ; is_witness = true
-        ; is_time = false
         ; _
         } ->
           Witness x.case_witness
-      | { is_commit = false
-        ; is_bid = false
-        ; is_witness = false
-        ; is_time = true
-        ; _
-        } ->
-          Time x.case_time
       | _ ->
           failwith "should be unreachable"
 
@@ -235,10 +216,8 @@ struct
     end
 
     let switch (x : var) ~(typ : ('a, 't) Typ.t) ~(case_commit : 'a)
-        ~(case_bid : 'a) ~(case_witness : 'a) ~(case_time : 'a) : 'a Checked.t =
-      let* switch_witness =
-        if_ x.is_witness ~typ ~then_:case_witness ~else_:case_time
-      in
+        ~(case_bid : 'a) ~(case_witness : 'a) : 'a Checked.t =
+      let switch_witness = case_witness in
       let* switch_bid =
         if_ x.is_bid ~typ ~then_:case_bid ~else_:switch_witness
       in
@@ -259,16 +238,12 @@ struct
     let witness_to_actions_var (w : Witness.var) =
       var_to_actions Typ.(F.typ * Witness.typ) (Run.Field.of_int 2, w)
 
-    let time_to_actions_var (time : Slot_range.var) =
-      var_to_actions Typ.(F.typ * Slot_range.typ) (Run.Field.of_int 3, time)
-
     let to_actions_var (x : var) =
       let* case_commit = commit_to_actions_var x.case_commit in
       let* case_bid = bid_to_actions_var x.case_bid in
       let* case_witness = witness_to_actions_var x.case_witness in
-      let* case_time = time_to_actions_var x.case_time in
       switch x ~typ:Zkapp_account.Actions.typ ~case_commit ~case_bid
-        ~case_witness ~case_time
+        ~case_witness
 
     let push_commit_var : Commit.var -> State.var -> State.var Checked.t =
      fun c xs ->
