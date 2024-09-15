@@ -592,7 +592,14 @@ val macroslot_size : nat (* probably around 1 day *)
 
 type macroslot = nat
 
-type commit = { ledger : ledger ; inner_action_state : action_state ; synchronized_outer_action_state : action_state ; sequencer : sequencer ; macroslot : macroslot ; valid_while : valid_while }
+type commit =
+  { ledger : ledger
+  ; inner_action_state : action_state
+  ; synchronized_outer_action_state : action_state
+  ; sequencer : sequencer
+  ; macroslot : macroslot
+  ; valid_while : valid_while
+  }
 
 and type outer_action =
   | Commit of commit
