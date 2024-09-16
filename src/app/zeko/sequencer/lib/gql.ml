@@ -129,6 +129,15 @@ module Make
                     Some timing_info.vesting_increment )
           ] )
 
+    let genesis_constants =
+      obj "GenesisConstants" ~fields:(fun _ ->
+          [ field "accountCreationFee" ~typ:(non_null fee)
+              ~doc:"The fee charged to create a new account"
+              ~args:Arg.[]
+              ~resolve:(fun _ () ->
+                Zeko_sequencer.constraint_constants.account_creation_fee )
+          ] )
+
     module AccountObj = struct
       module AnnotatedBalance = struct
         type t =
@@ -1774,7 +1783,6 @@ module Make
           Types.AccountObj.Partial_account.of_full_account account
           |> Types.AccountObj.lift )
 
-    (* TODO *)
     let accounts_for_pk =
       field "accounts" ~doc:"Find all accounts for a public key"
         ~typ:(non_null (list (non_null Types.AccountObj.account)))
@@ -1783,7 +1791,48 @@ module Make
             [ arg "publicKey" ~doc:"Public key to find accounts for"
                 ~typ:(non_null Types.Input.PublicKey.arg_typ)
             ]
-        ~resolve:(fun _ () _ -> [])
+        ~resolve:(fun { ctx = sequencer; _ } () pk ->
+          let ledger = Ledger.of_database sequencer.db in
+          let tokens = Ledger.tokens ledger pk |> Set.to_list in
+          List.filter_map tokens ~f:(fun token ->
+              let%bind.Option location =
+                Ledger.location_of_account ledger (Account_id.create pk token)
+              in
+              let%map.Option account = Ledger.get ledger location in
+              Types.AccountObj.Partial_account.of_full_account account
+              |> Types.AccountObj.lift ) )
+
+    let token_accounts =
+      io_field "tokenAccounts" ~doc:"Find all accounts for a token ID"
+        ~typ:(non_null (list (non_null Types.AccountObj.account)))
+        ~args:
+          Arg.
+            [ arg "tokenId" ~doc:"Token ID to find accounts for"
+                ~typ:(non_null Types.Input.TokenId.arg_typ)
+            ]
+        ~resolve:(fun { ctx = mina; _ } () token_id ->
+          let ledger = Ledger.of_database mina.db in
+          let%map account_ids = Ledger.accounts ledger in
+          Ok
+            (List.filter_map (Set.to_list account_ids) ~f:(fun account_id ->
+                 let token_id' = Account_id.token_id account_id in
+                 if Token_id.equal token_id token_id' then
+                   let%bind.Option location =
+                     Ledger.location_of_account ledger account_id
+                   in
+                   let%map.Option account = Ledger.get ledger location in
+                   Types.AccountObj.Partial_account.of_full_account account
+                   |> Types.AccountObj.lift
+                 else None ) ) )
+
+    let genesis_constants =
+      field "genesisConstants"
+        ~doc:
+          "The constants used to determine the configuration of the genesis \
+           block and all of its transitive dependencies"
+        ~args:Arg.[]
+        ~typ:(non_null Types.genesis_constants)
+        ~resolve:(fun _ () -> ())
 
     let transfer_account_update =
       field "transferAccountUpdate"
@@ -1935,6 +1984,8 @@ module Make
       ; daemon_status
       ; account
       ; accounts_for_pk
+      ; token_accounts
+      ; genesis_constants
       ; transfer_account_update
       ; committed_transaction
       ; token_owner
