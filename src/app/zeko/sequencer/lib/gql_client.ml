@@ -77,7 +77,7 @@ let fetch_transfers uri ?from_action_state ?end_action_state pk =
       method query =
         String.substr_replace_all ~pattern:"\n" ~with_:" "
           {|
-            query ($pk: PublicKey!) {
+            query ($pk: String!, $fromActionState: String, $endActionState: String) {
               actions(
                 input: {
                   address: $pk
