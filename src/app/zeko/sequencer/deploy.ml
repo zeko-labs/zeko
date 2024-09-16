@@ -42,7 +42,7 @@ end)
 
 module M = Zkapps_rollup.Make (T)
 
-let run ~uri ~sk ~initial_state ~da_nodes () =
+let run ~l1_uri ~sk ~initial_state ~da_nodes () =
   let logger = Logger.create () in
   let sender_keypair =
     Signature_lib.(
@@ -57,7 +57,7 @@ let run ~uri ~sk ~initial_state ~da_nodes () =
 
   let nonce =
     Thread_safe.block_on_async_exn (fun () ->
-        Sequencer_lib.Gql_client.infer_nonce uri
+        Sequencer_lib.Gql_client.infer_nonce l1_uri
           (Signature_lib.Public_key.compress sender_keypair.public_key) )
   in
 
@@ -101,7 +101,7 @@ let run ~uri ~sk ~initial_state ~da_nodes () =
 
   (* Deploy contract *)
   Thread_safe.block_on_async_exn (fun () ->
-      match%bind Sequencer_lib.Gql_client.send_zkapp uri command with
+      match%bind Sequencer_lib.Gql_client.send_zkapp l1_uri command with
       | Ok _ ->
           Deferred.unit
       | Error (`Failed_request err) ->
@@ -114,7 +114,8 @@ let run ~uri ~sk ~initial_state ~da_nodes () =
 let () =
   Command_unix.run
   @@ Command.basic ~summary:"Deploy zeko zkapp"
-       (let%map_open.Command uri = Cli_lib.Flag.Uri.Client.rest_graphql
+       (let%map_open.Command l1_uri =
+          flag "--l1-uri" (required string) ~doc:"string L1 URI"
         and test_accounts_path =
           flag "--test-accounts-path" (optional string)
             ~doc:"string Path to the test genesis accounts file"
@@ -144,4 +145,7 @@ let () =
           | None, None ->
               `None
         in
-        run ~uri ~sk ~initial_state ~da_nodes )
+        let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
+          Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
+        in
+        run ~l1_uri ~sk ~initial_state ~da_nodes )
