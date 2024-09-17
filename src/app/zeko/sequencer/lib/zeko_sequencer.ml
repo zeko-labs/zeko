@@ -1598,5 +1598,49 @@ let%test_module "Sequencer tests" =
                    Zkapp_account.Actions.push_events acc
                      (Zkapps_rollup.TR.to_actions transfer) )
           in
+          [%test_eq: Field.t] deposits_state expected_deposits_state ;
+
+          print_endline "Processing remaining deposits" ;
+
+          (* Create new blocks to process remaining deposits *)
+          Thread_safe.block_on_async_exn (fun () ->
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
+              in
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
+              in
+              return () ) ;
+
+          (* Commit should process remaining deposits *)
+          Thread_safe.block_on_async_exn (fun () ->
+              let%bind () = commit sequencer in
+              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+              let%bind () =
+                Executor.wait_to_finish sequencer.snark_q.executor
+              in
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
+              in
+              let%bind committed_ledger_hash =
+                Gql_client.fetch_committed_state gql_uri
+                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              in
+              let target_ledger_hash = get_root sequencer in
+              [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
+
+              return () ) ;
+
+          let deposits_state =
+            Utils.get_inner_deposits_state_exn
+              (module M)
+              (L.of_database sequencer.db)
+          in
+          let expected_deposits_state =
+            List.fold deposits ~init:Zkapp_account.Actions.empty_state_element
+              ~f:(fun acc transfer ->
+                Zkapp_account.Actions.push_events acc
+                  (Zkapps_rollup.TR.to_actions transfer) )
+          in
           [%test_eq: Field.t] deposits_state expected_deposits_state )
   end )
