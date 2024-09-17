@@ -1836,7 +1836,7 @@ module Queries = struct
 
   module Archive = struct
     let actions =
-      field "actions"
+      io_field "actions"
         ~typ:(non_null @@ list @@ non_null Types.Archive.ActionOutput.t)
         ~args:
           Arg.
@@ -1848,9 +1848,10 @@ module Queries = struct
                       (public_key, token_id, from_action_state, end_action_state)
                       ->
           let token_id = Option.value ~default:Token_id.default token_id in
-          Archive.get_actions t.archive
-            (Account_id.create public_key token_id)
-            ~from:from_action_state ~to_:end_action_state )
+          return
+          @@ Archive.get_actions t.archive
+               (Account_id.create public_key token_id)
+               ~from:from_action_state ~to_:end_action_state )
 
     let events =
       field "events"

@@ -218,28 +218,38 @@ module Archive = struct
     let open Account_update_actions in
     let open Snark_params.Tick in
     let all = List.rev @@ query_actions t account_id in
-    let filtered_from =
+    let%bind.Result filtered_from =
       match from with
       | Some from
         when Field.equal from Zkapp_account.Actions.empty_state_element ->
-          all
+          Ok all
       | None ->
-          all
-      | _ ->
-          List.drop_while all ~f:(fun { action_state; _ } ->
-              Stdlib.(Pickles_types.Vector.nth action_state 0 <> from) )
+          Ok all
+      | Some from -> (
+          match
+            List.drop_while all ~f:(fun { action_state; _ } ->
+                Stdlib.(Pickles_types.Vector.nth action_state 0 <> Some from) )
+          with
+          | [] ->
+              Error (sprintf "from %s not found" (Field.to_string from))
+          | actions ->
+              Ok actions )
     in
-    let filtered_to =
-      List.fold_until filtered_from ~init:[] ~finish:Fn.id
-        ~f:(fun acc ({ action_state; _ } as action) ->
-          if Stdlib.(Pickles_types.Vector.nth action_state 0 = to_) then
-            Stop (action :: acc)
-          else Continue (action :: acc) )
-      |> List.rev
+    let%bind.Result filtered_to =
+      match to_ with
+      | None ->
+          Ok filtered_from
+      | Some to_ -> (
+          match
+            List.findi filtered_from ~f:(fun _ { action_state; _ } ->
+                Stdlib.(Pickles_types.Vector.nth action_state 0 = Some to_) )
+          with
+          | None ->
+              Error (sprintf "to %s not found" (Field.to_string to_))
+          | Some (i, _) ->
+              Ok (List.take filtered_from (i + 1)) )
     in
-    (* If the filtered actions are empty return all *)
-    (* Weird, but it's the same way in archive node *)
-    match filtered_to with [] -> all | actions -> actions
+    Ok filtered_to
 
   let get_events t account_id = List.rev @@ query_events t account_id
 end

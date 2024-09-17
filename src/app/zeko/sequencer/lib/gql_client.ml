@@ -133,10 +133,11 @@ let fetch_transfers uri ?from_action_state ?end_action_state pk =
               }
           , block_height ) ) )
   |> List.join
-
-(* stiahnut transfery a pridat to outer.step *)
-(* pustit inner.step *)
-(* exposnut api na posielanie withdrawalov a provovanie depositov *)
+  |>
+  (* Drop the first transfer if it's not the initial state *)
+  if Stdlib.(from_action_state = Some Zkapp_account.Actions.empty_state_element)
+  then Fn.id
+  else function [] -> [] | _ :: tail -> tail
 
 let fetch_pooled_zkapp_commands uri pk =
   let q =

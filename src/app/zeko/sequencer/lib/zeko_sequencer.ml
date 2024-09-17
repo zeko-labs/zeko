@@ -257,40 +257,57 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
     let enqueue_prove_transfer_request t ~key ~(transfer : Transfer.t) =
       Throttle.enqueue t.q (fun () ->
-          let%bind tree =
-            match transfer with
-            | { direction = Deposit; transfer } ->
-                M.Outer.submit_deposit ~outer_public_key:t.config.zkapp_pk
-                  ~deposit:transfer
-            | { direction = Withdraw; transfer } ->
-                M.Inner.submit_withdrawal ~withdrawal:transfer
+          let%bind result =
+            try_with (fun () ->
+                match transfer with
+                | { direction = Deposit; transfer } ->
+                    M.Outer.submit_deposit ~outer_public_key:t.config.zkapp_pk
+                      ~deposit:transfer
+                | { direction = Withdraw; transfer } ->
+                    M.Inner.submit_withdrawal ~withdrawal:transfer )
           in
-          Transfers_memory.add t.transfers_memory key
-            (Zkapp_command.Call_forest.cons_tree tree []) ;
+          let () =
+            match result with
+            | Ok tree ->
+                Transfers_memory.add t.transfers_memory key
+                  (Ok (Zkapp_command.Call_forest.cons_tree tree []))
+            | Error e ->
+                Transfers_memory.add t.transfers_memory key
+                  (Error (Exn.to_string e))
+          in
           return () )
 
     let enqueue_prove_transfer_claim t ~key ~(claim : Transfer.claim) =
       Throttle.enqueue t.q (fun () ->
-          let%bind _, forest =
-            match claim with
-            | { transfer = { direction = Deposit; transfer }
-              ; is_new
-              ; pointer
-              ; before
-              ; after
-              } ->
-                M.Inner.process_deposit ~is_new ~pointer ~before ~after
-                  ~deposit:transfer
-            | { transfer = { direction = Withdraw; transfer }
-              ; is_new
-              ; pointer
-              ; before
-              ; after
-              } ->
-                M.Outer.process_withdrawal ~outer_public_key:t.config.zkapp_pk
-                  ~is_new ~pointer ~before ~after ~withdrawal:transfer
+          let%bind result =
+            try_with (fun () ->
+                match claim with
+                | { transfer = { direction = Deposit; transfer }
+                  ; is_new
+                  ; pointer
+                  ; before
+                  ; after
+                  } ->
+                    M.Inner.process_deposit ~is_new ~pointer ~before ~after
+                      ~deposit:transfer
+                | { transfer = { direction = Withdraw; transfer }
+                  ; is_new
+                  ; pointer
+                  ; before
+                  ; after
+                  } ->
+                    M.Outer.process_withdrawal
+                      ~outer_public_key:t.config.zkapp_pk ~is_new ~pointer
+                      ~before ~after ~withdrawal:transfer )
           in
-          Transfers_memory.add t.transfers_memory key forest ;
+          let () =
+            match result with
+            | Ok (_, forest) ->
+                Transfers_memory.add t.transfers_memory key (Ok forest)
+            | Error e ->
+                Transfers_memory.add t.transfers_memory key
+                  (Error (Exn.to_string e))
+          in
           return () )
 
     let enqueue_prove_commit t ~target_ledger ~old_deposits_pointer
@@ -1597,6 +1614,50 @@ let%test_module "Sequencer tests" =
                  ~f:(fun acc transfer ->
                    Zkapp_account.Actions.push_events acc
                      (Zkapps_rollup.TR.to_actions transfer) )
+          in
+          [%test_eq: Field.t] deposits_state expected_deposits_state ;
+
+          print_endline "Processing remaining deposits" ;
+
+          (* Create new blocks to process remaining deposits *)
+          Thread_safe.block_on_async_exn (fun () ->
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
+              in
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
+              in
+              return () ) ;
+
+          (* Commit should process remaining deposits *)
+          Thread_safe.block_on_async_exn (fun () ->
+              let%bind () = commit sequencer in
+              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+              let%bind () =
+                Executor.wait_to_finish sequencer.snark_q.executor
+              in
+              let%bind _created =
+                Gql_client.For_tests.create_new_block gql_uri
+              in
+              let%bind committed_ledger_hash =
+                Gql_client.fetch_committed_state gql_uri
+                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              in
+              let target_ledger_hash = get_root sequencer in
+              [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
+
+              return () ) ;
+
+          let deposits_state =
+            Utils.get_inner_deposits_state_exn
+              (module M)
+              (L.of_database sequencer.db)
+          in
+          let expected_deposits_state =
+            List.fold deposits ~init:Zkapp_account.Actions.empty_state_element
+              ~f:(fun acc transfer ->
+                Zkapp_account.Actions.push_events acc
+                  (Zkapps_rollup.TR.to_actions transfer) )
           in
           [%test_eq: Field.t] deposits_state expected_deposits_state )
   end )

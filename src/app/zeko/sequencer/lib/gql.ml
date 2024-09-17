@@ -1349,7 +1349,7 @@ module Make
           type input = Zeko_sequencer.Transfer.claim
 
           let arg_typ =
-            obj "TransferRequestInput"
+            obj "TransferClaimInput"
               ~coerce:(fun is_new pointer before after transfer ->
                 Zeko_sequencer.Transfer.
                   { is_new
@@ -1847,10 +1847,12 @@ module Make
           with
           | None ->
               None
-          | Some (_, account_update) ->
+          | Some (_, Ok account_update) ->
               Some
                 ( Yojson.Safe.to_string
-                @@ Zkapp_command.account_updates_to_json account_update ) )
+                @@ Zkapp_command.account_updates_to_json account_update )
+          | Some (_, Error msg) ->
+              Some msg )
 
     let committed_transaction =
       io_field "committedTransactions"
@@ -1942,7 +1944,7 @@ module Make
 
     module Archive = struct
       let actions =
-        field "actions"
+        io_field "actions"
           ~typ:(non_null @@ list @@ non_null Types.Archive.ActionOutput.t)
           ~args:
             Arg.
@@ -1957,9 +1959,10 @@ module Make
                         , from_action_state
                         , end_action_state ) ->
             let token_id = Option.value ~default:Token_id.default token_id in
-            Archive.get_actions sequencer.archive
-              (Account_id.create public_key token_id)
-              ~from:from_action_state ~to_:end_action_state )
+            return
+            @@ Archive.get_actions sequencer.archive
+                 (Account_id.create public_key token_id)
+                 ~from:from_action_state ~to_:end_action_state )
 
       let events =
         field "events"
