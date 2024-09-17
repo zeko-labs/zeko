@@ -1349,7 +1349,7 @@ module Make
           type input = Zeko_sequencer.Transfer.claim
 
           let arg_typ =
-            obj "TransferRequestInput"
+            obj "TransferClaimInput"
               ~coerce:(fun is_new pointer before after transfer ->
                 Zeko_sequencer.Transfer.
                   { is_new
