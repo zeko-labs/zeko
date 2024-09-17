@@ -1847,10 +1847,12 @@ module Make
           with
           | None ->
               None
-          | Some (_, account_update) ->
+          | Some (_, Ok account_update) ->
               Some
                 ( Yojson.Safe.to_string
-                @@ Zkapp_command.account_updates_to_json account_update ) )
+                @@ Zkapp_command.account_updates_to_json account_update )
+          | Some (_, Error msg) ->
+              Some msg )
 
     let committed_transaction =
       io_field "committedTransactions"

@@ -257,40 +257,57 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
     let enqueue_prove_transfer_request t ~key ~(transfer : Transfer.t) =
       Throttle.enqueue t.q (fun () ->
-          let%bind tree =
-            match transfer with
-            | { direction = Deposit; transfer } ->
-                M.Outer.submit_deposit ~outer_public_key:t.config.zkapp_pk
-                  ~deposit:transfer
-            | { direction = Withdraw; transfer } ->
-                M.Inner.submit_withdrawal ~withdrawal:transfer
+          let%bind result =
+            try_with (fun () ->
+                match transfer with
+                | { direction = Deposit; transfer } ->
+                    M.Outer.submit_deposit ~outer_public_key:t.config.zkapp_pk
+                      ~deposit:transfer
+                | { direction = Withdraw; transfer } ->
+                    M.Inner.submit_withdrawal ~withdrawal:transfer )
           in
-          Transfers_memory.add t.transfers_memory key
-            (Zkapp_command.Call_forest.cons_tree tree []) ;
+          let () =
+            match result with
+            | Ok tree ->
+                Transfers_memory.add t.transfers_memory key
+                  (Ok (Zkapp_command.Call_forest.cons_tree tree []))
+            | Error e ->
+                Transfers_memory.add t.transfers_memory key
+                  (Error (Exn.to_string e))
+          in
           return () )
 
     let enqueue_prove_transfer_claim t ~key ~(claim : Transfer.claim) =
       Throttle.enqueue t.q (fun () ->
-          let%bind _, forest =
-            match claim with
-            | { transfer = { direction = Deposit; transfer }
-              ; is_new
-              ; pointer
-              ; before
-              ; after
-              } ->
-                M.Inner.process_deposit ~is_new ~pointer ~before ~after
-                  ~deposit:transfer
-            | { transfer = { direction = Withdraw; transfer }
-              ; is_new
-              ; pointer
-              ; before
-              ; after
-              } ->
-                M.Outer.process_withdrawal ~outer_public_key:t.config.zkapp_pk
-                  ~is_new ~pointer ~before ~after ~withdrawal:transfer
+          let%bind result =
+            try_with (fun () ->
+                match claim with
+                | { transfer = { direction = Deposit; transfer }
+                  ; is_new
+                  ; pointer
+                  ; before
+                  ; after
+                  } ->
+                    M.Inner.process_deposit ~is_new ~pointer ~before ~after
+                      ~deposit:transfer
+                | { transfer = { direction = Withdraw; transfer }
+                  ; is_new
+                  ; pointer
+                  ; before
+                  ; after
+                  } ->
+                    M.Outer.process_withdrawal
+                      ~outer_public_key:t.config.zkapp_pk ~is_new ~pointer
+                      ~before ~after ~withdrawal:transfer )
           in
-          Transfers_memory.add t.transfers_memory key forest ;
+          let () =
+            match result with
+            | Ok (_, forest) ->
+                Transfers_memory.add t.transfers_memory key (Ok forest)
+            | Error e ->
+                Transfers_memory.add t.transfers_memory key
+                  (Error (Exn.to_string e))
+          in
           return () )
 
     let enqueue_prove_commit t ~target_ledger ~old_deposits_pointer

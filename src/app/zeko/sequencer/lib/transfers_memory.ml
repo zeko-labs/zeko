@@ -7,15 +7,16 @@ open Base
 open Mina_base
 
 module Transfers_memory = struct
+  type t_ =
+    ( ( Account_update.t
+      , Zkapp_command.Digest.Account_update.t
+      , Zkapp_command.Digest.Forest.t )
+      Zkapp_command.Call_forest.t
+    , string )
+    Result.t
+
   type t =
-    { table :
-        ( string
-        , float
-          * ( Account_update.t
-            , Zkapp_command.Digest.Account_update.t
-            , Zkapp_command.Digest.Forest.t )
-            Zkapp_command.Call_forest.t )
-        Hashtbl.t
+    { table : (string, float * t_) Hashtbl.t
     ; queue : (string * float) Queue.t
     ; lifetime : float
     }
@@ -39,9 +40,9 @@ module Transfers_memory = struct
     in
     loop ()
 
-  let add t key account_update =
+  let add t key account_update_result =
     let now = Unix.time () in
-    Hashtbl.set t.table ~key ~data:(now, account_update) ;
+    Hashtbl.set t.table ~key ~data:(now, account_update_result) ;
     Queue.enqueue t.queue (key, now) ;
     cleanup t
 
