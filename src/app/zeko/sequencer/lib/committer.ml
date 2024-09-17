@@ -127,8 +127,6 @@ let prove_commit (module M : Zkapps_rollup.S) ~(executor : Executor.t) ~zkapp_pk
     Gql_client.fetch_transfers archive_uri
       ~from_action_state:processed_deposits_pointer zkapp_pk
     |> Deferred.map ~f:(List.map ~f:fst)
-    (* Drop first since the filter is inclusive from both sides *)
-    |> Deferred.map ~f:(fun l -> List.drop l 1)
   in
   let%bind account_update =
     M.Outer.step last_snark ~outer_public_key:zkapp_pk
