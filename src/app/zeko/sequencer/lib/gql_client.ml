@@ -134,10 +134,6 @@ let fetch_transfers uri ?from_action_state ?end_action_state pk =
           , block_height ) ) )
   |> List.join
 
-(* stiahnut transfery a pridat to outer.step *)
-(* pustit inner.step *)
-(* exposnut api na posielanie withdrawalov a provovanie depositov *)
-
 let fetch_pooled_zkapp_commands uri pk =
   let q =
     object
