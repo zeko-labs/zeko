@@ -272,6 +272,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                 Transfers_memory.add t.transfers_memory key
                   (Ok (Zkapp_command.Call_forest.cons_tree tree []))
             | Error e ->
+                printf "Warning: prove_transfer_request failed %s\n%!"
+                  (Exn.to_string e) ;
                 Transfers_memory.add t.transfers_memory key
                   (Error (Exn.to_string e))
           in
@@ -305,6 +307,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             | Ok (_, forest) ->
                 Transfers_memory.add t.transfers_memory key (Ok forest)
             | Error e ->
+                printf "Warning: prove_transfer_claim failed %s\n%!"
+                  (Exn.to_string e) ;
                 Transfers_memory.add t.transfers_memory key
                   (Error (Exn.to_string e))
           in
