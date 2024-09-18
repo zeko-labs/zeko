@@ -209,6 +209,11 @@ module Process_transfer = struct
           (* We give it permission *)
       ; implicit_account_creation_fee =
           Boolean.false_ (* Custom token account, can't be true *)
+      ; events =
+          (* Need to expose transfer for data availability *)
+          (let empty_events = Zkapp_account.Events.(constant typ []) in
+           Events.push_to_data_as_hash empty_events
+             (var_to_fields TR.typ transfer) )
       }
     in
     let child_helper : Zkapp_call_forest.Checked.account_update =
@@ -750,18 +755,15 @@ module Make (T' : Transaction_snark.S) = struct
       Deferred.t )
     Pickles.Prover.t
 
-  let process_transfer ~is_new ~pointer ~before ~after ~transfer ~vk_hash
-      ~public_key (prover : transfer_prover) =
+  let process_transfer ~is_new ~pointer ~before ~after ~(transfer : TR.t)
+      ~vk_hash ~public_key (prover : transfer_prover) =
     let before = List.map ~f:(value_to_actions TR.typ) before in
     let after = List.map ~f:(value_to_actions TR.typ) after in
     let%bind trans1 =
-      Action_state_extension.prove ~dummy:is_new ~source:pointer before
+      Action_state_extension.prove ~dummy:is_new
+        ~source:Zkapp_account.Actions.empty_state_element before
     in
-    let pointer' =
-      Actions.push_events (Action_state_extension.statement trans1).target
-        (value_to_actions TR.typ transfer)
-    in
-    let%bind trans2 = Action_state_extension.prove ~source:pointer' after in
+    let%bind trans2 = Action_state_extension.prove ~source:pointer after in
     let child =
       { Body.dummy with
         public_key = transfer.recipient
@@ -795,7 +797,7 @@ module Make (T' : Transaction_snark.S) = struct
       ; authorization = None_given
       }
     in
-    ( `Pointer pointer'
+    ( `Pointer pointer
     , Zkapp_command.Call_forest.(
         cons_tree (mktree tree proof)
           ( if is_new then
