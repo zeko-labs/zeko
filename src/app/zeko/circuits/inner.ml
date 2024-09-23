@@ -1,5 +1,3 @@
-(** The rules for the inner account zkapp, that controls the money supply and transfers on the rollup *)
-
 open Core_kernel
 open Mina_base
 open Signature_lib
@@ -25,6 +23,12 @@ module State = struct
 
   let value_of_app_state (outer_action_state :: _ : F.t Zkapp_state.V.t) : t =
     { outer_action_state }
+
+  type precondition = { outer_action_state : F.var option }
+
+  let to_precondition (p : precondition) : F.var Or_ignore.Checked.t Zkapp_state.V.t =
+    var_to_precondition_fine
+      Var_to_precondition_fine.[ (F.typ, p.outer_action_state) ]
 end
 
 module Action = struct

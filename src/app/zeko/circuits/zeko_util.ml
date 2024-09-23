@@ -84,23 +84,6 @@ let unsafe_var_of_app_state (type var value) (typ : (var, value) Typ.t)
   app_state |> Zkapp_state.V.to_list |> Array.of_list
   |> unsafe_var_of_fields typ
 
-(** Default permissions for deployments *)
-let proof_permissions : Permissions.t =
-  { edit_state = Proof
-  ; send = Proof
-  ; receive = None
-  ; set_delegate = Proof
-  ; set_permissions = Proof
-  ; set_verification_key = (Either, Mina_numbers.Txn_version.current)
-  ; set_zkapp_uri = Proof
-  ; edit_action_state = Proof
-  ; set_token_symbol = Proof
-  ; increment_nonce = Proof
-  ; set_voting_for = Proof
-  ; set_timing = Proof
-  ; access = None
-  }
-
 (* Intended to be used for custom token accounts *)
 let none_permissions : Permissions.t =
   { edit_state = None
@@ -380,7 +363,7 @@ include struct
 end
 
 let assert_var label expr =
-  with_label label (fun () -> expr () |> Boolean.Assert.is_true)
+  with_label label Checked.(fun () -> expr () >>= Boolean.Assert.is_true)
 
 let default_account_update =
   let dummy' = { Account_update.Body.dummy with use_full_commitment = true } in
@@ -419,7 +402,10 @@ let value_to_actions (typ : ('var, 'value) Typ.t) (x : 'value) :
   [ fields ]
 
 module Calls = struct
-  type t = [] | ( :: ) of (Account_update.Checked.t * t) * t
+  type t =
+    | []
+    | ( :: ) of (Account_update.Checked.t * t) * t
+    | Raw of Zkapp_call_forest.Checked.t
 end
 
 let create_prover_value : 'a As_prover.t -> 'a Prover_value.t Checked.t =
@@ -447,6 +433,8 @@ let make_outputs :
           (Zkapp_call_forest.Checked.push
              ~account_update:(attach_control_var account_update)
              ~calls tail )
+    | Raw calls ->
+        Checked.return calls
   in
   fun account_update calls ->
     let* calls = create_call_forest calls in

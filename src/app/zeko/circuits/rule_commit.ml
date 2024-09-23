@@ -3,19 +3,18 @@ open Zeko_util
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
 open Mina_base
+open Outer
 
 module ASE = Action_state_extension.Make (struct
   let get_iterations = Int.pow 2 14
 end)
 
 module Make (Inputs : sig
-  val macroslot_size : int
+  val max_valid_while_size : int
 end)
-(Macroslot : module type of Macroslot.Make (Inputs))
-(Outer_inst : module type of Outer.Make (Inputs) (Macroslot))
 (T : Transaction_snark.S) =
 struct
-  open Outer_inst
+  open Inputs
 
   module PathElt = struct
     type t = { right_side : F.t } [@@deriving snarky]
@@ -37,8 +36,6 @@ struct
       ; public_key : PC.t  (** Our public key on the L2 *)
       ; vk_hash : F.t  (** Our vk hash *)
       ; sequencer : PC.t  (** Sequencer public key *)
-      ; bid_amount : Currency.Amount.t
-      ; macroslot : Macroslot.t  (** Current macroslot *)
       ; slot_range : Slot_range.t  (** slot_range *)
       ; action_state_extension : ASE.t
       ; old_inner_acc : Account.t
@@ -175,9 +172,7 @@ struct
     let* ({ txn_snark
           ; public_key
           ; vk_hash
-          ; macroslot
           ; sequencer
-          ; bid_amount
           ; slot_range
           ; action_state_extension
           ; old_inner_acc
@@ -188,6 +183,16 @@ struct
            Witness.var ) =
       exists_witness
     in
+
+    let* () =
+      assert_var __LOC__ (fun () ->
+          let* diff = Slot.Checked.diff slot_range.upper slot_range.lower in
+          Mina_numbers.Global_slot_span.Checked.(
+            diff
+            < constant
+                (Global_slot_span (Unsigned.UInt32.of_int max_valid_while_size))) )
+    in
+
     let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
 
@@ -229,7 +234,7 @@ struct
     let* new_inner_zkapp = get_zkapp new_inner_acc in
 
     let outer_action_state_in_inner =
-      Action.State.of_field_var
+      Outer.Action.State.of_field_var
         (Inner.State.var_of_app_state new_inner_zkapp.app_state)
           .outer_action_state
     in
@@ -272,42 +277,45 @@ struct
         app_state =
           State.(
             var_to_app_state typ
-              ( { ledger_hash = target_ledger
-                ; inner_action_state
-                ; sequencer
-                ; macroslot
-                ; bid_amount
-                ; finalized = Boolean.false_
-                }
+              ( { ledger_hash = target_ledger; inner_action_state; sequencer }
                 : var ))
       }
     in
     let preconditions =
       { default_account_update.preconditions with
         account =
-          { Zkapp_precondition.Account.(constant (typ ()) accept) with
+          { default_account_update.preconditions.account with
             state =
-              State.Precondition.(
-                to_precondition
-                  { ledger_hash = Some source_ledger
-                  ; inner_action_state = Some old_inner_action_state
-                  ; sequencer = Some sequencer
-                  ; macroslot = Some macroslot
-                  ; bid_amount = Some bid_amount
-                  ; finalized = Some Boolean.false_
-                  })
+              State.to_precondition
+                { ledger_hash = Some source_ledger
+                ; inner_action_state = Some old_inner_action_state
+                ; sequencer = Some sequencer
+                }
           ; action_state =
               Or_ignore.Checked.make_unsafe Boolean.true_
-                (Outer_inst.Action.State.to_field_var outer_action_state)
+                (Action.State.to_field_var outer_action_state)
               (* Our action state must match *)
           }
       ; valid_while = Slot_range.Checked.to_valid_while slot_range
       }
     in
+    let* actions =
+      Action.commit_to_actions_var
+        Action.Commit.
+          { ledger = target_ledger
+          ; inner_action_state =
+              Inner.Action.State.to_field_var inner_action_state
+          ; synchronized_outer_action_state =
+              Action.State.to_field_var outer_action_state
+          ; sequencer
+          ; slot_range
+          }
+    in
     (* Our account update is assembled, specifying our state update, our preconditions, our pk, and our authorization *)
     let account_update =
       { default_account_update with
         public_key
+      ; actions
       ; authorization_kind = authorization_vk_hash vk_hash
       ; update
       ; preconditions
@@ -348,7 +356,7 @@ struct
 
   let rule : _ Pickles.Inductive_rule.t =
     { identifier = "Rollup step"
-    ; prevs = [ T.tag ; force Action_state_extension.tag ]
+    ; prevs = [ T.tag; force Action_state_extension.tag ]
     ; main = (fun x -> main x |> Run.run_checked)
     ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
     }

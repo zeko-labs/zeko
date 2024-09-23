@@ -54,7 +54,7 @@ let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
     ; auxiliary_output
     }
 
-let rule : _ Pickles.Inductive_rule.t =
+let rule () : _ Pickles.Inductive_rule.t =
   { identifier = "Rollup inner account step"
   ; prevs = [ force Action_state_extension.tag ]
   ; main = (fun x -> main x |> Run.run_checked)

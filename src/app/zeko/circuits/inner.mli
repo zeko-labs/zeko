@@ -12,6 +12,10 @@ module State : sig
   val var_of_app_state : Field.Var.t Mina_base.Zkapp_state.V.t -> var
 
   val value_of_app_state : Field.t Mina_base.Zkapp_state.V.t -> t
+
+  type precondition = { outer_action_state : F.var option }
+
+  val to_precondition : precondition -> F.var Or_ignore.Checked.t Mina_base.Zkapp_state.V.t
 end
 
 module Action : sig

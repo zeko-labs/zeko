@@ -354,7 +354,7 @@ struct
       }
     [@@deriving snarky]
 
-    let get ?(check : Boolean.var option)
+    let%snarkydef_ get ?(check : Boolean.var option)
         ({ init_arg; proof_target; proof; excess } : var) =
       let* has_proof =
         exists Boolean.typ ~compute:As_prover.(V.get proof >>| Option.is_some)
