@@ -2019,8 +2019,7 @@ module Make
       ; accounts_for_pk
       ; token_accounts
       ; genesis_constants
-      ; transfer_account_update
-      ; committed_transaction
+      ; transfer_account_update (* ; committed_transaction *)
       ; token_owner
       ; network_id
       ; statistics
@@ -2042,7 +2041,7 @@ module Make
         ~resolve:(fun { ctx = sequencer; _ } ->
           return (Ok Zeko_sequencer.(add_transactions_subscriber sequencer)) )
 
-    let commands = [ new_transaction ]
+    let commands = [ (* new_transaction *) ]
   end
 
   let schema =
