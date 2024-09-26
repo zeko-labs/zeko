@@ -2,6 +2,7 @@ open Core_kernel
 open Async_kernel
 open Mina_base
 open Mina_ledger
+module Field = Snark_params.Tick.Field
 
 module Rpc = struct
   let dispatch ?(max_tries = 5) ~logger
@@ -168,7 +169,13 @@ let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
 let get_diff ~logger ~config ~ledger_hash =
   try_all_nodes ~config ~f:(fun ~node_location () ->
-      Rpc.get_diff ~logger ~node_location ~ledger_hash )
+      match%bind Rpc.get_diff ~logger ~node_location ~ledger_hash with
+      | Ok (Some diff) ->
+          return (Ok diff)
+      | Ok None ->
+          return (Error (Error.of_string "Diff not found"))
+      | Error e ->
+          return (Error e) )
 
 (** Distribute diff of initial accounts *)
 let distribute_genesis_diff ~logger ~config ~ledger =
@@ -193,3 +200,44 @@ let distribute_genesis_diff ~logger ~config ~ledger =
       ~changed_accounts ~command_with_action_step_flags:None
   in
   distribute_diff ~logger ~config ~ledger_openings ~diff ~quorum:0
+
+let attach_openings ~diffs ~depth =
+  let l = Ledger.create_ephemeral ~depth () in
+  List.map diffs ~f:(fun diff ->
+      let changed_accounts = Diff.changed_accounts diff in
+      let account_ids =
+        List.map changed_accounts ~f:snd |> List.map ~f:Account.identifier
+      in
+      let openings = Sparse_ledger.of_ledger_subset_exn l account_ids in
+      (diff, openings) )
+
+let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
+  let%bind.Deferred.Result ledger_hashes_chain =
+    get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash
+  in
+  let diffs_with_openings =
+    lazy
+      (let%bind.Deferred.Result diffs =
+         Deferred.List.map ledger_hashes_chain ~how:(`Max_concurrent_jobs 5)
+           ~f:(fun ledger_hash -> get_diff ~logger ~config ~ledger_hash)
+         >>| Result.all
+       in
+       return (Ok (attach_openings ~diffs ~depth)) )
+  in
+  Deferred.List.map config.nodes ~f:(fun node ->
+      match%bind
+        Rpc.get_diff ~logger ~node_location:node ~ledger_hash:target_ledger_hash
+      with
+      | Ok (Some _) ->
+          (* The node is already synced *)
+          return (Ok ())
+      | Ok None | Error _ ->
+          let%bind.Deferred.Result diffs_with_openings =
+            Lazy.force diffs_with_openings
+          in
+          Deferred.List.map diffs_with_openings ~f:(fun (diff, openings) ->
+              Rpc.post_diff ~logger ~node_location:node
+                ~ledger_openings:openings ~diff
+              >>| Result.ignore_m )
+          >>| Result.all_unit )
+  >>| Result.all_unit
