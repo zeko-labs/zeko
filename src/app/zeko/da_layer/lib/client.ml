@@ -5,7 +5,7 @@ open Mina_ledger
 module Field = Snark_params.Tick.Field
 
 module Rpc = struct
-  let dispatch ?(max_tries = 5) ~logger
+  let dispatch ?(max_tries = 5) ?(timeout = 5.) ~logger
       (node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) rpc data =
     let rec go tries_left errs =
       if Int.( <= ) tries_left 0 then
@@ -26,8 +26,11 @@ module Rpc = struct
         | Ok result ->
             return (Ok result)
         | Error e ->
-            [%log error] "Error sending data to the da node $error. Retrying..."
-              ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+            if tries_left > 1 then
+              [%log error]
+                "Error sending data to the da node $error. Retrying..."
+                ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+            let%bind () = after (Time_ns.Span.of_sec timeout) in
             go (tries_left - 1) (e :: errs)
     in
     go max_tries []
@@ -37,19 +40,20 @@ module Rpc = struct
 
   let get_diff ~logger ~node_location ~ledger_hash :
       (Diff.t option, Error.t) result Deferred.t =
-    dispatch ~logger node_location Rpc.Get_diff.v1 ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.v1 ledger_hash
 
   let get_all_keys ~logger ~node_location () =
-    dispatch ~logger node_location Rpc.Get_all_keys.v1 ()
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.v1 ()
 
   let get_diff_source ~logger ~node_location ~ledger_hash =
-    dispatch ~logger node_location Rpc.Get_diff_source.v1 ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.v1
+      ledger_hash
 
   let get_node_public_key ~logger ~node_location () =
-    dispatch ~logger node_location Rpc.Get_signer_public_key.v1 ()
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signer_public_key.v1 ()
 
   let get_signature ~logger ~node_location ~ledger_hash =
-    dispatch ~logger node_location Rpc.Get_signature.v1 ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.v1 ledger_hash
 end
 
 module Config = struct
@@ -204,11 +208,16 @@ let distribute_genesis_diff ~logger ~config ~ledger =
 let attach_openings ~diffs ~depth =
   let l = Ledger.create_ephemeral ~depth () in
   List.map diffs ~f:(fun diff ->
-      let changed_accounts = Diff.changed_accounts diff in
+      let changed_accounts =
+        Diff.changed_accounts diff
+        |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      in
       let account_ids =
         List.map changed_accounts ~f:snd |> List.map ~f:Account.identifier
       in
       let openings = Sparse_ledger.of_ledger_subset_exn l account_ids in
+      List.iter changed_accounts ~f:(fun (index, account) ->
+          Ledger.set_at_index_exn l index account ) ;
       (diff, openings) )
 
 let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
@@ -229,9 +238,11 @@ let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
         Rpc.get_diff ~logger ~node_location:node ~ledger_hash:target_ledger_hash
       with
       | Ok (Some _) ->
-          (* The node is already synced *)
+          printf "Node %s is already synced\n%!"
+            (Host_and_port.to_string node.value) ;
           return (Ok ())
       | Ok None | Error _ ->
+          printf "Syncing node %s\n%!" (Host_and_port.to_string node.value) ;
           let%bind.Deferred.Result diffs_with_openings =
             Lazy.force diffs_with_openings
           in
