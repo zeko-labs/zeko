@@ -19,6 +19,12 @@ let run_node =
        and testing_mode =
          flag "--random-sk" no_arg
            ~doc:"Run in testing mode, the signer key will be generated randomly"
+       and sync_period =
+         flag "--sync-period"
+           (optional_with_default 60 int)
+           ~doc:
+             "int Period to sync with the nodes in seconds, 0 for no periodic \
+              sync"
        in
        fun () ->
          let signer =
@@ -35,8 +41,8 @@ let run_node =
          in
          let%bind () =
            Deferred.ignore_m
-           @@ Da_layer.Node.create_server ~nodes_to_sync ~logger ~port ~db_dir
-                ~signer_sk:signer ()
+           @@ Da_layer.Node.create_server ~nodes_to_sync ~sync_period ~logger
+                ~port ~db_dir ~signer_sk:signer ()
          in
          [%log info] "Server started on port $port"
            ~metadata:[ ("port", `Int port) ] ;

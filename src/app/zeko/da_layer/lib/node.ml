@@ -266,8 +266,8 @@ let post_diff t ~ledger_openings ~diff =
   in
   Ok signature
 
-(** Find missing keys and fetch corresponding diffes *)
-let sync ~logger ~node_location t =
+(** Find missing keys and fetch corresponding diffs *)
+let sync_with_one ~logger ~node_location t =
   let open Async in
   let%bind.Deferred.Result remote_keys =
     Client.Rpc.get_all_keys ~logger ~node_location ()
@@ -313,6 +313,20 @@ let sync ~logger ~node_location t =
   in
   return (Ok ())
 
+let sync ~logger ~nodes_to_sync ~t =
+  let open Async in
+  Deferred.List.iter ~how:`Sequential nodes_to_sync ~f:(fun n ->
+      match%bind sync_with_one ~logger ~node_location:n t with
+      | Ok () ->
+          return ()
+      | Error e ->
+          return
+          @@ [%log error] "Exception while syncing the node $node: $error"
+               ~metadata:
+                 [ ("error", `String (Error.to_string_hum e))
+                 ; ("node", `String n.name)
+                 ] )
+
 let get_signature t ~ledger_hash =
   let%bind.Option _diff = Db.get_diff t.db ~ledger_hash in
   let message = Random_oracle.Input.Chunked.field_elements [| ledger_hash |] in
@@ -351,7 +365,8 @@ let implementations t =
             Async.return @@ get_signature t ~ledger_hash:query )
       ]
 
-let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
+let create_server ~nodes_to_sync ~sync_period ~port ~logger ~db_dir ~signer_sk
+    () =
   let open Async in
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
@@ -364,19 +379,10 @@ let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
     }
   in
 
-  let%bind () =
-    Deferred.List.iter ~how:`Sequential nodes_to_sync ~f:(fun n ->
-        match%bind sync ~logger ~node_location:n t with
-        | Ok () ->
-            return ()
-        | Error e ->
-            [%log error] "Exception while syncing the node $node: $error"
-              ~metadata:
-                [ ("error", `String (Error.to_string_hum e))
-                ; ("node", `String n.name)
-                ] ;
-            failwith (Error.to_string_hum e) )
-  in
+  if sync_period > 0 then
+    every
+      (Time.Span.of_sec (Float.of_int sync_period))
+      (fun () -> don't_wait_for @@ sync ~logger ~nodes_to_sync ~t) ;
 
   let implementations = implementations t in
   Tcp.Server.create
