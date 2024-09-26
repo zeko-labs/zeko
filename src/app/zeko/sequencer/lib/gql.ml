@@ -993,34 +993,28 @@ module Make
             ] )
     end
 
-    module Committed_transactions = struct
-      type json_account = { account_id : string; account : string }
-
-      type t =
-        { raw_committed_transactions : string list
-        ; json_genesis_accounts : json_account list
-        }
-
-      let t =
-        let json_account =
-          obj "jsonAccount" ~fields:(fun _ ->
-              [ field "accountId" ~typ:(non_null string) ~args:[]
-                  ~resolve:(fun _ a -> a.account_id)
-              ; field "account" ~typ:(non_null string) ~args:[]
-                  ~resolve:(fun _ a -> a.account)
-              ] )
-        in
-        obj "CommittedTransactions" ~fields:(fun _ ->
-            [ field "rawTransactions"
-                ~typ:(non_null (list (non_null string)))
-                ~doc:"List of raw committed transactions in base64 format"
+    module State_hashes = struct
+      let t : (Zeko_sequencer.t, Zeko_sequencer.State_hashes.t option) typ =
+        let open Snark_params.Tick in
+        obj "StateHashes" ~fields:(fun _ ->
+            [ field "provedLedgerHash" ~typ:(non_null string)
+                ~doc:"Ledger hash of latest proved state"
                 ~args:Arg.[]
-                ~resolve:(fun _ t -> t.raw_committed_transactions)
-            ; field "jsonGenesisAccounts"
-                ~typ:(non_null (list (non_null json_account)))
-                ~doc:"List of genesis accounts in json format"
+                ~resolve:(fun _ t ->
+                  Field.to_string
+                    Zeko_sequencer.State_hashes.(t.proved_ledger_hash) )
+            ; field "unprovedLedgerHash" ~typ:(non_null string)
+                ~doc:"Ledger hash of latest unproved state"
                 ~args:Arg.[]
-                ~resolve:(fun _ t -> t.json_genesis_accounts)
+                ~resolve:(fun _ t ->
+                  Field.to_string
+                    Zeko_sequencer.State_hashes.(t.unproved_ledger_hash) )
+            ; field "committedLedgerHash" ~typ:(non_null string)
+                ~doc:"Ledger hash of latest committed state"
+                ~args:Arg.[]
+                ~resolve:(fun _ t ->
+                  Field.to_string
+                    Zeko_sequencer.State_hashes.(t.committed_ledger_hash) )
             ] )
     end
 
@@ -1875,75 +1869,12 @@ module Make
           | Some (_, Error msg) ->
               Some msg )
 
-    let committed_transaction =
-      io_field "committedTransactions"
-        ~doc:
-          "Get list of raw committed transactions in base64 format. Useful for \
-           boostrapping archive node."
-        ~typ:Types.Committed_transactions.t
+    let state_hashes =
+      field "stateHashes" ~doc:"Get current state of the rollup"
+        ~typ:Types.State_hashes.t
         ~args:Arg.[]
         ~resolve:(fun { ctx = sequencer; _ } () ->
-          let%bind ledger_hashes_chain =
-            Da_layer.Client.get_ledger_hashes_chain
-              ~logger:Zeko_sequencer.(sequencer.logger)
-              ~config:sequencer.da_client.config
-              ~depth:Zeko_sequencer.constraint_constants.ledger_depth
-              ~target_ledger_hash:
-                (Option.value
-                   ~default:(Zeko_sequencer.get_root sequencer)
-                   sequencer.da_client.last_distributed_diff )
-            |> Deferred.map ~f:Or_error.ok_exn
-          in
-          let%bind genesis_accounts =
-            let ledger_hash = List.hd_exn ledger_hashes_chain in
-            let%bind diff =
-              match%bind
-                Da_layer.Client.get_diff ~logger:sequencer.logger
-                  ~config:sequencer.da_client.config ~ledger_hash
-              with
-              | Ok diff ->
-                  return diff
-              | Error e ->
-                  Error.raise e
-            in
-            let changed_accounts = Da_layer.Diff.changed_accounts diff in
-            return
-            @@ List.map changed_accounts ~f:(fun (_, account) ->
-                   ( Account_id.create account.public_key account.token_id
-                   , account ) )
-          in
-          let%bind commands =
-            let ledger_hashes = List.tl_exn ledger_hashes_chain in
-            Deferred.List.filter_map ledger_hashes ~how:`Parallel
-              ~f:(fun ledger_hash ->
-                let%bind diff =
-                  match%bind
-                    Da_layer.Client.get_diff ~logger:sequencer.logger
-                      ~config:sequencer.da_client.config ~ledger_hash
-                  with
-                  | Ok diff ->
-                      return diff
-                  | Error e ->
-                      Error.raise e
-                in
-                return @@ Option.map ~f:fst
-                @@ Da_layer.Diff.command_with_action_step_flags diff )
-          in
-          return
-            (Ok
-               (Some
-                  Types.Committed_transactions.
-                    { raw_committed_transactions =
-                        List.map commands ~f:(fun c ->
-                            User_command.to_base64 c )
-                    ; json_genesis_accounts =
-                        List.map genesis_accounts ~f:(fun (id, acc) ->
-                            { account_id =
-                                Yojson.Safe.to_string @@ Account_id.to_yojson id
-                            ; account =
-                                Yojson.Safe.to_string @@ Account.to_yojson acc
-                            } )
-                    } ) ) )
+          Some (Zeko_sequencer.get_latest_state sequencer) )
 
     let token_owner =
       field "tokenOwner" ~doc:"Find the account that owns a given token"
@@ -2019,7 +1950,8 @@ module Make
       ; accounts_for_pk
       ; token_accounts
       ; genesis_constants
-      ; transfer_account_update (* ; committed_transaction *)
+      ; transfer_account_update
+      ; state_hashes
       ; token_owner
       ; network_id
       ; statistics
@@ -2030,18 +1962,21 @@ module Make
   module Subscriptions = struct
     open Schema
 
-    let new_transaction =
-      subscription_field "newTransaction"
-        ~doc:
-          "Event that triggers when a new transaction is applied, returned in \
-           a base64 encoding of block with one transaction. Useful for archive \
-           node."
-        ~typ:(non_null string)
+    let state_hashes_changed =
+      subscription_field "stateHashesChanged"
+        ~doc:"Event that triggers when some of the state hashes are changed."
+        ~typ:(non_null Types.State_hashes.t)
         ~args:Arg.[]
         ~resolve:(fun { ctx = sequencer; _ } ->
-          return (Ok Zeko_sequencer.(add_transactions_subscriber sequencer)) )
+          let r, w =
+            Zeko_sequencer.Subscriptions.add_state_hashes_subscriber
+              sequencer.subscriptions
+          in
+          Pipe.write_without_pushback_if_open w
+            (Zeko_sequencer.get_latest_state sequencer) ;
+          return (Ok r) )
 
-    let commands = [ (* new_transaction *) ]
+    let commands = [ state_hashes_changed ]
   end
 
   let schema =

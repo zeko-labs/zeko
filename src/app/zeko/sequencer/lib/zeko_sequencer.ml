@@ -371,19 +371,24 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let wait_to_finish t = Throttle.capacity_available t.q
   end
 
+  module State_hashes = struct
+    type t =
+      { proved_ledger_hash : Ledger_hash.t
+      ; unproved_ledger_hash : Ledger_hash.t
+      ; committed_ledger_hash : Ledger_hash.t
+      }
+  end
+
   module Subscriptions = struct
     type t =
-      { mutable transactions : string Pipe.Writer.t list
-      ; mutable staged_archive_diffs :
-          Archive_lib.Diff.Transition_frontier.t list
-      }
+      { mutable state_hashes_changed : State_hashes.t Pipe.Writer.t list }
 
-    let create () = { transactions = []; staged_archive_diffs = [] }
+    let create () = { state_hashes_changed = [] }
 
-    let add_staged_diff t diff =
-      t.staged_archive_diffs <- t.staged_archive_diffs @ [ diff ]
-
-    let clear_staged_diffs t = t.staged_archive_diffs <- []
+    let add_state_hashes_subscriber t =
+      let r, w = Pipe.create () in
+      t.state_hashes_changed <- w :: t.state_hashes_changed ;
+      (r, w)
   end
 
   module Kvdb = struct
@@ -474,24 +479,18 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
   let is_empty t = L.Db.num_accounts t.db = 0
 
-  let dispatch_transaction t ~ledger ~accounts_created ~new_state_hash ~txn =
-    let new_protocol_state, diff =
-      Archive_lib.Diff.Builder.zeko_transaction_added ~constraint_constants
-        ~accounts_created ~new_state_hash ~protocol_state:t.protocol_state
-        ~ledger ~txn
+  let get_latest_state t =
+    let committed_ledger_hash =
+      Option.value ~default:Field.zero
+        t.snark_q.state.previous_committed_ledger_hash
     in
-    t.protocol_state <- new_protocol_state ;
-    persist_protocol_state t ;
-    Subscriptions.add_staged_diff t.subscriptions diff ;
-    match
-      Base64.encode
-      @@ Binable.to_string (module Archive_lib.Diff.Transition_frontier) diff
-    with
-    | Ok data ->
-        List.iter t.subscriptions.transactions ~f:(fun w ->
-            Pipe.write_without_pushback_if_open w data )
-    | Error (`Msg e) ->
-        print_endline e
+    State_hashes.
+      { proved_ledger_hash =
+          Option.map t.snark_q.state.last ~f:Zkapps_rollup.target_ledger
+          |> Option.value ~default:committed_ledger_hash
+      ; unproved_ledger_hash = get_root t
+      ; committed_ledger_hash
+      }
 
   (** Apply user command to the ledger without checking the validity of the command *)
   let apply_user_command_without_check l archive command ~global_slot
@@ -619,11 +618,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
               (apply_user_command_without_check l t.archive command ~global_slot
                  ~state_body )
           in
-
-          dispatch_transaction t ~ledger:l
-            ~accounts_created:(L.Transaction_applied.new_accounts txn_applied)
-            ~new_state_hash:(L.merkle_root l)
-            ~txn:(L.Transaction_applied.transaction txn_applied) ;
 
           (* Post transaction to the DA layer *)
           let changed_accounts =
@@ -800,7 +794,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         L.(of_database t.db)
         [ M.Inner.account_id ]
     in
-    Subscriptions.clear_staged_diffs t.subscriptions ;
     Snark_queue.enqueue_prove_commit t.snark_q ~target_ledger
       ~old_deposits_pointer ~processed_deposits_pointer:processed_pointer
 
@@ -810,22 +803,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
       every ~start:(after period) ~stop:(Ivar.read t.stop) period (fun () ->
           don't_wait_for @@ commit t )
-
-  let add_transactions_subscriber t =
-    let r, w = Pipe.create () in
-    List.iter t.subscriptions.staged_archive_diffs ~f:(fun diff ->
-        match
-          Base64.encode
-          @@ Binable.to_string
-               (module Archive_lib.Diff.Transition_frontier)
-               diff
-        with
-        | Ok data ->
-            Pipe.write_without_pushback_if_open w data
-        | Error (`Msg e) ->
-            print_endline e ) ;
-    t.subscriptions.transactions <- w :: t.subscriptions.transactions ;
-    r
 
   let bootstrap ~logger ({ config; snark_q; _ } as t) da_config =
     let%bind committed_ledger_hash =
