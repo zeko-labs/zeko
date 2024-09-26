@@ -1880,10 +1880,8 @@ module Make
                 Da_layer.Client.get_diff ~logger:sequencer.logger
                   ~config:sequencer.da_client.config ~ledger_hash
               with
-              | Ok (Some diff) ->
+              | Ok diff ->
                   return diff
-              | Ok None ->
-                  failwith "No genesis diff found"
               | Error e ->
                   Error.raise e
             in
@@ -1902,10 +1900,8 @@ module Make
                     Da_layer.Client.get_diff ~logger:sequencer.logger
                       ~config:sequencer.da_client.config ~ledger_hash
                   with
-                  | Ok (Some diff) ->
+                  | Ok diff ->
                       return diff
-                  | Ok None ->
-                      failwith "No diff found"
                   | Error e ->
                       Error.raise e
                 in

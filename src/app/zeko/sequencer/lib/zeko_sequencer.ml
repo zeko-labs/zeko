@@ -846,7 +846,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         ~f:(fun ledger_hash ->
           let%bind diff : Da_layer.Diff.t Deferred.t =
             Da_layer.Client.get_diff ~logger ~config:da_config ~ledger_hash
-            |> Deferred.map ~f:(fun r -> Option.value_exn @@ Or_error.ok_exn r)
+            |> Deferred.map ~f:(fun r -> Or_error.ok_exn r)
           in
           assert (
             Ledger_hash.equal
@@ -960,6 +960,17 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         (module M)
         ~executor:t.snark_q.executor ~db ~zkapp_pk:config.zkapp_pk
         ~archive_uri:config.archive_uri
+    in
+    let%bind () =
+      match%bind
+        Da_layer.Client.sync_nodes ~logger ~config:da_config
+          ~depth:constraint_constants.ledger_depth
+          ~target_ledger_hash:(get_root t)
+      with
+      | Ok _ ->
+          return ()
+      | Error e ->
+          Error.raise e
     in
     return t
 end
