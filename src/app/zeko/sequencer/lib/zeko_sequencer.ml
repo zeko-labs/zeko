@@ -391,40 +391,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       (r, w)
   end
 
-  module Kvdb = struct
-    let ok_exn x =
-      let open Ppx_deriving_yojson_runtime.Result in
-      match x with Ok x -> x | Error e -> failwith e
-
-    module Key_value = struct
-      type _ t = Protocol_state : (unit * Mina_state.Protocol_state.value) t
-
-      let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
-       fun pair_type key ->
-        match pair_type with
-        | Protocol_state ->
-            Bigstring.of_string "protocol_state"
-
-      let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
-       fun pair_type value ->
-        match pair_type with
-        | Protocol_state ->
-            Bigstring.of_string @@ Yojson.Safe.to_string
-            @@ Mina_state.Protocol_state.value_to_yojson value
-
-      let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
-       fun pair_type data ->
-        match pair_type with
-        | Protocol_state ->
-            ok_exn @@ Mina_state.Protocol_state.value_of_yojson
-            @@ Yojson.Safe.from_string @@ Bigstring.to_string data
-    end
-
-    include Kvdb_base.Make (Key_value)
-
-    let of_db = L.Db.zeko_kvdb
-  end
-
   type t =
     { db : L.Db.t
     ; logger : Logger.t
@@ -435,19 +401,9 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     ; da_client : Da_layer.Client.Sequencer.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
-    ; mutable protocol_state : Mina_state.Protocol_state.value
     ; mutable subscriptions : Subscriptions.t
     ; mutable number_of_transactions : int
     }
-
-  let persist_protocol_state t =
-    Kvdb.(set (of_db t.db) Protocol_state ~key:() ~data:t.protocol_state)
-
-  let load_protocol_state_exn t =
-    let data =
-      Kvdb.(get (of_db t.db) Protocol_state ~key:()) |> Option.value_exn
-    in
-    t.protocol_state <- data
 
   let close t =
     L.Db.close t.db ;
@@ -463,10 +419,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let account_id = Account_id.create public_key token_id in
     let%bind.Option location = L.Db.location_of_account t.db account_id in
     L.Db.get t.db location
-
-  let get_global_slot t =
-    Mina_state.Protocol_state.consensus_state t.protocol_state
-    |> Consensus.Data.Consensus_state.global_slot_since_genesis
 
   let infer_nonce t public_key =
     match get_account t public_key Token_id.default with
@@ -908,7 +860,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             ~kvdb:(L.Db.zeko_kvdb db)
       ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
-      ; protocol_state = compile_time_genesis_state
       ; subscriptions = Subscriptions.create ()
       ; number_of_transactions = 0
       }
@@ -916,8 +867,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let%bind () =
       if is_empty t then bootstrap ~logger t da_config
       else (
-        load_protocol_state_exn t ;
-
         Snark_queue.get_state ~kvdb:(L.Db.zeko_kvdb db)
         |> Option.iter ~f:(fun state -> t.snark_q.state <- state) ;
 
@@ -1241,7 +1190,8 @@ let%test_module "Sequencer tests" =
                                     Mina_numbers.Global_slot_since_genesis.zero
                                   ~state_view:
                                     Mina_state.Protocol_state.(
-                                      Body.view @@ body sequencer.protocol_state)
+                                      Body.view
+                                      @@ body compile_time_genesis_state)
                               with
                             | Ok (applied, _) ->
                                 [%test_eq: Transaction_status.t]
@@ -1355,7 +1305,7 @@ let%test_module "Sequencer tests" =
                                   Mina_numbers.Global_slot_since_genesis.zero
                                 ~state_view:
                                   Mina_state.Protocol_state.(
-                                    Body.view @@ body sequencer.protocol_state)
+                                    Body.view @@ body compile_time_genesis_state)
                             with
                           | Ok _ ->
                               ()
