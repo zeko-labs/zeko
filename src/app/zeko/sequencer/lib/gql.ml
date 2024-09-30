@@ -1964,7 +1964,9 @@ module Make
 
     let state_hashes_changed =
       subscription_field "stateHashesChanged"
-        ~doc:"Event that triggers when some of the state hashes are changed."
+        ~doc:
+          "Event that triggers when some of the state hashes are changed. Max \
+           once per minute."
         ~typ:(non_null Types.State_hashes.t)
         ~args:Arg.[]
         ~resolve:(fun { ctx = sequencer; _ } ->

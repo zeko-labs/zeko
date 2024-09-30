@@ -444,6 +444,11 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; committed_ledger_hash
       }
 
+  let trigger_state_hashes_changed t =
+    let state_hashes = get_latest_state t in
+    List.iter t.subscriptions.state_hashes_changed ~f:(fun w ->
+        Pipe.write_without_pushback_if_open w state_hashes )
+
   (** Apply user command to the ledger without checking the validity of the command *)
   let apply_user_command_without_check l archive command ~global_slot
       ~state_body =
@@ -601,6 +606,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           in
           Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
             ~ledger_openings:first_pass_ledger ~diff ~target_ledger_hash ;
+
+          trigger_state_hashes_changed t ;
 
           t.number_of_transactions <- t.number_of_transactions + 1 ;
 

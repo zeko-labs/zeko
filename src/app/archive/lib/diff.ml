@@ -142,7 +142,8 @@ module Builder = struct
   (* ZEKO NOTE: needed by archive relay *)
   let zeko_transaction_added
       ~(constraint_constants : Genesis_constants.Constraint_constants.t)
-      ~accounts_created ~new_state_hash ~protocol_state ~ledger ~txn =
+      ~accounts_created ~new_state_hash ~protocol_state ~ledger ~txn
+      ~dummy_fee_payer =
     let advance_protocol_state ~protocol_state ~new_state_hash
         ~increase_blockchain_length =
       let old_protocol_state = protocol_state in
@@ -249,7 +250,12 @@ module Builder = struct
                  ; commands =
                      [ With_status.{ data = command; status = txn_status } ]
                  ; coinbase = Zero
-                 ; internal_command_statuses = [ Transaction_status.Applied ]
+                 ; internal_command_statuses =
+                     ( if
+                       Currency.Fee.equal (User_command.fee command)
+                         Currency.Fee.zero
+                     then []
+                     else [ Transaction_status.Applied ] )
                  }
                , None )
            }
