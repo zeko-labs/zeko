@@ -125,7 +125,7 @@ module Graphql_ws = struct
         Gql_unknown s
 end
 
-let sync ~(state : State.t) ~hash =
+let sync_archive ~(state : State.t) ~hash =
   let logger = state.logger in
   let%bind.Deferred.Result chain =
     Da_layer.Client.get_ledger_hashes_chain ~logger ~config:state.da_config
@@ -177,91 +177,88 @@ let sync ~(state : State.t) ~hash =
                 | Ok () ->
                     State.add_hash state (Ledger.merkle_root ledger) ;
                     return
-                    @@ printf
-                         "Bootstrapped transaction to archive with hash: %s\n%!"
+                    @@ printf "Synced diff to archive with hash: %s\n%!"
                          ( Ledger_hash.to_decimal_string
                          @@ Ledger.merkle_root ledger )
                 | Error e ->
                     raise (Error.to_exn e) ) ) )
   |> Deferred.map ~f:Result.return
 
-let handshake r w =
-  let%bind () =
-    Pipe.write w (Graphql_ws.client_message_to_string Gql_connection_init)
+let fetch_current_ledger_hash ~zeko_uri () =
+  let query =
+    {|
+           query {
+             stateHashes {
+               unprovedLedgerHash
+             }
+           }
+         |}
   in
-  match%bind Pipe.read r with
-  | `Ok message -> (
-      match Graphql_ws.server_message_of_string message with
-      | Gql_connection_ack ->
-          return ()
-      | _ ->
-          failwith "connection_ack not received" )
-  | `Eof ->
-      failwith "eof"
-
-let subscribe w =
-  let subscribe_payload =
-    Graphql_ws.client_message_to_string
-      (Gql_start
-         { id = 1
-         ; query = "subscription { stateHashesChanged { unprovedLedgerHash } }"
-         ; variables = `Assoc []
-         ; operation_name = None
-         } )
+  let body =
+    Yojson.Safe.to_string
+    @@ `Assoc [ ("query", `String query); ("variables", `Assoc []) ]
   in
-  Pipe.write w subscribe_payload
-
-let rec run ~(state : State.t) () =
-  let () =
+  let headers =
+    List.fold ~init:(Cohttp.Header.init ())
+      ~f:(fun acc (k, v) -> Cohttp.Header.add acc k v)
+      [ ("Accept", "application/json"); ("Content-Type", "application/json") ]
+  in
+  let%bind.Deferred.Result response, body =
+    Deferred.Or_error.try_with ~here:[%here] ~extract_exn:true (fun () ->
+        Cohttp_async.Client.post ~headers
+          ~body:(Cohttp_async.Body.of_string body)
+          zeko_uri )
+    |> Deferred.Result.map_error ~f:(fun e -> Error.to_string_hum e)
+  in
+  let%bind body_str = Cohttp_async.Body.to_string body in
+  let%bind.Deferred.Result body_json =
     match
-      Thread_safe.block_on_async (fun () ->
-          Conduit_async.V3.with_connection_uri state.zeko_uri (fun _ r w ->
-              print_endline "Connected to zeko" ;
-              let r, w =
-                Websocket_async.client_ez ~heartbeat:(Time_ns.Span.of_sec 5.)
-                  state.zeko_uri r w
-              in
-
-              let%bind () = handshake r w in
-              let%bind () = subscribe w in
-
-              Pipe.iter r ~f:(fun message ->
-                  match
-                    try Graphql_ws.server_message_of_string message
-                    with e -> Gql_unknown (Exn.to_string e)
-                  with
-                  | Gql_data { data } -> (
-                      let hash =
-                        Yojson.Safe.Util.(
-                          member "stateHashesChanged" data
-                          |> member "unprovedLedgerHash"
-                          |> to_string)
-                        |> Ledger_hash.of_decimal_string
-                      in
-                      printf "Received hash: %s\n%!"
-                        (Ledger_hash.to_decimal_string hash) ;
-                      match%bind
-                        try_with (fun () -> time "Synced" (sync ~state ~hash))
-                      with
-                      | Ok (Ok ()) ->
-                          return ()
-                      | Ok (Error e) ->
-                          return @@ print_endline (Error.to_string_hum e)
-                      | Error e ->
-                          return @@ print_endline (Exn.to_string e) )
-                  | Gql_unknown s ->
-                      return @@ print_endline ("Received unknown message: " ^ s)
-                  | _ ->
-                      return () ) ) )
+      Cohttp.Code.code_of_status (Cohttp_async.Response.status response)
     with
-    | Ok () ->
-        print_endline "Disconnected gracefully"
-    | Error e ->
-        print_endline (Exn.to_string e)
+    | 200 ->
+        Deferred.return (Ok (Yojson.Safe.from_string body_str))
+    | code ->
+        Deferred.return
+          (Error (Printf.sprintf "Status code %d -- %s" code body_str))
   in
-  print_endline "Retrying in 10 seconds" ;
-  Thread_safe.block_on_async_exn (fun () -> after (Time.Span.of_sec 10.)) ;
-  run ~state ()
+  let open Yojson.Safe.Util in
+  match (member "errors" body_json, member "data" body_json) with
+  | `Null, `Null ->
+      return (Error "Empty response from graphql query")
+  | error, `Null ->
+      return (Error (Yojson.Safe.to_string error))
+  | _, raw_json ->
+      let unproved_ledger_hash =
+        member "stateHashes" raw_json
+        |> member "unprovedLedgerHash"
+        |> to_string |> Ledger_hash.of_decimal_string
+      in
+      return (Ok unproved_ledger_hash)
+
+let sync ~(state : State.t) () =
+  Thread_safe.block_on_async_exn (fun () ->
+      let%bind ledger_hash =
+        match%bind fetch_current_ledger_hash ~zeko_uri:state.zeko_uri () with
+        | Ok hash ->
+            printf "Fetched ledger hash: %s\n%!"
+              (Ledger_hash.to_decimal_string hash) ;
+            return hash
+        | Error e ->
+            failwith e
+      in
+      time "Synced" (sync_archive ~state ~hash:ledger_hash) )
+
+let rec run ~(state : State.t) ~sync_period () =
+  let () =
+    match sync ~state () with
+    | Ok () ->
+        ()
+    | Error e ->
+        print_endline (Error.to_string_hum e)
+  in
+  Thread_safe.block_on_async_exn (fun () ->
+      after (Time.Span.of_sec sync_period) ) ;
+  run ~state ~sync_period ()
 
 let () =
   Command_unix.run
@@ -273,6 +270,10 @@ let () =
           flag "--archive-host" (required string) ~doc:"Archive node host"
         and archive_port =
           flag "--archive-port" (required int) ~doc:"Archive node port"
+        and sync_period =
+          flag "--sync-period"
+            (optional_with_default 60. float)
+            ~doc:"Sync period"
         in
         let logger = Logger.create () in
         let zeko_uri = Uri.of_string zeko_uri in
@@ -284,5 +285,4 @@ let () =
         in
 
         let state = State.create ~logger ~archive_uri ~zeko_uri ~da_nodes in
-
-        run ~state )
+        run ~state ~sync_period )
