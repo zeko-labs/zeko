@@ -196,6 +196,7 @@ let
             src/app/zeko/sequencer/run.exe \
             src/app/zeko/sequencer/deploy.exe \
             src/app/zeko/sequencer/cli.exe \
+            src/app/zeko/sequencer/archive_relay/run.exe \
             src/app/zeko/sequencer/tests/testing_ledger/run.exe \
             src/app/zeko/da_layer/cli.exe \
             src/app/logproc/logproc.exe \
@@ -265,6 +266,7 @@ let
           cp src/app/zeko/sequencer/run.exe $zeko/bin/zeko-run
           cp src/app/zeko/sequencer/deploy.exe $zeko/bin/zeko-deploy
           cp src/app/zeko/sequencer/cli.exe $zeko/bin/zeko-cli
+          cp src/app/zeko/sequencer/archive_relay/run.exe $zeko/bin/zeko-archive-relay
           cp src/app/zeko/sequencer/tests/testing_ledger/run.exe $localnet/bin/mina-localnet
           cp src/app/zeko/da_layer/cli.exe $zeko_da/bin/zeko-da
           cp -R _doc/_html $out/share/doc/html
