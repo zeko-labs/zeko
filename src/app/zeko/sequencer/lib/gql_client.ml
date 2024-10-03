@@ -139,6 +139,47 @@ let fetch_transfers uri ?from_action_state ?end_action_state pk =
   then Fn.id
   else function [] -> [] | _ :: tail -> tail
 
+let fetch_events uri pk =
+  let ok_exn = function
+    | Ppx_deriving_yojson_runtime.Result.Ok x ->
+        x
+    | Error e ->
+        failwith e
+  in
+  let module M = struct
+    type event_data = { data : string list } [@@deriving yojson]
+
+    type event = { eventData : event_data list } [@@deriving yojson]
+
+    type events = { events : event list } [@@deriving yojson]
+  end in
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+          query ($pk: String!) {
+            events(input: {address: $pk}) {
+              eventData {
+                data
+              }
+            }
+          } 
+        |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
+            )
+          ]
+    end
+  in
+  let%map result = Graphql_client.query_json_exn q uri in
+  let result = M.events_of_yojson result |> ok_exn in
+  List.map result.events ~f:(fun { eventData } ->
+      List.map eventData ~f:(fun { data } -> List.map data ~f:Field.of_string) )
+
 let fetch_pooled_zkapp_commands uri pk =
   let q =
     object
