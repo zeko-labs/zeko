@@ -986,7 +986,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; lumina_lps : int
       }
 
-    let get sequencer lumina_factory =
+    let get ~sequencer ~lumina_factory =
       let%bind deposits =
         Gql_client.fetch_transfers sequencer.config.archive_uri
           sequencer.config.zkapp_pk

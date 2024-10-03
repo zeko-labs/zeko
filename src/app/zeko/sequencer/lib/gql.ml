@@ -1421,6 +1421,27 @@ module Make
       end
     end
 
+    module Statistics = struct
+      type t = Zeko_sequencer.Statistics.t
+
+      let t : ('context, t option) typ =
+        let open Zeko_sequencer.Statistics in
+        obj "Statistics" ~fields:(fun _ ->
+            [ field "transactions" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ x -> x.transactions)
+            ; field "deposits" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ x -> x.deposits)
+            ; field "luminaSwaps" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ x -> x.lumina_swaps)
+            ; field "luminaLiquidityPools" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ x -> x.lumina_lps)
+            ] )
+    end
+
     module Archive = struct
       module BlockInfo = struct
         type t = Archive.Block_info.t
@@ -1938,6 +1959,19 @@ module Make
           let%map account_id = Ledger.token_owner l token in
           Types.AccountObj.get_best_ledger_account l account_id )
 
+    let statistics =
+      io_field "statistics"
+        ~typ:(non_null Types.Statistics.t)
+        ~args:
+          Arg.
+            [ arg "luminaFactory" ~typ:(non_null Types.Input.PublicKey.arg_typ)
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } () lumina_factory ->
+          let%bind statistics =
+            Zeko_sequencer.Statistics.get ~sequencer ~lumina_factory
+          in
+          return (Ok statistics) )
+
     module Archive = struct
       let actions =
         io_field "actions"
@@ -1989,6 +2023,7 @@ module Make
       ; committed_transaction
       ; token_owner
       ; network_id
+      ; statistics
       ]
       @ Archive.commands
   end
