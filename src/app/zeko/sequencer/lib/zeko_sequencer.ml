@@ -432,6 +432,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
     ; mutable protocol_state : Mina_state.Protocol_state.value
     ; mutable subscriptions : Subscriptions.t
+    ; mutable number_of_transactions : int
     }
 
   let persist_protocol_state t =
@@ -654,6 +655,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           in
           Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
             ~ledger_openings:first_pass_ledger ~diff ~target_ledger_hash ;
+
+          t.number_of_transactions <- t.number_of_transactions + 1 ;
 
           let pc : Transaction_snark.Pending_coinbase_stack_state.t =
             (* No coinbase to add to the stack. *)
@@ -930,6 +933,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; apply_q = Sequencer.create ()
       ; protocol_state = compile_time_genesis_state
       ; subscriptions = Subscriptions.create ()
+      ; number_of_transactions = 0
       }
     in
     let%bind () =
@@ -973,6 +977,58 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           Error.raise e
     in
     return t
+
+  module Statistics = struct
+    type t =
+      { transactions : int
+      ; deposits : int
+      ; lumina_swaps : int
+      ; lumina_lps : int
+      }
+
+    let get ~sequencer ~lumina_factory =
+      let%bind deposits =
+        Gql_client.fetch_transfers sequencer.config.archive_uri
+          sequencer.config.zkapp_pk
+        >>| List.length
+      in
+      let%bind lps =
+        Gql_client.fetch_events sequencer.config.archive_uri lumina_factory
+        >>| List.join
+        >>| List.filter_map ~f:(function
+              | _sender_x :: _sender_oddity :: pool_x :: pool_oddity :: _ ->
+                  (* only one event type, so no index *)
+                  (* https://github.com/Lumina-DEX/lumina-mvp/blob/284341acc924bf21ac6947514e23cce7088e68ed/contracts/src/PoolFactory.ts#L39 *)
+                  Some
+                    ( { x = pool_x
+                      ; is_odd =
+                          ( if Field.equal pool_oddity Field.zero then false
+                          else true )
+                      }
+                      : Public_key.Compressed.t )
+              | _ ->
+                  None )
+      in
+      let%bind swaps =
+        Deferred.List.map ~how:`Parallel lps ~f:(fun lp ->
+            Gql_client.fetch_events sequencer.config.archive_uri lp
+            >>| List.join
+            >>| List.filter ~f:(function
+                  | event_type :: _ ->
+                      (* [1] is event type [addLiquidity] *)
+                      (* https://github.com/Lumina-DEX/lumina-mvp/blob/284341acc924bf21ac6947514e23cce7088e68ed/contracts/src/PoolMina.ts#L61 *)
+                      if Field.equal event_type Field.one then true else false
+                  | _ ->
+                      false ) )
+        >>| List.length
+      in
+      return
+        { transactions = sequencer.number_of_transactions
+        ; deposits
+        ; lumina_swaps = swaps
+        ; lumina_lps = List.length lps
+        }
+  end
 end
 
 let prover_modules :
