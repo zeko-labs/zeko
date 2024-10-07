@@ -1,6 +1,7 @@
 (executable
  (name run)
  (libraries
+  da_layer
   mina_lib
   mina_ledger
   archive_lib

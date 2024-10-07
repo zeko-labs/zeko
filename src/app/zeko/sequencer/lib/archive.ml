@@ -239,6 +239,9 @@ module Archive = struct
       match to_ with
       | None ->
           Ok filtered_from
+      | Some to_ when Field.equal to_ Zkapp_account.Actions.empty_state_element
+        ->
+          Ok []
       | Some to_ -> (
           match
             List.findi filtered_from ~f:(fun _ { action_state; _ } ->
