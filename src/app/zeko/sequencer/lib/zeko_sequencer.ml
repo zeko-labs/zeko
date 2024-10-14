@@ -603,6 +603,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                      | Zkapp_command command ->
                          Zkapp_command.all_account_updates_list command
                          |> List.map ~f:(fun _ -> true) ) )
+              ~timestamp:
+                (Block_time.now (Block_time.Controller.basic ~logger:t.logger))
           in
           Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
             ~ledger_openings:first_pass_ledger ~diff ~target_ledger_hash ;
@@ -1055,6 +1057,8 @@ let%test_module "Sequencer tests" =
             match%bind
               Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
                 ~ledger:ephemeral_ledger
+                ~timestamp:
+                  (Block_time.now (Block_time.Controller.basic ~logger))
             with
             | Ok _ ->
                 return ()

@@ -321,7 +321,7 @@ let get_signature t ~ledger_hash =
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
-      [ Async.Rpc.Rpc.implement Rpc.Post_diff.v1
+      [ Async.Rpc.Rpc.implement Rpc.Post_diff.v2
           (fun () { ledger_openings; diff } ->
             match post_diff t ~ledger_openings ~diff with
             | Ok signature ->
@@ -331,7 +331,7 @@ let implementations t =
                 [%log warn] "Error posting diff: $error"
                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff.v1 (fun () query ->
+      ; Async.Rpc.Rpc.implement Rpc.Get_diff.v2 (fun () query ->
             Async.return @@ Db.get_diff t.db ~ledger_hash:query )
       ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.v1 (fun () () ->
             Async.return @@ Db.get_index t.db )

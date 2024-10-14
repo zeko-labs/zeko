@@ -36,11 +36,11 @@ module Rpc = struct
     go max_tries []
 
   let post_diff ~logger ~node_location ~ledger_openings ~diff =
-    dispatch ~logger node_location Rpc.Post_diff.v1 { ledger_openings; diff }
+    dispatch ~logger node_location Rpc.Post_diff.v2 { ledger_openings; diff }
 
   let get_diff ~logger ~node_location ~ledger_hash :
       (Diff.t option, Error.t) result Deferred.t =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.v1 ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.v2 ledger_hash
 
   let get_all_keys ~logger ~node_location () =
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.v1 ()
@@ -182,7 +182,7 @@ let get_diff ~logger ~config ~ledger_hash =
           return (Error e) )
 
 (** Distribute diff of initial accounts *)
-let distribute_genesis_diff ~logger ~config ~ledger =
+let distribute_genesis_diff ~logger ~config ~ledger ~timestamp =
   let%bind account_ids =
     Ledger.accounts ledger |> Deferred.map ~f:Account_id.Set.to_list
   in
@@ -201,7 +201,7 @@ let distribute_genesis_diff ~logger ~config ~ledger =
   let diff =
     Diff.create
       ~source_ledger_hash:(Diff.empty_ledger_hash ~depth:(Ledger.depth ledger))
-      ~changed_accounts ~command_with_action_step_flags:None
+      ~changed_accounts ~command_with_action_step_flags:None ~timestamp
   in
   distribute_diff ~logger ~config ~ledger_openings ~diff ~quorum:0
 
