@@ -165,6 +165,7 @@ let sync_archive ~(state : State.t) ~hash =
                   ~protocol_state:!protocol_state ~ledger
                   ~txn:(Ledger.Transaction_applied.transaction txn_applied)
                   ~dummy_fee_payer:Zkapps_rollup.inner_public_key
+                  ~timestamp:(Da_layer.Diff.timestamp diff)
               in
               protocol_state := new_protocol_state ;
               if State.has_been_relayed state (Ledger.merkle_root ledger) then
