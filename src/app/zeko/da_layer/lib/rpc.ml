@@ -9,10 +9,10 @@ module Post_diff = struct
   module Query = struct
     [%%versioned
     module Stable = struct
-      module V1 = struct
+      module V2 = struct
         type t =
           { ledger_openings : Sparse_ledger.Stable.V2.t
-          ; diff : Diff.Stable.V1.t
+          ; diff : Diff.Stable.V2.t
           }
 
         let to_latest = Fn.id
@@ -20,8 +20,8 @@ module Post_diff = struct
     end]
   end
 
-  let v1 : (Query.t, Signature.t) Rpc.Rpc.t =
-    Rpc.Rpc.create ~name:"Post_diff" ~version:1 ~bin_query:Query.Stable.V1.bin_t
+  let v2 : (Query.t, Signature.t) Rpc.Rpc.t =
+    Rpc.Rpc.create ~name:"Post_diff" ~version:2 ~bin_query:Query.Stable.V2.bin_t
       ~bin_response:Signature.Stable.V1.bin_t
 end
 
@@ -30,18 +30,18 @@ module Get_diff = struct
   module Response = struct
     [%%versioned
     module Stable = struct
-      module V1 = struct
-        type t = Diff.Stable.V1.t option
+      module V2 = struct
+        type t = Diff.Stable.V2.t option
 
         let to_latest = Fn.id
       end
     end]
   end
 
-  let v1 : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
-    Rpc.Rpc.create ~name:"Get_diff" ~version:1
+  let v2 : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
+    Rpc.Rpc.create ~name:"Get_diff" ~version:2
       ~bin_query:Ledger_hash.Stable.V1.bin_t
-      ~bin_response:Response.Stable.V1.bin_t
+      ~bin_response:Response.Stable.V2.bin_t
 end
 
 (* val get_all_keys : unit -> Ledger_hash.t list *)
