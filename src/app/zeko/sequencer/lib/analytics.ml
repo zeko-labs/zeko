@@ -16,7 +16,7 @@ end
 
 module Transaction_activity = struct
   type t =
-    { total_bridge_commands : int
+    { total_deposits : int
     ; total_signed_commands : int
     ; total_zkapp_commands : int
     }
@@ -164,7 +164,7 @@ let get (state : State.t) ~archive_uri ~zkapp_pk ~lumina_factory =
   in
   let transaction_activity =
     Transaction_activity.
-      { total_bridge_commands = deposits
+      { total_deposits = deposits
       ; total_signed_commands = state.total_signed_commands
       ; total_zkapp_commands = state.total_zkapp_commands
       }
