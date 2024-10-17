@@ -16,11 +16,15 @@ let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
   in
   go 0
 
-let time label (d : 'a Deferred.t) =
+let time (d : 'a Deferred.t) =
   let start = Time.now () in
   let%bind x = d in
   let stop = Time.now () in
-  printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
+  return (x, Time.diff stop start)
+
+let print_time label (d : 'a Deferred.t) =
+  let%bind x, t = time d in
+  printf "%s: %s\n%!" label (Time.Span.to_string_hum t) ;
   return x
 
 (* Finds the account_id's account update and returns the 0th state update *)

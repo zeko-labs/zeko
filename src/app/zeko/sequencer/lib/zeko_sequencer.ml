@@ -204,7 +204,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         =
       let handler = unstage @@ Sparse_ledger.handler sparse_ledger in
       let%bind txn_snark =
-        Utils.time "Transaction_snark.of_signed_command"
+        Utils.print_time "Transaction_snark.of_signed_command"
           (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
              ~statement user_command_in_block handler )
       in
@@ -219,18 +219,18 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             failwith "No witnesses"
         | (witness, spec, statement) :: rest ->
             let%bind p1 =
-              Utils.time "Transaction_snark.of_zkapp_command_segment"
+              Utils.print_time "Transaction_snark.of_zkapp_command_segment"
                 (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
             in
             Deferred.List.fold ~init:p1 rest
               ~f:(fun acc (witness, spec, statement) ->
                 let%bind prev = return acc in
                 let%bind curr =
-                  Utils.time "Transaction_snark.of_zkapp_command_segment"
+                  Utils.print_time "Transaction_snark.of_zkapp_command_segment"
                     (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
                 in
                 let%bind merged =
-                  Utils.time "Transaction_snark.merge"
+                  Utils.print_time "Transaction_snark.merge"
                     (T.merge curr prev ~sok_digest)
                 in
                 return (Or_error.ok_exn merged) )
@@ -520,7 +520,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     , second_pass_ledger
     , txn_applied
     , target_ledger_hash
-    , Analytics.State.update analytics_state command l )
+    , Analytics.State.update_with_command analytics_state command l )
 
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
