@@ -70,11 +70,14 @@ end
 module State = struct
   type timestamps = { created_at : Time.t; last_active_at : Time.t }
 
+  type avg_fee = { total_fee : int; total_commands : int }
+
   type t =
     { account_map : timestamps Account_id.Map.t
     ; zkapp_map : timestamps Account_id.Map.t
     ; total_signed_commands : int
     ; total_zkapp_commands : int
+    ; avg_fee : avg_fee
     }
 
   let empty =
@@ -82,9 +85,10 @@ module State = struct
     ; zkapp_map = Account_id.Map.empty
     ; total_signed_commands = 0
     ; total_zkapp_commands = 0
+    ; avg_fee = { total_fee = 0; total_commands = 0 }
     }
 
-  let update t command ledger =
+  let update_with_command t command ledger =
     let now = Time.now () in
     let accounts = User_command.accounts_accessed command Applied in
     let t =
@@ -113,6 +117,16 @@ module State = struct
                | _ ->
                    t.zkapp_map )
           } )
+    in
+    let t =
+      { t with
+        avg_fee =
+          { total_fee =
+              t.avg_fee.total_fee
+              + (Currency.Fee.to_mina_int @@ User_command.fee command)
+          ; total_commands = t.avg_fee.total_commands + 1
+          }
+      }
     in
     match command with
     | Signed_command _ ->
@@ -170,7 +184,13 @@ let get (state : State.t) ~archive_uri ~zkapp_pk ~lumina_factory =
       }
   in
   let transaction_statistics =
-    Transaction_statistics.{ avg_fee = 0.; avg_pfs = 0. }
+    Transaction_statistics.
+      { avg_fee =
+          Float.( / )
+            (Int.to_float state.avg_fee.total_fee)
+            (Int.to_float state.avg_fee.total_commands)
+      ; avg_pfs = 0. (* TODO: when I do parallel proving will update this *)
+      }
   in
   let top_zkapps = Top_zkapps.[] in
   let%bind lumina_activity =
