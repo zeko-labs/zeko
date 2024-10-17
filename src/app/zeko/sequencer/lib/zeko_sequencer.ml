@@ -402,7 +402,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
     ; mutable subscriptions : Subscriptions.t
-    ; mutable number_of_transactions : int
+    ; mutable analytics_state : Analytics.State.t
     }
 
   let close t =
@@ -451,7 +451,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
   (** Apply user command to the ledger without checking the validity of the command *)
   let apply_user_command_without_check l archive command ~global_slot
-      ~state_body =
+      ~state_body ~analytics_state =
     let accounts_referenced = User_command.accounts_referenced command in
 
     let first_pass_ledger =
@@ -516,7 +516,11 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                            @@ Account_update.body update
                        } ) ))
     in
-    (first_pass_ledger, second_pass_ledger, txn_applied, target_ledger_hash)
+    ( first_pass_ledger
+    , second_pass_ledger
+    , txn_applied
+    , target_ledger_hash
+    , Analytics.State.update analytics_state command l )
 
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
@@ -570,11 +574,13 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           let%bind.Deferred.Result ( first_pass_ledger
                                    , second_pass_ledger
                                    , txn_applied
-                                   , target_ledger_hash ) =
+                                   , target_ledger_hash
+                                   , new_analytics_state ) =
             return
               (apply_user_command_without_check l t.archive command ~global_slot
-                 ~state_body )
+                 ~state_body ~analytics_state:t.analytics_state )
           in
+          t.analytics_state <- new_analytics_state ;
 
           (* Post transaction to the DA layer *)
           let changed_accounts =
@@ -610,8 +616,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             ~ledger_openings:first_pass_ledger ~diff ~target_ledger_hash ;
 
           trigger_state_hashes_changed t ;
-
-          t.number_of_transactions <- t.number_of_transactions + 1 ;
 
           let pc : Transaction_snark.Pending_coinbase_stack_state.t =
             (* No coinbase to add to the stack. *)
@@ -810,11 +814,12 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
               let state_body =
                 Mina_state.Protocol_state.body compile_time_genesis_state
               in
-              let _res =
+              let _, _, _, _, analytics_state =
                 apply_user_command_without_check mask t.archive command
-                  ~global_slot ~state_body
+                  ~global_slot ~state_body ~analytics_state:t.analytics_state
                 |> Or_error.ok_exn
               in
+              t.analytics_state <- analytics_state ;
               L.Mask.Attached.commit mask ;
               return () )
     in
@@ -870,7 +875,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
       ; subscriptions = Subscriptions.create ()
-      ; number_of_transactions = 0
+      ; analytics_state = Analytics.State.empty
       }
     in
     let%bind () =
@@ -912,58 +917,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           Error.raise e
     in
     return t
-
-  module Statistics = struct
-    type t =
-      { transactions : int
-      ; deposits : int
-      ; lumina_swaps : int
-      ; lumina_lps : int
-      }
-
-    let get ~sequencer ~lumina_factory =
-      let%bind deposits =
-        Gql_client.fetch_transfers sequencer.config.archive_uri
-          sequencer.config.zkapp_pk
-        >>| List.length
-      in
-      let%bind lps =
-        Gql_client.fetch_events sequencer.config.archive_uri lumina_factory
-        >>| List.join
-        >>| List.filter_map ~f:(function
-              | _sender_x :: _sender_oddity :: pool_x :: pool_oddity :: _ ->
-                  (* only one event type, so no index *)
-                  (* https://github.com/Lumina-DEX/lumina-mvp/blob/284341acc924bf21ac6947514e23cce7088e68ed/contracts/src/PoolFactory.ts#L39 *)
-                  Some
-                    ( { x = pool_x
-                      ; is_odd =
-                          ( if Field.equal pool_oddity Field.zero then false
-                          else true )
-                      }
-                      : Public_key.Compressed.t )
-              | _ ->
-                  None )
-      in
-      let%bind swaps =
-        Deferred.List.map ~how:`Parallel lps ~f:(fun lp ->
-            Gql_client.fetch_events sequencer.config.archive_uri lp
-            >>| List.join
-            >>| List.filter ~f:(function
-                  | event_type :: _ ->
-                      (* [1] is event type [addLiquidity] *)
-                      (* https://github.com/Lumina-DEX/lumina-mvp/blob/284341acc924bf21ac6947514e23cce7088e68ed/contracts/src/PoolMina.ts#L61 *)
-                      if Field.equal event_type Field.one then true else false
-                  | _ ->
-                      false ) )
-        >>| List.length
-      in
-      return
-        { transactions = sequencer.number_of_transactions
-        ; deposits
-        ; lumina_swaps = swaps
-        ; lumina_lps = List.length lps
-        }
-  end
 end
 
 let prover_modules :
