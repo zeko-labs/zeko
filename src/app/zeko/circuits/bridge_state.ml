@@ -3,15 +3,24 @@ open Zeko_util
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
 
+module Outer_bridge_state = struct
+  type t =
+    { disable_offset_lower : Checked32.t
+    ; disable_offset_upper : Checked32.t
+    ; disable_period : Checked32.t
+    ; enable_offset_lower : Checked32.t
+    ; enable_offset_upper : Checked32.t
+    ; enable_period : Checked32.t
+    }
+  [@@deriving snarky]
+end
+
 module Inner_user_state = struct
   type t = { next_deposit : Checked32.t } [@@deriving snarky]
 
-  type precondition = { next_deposit : Checked32.var option }
+  type fine = { next_deposit : Checked32.var option }
 
-  let to_precondition (p : precondition) :
-      F.var Or_ignore.Checked.t Zkapp_state.V.t =
-    var_to_precondition_fine
-      Var_to_precondition_fine.[ (Checked32.typ, p.next_deposit) ]
+  let fine (p : fine) : Fine.t = [ Whole (Checked32.typ, p.next_deposit) ]
 end
 
 module Outer_user_state = struct
@@ -19,18 +28,15 @@ module Outer_user_state = struct
     { next_cancelled_deposit : Checked32.t; next_withdrawal : Checked32.t }
   [@@deriving snarky]
 
-  type precondition =
+  type fine =
     { next_cancelled_deposit : Checked32.var option
     ; next_withdrawal : Checked32.var option
     }
 
-  let to_precondition (p : precondition) :
-      F.var Or_ignore.Checked.t Zkapp_state.V.t =
-    var_to_precondition_fine
-      Var_to_precondition_fine.
-        [ (Checked32.typ, p.next_cancelled_deposit)
-        ; (Checked32.typ, p.next_withdrawal)
-        ]
+  let fine (p : fine) : Fine.t =
+    [ Whole (Checked32.typ, p.next_cancelled_deposit)
+    ; Whole (Checked32.typ, p.next_withdrawal)
+    ]
 end
 
 module C = struct
@@ -74,7 +80,7 @@ module Deposit_params_custom = struct
     }
   [@@deriving snarky]
 
-  let base { base } : Deposit_params_base.var = base
+  let base { base; _ } : Deposit_params_base.var = base
 
   let custom x = Some x
 end

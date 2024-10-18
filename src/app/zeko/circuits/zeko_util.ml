@@ -498,7 +498,7 @@ module Checked32 = struct
   type var = Checked.t
 end
 
-(* FIXME *)
+(* FIXME 
 let compile_simple ?override_wrap_domain ~name ~main ~output ~left_tag
     ~right_tag () =
   let identifier = "compile_simple of " ^ name in
@@ -517,3 +517,4 @@ let compile_simple ?override_wrap_domain ~name ~main ~output ~left_tag
         ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
         }
       ] )
+      *)

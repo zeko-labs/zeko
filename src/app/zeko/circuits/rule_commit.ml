@@ -252,18 +252,14 @@ struct
         .outer_action_state
     in
 
-    let* ( Ase_outer_inst.
-             { source = synchronized_outer_action_state'
-             ; target = outer_action_state
-             }
+    let* ( { source = synchronized_outer_action_state'
+           ; target = outer_action_state
+           }
          , verify_ase_outer ) =
       Ase_outer_inst.get ase_outer
     in
 
-    let* ( Ase_inner_inst.
-             { source = old_inner_action_state
-             ; target = new_inner_action_state
-             }
+    let* ( { source = old_inner_action_state; target = new_inner_action_state }
          , verify_ase_inner ) =
       Ase_inner_inst.get ase_inner
     in
@@ -399,7 +395,7 @@ struct
 
   let rule : _ Pickles.Inductive_rule.t =
     { identifier = "Rollup step" (* FIXME: verify two ases *)
-    ; prevs = [ T.tag; force Ase.tag_with_length ; force Ase.tag_with_length ]
+    ; prevs = [ T.tag; force Ase.tag_with_length; force Ase.tag_with_length ]
     ; main = (fun x -> main x |> Run.run_checked)
     ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
     }

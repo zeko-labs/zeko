@@ -14,16 +14,16 @@ type tag_without_length_var
 val tag_with_length :
   ( tag_with_length_var
   , tag_with_length_t
-  , Pickles_types.Nat.N2.n
-  , Pickles_types.Nat.N2.n )
+  , Folder.tag_max_proofs_verified
+  , Folder.tag_branches )
   Pickles.Tag.t
   lazy_t
 
 val tag_without_length :
   ( tag_without_length_var
   , tag_without_length_t
-  , Pickles_types.Nat.N2.n
-  , Pickles_types.Nat.N2.n )
+  , Folder.tag_max_proofs_verified
+  , Folder.tag_branches )
   Pickles.Tag.t
   lazy_t
 
@@ -58,7 +58,7 @@ end) : sig
     -> var
     -> ( Stmt.var
        * ( tag_with_length_var
-         , Pickles_types.Nat.N2.n )
+         , Folder.tag_max_proofs_verified )
          Pickles.Inductive_rule.Previous_proof_statement.t )
        Checked.t
 
@@ -94,7 +94,7 @@ end) : sig
     -> var
     -> ( Stmt.var
        * ( tag_without_length_var
-         , Pickles_types.Nat.N2.n )
+         , Folder.tag_max_proofs_verified )
          Pickles.Inductive_rule.Previous_proof_statement.t )
        Checked.t
 

@@ -23,7 +23,7 @@ let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
     { default_account_update.update with
       app_state =
         Inner.State.(var_to_app_state typ { outer_action_state = ase.target })
-        (* This is equal to outer state action state and is checked in outer account rule *)
+        (* This is equal to outer action state and is checked in outer account rule *)
     }
   in
   let preconditions =

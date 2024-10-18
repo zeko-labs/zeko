@@ -2,7 +2,7 @@ open Core_kernel
 open Mina_base
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
-open Bridge
+open Bridge_state
 open Zeko_util
 open Checked.Let_syntax
 
@@ -45,7 +45,7 @@ struct
     { lower = Slot.zero; upper = Slot.max_value }
 
   let deposit_action (params : Deposit_params.var) :
-      Outer.Action.Witness.var Checked.t =
+      Rollup_state.Outer.Action.Witness.var Checked.t =
     (* The chosen account must be one of the valid holder accounts.
        NB: If we invalidate an account later on,
        a yet unfinalized deposit will be made unfinalizable.
@@ -101,13 +101,13 @@ struct
         ; children = children'
         ; slot_range = constant Slot_range.typ infinite_slot_range
         }
-        : Outer.Action.Witness.var )
+        : Rollup_state.Outer.Action.Witness.var )
 
   module Check_accepted_definition = struct
     module Stmt = struct
       type t =
         { params : Deposit_params.t
-        ; action_state : Outer.Action.State.t
+        ; action_state : Rollup_state.Outer_action_state.t
         ; n_steps : Checked32.t
         ; is_rejected : Boolean.t
         ; is_accepted : Boolean.t
@@ -115,8 +115,8 @@ struct
       [@@deriving snarky]
     end
 
-    module Elem = Outer.Action
-    module ElemOption = Outer.Action
+    module Elem = Rollup_state.Outer.Action
+    module ElemOption = Rollup_state.Outer.Action
 
     let elem_to_option x = x
 
@@ -125,7 +125,7 @@ struct
     module Init = struct
       type t =
         { params : Deposit_params.t
-        ; original_action_state : Outer.Action.State.t
+        ; original_action_state : Rollup_state.Outer_action_state.t
         }
       [@@deriving snarky]
     end
@@ -134,7 +134,7 @@ struct
         Stmt.var Checked.t =
       let* witness = deposit_action params in
       let* action_state =
-        Outer.Action.push_witness_var witness original_action_state
+        Rollup_state.Outer.Action.push_witness_var witness original_action_state
       in
       Checked.return
         ( { params
@@ -145,11 +145,13 @@ struct
           }
           : Stmt.var )
 
-    let step ~check:_ (action : Outer.Action.var)
+    let step ~check:_ (action : Rollup_state.Outer.Action.var)
         ({ params; action_state; n_steps; is_rejected; is_accepted } : Stmt.var)
         =
       let* n_steps = Checked32.Checked.succ n_steps in
-      let* action_state = Outer.Action.push_var action action_state in
+      let* action_state =
+        Rollup_state.Outer.Action.push_var action action_state
+      in
       let* valid_while =
         if_ ~typ:Slot_range.typ action.is_witness
           ~then_:action.case_witness.slot_range
@@ -168,7 +170,7 @@ struct
       in
       Stmt.{ params; action_state; n_steps; is_rejected; is_accepted }
 
-    let step_option ~check:_ (action : Outer.Action.var)
+    let step_option ~check:_ (action : Rollup_state.Outer.Action.var)
         ({ params; action_state; n_steps; is_rejected; is_accepted } : Stmt.var)
         =
       failwith "FIXME"
@@ -193,7 +195,10 @@ struct
   module Check_accepted = Folder.Make (Check_accepted_definition)
   module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)
 
-  module Ase_lengthed_inst = Ase_lengthed.Make (struct
+  module Ase_inst = Ase.Make_with_length (struct
+    module Action_state = Rollup_state.Outer_action_state
+    module Action = Rollup_state.Outer.Action
+
     let get_iterations = Int.pow 2 14
   end)
 
@@ -204,8 +209,7 @@ struct
       ; vk_hash : F.t
       ; may_use_token : May_use_token.t
       ; inner_authorization_kind : A.t
-      ; outer_action_state_with_length : Ase_lengthed_inst.t
-            (* FIXME: Allow proving length backwards *)
+      ; ase : Ase_inst.t
       ; check_accepted : Check_accepted_inst.t
       ; prev_next_deposit : Checked32.t
       }
@@ -222,7 +226,7 @@ struct
            ; vk_hash
            ; may_use_token
            ; inner_authorization_kind
-           ; outer_action_state_with_length
+           ; ase
            ; check_accepted
            ; prev_next_deposit
            } =
@@ -238,20 +242,21 @@ struct
     let* () =
       Boolean.Assert.(Boolean.false_ = check_accepted.target.is_rejected)
     in
-    let* outer_action_state_with_length, verify_outer_action_state_with_length =
-      Ase_lengthed_inst.get outer_action_state_with_length
-    in
-    let outer_action_state =
-      Outer.Action.State.of_field_var
-        outer_action_state_with_length.target.action_state
+    let* ( { source = mid_outer_action_state; target = outer_action_state }
+         , verify_ase ) =
+      Ase_inst.get ase
     in
     let* () =
-      assert_equal ~label:__LOC__ Outer.Action.State.typ outer_action_state
+      assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
+        (Rollup_state.Outer_action_state.With_length.state_var
+           mid_outer_action_state )
         check_accepted.target.action_state
     in
     let* next_deposit =
       Checked32.Checked.(
-        sub outer_action_state_with_length.target.len
+        sub
+          (Rollup_state.Outer_action_state.With_length.length_var
+             mid_outer_action_state )
           check_accepted.target.n_steps)
     in
     let* () =
@@ -275,26 +280,35 @@ struct
             account =
               { default_account_update.preconditions.account with
                 state =
-                  Inner_user_state.to_precondition
+                  Inner_user_state.fine
                     { next_deposit = Some prev_next_deposit }
+                  |> var_to_precondition_fine
               }
           }
       }
     in
     let witness_inner =
       { default_account_update with
-        public_key = constant PC.typ Inner.public_key
+        public_key = constant PC.typ Rollup_state.Inner.public_key
       ; authorization_kind = inner_authorization_kind
       ; preconditions =
           { default_account_update.preconditions with
             account =
               { default_account_update.preconditions.account with
                 state =
-                  Inner.State.to_precondition
+                  Rollup_state.Inner.State.fine
                     { outer_action_state =
-                        Outer.Action.State.to_field_var outer_action_state
-                        |> Some
+                        { state =
+                            Some
+                              (Rollup_state.Outer_action_state.With_length
+                               .state_var outer_action_state )
+                        ; length =
+                            Some
+                              (Rollup_state.Outer_action_state.With_length
+                               .length_var outer_action_state )
+                        }
                     }
+                  |> var_to_precondition_fine
               }
           }
       }
@@ -316,14 +330,14 @@ struct
     let*| auxiliary_output = V.create auxiliary_output in
     Pickles.Inductive_rule.
       { previous_proof_statements =
-          [ verify_check_accepted; verify_outer_action_state_with_length ]
+          [ verify_check_accepted; verify_ase ]
       ; public_output
       ; auxiliary_output
       }
 
   let rule : _ Pickles.Inductive_rule.t =
     { identifier = "zeko action witness"
-    ; prevs = [ force Check_accepted.tag; force Ase_lengthed.tag ]
+    ; prevs = [ force Check_accepted.tag; force Ase.tag_with_length ]
     ; main = (fun x -> main x |> Run.run_checked)
     ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
     }

@@ -48,8 +48,13 @@ type deposit = { amount : nat ; recipient : Public_key.t ; timeout : slot }
 type withdrawal = { amount : nat ; recipient : Public_key.t }
 
 type outer_state =
-  {
-  }
+  { disable_offset_lower : nat
+  ; disable_offset_upper : nat
+  ; disable_period : nat
+  ; enable_offset_lower : nat
+  ; enable_offset_upper : nat
+  ; enable_period : nat
+  } (* maybe should be ints? *)
 
 type outer_helper_state =
   { next_withdrawal : nat
@@ -125,13 +130,15 @@ let withdraw_action
   Witness { aux = params.withdrawal ; children }
 
 
-let check_accepted ~deposit ~actions_after_deposit =
+let check_accepted ~deposit ~actions_after_deposit ~deposit_index =
   let f = function
     | `Unknown -> begin function
-      | Commit { valid_while ; _ } ->
-        (* FIXME: incorrect, check synchronized_outer_action_state *)
+      | Commit { valid_while ; synchronized_outer_action_state_length ; _ } ->
         if valid_while.lower > deposit.timeout then `Rejected
-        else if valid_while.upper < deposit.timeout then `Accepted
+        else if
+          valid_while.upper < deposit.timeout &&
+          synchronized_outer_action_state_length > deposit_index
+        then `Accepted
         else `Unknown
       | Witness { valid_while ; _ } ->
         if valid_while.lower > deposit.timeout then `Rejected else `Unknown
@@ -178,7 +185,7 @@ let do_finalize_deposit
         }
       }
     ; { public_key = inner_pk
-      ; preconditions = { app_state = { outer_action_state } }
+      ; preconditions = { app_state = { outer_action_state } } (* FIXME length used here *)
       ; authorization_kind = inner_authorization_kind
       }
     ]
@@ -224,7 +231,7 @@ let do_finalize_cancelled_deposit
       }
     ; { public_key = zeko_pk
       ; preconditions =
-        { action_state = outer_action_state
+        { action_state = outer_action_state (* FIXME: precondition on length somehow *)
         ; app_state =
           { paused = false
           }
@@ -283,7 +290,7 @@ let do_finalize_withdrawal
       ; authorization_kind = None
       ; preconditions =
         { action_state = outer_action_state
-        ; app_state = { inner_action_state ; paused = false }
+        ; app_state = { inner_action_state ; paused = false } (* FIXME: precondition on length *)
         ; valid_while =
           { lower = commit.valid_while.upper + withdrawal_delay
           ; upper = infinity }
@@ -347,3 +354,14 @@ We can cooperate with the sequencer and jointly construct a transaction
 such that a payment to the sequencer is included.
 The sequencer is then incentivized to align their commits such that this
 withdrawal transaction succeeds, otherwise they wouldn't get their fee.
+
+## Proving considerations
+
+Sequencer should save proofs of action state extensions proved
+and also make them queriable such that users don't have to prove
+more than they need to.
+Users can take these and merge them to prove the extension from their
+deposit/withdrawal until the synchronized point.
+
+check_accepted should not be used as much as possible because the proof
+is specific to the deposit in question rather than being generic.

@@ -133,11 +133,8 @@ struct
   let typ = Made_2.typ
 
   let get ?check t :
-      ( Stmt.var
-      * ( tag_with_length_var
-        , Pickles_types.Nat.N2.n )
-        Pickles.Inductive_rule.Previous_proof_statement.t )
-      Checked.t =
+      (Stmt.var * _ Pickles.Inductive_rule.Previous_proof_statement.t) Checked.t
+      =
     let*| trans, verifier = Made_2.get ?check t in
     let source =
       Action_state.With_length.unsafe_var_of_fields
@@ -196,11 +193,8 @@ struct
   let typ = Made_2.typ
 
   let get ?check t :
-      ( Stmt.var
-      * ( tag_without_length_var
-        , Pickles_types.Nat.N2.n )
-        Pickles.Inductive_rule.Previous_proof_statement.t )
-      Checked.t =
+      (Stmt.var * _ Pickles.Inductive_rule.Previous_proof_statement.t) Checked.t
+      =
     let*| trans, verifier = Made_2.get ?check t in
     let source = Action_state.unsafe_var_of_field trans.source.action_state in
     let target = Action_state.unsafe_var_of_field trans.target.action_state in

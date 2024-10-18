@@ -99,7 +99,7 @@ module Make : functor
       -> var (** What you're trying to verify *)
       -> ( Trans.var
          * ( Trans.var
-           , Pickles_types.Nat.N2.n )
+           , tag_max_proofs_verified )
            Pickles.Inductive_rule.Previous_proof_statement.t )
          Checked.t
 
