@@ -214,3 +214,13 @@
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
  (modules actions)
  )
+
+(executable
+ (name compile_circuits)
+ (libraries zkapps_rollup)
+ (instrumentation
+  (backend bisect_ppx))
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
+ (modules compile_circuits)
+ )

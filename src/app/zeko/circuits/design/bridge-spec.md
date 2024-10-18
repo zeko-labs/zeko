@@ -1,7 +1,5 @@
 # Pseudo-code example spec for token bridge smart contract
 
-TODO: Use fungible token standard contract for L2 tokens.
-
 The zkApp on L1 acts as a bank for the token in question,
 emitting a note essentially that allows you to withdraw from
 a corresponding bank on the L2.
@@ -12,33 +10,53 @@ where the account id is `holder_account_l1`, or where the token id is `helper_to
 define the circuit for the verification keys for the L1-side of the bridge contract.
 Likewise, the ones for `account_id_l2` define the circuit for the L2-side.
 
-There is also an extra verification key for the disabled state of the holding accounts,
-to prevent catastrophic hacks.
-
 Things to consider:
 - State of rollup can arbitrarily change potentially through governance.
 - How much historical data do you need to prove a deposit?
 
+There are multiple accounts on the L1 that correspond to the single account on the L2,
+such that in the event of a hack (vulnerability is found in circuit), only
+~one/two of the L1 banks can get their funds stolen.
+
+This is done via disabling and enabling accounts at certain intervals.
+Disabled accounts are switched to an entirely different circuit,
+which only function is enabling the account again.
+
+When disabled, the `send` permission is set to `Impossible`.
+
+The expectation is that some good samaritan will take on the task
+of doing this switching, albeit if there is more than such good samaritan, the one who
+doesn't succeed will needlessly pay transaction fees.
+This is deemed to be an acceptable cost.
+
+NB: We don't require that user actions are only done in the enabled period.
+This wouldn't improve security, and would increase circuit size and complexity.
+OTOH, users should not use an L1 account/bank which is soon to become disabled.
+
 ```ocaml
 val helper_token_owner_l1 : Public_key.t
-let helper_token_id = Account_id.create helper_token_owner_l1 Token_id.default
 val public_key_l2 : Public_key.t
 val token_id_l1 : Token_id.t
 val token_id_l2 : Token_id.t
 val holder_accounts_l1 : Public_key.t list
 val window_size : nat
+let helper_token_id = Account_id.create helper_token_owner_l1 Token_id.default
 
 let account_id_l2 = Account_id.create public_key_l2 token_id_l2
 
 type deposit = { amount : nat ; recipient : Public_key.t ; timeout : slot }
 type withdrawal = { amount : nat ; recipient : Public_key.t }
 
-type token_outer_helper_state =
+type outer_state =
+  {
+  }
+
+type outer_helper_state =
   { next_withdrawal : nat
   ; next_cancelled_deposit : nat
   }
 
-type token_inner_helper_state =
+type inner_helper_state =
   { next_deposit : nat
   }
 
@@ -72,7 +90,7 @@ let deposit_action (params : deposit_params) : outer_action =
       }
   in
   let children = a' :: params.children in
-  Witness { aux = params.deposit ; children }
+  Witness { aux = params.deposit ; children ; valid_while = infinite_valid_while }
 
 type withdrawal_params =
   { authorization_kind : Authorization_kind.t
@@ -111,10 +129,11 @@ let check_accepted ~deposit ~actions_after_deposit =
   let f = function
     | `Unknown -> begin function
       | Commit { valid_while ; _ } ->
+        (* FIXME: incorrect, check synchronized_outer_action_state *)
         if valid_while.lower > deposit.timeout then `Rejected
         else if valid_while.upper < deposit.timeout then `Accepted
         else `Unknown
-      | Bid { valid_while ; _ } | Witness { valid_while ; _ } ->
+      | Witness { valid_while ; _ } ->
         if valid_while.lower > deposit.timeout then `Rejected else `Unknown
     end
     | `Rejected -> fun _ -> `Rejected
@@ -128,6 +147,8 @@ let do_finalize_deposit
   ~actions_after_deposit
   ~action_state_before_deposit
   ~prev_next_deposit
+  ~may_use_token
+  ~inner_authorization_kind
   =
   let deposit = deposit_params.deposit in
   assert check_accepted ~deposit ~actions_after_deposit = `Accepted ;
@@ -139,7 +160,7 @@ let do_finalize_deposit
   in
   { account_id = account_id_l2
   ; balance_change = -deposit.amount
-  ; may_use_token = Parents_own_token
+  ; may_use_token
   ; authorization_kind = Proof
   ; children =
     [ { public_key = deposit.recipient
@@ -158,7 +179,7 @@ let do_finalize_deposit
       }
     ; { public_key = inner_pk
       ; preconditions = { app_state = { outer_action_state } }
-      ; authorization_kind = None
+      ; authorization_kind = inner_authorization_kind
       }
     ]
   }
@@ -202,7 +223,12 @@ let do_finalize_cancelled_deposit
         ]
       }
     ; { public_key = zeko_pk
-      ; preconditions = { action_state = outer_action_state }
+      ; preconditions =
+        { action_state = outer_action_state
+        ; app_state =
+          { paused = false
+          }
+        }
       ; authorization_kind = None
       }
     ]
@@ -257,7 +283,7 @@ let do_finalize_withdrawal
       ; authorization_kind = None
       ; preconditions =
         { action_state = outer_action_state
-        ; app_state = { inner_action_state }
+        ; app_state = { inner_action_state ; paused = false }
         ; valid_while =
           { lower = commit.valid_while.upper + withdrawal_delay
           ; upper = infinity }
@@ -266,10 +292,15 @@ let do_finalize_withdrawal
     ]
   }
 
-let get_valid_while_for_disable account_idx idx =
+let get_valid_while_for_disable outer_state idx =
+  { lower = outer_state.disable_offset_lower + idx * outer_state.disable_period
+  ; upper = outer_state.disable_offset_upper + idx * outer_state.disable_period
+  }
+  (*
   { lower = (account_idx + 1 + idx * List.length holder_accounts_l1) * window_size
   ; upper = (account_idx + (1 + idx) * List.length holder_accounts_l1) * window_size - 1
   }
+  *)
 
 let do_disable account_idx idx =
   { account_id = holder_accounts_l1.(account_idx)
@@ -285,10 +316,15 @@ let do_disable account_idx idx =
 
 Circuit when disabled
 ```ocaml
-let get_valid_while_for_enable account_idx idx =
+let get_valid_while_for_enable outer_state idx =
+  { lower = outer_state.enable_offset_lower + idx * outer_state.enable_period
+  ; upper = outer_state.enable_offset_upper + idx * outer_state.enable_period
+  }
+  (*
   { lower = (account_idx + idx * List.length holder_accounts_l1) * window_size
   ; upper = (account_idx + idx * List.length holder_accounts_l1 + 1) * window_size - 1
   }
+  *)
 
 let do_enable =
   { account_id = holder_account_l1

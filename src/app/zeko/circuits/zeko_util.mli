@@ -21,13 +21,6 @@ val var_to_fields : ('var, 'value) Typ.t -> 'var -> Field.Var.t array
 
 val var_to_field : ('var, 'value) Typ.t -> 'var -> Field.Var.t
 
-val unsaf_var_of_fields : ('var, 'value) Typ.t -> Field.Var.t array -> 'var
-
-val unsafe_var_of_fields : ('var, 'value) Typ.t -> Field.Var.t array -> 'var
-
-val unsafe_var_of_app_state :
-  ('var, 'value) Typ.t -> Field.Var.t Pickles_types.Vector.Vector_8.t -> 'var
-
 val none_permissions : Mina_base.Permissions.t
 
 type call_forest =
@@ -43,7 +36,12 @@ type call_forest_tree =
   Mina_base.Zkapp_command.Call_forest.tree
 
 module Calls : sig
-  type t = [] | ( :: ) of (Mina_base.Account_update.Checked.t * t) * t | Raw of Zkapp_call_forest.Checked.t
+  type t =
+    | []
+    | ( :: ) of (Mina_base.Account_update.Checked.t * t) * t
+    | Raw of Zkapp_call_forest.Checked.t
+
+  val hash : t -> Zkapp_call_forest.Checked.t Checked.t
 end
 
 val create_prover_value : 'a As_prover.t -> 'a Prover_value.t Checked.t
@@ -74,10 +72,6 @@ val mktree :
      , 'b )
      Mina_base.Zkapp_command.Call_forest.tree
 
-val keep : Pickles.Impls.Step.Field.t Set_or_keep.Checked.t
-
-val ignore : Pickles.Impls.Step.Field.t Or_ignore.Checked.t
-
 val naive_hash_string_to_field : string -> Pasta_bindings.Fp.t
 
 val var_to_state_generic :
@@ -97,13 +91,21 @@ val var_to_precondition :
   -> 'a
   -> Field.Var.t Or_ignore.Checked.t Pickles_types.Vector.Vector_8.t
 
-module Var_to_precondition_fine : sig
-  type t = [] : t | ( :: ) : (('var, 't) Typ.t * 'var option) * t -> t
+module Fine : sig
+  module Case : sig
+    type 'self t =
+      | Whole : (('var, 't) Typ.t * 'var option) -> 'self t
+      | Recursive : 'self -> 'self t
+  end
+
+  type t = [] : t | ( :: ) : t Case.t * t -> t
 end
 
 val var_to_precondition_fine :
-     Var_to_precondition_fine.t
-  -> Field.Var.t Or_ignore.Checked.t Pickles_types.Vector.Vector_8.t
+  Fine.t -> Field.Var.t Or_ignore.Checked.t Pickles_types.Vector.Vector_8.t
+
+val var_to_app_state_fine :
+  Fine.t -> Field.Var.t Set_or_keep.Checked.t Pickles_types.Vector.Vector_8.t
 
 val value_to_state_generic :
      (Pasta_bindings.Fp.t -> 'option)
@@ -122,6 +124,12 @@ val value_to_app_state :
 
 val var_to_actions :
   ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t
+
+val var_to_hash :
+     init:field Random_oracle.State.t
+  -> ('var, 'value) Typ.t
+  -> 'var
+  -> Field.Var.t Checked.t
 
 val value_to_actions :
   ('var, 'value) Typ.t -> 'value -> Mina_base.Zkapp_account.Actions.t
@@ -253,3 +261,39 @@ end
 
 val assert_equal :
   ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t
+
+module Checked32 : sig
+  include module type of Mina_numbers.Nat.Make32 ()
+
+  type var = Checked.t
+end
+
+(*
+val compile_simple :
+     ?override_wrap_domain:Pickles_base.Proofs_verified.t
+  -> name:string
+  -> main:
+       (   unit
+        -> ('output_var * 'aux As_prover.t)
+           Checked.t )
+  -> output:('output_var, 'output_t) Typ.t
+  -> left_tag:('left_tag_var, 'left_tag_t, Pickles_types.Nat.N2.n, Pickles_types.Nat.N2.n) Pickles.Tag.t
+  -> right_tag:('right_tag_var, 'right_tag_t, Pickles_types.Nat.N2.n, Pickles_types.Nat.N2.n) Pickles.Tag.t
+  -> unit
+  -> ('e, 'g, Pickles_types.Nat.N2.n, Pickles_types.Nat.N1.n) Pickles.Tag.t
+     * Pickles.Cache_handle.t
+     * (module Pickles.Proof_intf
+          with type statement = 'g
+           and type t = ( Pickles_types.Nat.N2.n
+                        , Pickles_types.Nat.N2.n )
+                        Pickles.Proof.t )
+     * ( ('h * ('j * unit)) * unit
+       , ('c * ('d * unit)) * unit
+       , ('i * ('k * unit)) * unit
+       , unit
+       , ( 'g
+         * 'f
+         * (Pickles_types.Nat.N2.n, Pickles_types.Nat.N2.n) Pickles.Proof.t )
+         Async_kernel.Deferred.t )
+       Pickles.Provers.t
+       *)

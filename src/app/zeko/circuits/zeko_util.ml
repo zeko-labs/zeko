@@ -59,31 +59,6 @@ let var_to_field (type var value) (typ : (var, value) Typ.t) (x : var) :
   assert (Int.(Array.length fields = 1)) ;
   fields.(0)
 
-(** Converts the fields back into a variable.
-    NB! The behavior is undefined if the variable carries
-        state beyond its constituent fields. *)
-let unsaf_var_of_fields (type var value) (typ : (var, value) Typ.t)
-    (fields : Field.Var.t array) : var =
-  let (Typ typ) = typ in
-  let x = typ.var_of_fields (fields, typ.constraint_system_auxiliary ()) in
-  x
-
-(** Converts the fields back into a variable.
-    NB! The behavior is undefined if the variable carries
-        state beyond its constituent fields.
-        In this case you want to use a custom function
-        to recreate the state at proving time. *)
-let unsafe_var_of_fields (type var value) (typ : (var, value) Typ.t)
-    (fields : Field.Var.t array) : var =
-  let (Typ typ) = typ in
-  let x = typ.var_of_fields (fields, typ.constraint_system_auxiliary ()) in
-  x
-
-let unsafe_var_of_app_state (type var value) (typ : (var, value) Typ.t)
-    (app_state : Field.Var.t Zkapp_state.V.t) : var =
-  app_state |> Zkapp_state.V.to_list |> Array.of_list
-  |> unsafe_var_of_fields typ
-
 (* Intended to be used for custom token accounts *)
 let none_permissions : Permissions.t =
   { edit_state = None
@@ -113,16 +88,9 @@ type call_forest_tree =
   , Zkapp_command.Digest.Forest.t )
   Zkapp_command.Call_forest.Tree.t
 
-(** A shorthand function to keep a field in the update for the app state *)
-let keep = Set_or_keep.Checked.keep ~dummy:Run.Field.zero
-
-(** A shorthand function to ignore a field in the precondition for the app state *)
-let ignore = Or_ignore.Checked.make_unsafe Boolean.false_ Run.Field.zero
-
 (** Hash a constant string to a field for use as tags. *)
 let naive_hash_string_to_field (s : string) =
-  Random_oracle.hash
-    (Array.map ~f:(fun c -> Field.of_int @@ Char.to_int c) @@ String.to_array s)
+  Hash_prefix_create.salt s |> Random_oracle.digest
 
 (** Generic function for turning variables into 8 of something  *)
 let var_to_state_generic (some : Field.Var.t -> 'option) (none : 'option)
@@ -148,38 +116,75 @@ let var_to_precondition typ x =
     (Or_ignore.Checked.make_unsafe Boolean.false_ Run.Field.zero)
     typ x
 
-module Var_to_precondition_fine = struct
-  type t = [] : t | ( :: ) : (('var, 't) Typ.t * 'var option) * t -> t
+module Fine = struct
+  module Case = struct
+    type 'self t =
+      | Whole : (('var, 't) Typ.t * 'var option) -> 'self t
+      | Recursive : 'self -> 'self t
+  end
+
+  type t = [] : t | ( :: ) : t Case.t * t -> t
 end
 
-let var_to_precondition_fine :
-       Var_to_precondition_fine.t
-    -> Field.Var.t Or_ignore.Checked.t Zkapp_state.V.t =
-  let rec go :
-      Var_to_precondition_fine.t -> Field.Var.t Or_ignore.Checked.t list =
-    function
+module type Maybe_var_type = sig
+  type var
+
+  val some : Field.Var.t -> var
+
+  val none : var
+end
+
+let var_to_state_generic_fine :
+    type var.
+    (module Maybe_var_type with type var = var) -> Fine.t -> var Zkapp_state.V.t
+    =
+ fun (module Maybe_var : Maybe_var_type with type var = var) ->
+  let rec go : Fine.t -> var list = function
     | [] ->
         []
-    | (typ, Some var) :: rest ->
+    | Whole (typ, Some var) :: rest ->
         List.append
-          ( var_to_fields typ var |> Array.to_list
-          |> List.map ~f:(Or_ignore.Checked.make_unsafe Boolean.true_) )
+          (var_to_fields typ var |> Array.to_list |> List.map ~f:Maybe_var.some)
           (go rest)
-    | (typ, None) :: rest ->
+    | Whole (typ, None) :: rest ->
         List.append
           (let (Typ typ) = typ in
-           List.init typ.size_in_field_elements ~f:(fun _ -> ignore) )
+           List.init typ.size_in_field_elements ~f:(fun _ -> Maybe_var.none) )
           (go rest)
+    | Recursive maybe_fields :: rest ->
+        List.append (go maybe_fields) (go rest)
   in
   fun x ->
     let r = go x in
     if List.length r > 8 then
       failwith
-        "var_to_precondition_fine used with more than 8 fields, too big for \
+        "var_to_state_generic_fine used with more than 8 fields, too big for \
          zkapp state!"
     else
-      let r' = List.(append r (init ~f:(fun _ -> ignore) (length r - 8))) in
+      let r' =
+        List.(append r (init ~f:(fun _ -> Maybe_var.none) (length r - 8)))
+      in
       Zkapp_state.V.of_list_exn r'
+
+let var_to_precondition_fine =
+  var_to_state_generic_fine
+    ( module struct
+      type var = Field.Var.t Or_ignore.Checked.t
+
+      let some = Or_ignore.Checked.make_unsafe Boolean.true_
+
+      let none = Or_ignore.Checked.make_unsafe Boolean.false_ Run.Field.zero
+    end )
+
+let var_to_app_state_fine =
+  var_to_state_generic_fine
+    ( module struct
+      type var = Field.Var.t Set_or_keep.Checked.t
+
+      let some = Set_or_keep.Checked.make_unsafe Boolean.true_
+
+      let none = Set_or_keep.Checked.make_unsafe Boolean.false_ Run.Field.zero
+    end )
 
 (** Same as var_to_state_generic but for values *)
 let value_to_state_generic (some : field -> 'option) (none : 'option)
@@ -395,6 +400,13 @@ let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) :
   in
   actions
 
+let var_to_hash ~(init : F.t Random_oracle.State.t) (typ : ('var, 'value) Typ.t)
+    (x : 'var) : F.var Checked.t =
+  let*| () = Checked.return () in
+  let (Typ typ) = typ in
+  let fields, _aux = typ.var_to_fields x in
+  Random_oracle.Checked.hash ~init fields
+
 let value_to_actions (typ : ('var, 'value) Typ.t) (x : 'value) :
     Zkapp_account.Actions.t =
   let (Typ typ) = typ in
@@ -406,6 +418,19 @@ module Calls = struct
     | []
     | ( :: ) of (Account_update.Checked.t * t) * t
     | Raw of Zkapp_call_forest.Checked.t
+
+  let rec hash : t -> Zkapp_call_forest.Checked.t Checked.t = function
+    | [] ->
+        Checked.return (Zkapp_call_forest.Checked.empty ())
+    | (account_update, nested_calls) :: tail ->
+        let* calls = hash nested_calls in
+        let* tail = hash tail in
+        Checked.return
+          (Zkapp_call_forest.Checked.push
+             ~account_update:(attach_control_var account_update)
+             ~calls tail )
+    | Raw calls ->
+        Checked.return calls
 end
 
 let create_prover_value : 'a As_prover.t -> 'a Prover_value.t Checked.t =
@@ -422,43 +447,29 @@ let make_outputs :
          * call_forest )
          As_prover.t )
        Checked.t =
-  let rec create_call_forest : Calls.t -> Zkapp_call_forest.Checked.t Checked.t
-      = function
-    | [] ->
-        Checked.return (Zkapp_call_forest.Checked.empty ())
-    | (account_update, nested_calls) :: tail ->
-        let* calls = create_call_forest nested_calls in
-        let* tail = create_call_forest tail in
-        Checked.return
-          (Zkapp_call_forest.Checked.push
-             ~account_update:(attach_control_var account_update)
-             ~calls tail )
-    | Raw calls ->
-        Checked.return calls
+ fun account_update calls ->
+  let* calls = Calls.hash calls in
+  let account_update_digest =
+    Zkapp_command.Call_forest.Digest.Account_update.Checked.create
+      account_update
   in
-  fun account_update calls ->
-    let* calls = create_call_forest calls in
-    let account_update_digest =
-      Zkapp_command.Call_forest.Digest.Account_update.Checked.create
-        account_update
+  let public_output : Zkapp_statement.Checked.t =
+    { account_update = (account_update_digest :> Field.Var.t)
+    ; calls = (Zkapp_call_forest.Checked.hash calls :> Field.Var.t)
+    }
+  in
+  let auxiliary_output =
+    let+ account_update =
+      As_prover.read (Account_update.Body.typ ()) account_update
     in
-    let public_output : Zkapp_statement.Checked.t =
-      { account_update = (account_update_digest :> Field.Var.t)
-      ; calls = (Zkapp_call_forest.Checked.hash calls :> Field.Var.t)
-      }
+    let+| account_update_digest =
+      As_prover.read Zkapp_command.Call_forest.Digest.Account_update.typ
+        account_update_digest
     in
-    let auxiliary_output =
-      let+ account_update =
-        As_prover.read (Account_update.Body.typ ()) account_update
-      in
-      let+| account_update_digest =
-        As_prover.read Zkapp_command.Call_forest.Digest.Account_update.typ
-          account_update_digest
-      in
-      let calls = Prover_value.get calls.data in
-      (account_update, account_update_digest, calls)
-    in
-    Checked.return (public_output, auxiliary_output)
+    let calls = Prover_value.get calls.data in
+    (account_update, account_update_digest, calls)
+  in
+  Checked.return (public_output, auxiliary_output)
 
 (** Takes output from make_outputs and makes it usable *)
 let mktree (account_update, account_update_digest, calls) proof =
@@ -480,3 +491,29 @@ let assert_equal :
     List.map ~f (List.zip_exn (Array.to_list x) (Array.to_list y))
   in
   assert_all ?label constraints
+
+module Checked32 = struct
+  include Mina_numbers.Nat.Make32 ()
+
+  type var = Checked.t
+end
+
+(* FIXME *)
+let compile_simple ?override_wrap_domain ~name ~main ~output ~left_tag
+    ~right_tag () =
+  let identifier = "compile_simple of " ^ name in
+  Pickles.compile () ?override_wrap_domain ~cache:Cache_dir.cache
+    ~auxiliary_typ:V.typ ~public_input:(Output output)
+    ~branches:(module Pickles_types.Nat.N1)
+    ~max_proofs_verified:(module Pickles_types.Nat.N2)
+    ~name:identifier
+    ~constraint_constants:
+      (Genesis_constants.Constraint_constants.to_snark_keys_header
+         constraint_constants )
+    ~choices:(fun ~self:_ ->
+      [ { identifier
+        ; prevs = [ left_tag; right_tag ]
+        ; main = (fun x -> main x |> Run.run_checked)
+        ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
+        }
+      ] )

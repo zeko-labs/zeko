@@ -8,8 +8,9 @@ type ledger = account list
 type commit =
   { ledger : ledger
   ; inner_action_state : action_state
+  ; inner_action_state_length : nat
   ; synchronized_outer_action_state : action_state
-  ; sequencer : sequencer
+  ; synchronized_outer_action_state_length : nat
   ; valid_while : valid_while
   }
 
@@ -27,7 +28,10 @@ type inner_action_state = inner_action list
 type outer_app_state =
   { ledger : ledger
   ; inner_action_state : inner_action_state
+  ; inner_action_state_length : nat
   ; sequencer : public_key
+  ; pause_key : public_key
+  ; is_paused : bool
   }
 
 type inner_app_state =
@@ -56,34 +60,53 @@ let do_commit
   ~valid_while
   ~sequencer
   ~new_actions
+  ~pause_key
   =
   (* doesn't need to be at the same time as macroslot,
      can be early or late depending on other factors *)
   assert valid_while.upper - valid_while.lower < max_valid_while_size ;
 
+  (* The vk for the inner account ensures that the outer action state as recorded only goes forward. *)
   let old_inner = get_account inner_pk txn_snark.source in
   let new_inner = get_account inner_pk txn_snark.target in
+
+  let synchronized_outer_action_state = new_inner.app_state.outer_action_state in
+  let synchronized_outer_action_state_length = List.length synchronized_outer_action_state in
 
   let action_state =
     (* We don't force sequencer to match on latest action state,
        since it's unreliable and might roll back. *)
-    List.append new_actions new_inner.app_state.outer_action_state in
+    List.append new_actions synchronized_outer_action_state in
 
   let ledger = txn_snark.target in
   let inner_action_state = new_inner.action_state in
+  let inner_action_state_length = List.length inner_action_state in
 
   [ { public_key = zeko_pk
-    ; actions = Commit { ledger ; inner_action_state ; valid_while }
+    ; actions = Commit
+      { ledger
+      ; inner_action_state
+      ; inner_action_state_length
+      ; synchronized_outer_action_state
+      ; synchronized_outer_action_state_length
+      ; valid_while
+      }
     ; app_state =
       { ledger
       ; inner_action_state
+      ; inner_action_state_length
       ; sequencer
+      ; paused = false
+      ; pause_key
       }
     ; preconditions =
       { app_state =
         { ledger = txn_snark.source
         ; inner_action_state = old_inner.action_state
+        ; inner_action_state_length = List.length old_inner.action_state
         ; sequencer
+        ; paused = false
+        ; pause_key
         }
       ; valid_while
       ; action_state

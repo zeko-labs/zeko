@@ -3,6 +3,9 @@
 open Snark_params.Tick
 open Zeko_util
 
+type tag_max_proofs_verified
+type tag_branches
+
 (** Define a provable state machine as a machine with some initial state
     and some step function. *)
 module Make : functor
@@ -25,12 +28,14 @@ module Make : functor
      (** This is passed to `init` when initializing the state machine. This way, you can have several starting points. *)
      module Init : SnarkType
 
+     (* FIXME: Allow verifying proofs inside. *)
      val init :
           check:Zeko_util.Boolean.var option
             (** The circuit must not fail if this is false. *)
        -> Init.var
        -> Stmt.var Checked.t
 
+     (* FIXME: Allow verifying proofs inside. *)
      val step :
           check:Zeko_util.Boolean.var option
             (** The circuit must not fail if this is false. *)
@@ -69,13 +74,13 @@ module Make : functor
   module Trans : sig
     type t = { source : Stmt.t; target : Stmt.t } [@@deriving snarky]
   end
-
+  
   (** The tag for the Pickles rule. You need to specify this in your rule. *)
   val tag :
     ( Trans.var
     , Trans.t
-    , Pickles_types.Nat.N2.n
-    , Pickles_types.Nat.N2.n )
+    , tag_max_proofs_verified
+    , tag_branches )
     Pickles.Tag.t
     lazy_t
 
@@ -89,7 +94,7 @@ module Make : functor
 
     (** You should pass this directly into previous_proof_statements *)
     val get :
-         ?check:Zeko_util.Boolean.var
+         ?check:Boolean.var
            (** Set this to false if you don't want to check the proof after all. *)
       -> var (** What you're trying to verify *)
       -> ( Trans.var
@@ -100,5 +105,9 @@ module Make : functor
 
     (** Prove the state machine execution. *)
     val prove : Init.t -> Elem.t list -> t Async.Deferred.t
+    
+    (** FIXME: Implement *)
+    (* val merge : t -> t -> t Async.Deferred.t *)
+    (* val extend : t -> Elem.t list -> t Async.Deferred.t *)
   end
 end

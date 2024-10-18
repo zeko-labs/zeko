@@ -24,9 +24,9 @@ To that end, here is a summary of the core protocol:
   This account is referred to as the _outer_ account.
   There is a corresponding _inner_ account on the L2,
   whereto you can post actions to communicate the other way.
-  On commit, the action states are synchronised.
-  Notably, the outer action state is synchronised _up to some point_,
-  to ensure that sequencer does not waste work synchronising something that
+  On commit, the action states are synchronized.
+  Notably, the outer action state is synchronized _up to some point_,
+  to ensure that sequencer does not waste work synchronizing something that
   might be rolled back immediately.
 - Actions on the outside:
   + Witness (witness arbitrary account update)

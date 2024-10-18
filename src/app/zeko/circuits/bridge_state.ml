@@ -3,53 +3,33 @@ open Zeko_util
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
 
-module Next_deposit = struct
-  include Mina_numbers.Nat.Make32 ()
-
-  type var = Checked.t
-end
-
-module Next_cancelled_deposit = struct
-  include Mina_numbers.Nat.Make32 ()
-
-  type var = Checked.t
-end
-
-module Next_withdrawal = struct
-  include Mina_numbers.Nat.Make32 ()
-
-  type var = Checked.t
-end
-
 module Inner_user_state = struct
-  type t = { next_deposit : Next_deposit.t } [@@deriving snarky]
+  type t = { next_deposit : Checked32.t } [@@deriving snarky]
 
-  type precondition = { next_deposit : Next_deposit.var option }
+  type precondition = { next_deposit : Checked32.var option }
 
   let to_precondition (p : precondition) :
       F.var Or_ignore.Checked.t Zkapp_state.V.t =
     var_to_precondition_fine
-      Var_to_precondition_fine.[ (Next_deposit.typ, p.next_deposit) ]
+      Var_to_precondition_fine.[ (Checked32.typ, p.next_deposit) ]
 end
 
 module Outer_user_state = struct
   type t =
-    { next_cancelled_deposit : Next_cancelled_deposit.t
-    ; next_withdrawal : Next_withdrawal.t
-    }
+    { next_cancelled_deposit : Checked32.t; next_withdrawal : Checked32.t }
   [@@deriving snarky]
 
   type precondition =
-    { next_cancelled_deposit : Next_cancelled_deposit.var option
-    ; next_withdrawal : Next_withdrawal.var option
+    { next_cancelled_deposit : Checked32.var option
+    ; next_withdrawal : Checked32.var option
     }
 
   let to_precondition (p : precondition) :
       F.var Or_ignore.Checked.t Zkapp_state.V.t =
     var_to_precondition_fine
       Var_to_precondition_fine.
-        [ (Next_cancelled_deposit.typ, p.next_cancelled_deposit)
-        ; (Next_withdrawal.typ, p.next_withdrawal)
+        [ (Checked32.typ, p.next_cancelled_deposit)
+        ; (Checked32.typ, p.next_withdrawal)
         ]
 end
 
@@ -74,16 +54,29 @@ module A = struct
   type var = Checked.t
 end
 
-module Deposit_params = struct
+(* When the token is the Mina token. *)
+module Deposit_params_base = struct
+  type t = { children : C.t; deposit : Deposit.t; holder_account_l1 : PC.t }
+  [@@deriving snarky]
+
+  let base (x : var) = x
+
+  let custom _ = None
+end
+
+(* When the token is custom, and we need token owner authorization. *)
+module Deposit_params_custom = struct
   type t =
     { authorization_kind : A.t
     ; nested_children : C.t
     ; call_data : F.t
-    ; children : C.t
-    ; deposit : Deposit.t
-    ; holder_account_l1 : PC.t
+    ; base : Deposit_params_base.t
     }
   [@@deriving snarky]
+
+  let base { base } : Deposit_params_base.var = base
+
+  let custom x = Some x
 end
 
 module Withdrawal_params = struct

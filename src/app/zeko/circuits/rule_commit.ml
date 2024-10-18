@@ -3,9 +3,19 @@ open Zeko_util
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
 open Mina_base
-open Outer
+open Rollup_state
 
-module ASE = Action_state_extension.Make (struct
+module Ase_outer_inst = Ase.Make_with_length (struct
+  module Action_state = Outer_action_state
+  module Action = Outer.Action
+
+  let get_iterations = Int.pow 2 14
+end)
+
+module Ase_inner_inst = Ase.Make_with_length (struct
+  module Action_state = Inner_action_state
+  module Action = Inner.Action
+
   let get_iterations = Int.pow 2 14
 end)
 
@@ -37,11 +47,13 @@ struct
       ; vk_hash : F.t  (** Our vk hash *)
       ; sequencer : PC.t  (** Sequencer public key *)
       ; slot_range : Slot_range.t  (** slot_range *)
-      ; action_state_extension : ASE.t
+      ; ase_inner : Ase_inner_inst.t
+      ; ase_outer : Ase_outer_inst.t
       ; old_inner_acc : Account.t
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t  (** Withdrawals to be processed this time *)
       ; new_inner_acc_path : Path.t
+      ; pause_key : PC.t
       }
     [@@deriving snarky]
   end
@@ -174,11 +186,13 @@ struct
           ; vk_hash
           ; sequencer
           ; slot_range
-          ; action_state_extension
+          ; ase_inner
+          ; ase_outer
           ; old_inner_acc
           ; old_inner_acc_path
           ; new_inner_acc
           ; new_inner_acc_path
+          ; pause_key
           } :
            Witness.var ) =
       exists_witness
@@ -233,51 +247,69 @@ struct
     let* old_inner_zkapp = get_zkapp old_inner_acc in
     let* new_inner_zkapp = get_zkapp new_inner_acc in
 
-    let outer_action_state_in_inner =
-      Outer.Action.State.of_field_var
-        (Inner.State.var_of_app_state new_inner_zkapp.app_state)
-          .outer_action_state
+    let synchronized_outer_action_state =
+      (Inner.State.var_of_app_state new_inner_zkapp.app_state)
+        .outer_action_state
     in
 
-    let* ( Action_state_extension.Stmt.
-             { source = outer_action_state_in_inner'
+    let* ( Ase_outer_inst.
+             { source = synchronized_outer_action_state'
              ; target = outer_action_state
              }
-         , verify_action_state_extension ) =
-      ASE.get action_state_extension
+         , verify_ase_outer ) =
+      Ase_outer_inst.get ase_outer
     in
-    let outer_action_state =
-      Action.State.of_field_var outer_action_state.action_state
+
+    let* ( Ase_inner_inst.
+             { source = old_inner_action_state
+             ; target = new_inner_action_state
+             }
+         , verify_ase_inner ) =
+      Ase_inner_inst.get ase_inner
     in
 
     (* We want to transfer only deposits finalised with some certainty.
        By submitting `delay_extension` we can prove that we are transfering older deposits. *)
     let* () =
       with_label __LOC__ (fun () ->
-          Action.State.to_field_var outer_action_state_in_inner
-          |> Field.Checked.Assert.equal
-               outer_action_state_in_inner'.action_state )
+          assert_equal Outer_action_state.With_length.typ
+            synchronized_outer_action_state synchronized_outer_action_state' )
     in
 
     (* Withdrawals are registered in the inner account's action state *)
-    let old_inner_action_state =
+    let old_inner_action_state' =
       match old_inner_zkapp.action_state with
       | x :: _ ->
-          Inner.Action.State.of_field_var x
+          Inner_action_state.unsafe_var_of_field x
     in
-    let inner_action_state =
+    let new_inner_action_state' =
       match new_inner_zkapp.action_state with
       | x :: _ ->
-          Inner.Action.State.of_field_var x
+          Inner_action_state.unsafe_var_of_field x
+    in
+    let* () =
+      assert_equal Inner_action_state.typ
+        (Inner_action_state.With_length.state_var old_inner_action_state)
+        old_inner_action_state'
+    in
+    let* () =
+      assert_equal Inner_action_state.typ
+        (Inner_action_state.With_length.state_var new_inner_action_state)
+        new_inner_action_state'
     in
 
     (* Finalize update  *)
     let update =
       { default_account_update.update with
         app_state =
-          State.(
+          Outer.State.(
             var_to_app_state typ
-              ( { ledger_hash = target_ledger; inner_action_state; sequencer }
+              ( { ledger_hash = target_ledger
+                ; inner_action_state = new_inner_action_state
+                ; sequencer
+                ; paused = Boolean.false_
+                ; pause_key
+                }
                 : var ))
       }
     in
@@ -286,28 +318,37 @@ struct
         account =
           { default_account_update.preconditions.account with
             state =
-              State.to_precondition
+              Outer.State.fine
                 { ledger_hash = Some source_ledger
-                ; inner_action_state = Some old_inner_action_state
+                ; inner_action_state =
+                    { state =
+                        Some
+                          (Inner_action_state.With_length.state_var
+                             new_inner_action_state )
+                    ; length =
+                        Some
+                          (Inner_action_state.With_length.length_var
+                             new_inner_action_state )
+                    }
                 ; sequencer = Some sequencer
+                ; paused = Some Boolean.false_
+                ; pause_key = Some pause_key
                 }
+              |> var_to_precondition_fine
           ; action_state =
               Or_ignore.Checked.make_unsafe Boolean.true_
-                (Action.State.to_field_var outer_action_state)
+                (Outer_action_state.With_length.raw_var outer_action_state)
               (* Our action state must match *)
           }
       ; valid_while = Slot_range.Checked.to_valid_while slot_range
       }
     in
     let* actions =
-      Action.commit_to_actions_var
-        Action.Commit.
+      Outer.Action.commit_to_actions_var
+        Outer.Action.Commit.
           { ledger = target_ledger
-          ; inner_action_state =
-              Inner.Action.State.to_field_var inner_action_state
-          ; synchronized_outer_action_state =
-              Action.State.to_field_var outer_action_state
-          ; sequencer
+          ; inner_action_state = new_inner_action_state
+          ; synchronized_outer_action_state
           ; slot_range
           }
     in
@@ -346,17 +387,19 @@ struct
             ; proof
             }
             (* Proof for Wrapper showing there is a valid transition from source to target *)
-          ; verify_action_state_extension
+          ; verify_ase_outer
             (* Proof that deposits as recorded on L1 went forward, otherwise it could go backwards,
                and proof that the action_state precondition is an extension of our new all_deposits *)
+          ; verify_ase_inner
+            (* Used to get length of inner action state easily. *)
           ]
       ; public_output
       ; auxiliary_output
       }
 
   let rule : _ Pickles.Inductive_rule.t =
-    { identifier = "Rollup step"
-    ; prevs = [ T.tag; force Action_state_extension.tag ]
+    { identifier = "Rollup step" (* FIXME: verify two ases *)
+    ; prevs = [ T.tag; force Ase.tag_with_length ; force Ase.tag_with_length ]
     ; main = (fun x -> main x |> Run.run_checked)
     ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
     }

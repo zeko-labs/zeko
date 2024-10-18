@@ -5,6 +5,11 @@ open Snark_params.Tick
 open Zeko_util
 open Mina_base
 
+module Max_proofs_verified = Pickles_types.Nat.N2
+type tag_max_proofs_verified = Max_proofs_verified.n
+module Branches = Pickles_types.Nat.N5
+type tag_branches = Branches.n
+
 module Make (Inputs : sig
   module Elem : SnarkType
 
@@ -246,8 +251,8 @@ struct
       (time (name ^ ".compile") (fun () ->
            Pickles.compile () ?override_wrap_domain ~cache:Cache_dir.cache
              ~public_input:(Output Transition.Stmt.typ) ~auxiliary_typ:Typ.unit
-             ~branches:(module Pickles_types.Nat.N2)
-             ~max_proofs_verified:(module Pickles_types.Nat.N2)
+             ~branches:(module Branches)
+             ~max_proofs_verified:(module Max_proofs_verified)
              ~name:(name ^ ".compile")
              ~constraint_constants:
                (Genesis_constants.Constraint_constants.to_snark_keys_header
@@ -355,10 +360,11 @@ struct
     [@@deriving snarky]
 
     let%snarkydef_ get ?(check : Boolean.var option)
-        ({ init_arg; proof_target; proof; excess } : var) =
+        ({ init_arg; proof_target; proof; excess ; excess_nr_nones = _ } : var) =
       let* has_proof =
         exists Boolean.typ ~compute:As_prover.(V.get proof >>| Option.is_some)
       in
+      (* We verify the proof if check is true or None, and there is a proof *)
       let* proof_must_verify =
         match check with
         | Some check ->
@@ -366,18 +372,20 @@ struct
         | None ->
             Checked.return has_proof
       in
+      (* We get the supposed source from the initialization of the state machine. *)
       let* source = init ~check init_arg in
+      (* We do some wrangling to get either the proof or a dummy proof. *)
       let* (proof : Proof.t As_prover.Ref.t) =
         As_prover.(V.get proof >>| Option.value ~default:(dummy_proof ()))
         |> As_prover.Ref.create
       in
-      let* init =
+      let* excess_init =
         if_ has_proof ~typ:Stmt.typ ~then_:proof_target ~else_:source
       in
       let* target =
         Checked.List.fold
           ~f:(fun state elem -> step_option ~check elem state)
-          ~init excess
+          ~init:excess_init excess
       in
       let stmt : Transition.Stmt.var = { source; target } in
       Checked.return

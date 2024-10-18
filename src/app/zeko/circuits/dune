@@ -1,4 +1,4 @@
-(env (_ (flags (:standard -w @a-42-40-44-70-45-41-9))))
+(env (_ (flags (:standard -w @a-42-40-44-70-45-41))))
 
 (library
  (name zkapps_rollup)
@@ -59,6 +59,5 @@
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules zkapps_rollup zkapps_rollup_intf rule_bridge_finalize_deposit bridge_inner outer_rules inner_rules rule_commit rule_action_witness outer rule_inner_sync inner ase_lengthed action_state_extension folder zeko_util)
- (modules_without_implementation zkapps_rollup_intf)
+ (modules rule_bridge_finalize_deposit bridge_state outer_rules inner_rules rule_commit rule_action_witness rule_inner_sync rollup_state ase folder zeko_util)
  )

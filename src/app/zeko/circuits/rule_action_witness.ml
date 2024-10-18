@@ -1,10 +1,10 @@
 open Zeko_util
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
-open Outer
+open Rollup_state
 
 module Witness = struct
-  type t = { public_key : PC.t; vk_hash : F.t; witness : Action.Witness.t }
+  type t = { public_key : PC.t; vk_hash : F.t; witness : Outer.Action.Witness.t }
   [@@deriving snarky]
 end
 
@@ -12,7 +12,7 @@ include MkHandler (Witness)
 
 let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
   let* Witness.{ public_key; vk_hash; witness } = exists_witness in
-  let* actions = Action.witness_to_actions_var witness in
+  let* actions = Outer.Action.witness_to_actions_var witness in
   let valid_while = Slot_range.Checked.to_valid_while witness.slot_range in
   let account_update =
     { default_account_update with
