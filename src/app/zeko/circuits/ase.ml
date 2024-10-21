@@ -6,6 +6,10 @@ open Snark_params.Tick
 open Zeko_util
 open Checked.Let_syntax
 
+let push_events_checked state actions =
+  make_checked (fun () ->
+      Zkapp_account.Actions.push_events_checked state actions )
+
 module M (Length : sig
   include SnarkType
 
@@ -14,8 +18,12 @@ module M (Length : sig
 
     val succ_if : var -> Boolean.var -> var Checked.t
   end
+end) (Inputs : sig
+  val name : string
 end) =
 struct
+  open Inputs
+
   module Stmt = struct
     type t = { action_state : F.t; length : Length.t } [@@deriving snarky]
   end
@@ -33,12 +41,9 @@ struct
   let init ~check:_ x = Checked.return x
 
   let step ~check:_ actions ({ action_state; length } : Stmt.var) =
-    let*| length = Length.Checked.succ length in
-    Stmt.
-      { action_state =
-          Zkapp_account.Actions.push_events_checked action_state actions
-      ; length
-      }
+    let* length = Length.Checked.succ length in
+    let*| action_state = push_events_checked action_state actions in
+    Stmt.{ action_state; length }
 
   let step_option ~check:_ actions ({ action_state; length } : Stmt.var) =
     let* dummy_ref = As_prover.Ref.create (As_prover.return []) in
@@ -49,26 +54,26 @@ struct
         (Data_as_hash.hash actions)
         (constant Field.typ Outside_hash_image.t)
     in
+    let* action_state_else = push_events_checked action_state actions in
     let* action_state =
-      Field.Checked.if_ is_dummy ~then_:action_state
-        ~else_:(Zkapp_account.Actions.push_events_checked action_state actions)
+      Field.Checked.if_ is_dummy ~then_:action_state ~else_:action_state_else
     in
     let*| length = Length.Checked.succ_if length (Boolean.not is_dummy) in
     Stmt.{ action_state; length }
 
-  let name = "action state"
+  let name = name
 
   (* FIXME: increase depending on whether length is used or not *)
 
-  let leaf_iterations = Int.pow 2 16
+  let leaf_iterations = Int.pow 2 11
 
-  let leaf_option_iterations = Int.pow 2 15
+  let leaf_option_iterations = Int.pow 2 10
 
-  let extend_iterations = Int.pow 2 15
+  let extend_iterations = Int.pow 2 10
 
-  let extend_option_iterations = Int.pow 2 14
+  let extend_option_iterations = Int.pow 2 9
 
-  let override_wrap_domain = None
+  let override_wrap_domain = Some Pickles_base.Proofs_verified.N1
 end
 
 module Not_length = struct
@@ -85,8 +90,23 @@ module Not_length = struct
   end
 end
 
-module Made_with_length = Folder.Make (M (Checked32))
-module Made_without_length = Folder.Make (M (Not_length))
+module M_with_length =
+  M
+    (Checked32)
+    (struct
+      let name = "Ase with length"
+    end)
+
+module Made_with_length = Folder.Make (M_with_length)
+
+module M_without_length =
+  M
+    (Not_length)
+    (struct
+      let name = "Ase without length"
+    end)
+
+module Made_without_length = Folder.Make (M_without_length)
 
 type tag_with_length_t = Made_with_length.Trans.t
 
@@ -202,9 +222,13 @@ struct
 
   let prove (action_state : Action_state.t) (actions : Action.t list) =
     let f action =
-      run_and_check_exn
-        ( constant Action.typ action |> Action.to_actions_var
-        >>| As_prover.read Zkapp_account.Actions.typ )
+      printf "preparing checked computation\n" ;
+      let computation =
+        constant Action.typ action |> Action.to_actions_var
+        >>| As_prover.read Zkapp_account.Actions.typ
+      in
+      printf "running checked computation\n" ;
+      run_and_check_exn computation
     in
     let actions = List.map ~f actions in
     Made_2.prove

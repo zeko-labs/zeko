@@ -1,13 +1,17 @@
+[@@@warning "-60-32-27"] (* FIXME *)
+
 (* TODO: optimize list processing algorithms, maybe use Seq *)
 
 open Core_kernel
 open Snark_params.Tick
 open Zeko_util
 open Mina_base
-
 module Max_proofs_verified = Pickles_types.Nat.N2
+
 type tag_max_proofs_verified = Max_proofs_verified.n
-module Branches = Pickles_types.Nat.N5
+
+module Branches = Pickles_types.Nat.N1
+
 type tag_branches = Branches.n
 
 module Make (Inputs : sig
@@ -81,11 +85,7 @@ struct
 
     let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
       let* Witness.{ elems; source } = exists_witness in
-      let f (state : Stmt.var Checked.t) (elem : E.var) =
-        let* state in
-        step_e elem state
-      in
-      let* target = List.fold_left ~f ~init:(Checked.return source) elems in
+      let* target = Checked.List.fold ~f:(Fun.flip step_e) ~init:source elems in
       Checked.return
         Pickles.Inductive_rule.
           { previous_proof_statements = []
@@ -248,22 +248,25 @@ struct
 
   let compilation_result =
     lazy
-      (time (name ^ ".compile") (fun () ->
-           Pickles.compile () ?override_wrap_domain ~cache:Cache_dir.cache
-             ~public_input:(Output Transition.Stmt.typ) ~auxiliary_typ:Typ.unit
-             ~branches:(module Branches)
-             ~max_proofs_verified:(module Max_proofs_verified)
-             ~name:(name ^ ".compile")
-             ~constraint_constants:
-               (Genesis_constants.Constraint_constants.to_snark_keys_header
-                  constraint_constants )
-             ~choices:(fun ~self ->
-               [ Rule_leaf.rule
-               ; Rule_leaf_option.rule
-               ; Rule_extend.rule self
-               ; Rule_extend_option.rule self
-               ; Rule_merge.rule self
-               ] ) ) )
+      ( printf "compiling %s\n" name ;
+        let@ () = time (name ^ ".compile") in
+        let r =
+          Pickles.compile () ?override_wrap_domain ~cache:Cache_dir.cache
+            ~public_input:(Output Transition.Stmt.typ) ~auxiliary_typ:Typ.unit
+            ~branches:(module Branches)
+            ~max_proofs_verified:(module Max_proofs_verified)
+            ~name:(name ^ ".compile")
+            ~constraint_constants:
+              (Genesis_constants.Constraint_constants.to_snark_keys_header
+                 constraint_constants )
+            ~choices:(fun ~self -> [ Rule_leaf.rule ])
+        in
+        let tag, _, _, _ = r in
+        let (_ : Pickles.Side_loaded.Verification_key.t) =
+          Async.Thread_safe.block_on_async_exn (fun () ->
+              Pickles.Side_loaded.Verification_key.of_compiled tag )
+        in
+        r )
 
   let tag = lazy (match force compilation_result with tag, _, _, _ -> tag)
 
@@ -271,7 +274,7 @@ struct
       Transition.t Async_kernel.Deferred.t =
     let open Async_kernel in
     match force compilation_result with
-    | _, _, _, Pickles.Provers.[ leaf_; _; _; _; _ ] ->
+    | _, _, _, Pickles.Provers.[ leaf_ ] ->
         time_async (name ^ ".leaf") (fun () ->
             let%map stmt, (), proof =
               leaf_ ~handler:(Rule_leaf.handler { elems; source }) ()
@@ -280,6 +283,8 @@ struct
 
   let leaf_option (source : Stmt.t) (elems : ElemOption.t list) :
       Transition.t Async_kernel.Deferred.t =
+    failwith "FIXME"
+  (*
     let open Async_kernel in
     match force compilation_result with
     | _, _, _, Pickles.Provers.[ _; leaf_option_; _; _; _ ] ->
@@ -290,9 +295,12 @@ struct
                 ()
             in
             ({ stmt; proof = Some proof } : Transition.t) )
+            *)
 
   let extend (prev : Transition.t) (elems : Elem.t list) :
       Transition.t Async_kernel.Deferred.t =
+    failwith "FIXME"
+  (*
     let open Async_kernel in
     match force compilation_result with
     | _, _, _, Pickles.Provers.[ _; _; extend_; _; _ ] ->
@@ -301,9 +309,12 @@ struct
               extend_ ~handler:(Rule_extend.handler { elems; prev }) ()
             in
             ({ stmt; proof = Some proof } : Transition.t) )
+            *)
 
   let extend_option (prev : Transition.t) (elems : ElemOption.t list) :
       Transition.t Async_kernel.Deferred.t =
+    failwith "FIXME"
+  (*
     let open Async_kernel in
     match force compilation_result with
     | _, _, _, Pickles.Provers.[ _; _; _; extend_option_; _ ] ->
@@ -314,6 +325,7 @@ struct
                 ()
             in
             ({ stmt; proof = Some proof } : Transition.t) )
+            *)
 
   (*
   let merge (left : Transition.t) (right : Transition.t) :
@@ -360,7 +372,9 @@ struct
     [@@deriving snarky]
 
     let%snarkydef_ get ?(check : Boolean.var option)
-        ({ init_arg; proof_target; proof; excess ; excess_nr_nones = _ } : var) =
+        ({ init_arg; proof_target; proof; excess; excess_nr_nones = _ } : var) =
+      let* () = Checked.return () in
+      printf "calling Folder.get\n" ;
       let* has_proof =
         exists Boolean.typ ~compute:As_prover.(V.get proof >>| Option.is_some)
       in
@@ -388,6 +402,7 @@ struct
           ~init:excess_init excess
       in
       let stmt : Transition.Stmt.var = { source; target } in
+      printf "calling Folder.get done\n" ;
       Checked.return
         ( stmt
         , ( { public_input =
@@ -417,17 +432,18 @@ struct
 
     let prove (init_arg : Init.t) (elems : Elem.t list) :
         t Async_kernel.Deferred.t =
+      printf "calling prove\n" ;
       let source =
-        run_and_check
+        run_and_check_exn
           (let init_arg = constant Init.typ init_arg in
            let* source = init ~check:None init_arg in
            As_prover.read Stmt.typ source |> Checked.return )
-        |> Or_error.ok_exn
       in
       let ( let$ ) = Async_kernel.( >>= ) in
       let ( let$| ) = Async_kernel.( >>| ) in
       let rec go (trans : Transition.t) (elems : Elem.t list_with_length) :
           (Transition.t * Elem.t list_with_length) Async_kernel.Deferred.t =
+        printf "go called\n" ;
         if elems.length <= get_iterations then Async_kernel.return (trans, elems)
         else if elems.length >= extend_iterations then
           let to_process, elems = split_n elems extend_iterations in
@@ -464,9 +480,11 @@ struct
           let$| trans, elems = go trans elems in
           (trans.stmt.target, trans.proof, elems)
       in
+      printf "done calling go\n" ;
       let excess_nr_nones = get_iterations - elems.length in
       let nones = List.init excess_nr_nones ~f:(fun _ -> elem_option_none) in
       let excess = nones @ List.map ~f:elem_to_option elems.list in
+      printf "returning from Folder.prove\n" ;
       Async_kernel.return
         ({ init_arg; proof_target; proof; excess; excess_nr_nones } : t)
   end

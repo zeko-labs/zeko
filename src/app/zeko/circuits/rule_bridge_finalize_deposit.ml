@@ -170,8 +170,8 @@ struct
       in
       Stmt.{ params; action_state; n_steps; is_rejected; is_accepted }
 
-    let step_option ~check:_ (action : Rollup_state.Outer.Action.var)
-        ({ params; action_state; n_steps; is_rejected; is_accepted } : Stmt.var)
+    let step_option ~check:_ (_ : Rollup_state.Outer.Action.var)
+        (_ : Stmt.var)
         =
       failwith "FIXME"
 
@@ -219,121 +219,125 @@ struct
   include MkHandler (Witness)
 
   (** Prove that we have submitted a deposit, and that it's been accepted. *)
-  let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-    let* Witness.
-           { token_id
-           ; public_key
-           ; vk_hash
-           ; may_use_token
-           ; inner_authorization_kind
-           ; ase
-           ; check_accepted
-           ; prev_next_deposit
-           } =
-      exists_witness
-    in
-    let* check_accepted, verify_check_accepted =
-      Check_accepted_inst.get check_accepted
-    in
-    let params = check_accepted.target.params in
-    let account_id = Account_id.Checked.create public_key token_id in
-    let our_token_id = Account_id.Checked.derive_token_id ~owner:account_id in
-    let* () = Boolean.Assert.is_true check_accepted.target.is_accepted in
-    let* () =
-      Boolean.Assert.(Boolean.false_ = check_accepted.target.is_rejected)
-    in
-    let* ( { source = mid_outer_action_state; target = outer_action_state }
-         , verify_ase ) =
-      Ase_inst.get ase
-    in
-    let* () =
-      assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
-        (Rollup_state.Outer_action_state.With_length.state_var
-           mid_outer_action_state )
-        check_accepted.target.action_state
-    in
-    let* next_deposit =
-      Checked32.Checked.(
-        sub
-          (Rollup_state.Outer_action_state.With_length.length_var
-             mid_outer_action_state )
-          check_accepted.target.n_steps)
-    in
-    let* () =
-      assert_var __LOC__
-        Checked32.Checked.(fun () -> prev_next_deposit < next_deposit)
-    in
-    let base_params = Deposit_params.base params in
-    let helper_account =
-      { default_account_update with
-        public_key = base_params.deposit.recipient
-      ; token_id = our_token_id
-      ; authorization_kind = authorization_signed ()
-      ; use_full_commitment = Boolean.true_
-      ; may_use_token = constant May_use_token.typ Parents_own_token
-      ; update =
-          { default_account_update.update with
-            app_state = Inner_user_state.(var_to_app_state typ { next_deposit })
-          }
-      ; preconditions =
-          { default_account_update.preconditions with
-            account =
-              { default_account_update.preconditions.account with
-                state =
-                  Inner_user_state.fine
-                    { next_deposit = Some prev_next_deposit }
-                  |> var_to_precondition_fine
+  let main Pickles.Inductive_rule.{ public_input = () } =
+    with_label ("main " ^ __LOC__) (fun () ->
+        let* Witness.
+               { token_id
+               ; public_key
+               ; vk_hash
+               ; may_use_token
+               ; inner_authorization_kind
+               ; ase
+               ; check_accepted
+               ; prev_next_deposit
+               } =
+          exists_witness
+        in
+        let* check_accepted, verify_check_accepted =
+          Check_accepted_inst.get check_accepted
+        in
+        let params = check_accepted.target.params in
+        let account_id = Account_id.Checked.create public_key token_id in
+        let our_token_id =
+          Account_id.Checked.derive_token_id ~owner:account_id
+        in
+        let* () = Boolean.Assert.is_true check_accepted.target.is_accepted in
+        let* () =
+          Boolean.Assert.(Boolean.false_ = check_accepted.target.is_rejected)
+        in
+        let* ( { source = mid_outer_action_state; target = outer_action_state }
+             , verify_ase ) =
+          Ase_inst.get ase
+        in
+        let* () =
+          assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
+            (Rollup_state.Outer_action_state.With_length.state_var
+               mid_outer_action_state )
+            check_accepted.target.action_state
+        in
+        let* next_deposit =
+          Checked32.Checked.(
+            sub
+              (Rollup_state.Outer_action_state.With_length.length_var
+                 mid_outer_action_state )
+              check_accepted.target.n_steps)
+        in
+        let* () =
+          assert_var __LOC__
+            Checked32.Checked.(fun () -> prev_next_deposit < next_deposit)
+        in
+        let base_params = Deposit_params.base params in
+        let helper_account =
+          { default_account_update with
+            public_key = base_params.deposit.recipient
+          ; token_id = our_token_id
+          ; authorization_kind = authorization_signed ()
+          ; use_full_commitment = Boolean.true_
+          ; may_use_token = constant May_use_token.typ Parents_own_token
+          ; update =
+              { default_account_update.update with
+                app_state =
+                  Inner_user_state.(var_to_app_state typ { next_deposit })
+              }
+          ; preconditions =
+              { default_account_update.preconditions with
+                account =
+                  { default_account_update.preconditions.account with
+                    state =
+                      Inner_user_state.fine
+                        { next_deposit = Some prev_next_deposit }
+                      |> var_to_precondition_fine
+                  }
               }
           }
-      }
-    in
-    let witness_inner =
-      { default_account_update with
-        public_key = constant PC.typ Rollup_state.Inner.public_key
-      ; authorization_kind = inner_authorization_kind
-      ; preconditions =
-          { default_account_update.preconditions with
-            account =
-              { default_account_update.preconditions.account with
-                state =
-                  Rollup_state.Inner.State.fine
-                    { outer_action_state =
-                        { state =
-                            Some
-                              (Rollup_state.Outer_action_state.With_length
-                               .state_var outer_action_state )
-                        ; length =
-                            Some
-                              (Rollup_state.Outer_action_state.With_length
-                               .length_var outer_action_state )
+        in
+        let witness_inner =
+          { default_account_update with
+            public_key = constant PC.typ Rollup_state.Inner.public_key
+          ; authorization_kind = inner_authorization_kind
+          ; preconditions =
+              { default_account_update.preconditions with
+                account =
+                  { default_account_update.preconditions.account with
+                    state =
+                      Rollup_state.Inner.State.fine
+                        { outer_action_state =
+                            { state =
+                                Some
+                                  (Rollup_state.Outer_action_state.With_length
+                                   .state_var outer_action_state )
+                            ; length =
+                                Some
+                                  (Rollup_state.Outer_action_state.With_length
+                                   .length_var outer_action_state )
+                            }
                         }
-                    }
-                  |> var_to_precondition_fine
+                      |> var_to_precondition_fine
+                  }
               }
           }
-      }
-    in
-    let account_update =
-      { default_account_update with
-        public_key
-      ; token_id
-      ; may_use_token
-      ; authorization_kind = authorization_vk_hash vk_hash
-      ; balance_change =
-          Currency.Amount.Signed.Checked.(
-            of_unsigned base_params.deposit.amount |> negate)
-      }
-    in
-    let* public_output, auxiliary_output =
-      make_outputs account_update [ (helper_account, []); (witness_inner, []) ]
-    in
-    let*| auxiliary_output = V.create auxiliary_output in
-    Pickles.Inductive_rule.
-      { previous_proof_statements =
-          [ verify_check_accepted; verify_ase ]
-      ; public_output
-      ; auxiliary_output
-      }
+        in
+        let account_update =
+          { default_account_update with
+            public_key
+          ; token_id
+          ; may_use_token
+          ; authorization_kind = authorization_vk_hash vk_hash
+          ; balance_change =
+              Currency.Amount.Signed.Checked.(
+                of_unsigned base_params.deposit.amount |> negate)
+          }
+        in
+        let* public_output, auxiliary_output =
+          make_outputs account_update
+            [ (helper_account, []); (witness_inner, []) ]
+        in
+        let*| auxiliary_output = V.create auxiliary_output in
+        Pickles.Inductive_rule.
+          { previous_proof_statements = [ verify_check_accepted; verify_ase ]
+          ; public_output
+          ; auxiliary_output
+          } )
 
   let rule : _ Pickles.Inductive_rule.t =
     { identifier = "zeko action witness"

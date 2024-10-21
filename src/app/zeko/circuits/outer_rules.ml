@@ -15,7 +15,7 @@ module Make (T : Transaction_snark.S) = struct
              ~public_input:(Output Mina_base.Zkapp_statement.typ)
              ~auxiliary_typ:V.typ
              ~branches:(module Pickles_types.Nat.N2)
-             ~max_proofs_verified:(module Pickles_types.Nat.N2)
+             ~max_proofs_verified:(module Pickles_types.Nat.N3)
              ~name:"Outer_rules" ~override_wrap_domain:N0
              ~constraint_constants:
                (Genesis_constants.Constraint_constants.to_snark_keys_header

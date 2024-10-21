@@ -3,6 +3,11 @@ open Mina_base
 open Snark_params.Tick
 open Zeko_util
 module PC = Signature_lib.Public_key.Compressed
+open Checked.Let_syntax
+
+let push_events_checked state actions =
+  make_checked (fun () ->
+      Zkapp_account.Actions.push_events_checked state actions )
 
 module type Action_state_type = sig
   include SnarkType
@@ -168,10 +173,8 @@ module Inner = struct
     let push_var :
         var -> Inner_action_state.var -> Inner_action_state.var Checked.t =
      fun x xs ->
-      let open Checked in
-      to_actions_var x
-      >>| Zkapp_account.Actions.push_events_checked
-            (Inner_action_state.raw_var xs)
+      let* actions = to_actions_var x in
+      push_events_checked (Inner_action_state.raw_var xs) actions
       >>| Inner_action_state.unsafe_var_of_field
   end
 end
@@ -337,30 +340,24 @@ module Outer = struct
         Commit.var -> Outer_action_state.var -> Outer_action_state.var Checked.t
         =
      fun c xs ->
-      let*| actions = commit_to_actions_var c in
-      Zkapp_account.Actions.push_events_checked
-        (Outer_action_state.raw_var xs)
-        actions
-      |> Outer_action_state.unsafe_var_of_field
+      let* actions = commit_to_actions_var c in
+      push_events_checked (Outer_action_state.raw_var xs) actions
+      >>| Outer_action_state.unsafe_var_of_field
 
     let push_witness_var :
            Witness.var
         -> Outer_action_state.var
         -> Outer_action_state.var Checked.t =
      fun w xs ->
-      let*| actions = witness_to_actions_var w in
-      Zkapp_account.Actions.push_events_checked
-        (Outer_action_state.raw_var xs)
-        actions
-      |> Outer_action_state.unsafe_var_of_field
+      let* actions = witness_to_actions_var w in
+      push_events_checked (Outer_action_state.raw_var xs) actions
+      >>| Outer_action_state.unsafe_var_of_field
 
     let push_var :
         var -> Outer_action_state.var -> Outer_action_state.var Checked.t =
      fun x xs ->
-      let*| actions = to_actions_var x in
-      Zkapp_account.Actions.push_events_checked
-        (Outer_action_state.raw_var xs)
-        actions
-      |> Outer_action_state.unsafe_var_of_field
+      let* actions = to_actions_var x in
+      push_events_checked (Outer_action_state.raw_var xs) actions
+      >>| Outer_action_state.unsafe_var_of_field
   end
 end

@@ -244,6 +244,8 @@ val ( let+ ) : 'a As_prover.t -> ('a -> 'b As_prover.t) -> 'b As_prover.t
 
 val ( let+| ) : 'a As_prover.t -> ('a -> 'b) -> 'b As_prover.t
 
+val ( let@ ) : (('a -> 'b) -> 'c) -> ('a -> 'b) -> 'c
+
 module Slot : sig
   include module type of Mina_numbers.Global_slot_since_genesis
 

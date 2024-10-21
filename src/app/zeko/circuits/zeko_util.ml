@@ -14,6 +14,8 @@ let ( let+ ) = As_prover.Let_syntax.( >>= )
 
 let ( let+| ) = As_prover.Let_syntax.( >>| )
 
+let (let@) : (('a -> 'b) -> 'c) -> ('a -> 'b) -> 'c = (@@)
+
 let attach_control_var :
     Account_update.Body.Checked.t -> Zkapp_call_forest.Checked.account_update =
  fun account_update ->
@@ -23,7 +25,7 @@ let attach_control_var :
           Zkapp_command.Call_forest.Digest.Account_update.Checked.create
             account_update
       }
-  ; control = Mina_base.Prover_value.create (fun () -> Control.None_given)
+  ; control = let@ () = Mina_base.Prover_value.create in Control.None_given
   }
 
 let attach_control : Account_update.Body.t -> Zkapp_call_forest.account_update =
@@ -392,7 +394,7 @@ end
 
 let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) :
     Zkapp_account.Actions.var Checked.t =
-  let*| () = Checked.return () in
+  let@ () = make_checked in
   let empty_actions = Zkapp_account.Actions.(constant typ []) in
   let actions =
     Zkapp_account.Actions.push_to_data_as_hash empty_actions
@@ -402,7 +404,7 @@ let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) :
 
 let var_to_hash ~(init : F.t Random_oracle.State.t) (typ : ('var, 'value) Typ.t)
     (x : 'var) : F.var Checked.t =
-  let*| () = Checked.return () in
+  let@ () = make_checked in
   let (Typ typ) = typ in
   let fields, _aux = typ.var_to_fields x in
   Random_oracle.Checked.hash ~init fields
@@ -498,7 +500,24 @@ module Checked32 = struct
   type var = Checked.t
 end
 
-(* FIXME 
+(*
+type z = |
+
+type _ s = |
+
+module Verify_proof = struct
+  type ('prev_var, 'width) t =
+    { public_input : 'prev_var
+    ; proof : ('width, 'width) Pickles.Proof.t V.t
+    ; proof_must_verify : Boolean.var
+    }
+end
+
+type choices =
+   (   unit
+    -> ('output_var * 'aux As_prover.t)
+       Checked.t )
+
 let compile_simple ?override_wrap_domain ~name ~main ~output ~left_tag
     ~right_tag () =
   let identifier = "compile_simple of " ^ name in
@@ -516,5 +535,4 @@ let compile_simple ?override_wrap_domain ~name ~main ~output ~left_tag
         ; main = (fun x -> main x |> Run.run_checked)
         ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
         }
-      ] )
-      *)
+      ] ) *)
