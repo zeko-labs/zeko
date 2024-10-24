@@ -9,10 +9,10 @@ module Post_diff = struct
   module Query = struct
     [%%versioned
     module Stable = struct
-      module V2 = struct
+      module V1 = struct
         type t =
           { ledger_openings : Sparse_ledger.Stable.V2.t
-          ; diff : Diff.Stable.V2.t
+          ; diff : Diff.Stable.V1.t
           }
 
         let to_latest = Fn.id
@@ -20,8 +20,8 @@ module Post_diff = struct
     end]
   end
 
-  let v2 : (Query.t, Signature.t) Rpc.Rpc.t =
-    Rpc.Rpc.create ~name:"Post_diff" ~version:2 ~bin_query:Query.Stable.V2.bin_t
+  let v1 : (Query.t, Signature.t) Rpc.Rpc.t =
+    Rpc.Rpc.create ~name:"Post_diff" ~version:1 ~bin_query:Query.Stable.V1.bin_t
       ~bin_response:Signature.Stable.V1.bin_t
 end
 
@@ -31,7 +31,7 @@ module Get_diff = struct
     [%%versioned
     module Stable = struct
       module V2 = struct
-        type t = Diff.Stable.V2.t option
+        type t = Diff.With_timestamp.Stable.V1.t option
 
         let to_latest = Fn.id
       end

@@ -93,7 +93,6 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes () =
       let config = Da_layer.Client.Config.{ nodes = da_nodes } in
       match%bind
         Da_layer.Client.distribute_genesis_diff ~logger ~config ~ledger
-          ~timestamp:(Block_time.now (Block_time.Controller.basic ~logger))
       with
       | Ok _ ->
           return ()
