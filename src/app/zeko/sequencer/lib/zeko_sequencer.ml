@@ -785,7 +785,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         ~f:(fun ledger_hash ->
           let%bind diff : Da_layer.Diff.t Deferred.t =
             Da_layer.Client.get_diff ~logger ~config:da_config ~ledger_hash
-            |> Deferred.map ~f:(fun r -> Or_error.ok_exn r)
+            >>| Or_error.ok_exn >>| fst
           in
           assert (
             Ledger_hash.equal

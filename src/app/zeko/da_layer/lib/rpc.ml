@@ -30,18 +30,18 @@ module Get_diff = struct
   module Response = struct
     [%%versioned
     module Stable = struct
-      module V1 = struct
-        type t = Diff.Stable.V1.t option
+      module V2 = struct
+        type t = Diff.With_timestamp.Stable.V1.t option
 
         let to_latest = Fn.id
       end
     end]
   end
 
-  let v1 : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
-    Rpc.Rpc.create ~name:"Get_diff" ~version:1
+  let v2 : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
+    Rpc.Rpc.create ~name:"Get_diff" ~version:2
       ~bin_query:Ledger_hash.Stable.V1.bin_t
-      ~bin_response:Response.Stable.V1.bin_t
+      ~bin_response:Response.Stable.V2.bin_t
 end
 
 (* val get_all_keys : unit -> Ledger_hash.t list *)
