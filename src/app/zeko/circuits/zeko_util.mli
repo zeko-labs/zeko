@@ -270,32 +270,25 @@ module Checked32 : sig
   type var = Checked.t
 end
 
-(*
+module Compile_simple : sig
+  include module type of Compile_simple_intf.Compile_simple (struct
+    type 'a v_t = 'a V.t
+  end)
+end
+
 val compile_simple :
      ?override_wrap_domain:Pickles_base.Proofs_verified.t
   -> name:string
-  -> main:
-       (   unit
-        -> ('output_var * 'aux As_prover.t)
-           Checked.t )
-  -> output:('output_var, 'output_t) Typ.t
-  -> left_tag:('left_tag_var, 'left_tag_t, Pickles_types.Nat.N2.n, Pickles_types.Nat.N2.n) Pickles.Tag.t
-  -> right_tag:('right_tag_var, 'right_tag_t, Pickles_types.Nat.N2.n, Pickles_types.Nat.N2.n) Pickles.Tag.t
+  -> branches:
+       ( 'out_var
+       , 'prevs
+       , ('first_input, 'branches) Compile_simple.cons_branch
+       , 'n_available_branches )
+       Compile_simple.Branches.t
+  -> out_typ:('out_var, 'out_t) Typ.t
   -> unit
-  -> ('e, 'g, Pickles_types.Nat.N2.n, Pickles_types.Nat.N1.n) Pickles.Tag.t
-     * Pickles.Cache_handle.t
-     * (module Pickles.Proof_intf
-          with type statement = 'g
-           and type t = ( Pickles_types.Nat.N2.n
-                        , Pickles_types.Nat.N2.n )
-                        Pickles.Proof.t )
-     * ( ('h * ('j * unit)) * unit
-       , ('c * ('d * unit)) * unit
-       , ('i * ('k * unit)) * unit
-       , unit
-       , ( 'g
-         * 'f
-         * (Pickles_types.Nat.N2.n, Pickles_types.Nat.N2.n) Pickles.Proof.t )
-         Async_kernel.Deferred.t )
-       Pickles.Provers.t
-       *)
+  -> ( 'out_var
+     , 'out_t
+     , ('first_input, 'branches) Compile_simple.cons_branch )
+     Compile_simple.result
+     Promise.t

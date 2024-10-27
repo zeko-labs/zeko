@@ -1,7 +1,3 @@
-[@@@warning "-60-32-27"] (* FIXME *)
-
-(* TODO: optimize list processing algorithms, maybe use Seq *)
-
 open Core_kernel
 open Snark_params.Tick
 open Zeko_util
@@ -10,7 +6,7 @@ module Max_proofs_verified = Pickles_types.Nat.N2
 
 type tag_max_proofs_verified = Max_proofs_verified.n
 
-module Branches = Pickles_types.Nat.N1
+module Branches = Pickles_types.Nat.N5
 
 type tag_branches = Branches.n
 
@@ -259,7 +255,13 @@ struct
             ~constraint_constants:
               (Genesis_constants.Constraint_constants.to_snark_keys_header
                  constraint_constants )
-            ~choices:(fun ~self -> [ Rule_leaf.rule ])
+            ~choices:(fun ~self ->
+              [ Rule_leaf.rule
+              ; Rule_leaf_option.rule
+              ; Rule_extend.rule self
+              ; Rule_extend_option.rule self
+              ; Rule_merge.rule self
+              ] )
         in
         let tag, _, _, _ = r in
         let (_ : Pickles.Side_loaded.Verification_key.t) =
@@ -274,71 +276,58 @@ struct
       Transition.t Async_kernel.Deferred.t =
     let open Async_kernel in
     match force compilation_result with
-    | _, _, _, Pickles.Provers.[ leaf_ ] ->
-        time_async (name ^ ".leaf") (fun () ->
-            let%map stmt, (), proof =
-              leaf_ ~handler:(Rule_leaf.handler { elems; source }) ()
-            in
-            ({ stmt; proof = Some proof } : Transition.t) )
+    | _, _, _, Pickles.Provers.[ leaf_; _; _; _; _ ] ->
+        let@ () = time_async (name ^ ".leaf") in
+        let%map stmt, (), proof =
+          leaf_ ~handler:(Rule_leaf.handler { elems; source }) ()
+        in
+        ({ stmt; proof = Some proof } : Transition.t)
 
   let leaf_option (source : Stmt.t) (elems : ElemOption.t list) :
       Transition.t Async_kernel.Deferred.t =
-    failwith "FIXME"
-  (*
     let open Async_kernel in
     match force compilation_result with
     | _, _, _, Pickles.Provers.[ _; leaf_option_; _; _; _ ] ->
-        time_async (name ^ ".leaf") (fun () ->
-            let%map stmt, (), proof =
-              leaf_option_
-                ~handler:(Rule_leaf_option.handler { elems; source })
-                ()
-            in
-            ({ stmt; proof = Some proof } : Transition.t) )
-            *)
+        let@ () = time_async (name ^ ".leaf") in
+        let%map stmt, (), proof =
+          leaf_option_ ~handler:(Rule_leaf_option.handler { elems; source }) ()
+        in
+        ({ stmt; proof = Some proof } : Transition.t)
 
   let extend (prev : Transition.t) (elems : Elem.t list) :
       Transition.t Async_kernel.Deferred.t =
-    failwith "FIXME"
-  (*
     let open Async_kernel in
     match force compilation_result with
     | _, _, _, Pickles.Provers.[ _; _; extend_; _; _ ] ->
-        time_async (name ^ ".extend") (fun () ->
-            let%map stmt, (), proof =
-              extend_ ~handler:(Rule_extend.handler { elems; prev }) ()
-            in
-            ({ stmt; proof = Some proof } : Transition.t) )
-            *)
+        let@ () = time_async (name ^ ".extend") in
+        let%map stmt, (), proof =
+          extend_ ~handler:(Rule_extend.handler { elems; prev }) ()
+        in
+        ({ stmt; proof = Some proof } : Transition.t)
 
   let extend_option (prev : Transition.t) (elems : ElemOption.t list) :
       Transition.t Async_kernel.Deferred.t =
-    failwith "FIXME"
-  (*
     let open Async_kernel in
     match force compilation_result with
     | _, _, _, Pickles.Provers.[ _; _; _; extend_option_; _ ] ->
-        time_async (name ^ ".extend") (fun () ->
-            let%map stmt, (), proof =
-              extend_option_
-                ~handler:(Rule_extend_option.handler { elems; prev })
-                ()
-            in
-            ({ stmt; proof = Some proof } : Transition.t) )
-            *)
+        let@ () = time_async (name ^ ".extend") in
+        let%map stmt, (), proof =
+          extend_option_
+            ~handler:(Rule_extend_option.handler { elems; prev })
+            ()
+        in
+        ({ stmt; proof = Some proof } : Transition.t)
 
-  (*
-  let merge (left : Transition.t) (right : Transition.t) :
+  let _merge (left : Transition.t) (right : Transition.t) :
       Transition.t Async_kernel.Deferred.t =
     let open Async_kernel in
     match force compilation_result with
     | _, _, _, Pickles.Provers.[ _; _; _; _; merge_ ] ->
-        time_async (name ^ ".merge") (fun () ->
-            let%map stmt, (), proof =
-              merge_ ~handler:(Rule_merge.handler { left; right }) ()
-            in
-            ({ stmt; proof = Some proof } : Transition.t) )
-*)
+        let@ () = time_async (name ^ ".merge") in
+        let%map stmt, (), proof =
+          merge_ ~handler:(Rule_merge.handler { left; right }) ()
+        in
+        ({ stmt; proof = Some proof } : Transition.t)
 
   let dummy_proof () =
     let open Pickles_types in

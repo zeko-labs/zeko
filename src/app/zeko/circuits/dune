@@ -7,57 +7,14 @@
   base
   core_kernel
   async_kernel
-  ;; local libraries
-  allocation_functor
-  base58_check
-  block_time
-  cache_dir
-  crypto_params
-  currency
-  consensus
-  genesis_ledger
-  staged_ledger_diff
-  data_hash_lib
-  fields_derivers
-  fields_derivers_zkapps
-  genesis_constants
-  hash_prefixes
-  h_list
-  logger
-  mina_base
-  mina_base.import
-  mina_ledger
-  mina_numbers
-  mina_signature_kind
-  mina_state
-  mina_transaction
-  mina_transaction_logic
-  mina_wire_types
-  pasta_bindings
-  pickles
-  pickles.backend
-  pickles_base
-  pickles.limb_vector
-  pickles_types
-  ppx_version.runtime
-  random_oracle
-  random_oracle_input
-  sgn
-  signature_lib
-  snark_keys_header
-  snark_params
-  snarky.backendless
-  sponge
   transaction_snark
-  tuple_lib
-  unsigned_extended
-  with_hash
-  outside_hash_image
+  staged_ledger_diff
   )
  (inline_tests)
  (instrumentation
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules rule_bridge_finalize_deposit bridge_state outer_rules inner_rules rule_commit rule_action_witness rule_inner_sync rollup_state ase folder zeko_util)
+ (modules rule_bridge_finalize_deposit bridge_state outer_rules inner_rules rule_commit rule_action_witness rule_inner_sync ase rollup_state folder zeko_util compile_simple_intf)
+ ;; FIXME add (modules_without_implementation compile_simple_intf)
  )

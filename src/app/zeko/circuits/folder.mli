@@ -109,5 +109,6 @@ module Make : functor
     (** FIXME: Implement *)
     (* val merge : t -> t -> t Async.Deferred.t *)
     (* val extend : t -> Elem.t list -> t Async.Deferred.t *)
+    (* also a way to convert from one instantiation of a folder to another one with a different `get_iterations` count. *)
   end
 end

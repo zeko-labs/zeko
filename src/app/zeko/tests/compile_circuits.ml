@@ -1,5 +1,6 @@
 open Core_kernel
 open Snark_params.Tick
+open Zkapps_rollup.Zeko_util
 
 (*
 module T = Transaction_snark.Make (struct
@@ -35,31 +36,26 @@ let _ase : Ase_inst.t =
 
 let () = printf "proved ase!\n"
 
-(*
 module Example = struct
   module Witness = struct
-    type t = { x : Ase_inst.t; y : Ase_inst.t; z : Ase_inst.t }
-    [@@deriving snarky]
+    type t = { x : Ase_inst.t } [@@deriving snarky]
   end
 
   include MkHandler (Witness)
 
   let%snarkydef_ main _ =
-    let* { x; y; z = _ } = exists_witness in
+    let* { x } = exists_witness in
     let* _x, verify_x = Ase_inst.get x in
-    let*| _y, verify_y = Ase_inst.get y in
-    Pickles.Inductive_rule.
-      { previous_proof_statements = [ verify_x; verify_y ]
-      ; public_output = ()
-      ; auxiliary_output = ()
-      }
+    Checked.return
+      Pickles.Inductive_rule.
+        { previous_proof_statements = [ verify_x ]
+        ; public_output = ()
+        ; auxiliary_output = ()
+        }
 
   let rule : _ Pickles.Inductive_rule.t =
     { identifier = "test"
-    ; prevs =
-        [ force Zkapps_rollup.Ase.tag_without_length
-        ; force Zkapps_rollup.Ase.tag_without_length
-        ]
+    ; prevs = [ force Zkapps_rollup.Ase.tag_without_length ]
     ; main = (fun x -> main x |> Run.run_checked)
     ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
     }
@@ -68,15 +64,23 @@ module Example = struct
 
   let _tag, _cache, _proof_module, Pickles.Provers.[ prove ] =
     time "example" (fun () ->
-        Pickles.compile () ~cache:Cache_dir.cache
-          ~public_input:(Output Typ.unit) ~auxiliary_typ:Typ.unit
-          ~branches:(module Pickles_types.Nat.N1)
-          ~max_proofs_verified:(module Pickles_types.Nat.N2)
-          ~name:"my example jduaihx" ~override_wrap_domain:N0
-          ~constraint_constants:
-            (Genesis_constants.Constraint_constants.to_snark_keys_header
-               constraint_constants )
-          ~choices:(fun ~self:_ -> [ rule ]) )
+        let ((tag, _, _, _) as r) =
+          Pickles.compile () ~cache:Cache_dir.cache
+            ~public_input:(Output Typ.unit) ~auxiliary_typ:Typ.unit
+            ~branches:(module Pickles_types.Nat.N1)
+            ~max_proofs_verified:(module Pickles_types.Nat.N1)
+            ~name:"my example jduaihx" ~override_wrap_domain:N1
+            ~constraint_constants:
+              (Genesis_constants.Constraint_constants.to_snark_keys_header
+                 constraint_constants )
+            ~choices:(fun ~self:_ -> [ rule ])
+        in
+
+        let (_ : Pickles.Side_loaded.Verification_key.t) =
+          Async.Thread_safe.block_on_async_exn (fun () ->
+              Pickles.Side_loaded.Verification_key.of_compiled tag )
+        in
+        r )
 
   let (), (), (_ : _ Pickles.Proof.t) =
     printf "proving jdauiwbxui\n" ;
@@ -93,9 +97,10 @@ module Example = struct
     in
     printf "proved action state extension\n" ;
     let r =
-      Async_unix.Thread_safe.block_on_async_exn (fun () ->
-          prove ~handler:(handler { x; y = x; z = x }) () )
+      let@ () = time "proving example circuit max_proofs_verified N1" in
+      let@ () = Async.Thread_safe.block_on_async_exn in
+      prove ~handler:(handler { x }) ()
     in
+
     r
 end
-*)
