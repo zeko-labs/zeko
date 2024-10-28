@@ -80,7 +80,6 @@ struct
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t  (** Withdrawals to be processed this time *)
       ; new_inner_acc_path : Path.t
-      ; pause_key : PC.t
       }
     [@@deriving snarky]
   end
@@ -218,7 +217,6 @@ struct
           ; old_inner_acc_path
           ; new_inner_acc
           ; new_inner_acc_path
-          ; pause_key
           } :
            Witness.var ) =
       exists ~compute:(V.get w) Witness.typ
@@ -336,15 +334,23 @@ struct
     let update =
       { default_account_update.update with
         app_state =
-          Outer.State.(
-            var_to_app_state typ
-              ( { ledger_hash = target_ledger
-                ; inner_action_state = new_inner_action_state
-                ; sequencer
-                ; paused = Boolean.false_
-                ; pause_key
+          Outer.State.fine
+            { ledger_hash = Some target_ledger
+            ; inner_action_state =
+                { state =
+                    Some
+                      (Inner_action_state.With_length.state_var
+                         new_inner_action_state )
+                ; length =
+                    Some
+                      (Inner_action_state.With_length.length_var
+                         new_inner_action_state )
                 }
-                : var ))
+            ; sequencer = Some sequencer
+            ; paused = Some Boolean.false_
+            ; pause_key = None
+            }
+          |> var_to_app_state_fine
       }
     in
     let preconditions =
@@ -358,15 +364,15 @@ struct
                     { state =
                         Some
                           (Inner_action_state.With_length.state_var
-                             new_inner_action_state )
+                             old_inner_action_state )
                     ; length =
                         Some
                           (Inner_action_state.With_length.length_var
-                             new_inner_action_state )
+                             old_inner_action_state )
                     }
                 ; sequencer = Some sequencer
                 ; paused = Some Boolean.false_
-                ; pause_key = Some pause_key
+                ; pause_key = None
                 }
               |> var_to_precondition_fine
           ; action_state =
