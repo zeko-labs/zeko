@@ -312,19 +312,6 @@ module Boolean = struct
   type t = bool
 end
 
-(** Helper to construct snarky handler from type *)
-module MkHandler (Witness : SnarkType) = struct
-  open Snarky_backendless.Request
-
-  type _ t += Witness : Witness.t t
-
-  let handler (w : Witness.t) (With { request; respond }) =
-    match request with Witness -> respond (Provide w) | _ -> respond Unhandled
-
-  let exists_witness : Witness.var Snark_params.Tick.Checked.t =
-    exists Witness.typ ~request:(As_prover.return Witness)
-end
-
 let public_key_to_token_id_var :
     Signature_lib.Public_key.Compressed.var -> Token_id.Checked.t =
  fun public_key ->
@@ -460,7 +447,7 @@ let make_outputs :
        * ( Account_update.Body.t
          * Zkapp_command.Digest.Account_update.t
          * call_forest )
-         As_prover.t )
+         V.t )
        Checked.t =
  fun account_update calls ->
   let* calls = Calls.hash calls in
@@ -484,7 +471,8 @@ let make_outputs :
     let calls = Prover_value.get calls.data in
     (account_update, account_update_digest, calls)
   in
-  Checked.return (public_output, auxiliary_output)
+  let*| auxiliary_output = V.create auxiliary_output in
+  (public_output, auxiliary_output)
 
 (** Takes output from make_outputs and makes it usable *)
 let mktree (account_update, account_update_digest, calls) proof =
@@ -519,14 +507,29 @@ module Compile_simple = struct
   end)
 end
 
+type 'branches count_branches_result =
+  | Count_branches_result :
+      ('branches, 'n_branches) Compile_simple.branches_length
+      -> 'branches count_branches_result
+
 let rec count_branches :
-    type out_var prevs branches n_available_branches.
-       (out_var, prevs, branches, n_available_branches) Compile_simple.Branches.t
-    -> (module Pickles_types.Nat.Intf) = function
+    type out_var branches n_available_branches.
+       (out_var, branches, n_available_branches) Compile_simple.Branches.t
+    -> branches count_branches_result = function
   | [] ->
-      (module Pickles_types.Nat.N0)
+      Count_branches_result Z
   | _ :: xs ->
-      let (module N) = count_branches xs in
+      let (Count_branches_result n) = count_branches xs in
+      Count_branches_result (S n)
+
+let rec branches_length_to_module :
+    type branches n_branches.
+       (branches, n_branches) Compile_simple.branches_length
+    -> (module Pickles_types.Nat.Intf with type n = n_branches) = function
+  | Z ->
+      (module Pickles_types.Nat.N0)
+  | S n ->
+      let (module N) = branches_length_to_module n in
       ( module struct
         type n = N.n Pickles_types.Nat.s
 
@@ -539,7 +542,7 @@ let proof_as_ref :
   | Proving_mode proof ->
       ref (Some proof)
   | Circuit_mode ->
-      failwith "impossible"
+      ref None
 
 let input_for_main (type input)
     (_main :
@@ -669,7 +672,8 @@ type ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return =
       -> ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return
 
 let transform_prover :
-       name:string
+       branch_name:string
+    -> name:string
     -> (   ?handler:
              (   Snarky_backendless.Request.request
               -> Snarky_backendless.Request.response )
@@ -680,8 +684,10 @@ let transform_prover :
         -> Snarky_backendless.Request.response )
     -> 'input
     -> ('out_t * Pickles.Side_loaded.Proof.t) Promise.t =
- fun ~name prover handler input ->
-  let@ () = time_promise @@ "(compile_simple) proving " ^ name in
+ fun ~branch_name ~name prover handler input ->
+  let@ () =
+    time_promise @@ "(compile_simple) proving " ^ name ^ "." ^ branch_name
+  in
   let@ stmt, (), proof =
     prover ~handler:(handler input) () |> Promise.( >>| )
   in
@@ -689,12 +695,11 @@ let transform_prover :
 
 (* TODO: collapse branches *)
 let rec branches_to_choices :
-    type out_var out_t prevs branches available_branches tag_branches.
-    name:string ->
-       (out_var, prevs, branches, available_branches) Compile_simple.Branches.t
+    type out_var out_t branches available_branches tag_branches.
+       name:string
+    -> (out_var, branches, available_branches) Compile_simple.Branches.t
     -> (out_var, out_t, tag_branches, branches) branches_to_choices_return =
-      fun ~name ->
-  function
+ fun ~name -> function
   | [] ->
       let open Pickles_types.Hlist.H4_6.T (Pickles.Inductive_rule.Promise) in
       Choices
@@ -705,7 +710,8 @@ let rec branches_to_choices :
           let input, handler = input_for_main main in
           let transform_provers (prover :: provers : _ Pickles.Provers.t) :
               _ Compile_simple.provers =
-            transform_prover ~name prover handler :: prev_transform_provers provers
+            transform_prover ~branch_name ~name prover handler
+            :: prev_transform_provers provers
           in
           let feature_flags = Pickles_types.Plonk_types.Features.none_bool in
           match tags with
@@ -850,7 +856,6 @@ let compile_simple
     ~(name : string)
     ~(branches :
        ( 'out_var
-       , 'prevs
        , ('first_input, 'branches) Compile_simple.cons_branch
        , 'n_available_branches )
        Compile_simple.Branches.t ) ~(out_typ : ('out_var, 'out_t) Typ.t) () :
@@ -860,8 +865,9 @@ let compile_simple
     Compile_simple.result
     Promise.t =
   printf "(compile_simple) called for circuit %s\n" name ;
-  let@ () = time_promise ("compile_simple compiling circuit " ^ name) in
-  let (module N_branches) = count_branches branches in
+  let@ () = time_promise ("(compile_simple) compiling circuit " ^ name) in
+  let (Count_branches_result tag_length) = count_branches branches in
+  let (module N_branches) = branches_length_to_module tag_length in
   match branches_to_choices ~name branches with
   | Choices { rules; transform_provers } ->
       let tag, _cache, _proof_module, provers =
@@ -880,4 +886,4 @@ let compile_simple
         |> Promise.( >>| )
       in
       let provers = transform_provers provers in
-      Compile_simple.Result { tag; provers }
+      Compile_simple.Result { tag; provers; tag_length }

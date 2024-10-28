@@ -19,6 +19,32 @@ module Ase_inner_inst = Ase.Make_with_length (struct
   let get_iterations = Int.pow 2 14
 end)
 
+module Verify_both_ases = struct
+  let main (w : (Ase_outer_inst.t * Ase_inner_inst.t) V.t) =
+    let* outer, inner =
+      exists ~compute:(V.get w) Typ.(Ase_outer_inst.typ * Ase_inner_inst.typ)
+    in
+    let* outer, verify_outer = Ase_outer_inst.get outer in
+    let*| inner, verify_inner = Ase_inner_inst.get inner in
+    Compile_simple.
+      { prevs = Two_prevs (verify_outer, verify_inner); out = (outer, inner) }
+
+  let rule : _ Compile_simple.branch =
+    { branch_name = "Verify_both_ases"
+    ; tags =
+        Two_tags
+          (Tag (force Ase.tag_with_length), Tag (force Ase.tag_with_length))
+    ; main
+    }
+
+  let compilation_result =
+    lazy
+      (let@ () = Promise.block_on_async_exn in
+       compile_simple ~name:"Verify_both_ases" ~branches:[ rule ]
+         ~out_typ:Typ.(Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
+         () )
+end
+
 module Make (Inputs : sig
   val max_valid_while_size : int
 end)
@@ -47,8 +73,9 @@ struct
       ; vk_hash : F.t  (** Our vk hash *)
       ; sequencer : PC.t  (** Sequencer public key *)
       ; slot_range : Slot_range.t  (** slot_range *)
-      ; ase_inner : Ase_inner_inst.t
-      ; ase_outer : Ase_outer_inst.t
+      ; unverified_ase_inner : Ase_inner_inst.Stmt.t
+      ; unverified_ase_outer : Ase_outer_inst.Stmt.t
+      ; ases_proof : ProofV.t
       ; old_inner_acc : Account.t
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t  (** Withdrawals to be processed this time *)
@@ -57,8 +84,6 @@ struct
       }
     [@@deriving snarky]
   end
-
-  include MkHandler (Witness)
 
   type extract_txn_snark_result =
     { source_ledger : Ledger_hash.var; target_ledger : Ledger_hash.var }
@@ -180,14 +205,15 @@ struct
     in
     content
 
-  let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
+  let%snarkydef_ main (w : Witness.t V.t) =
     let* ({ txn_snark
           ; public_key
           ; vk_hash
           ; sequencer
           ; slot_range
-          ; ase_inner
-          ; ase_outer
+          ; unverified_ase_inner
+          ; unverified_ase_outer
+          ; ases_proof
           ; old_inner_acc
           ; old_inner_acc_path
           ; new_inner_acc
@@ -195,7 +221,7 @@ struct
           ; pause_key
           } :
            Witness.var ) =
-      exists_witness
+      exists ~compute:(V.get w) Witness.typ
     in
 
     let* () =
@@ -252,16 +278,28 @@ struct
         .outer_action_state
     in
 
-    let* ( { source = synchronized_outer_action_state'
-           ; target = outer_action_state
-           }
-         , verify_ase_outer ) =
-      Ase_outer_inst.get ase_outer
+    let ase_outer, ase_inner, verify_ases =
+      let verify_ases : _ Compile_simple.prev =
+        { public_input = (unverified_ase_outer, unverified_ase_inner)
+        ; proof_must_verify = Boolean.true_
+        ; proof = ases_proof
+        }
+      in
+      let ase_outer = unverified_ase_outer in
+      let ase_inner = unverified_ase_inner in
+      (ase_outer, ase_inner, verify_ases)
     in
 
-    let* ( { source = old_inner_action_state; target = new_inner_action_state }
-         , verify_ase_inner ) =
-      Ase_inner_inst.get ase_inner
+    let Ase_outer_inst.Stmt.
+          { source = synchronized_outer_action_state'
+          ; target = outer_action_state
+          } =
+      ase_outer
+    in
+
+    let Ase_inner_inst.Stmt.
+          { source = old_inner_action_state; target = new_inner_action_state } =
+      ase_inner
     in
 
     (* We want to transfer only deposits finalised with some certainty.
@@ -368,35 +406,26 @@ struct
     in
 
     (* Assemble some stuff to help the prover and calculate public output *)
-    let* public_output, auxiliary_output =
-      make_outputs account_update [ (sequencer_account_update, []) ]
+    let* out = make_outputs account_update [ (sequencer_account_update, []) ] in
+    let*| txn_snark_proof =
+      As_prover.(V.get txn_snark >>| Transaction_snark.proof) |> V.create
     in
-    let* auxiliary_output = V.create auxiliary_output in
-    let*| proof =
-      As_prover.(V.get txn_snark >>| Transaction_snark.proof)
-      |> As_prover.Ref.create
-    in
-    Pickles.Inductive_rule.
-      { previous_proof_statements =
-          [ { public_input = txn_snark_stmt
-            ; proof_must_verify = Boolean.true_
-            ; proof
-            }
-            (* Proof for Wrapper showing there is a valid transition from source to target *)
-          ; verify_ase_outer
-            (* Proof that deposits as recorded on L1 went forward, otherwise it could go backwards,
-               and proof that the action_state precondition is an extension of our new all_deposits *)
-          ; verify_ase_inner
-            (* Used to get length of inner action state easily. *)
-          ]
-      ; public_output
-      ; auxiliary_output
+    Compile_simple.
+      { prevs =
+          Two_prevs
+            ( { public_input = txn_snark_stmt
+              ; proof_must_verify = Boolean.true_
+              ; proof = txn_snark_proof
+              }
+            , verify_ases )
+      ; out
       }
 
-  let rule : _ Pickles.Inductive_rule.t =
-    { identifier = "Rollup step" (* FIXME: verify two ases *)
-    ; prevs = [ T.tag; force Ase.tag_with_length; force Ase.tag_with_length ]
-    ; main = (fun x -> main x |> Run.run_checked)
-    ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
-    }
+  let rule : _ Compile_simple.branch =
+    match force Verify_both_ases.compilation_result with
+    | Result { tag; provers = _; tag_length = _ } ->
+        { branch_name = "Rollup step"
+        ; tags = Two_tags (Tag T.tag, Tag tag)
+        ; main
+        }
 end

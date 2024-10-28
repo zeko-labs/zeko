@@ -25,15 +25,14 @@ module Compile_simple (I : Inputs) = struct
     | Two_prevs :
         (('left_var, 'left_width) prev * ('right_var, 'right_width) prev)
         -> ('left_var, 'left_width, 'right_var, 'right_width) two_prevs prevs
-  
+
   type self_width = Pickles_types.Nat.N2.n
 
   type ('self_var, 'var, 'width) pickles_tag_or_self =
     | Tag :
         ('var, 't, 'width, 'branches) Pickles.Tag.t
         -> ('self_var, 'var, 'width) pickles_tag_or_self
-    | Own_tag
-        : ('self_var, 'self_var, self_width) pickles_tag_or_self
+    | Own_tag : ('self_var, 'self_var, self_width) pickles_tag_or_self
 
   type ('self_var, 'prevs) tags =
     | No_tags : ('self_var, no_prevs) tags
@@ -79,37 +78,30 @@ module Compile_simple (I : Inputs) = struct
     }
 
   module Branches = struct
-    type ('out_var, 'prevs, 'branches, 'n_available_branches) t =
-      | []
-          : ( 'out_var
-            , 'prevs
-            , nil_branch
-            , all_branches_available )
-            t
+    type ('out_var, 'branches, 'n_available_branches) t =
+      | [] : ('out_var, nil_branch, all_branches_available) t
       | ( :: ) :
           ('input, 'out_var, 'prevs) branch
-          * ( 'out_var
-            , 'prevs
-            , 'branches
-            , 'n_available_branches available_branch )
-            t
+          * ('out_var, 'branches, 'n_available_branches available_branch) t
           -> ( 'out_var
-             , 'prevs
              , ('input, 'branches) cons_branch
              , 'n_available_branches )
              t
   end
 
+  type ('branches, 'n_branches) branches_length =
+    | Z : (nil_branch, Pickles_types.Nat.z) branches_length
+    | S :
+        ('branches, 'n_branches) branches_length
+        -> ( ('input, 'branches) cons_branch
+           , 'n_branches Pickles_types.Nat.s )
+           branches_length
+
   type ('out_var, 'out_t, 'branches) result =
     | Result :
-        { tag :
-            ( 'out_var
-            , 'out_t
-            , self_width
-            , 'n_branches )
-            Pickles.Tag.t
+        { tag : ('out_var, 'out_t, self_width, 'n_branches) Pickles.Tag.t
         ; provers : ('out_t, 'branches) provers
+        ; tag_length : ('branches, 'n_branches) branches_length
         }
         -> ('out_var, 'out_t, 'branches) result
-
 end

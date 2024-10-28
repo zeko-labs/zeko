@@ -100,15 +100,15 @@ module Make : functor
       -> ( Trans.var
          * ( Trans.var
            , tag_max_proofs_verified )
-           Pickles.Inductive_rule.Previous_proof_statement.t )
+           Compile_simple.prev )
          Checked.t
 
     (** Prove the state machine execution. *)
-    val prove : Init.t -> Elem.t list -> t Async.Deferred.t
+    val prove : Init.t -> Elem.t list -> t Promise.t
     
     (** FIXME: Implement *)
-    (* val merge : t -> t -> t Async.Deferred.t *)
-    (* val extend : t -> Elem.t list -> t Async.Deferred.t *)
+    (* val merge : t -> t -> t Promise.t *)
+    (* val extend : t -> Elem.t list -> t Promise.t *)
     (* also a way to convert from one instantiation of a folder to another one with a different `get_iterations` count. *)
   end
 end

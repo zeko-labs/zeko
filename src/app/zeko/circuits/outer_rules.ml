@@ -1,4 +1,3 @@
-open Core_kernel
 open Zeko_util
 
 module Make (T : Transaction_snark.S) = struct
@@ -10,18 +9,9 @@ module Make (T : Transaction_snark.S) = struct
 
   let compilation_result =
     lazy
-      (time "Outer_rules" (fun () ->
-           Pickles.compile () ~cache:Cache_dir.cache
-             ~public_input:(Output Mina_base.Zkapp_statement.typ)
-             ~auxiliary_typ:V.typ
-             ~branches:(module Pickles_types.Nat.N2)
-             ~max_proofs_verified:(module Pickles_types.Nat.N3)
-             ~name:"Outer_rules" ~override_wrap_domain:N0
-             ~constraint_constants:
-               (Genesis_constants.Constraint_constants.to_snark_keys_header
-                  constraint_constants )
-             ~choices:(fun ~self:_ ->
-               [ Rule_commit_inst.rule; Rule_action_witness.rule ] ) ) )
-
-  let tag = lazy (match force compilation_result with tag, _, _, _ -> tag)
+      (let@ () = Promise.block_on_async_exn in
+       compile_simple ()
+         ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+         ~branches:[ Rule_commit_inst.rule ] (* add Rule_action_witness back *)
+         ~name:"Outer_rules" )
 end

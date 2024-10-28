@@ -14,10 +14,8 @@ module Witness = struct
   type t = { vk_hash : F.t; ase : Ase_inst.t } [@@deriving snarky]
 end
 
-include MkHandler (Witness)
-
-let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
-  let* Witness.{ vk_hash; ase } = exists_witness in
+let%snarkydef_ main (w : Witness.t V.t) =
+  let* Witness.{ vk_hash; ase } = exists ~compute:(V.get w) Witness.typ in
   let* ase, verify_ase = Ase_inst.get ase in
   let update =
     { default_account_update.update with
@@ -51,17 +49,11 @@ let%snarkydef_ main Pickles.Inductive_rule.{ public_input = () } =
     ; preconditions
     }
   in
-  let* public_output, auxiliary_output = make_outputs account_update [] in
-  let*| auxiliary_output = V.create auxiliary_output in
-  Pickles.Inductive_rule.
-    { previous_proof_statements = [ verify_ase ]
-    ; public_output
-    ; auxiliary_output
-    }
+  let*| out = make_outputs account_update [] in
+  Compile_simple.{ prevs = One_prev verify_ase; out }
 
-let rule () : _ Pickles.Inductive_rule.t =
-  { identifier = "Rollup inner account step"
-  ; prevs = [ force Ase.tag_with_length ]
-  ; main = (fun x -> main x |> Run.run_checked)
-  ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
+let rule : _ Compile_simple.branch =
+  { branch_name = "Rollup inner account step"
+  ; tags = One_tag (Tag (force Ase.tag_with_length))
+  ; main
   }

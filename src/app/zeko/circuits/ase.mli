@@ -59,11 +59,11 @@ end) : sig
     -> ( Stmt.var
        * ( tag_with_length_var
          , Folder.tag_max_proofs_verified )
-         Pickles.Inductive_rule.Previous_proof_statement.t )
+         Compile_simple.prev )
        Checked.t
 
   (** Prove the state machine execution. *)
-  val prove : Action_state.With_length.t -> Action.t list -> t Async.Deferred.t
+  val prove : Action_state.With_length.t -> Action.t list -> t Promise.t
 end
 
 module Make_without_length (Inputs : sig
@@ -95,9 +95,9 @@ end) : sig
     -> ( Stmt.var
        * ( tag_without_length_var
          , Folder.tag_max_proofs_verified )
-         Pickles.Inductive_rule.Previous_proof_statement.t )
+         Compile_simple.prev )
        Checked.t
 
   (** Prove the state machine execution. *)
-  val prove : Action_state.t -> Action.t list -> t Async.Deferred.t
+  val prove : Action_state.t -> Action.t list -> t Promise.t
 end

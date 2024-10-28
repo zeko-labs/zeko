@@ -4,9 +4,7 @@
  (name zkapps_rollup)
  (libraries
   ;; opam libraries
-  base
   core_kernel
-  async_kernel
   transaction_snark
   staged_ledger_diff
   )

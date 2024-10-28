@@ -46,16 +46,6 @@ end
 
 val create_prover_value : 'a As_prover.t -> 'a Prover_value.t Checked.t
 
-val make_outputs :
-     Mina_base.Account_update.Checked.t
-  -> Calls.t
-  -> ( Mina_base.Zkapp_statement.Checked.t
-     * ( Mina_base.Account_update.Body.t
-       * Mina_base.Zkapp_command.Digest.Account_update.t
-       * call_forest )
-       As_prover.t )
-     Checked.t
-
 val mktree :
      Mina_base.Account_update.Body.t
      * 'a
@@ -206,17 +196,15 @@ module Boolean : sig
   type t = bool
 end
 
-module MkHandler : functor (Witness : SnarkType) -> sig
-  type _ Snarky_backendless.Request.t +=
-    | Witness : Witness.t Snarky_backendless.Request.t
-
-  val handler :
-       Witness.t
-    -> Snarky_backendless.Request.request
-    -> Snarky_backendless.Request.response
-
-  val exists_witness : Witness.var Checked.t
-end
+val make_outputs :
+     Mina_base.Account_update.Checked.t
+  -> Calls.t
+  -> ( Mina_base.Zkapp_statement.Checked.t
+     * ( Mina_base.Account_update.Body.t
+       * Mina_base.Zkapp_command.Digest.Account_update.t
+       * call_forest )
+       V.t )
+     Checked.t
 
 val public_key_to_token_id_var :
   Mina_base_import.Public_key.Compressed.var -> Mina_base.Token_id.Checked.t
@@ -281,7 +269,6 @@ val compile_simple :
   -> name:string
   -> branches:
        ( 'out_var
-       , 'prevs
        , ('first_input, 'branches) Compile_simple.cons_branch
        , 'n_available_branches )
        Compile_simple.Branches.t
