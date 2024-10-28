@@ -142,7 +142,8 @@ module Builder = struct
   (* ZEKO NOTE: needed by archive relay *)
   let zeko_transaction_added
       ~(constraint_constants : Genesis_constants.Constraint_constants.t)
-      ~accounts_created ~new_state_hash ~protocol_state ~ledger ~txn =
+      ~accounts_created ~new_state_hash ~protocol_state ~ledger ~txn
+      ~dummy_fee_payer ~timestamp =
     let advance_protocol_state ~protocol_state ~new_state_hash
         ~increase_blockchain_length =
       let old_protocol_state = protocol_state in
@@ -163,6 +164,7 @@ module Builder = struct
                   ( Or_error.ok_exn
                   @@ Pending_coinbase.create
                        ~depth:constraint_constants.pending_coinbase_depth () ))
+          ; timestamp
           } )
       in
       let consensus_state =
@@ -225,7 +227,8 @@ module Builder = struct
     in
     let sender_receipt_chain_from_parent_ledger =
       let sender = User_command.(fee_payer command) in
-      Option.value_exn
+      Option.value
+        ~default:(Account_id.empty, Receipt.Chain_hash.empty)
         (let open Option.Let_syntax in
         let%bind ledger_location =
           Mina_ledger.Ledger.location_of_account ledger sender
@@ -248,7 +251,12 @@ module Builder = struct
                  ; commands =
                      [ With_status.{ data = command; status = txn_status } ]
                  ; coinbase = Zero
-                 ; internal_command_statuses = [ Transaction_status.Applied ]
+                 ; internal_command_statuses =
+                     ( if
+                       Currency.Fee.equal (User_command.fee command)
+                         Currency.Fee.zero
+                     then []
+                     else [ Transaction_status.Applied ] )
                  }
                , None )
            }

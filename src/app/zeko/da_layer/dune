@@ -1,0 +1,12 @@
+(executable
+ (name cli)
+ (libraries
+  da_layer
+  ;; mina ;;
+  cli_lib
+  ;; opam libraries ;;
+  async
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_jane ppx_mina))
+ (modules cli))

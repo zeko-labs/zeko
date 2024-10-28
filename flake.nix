@@ -304,15 +304,8 @@
 
         # Main user-facing binaries.
         packages = rec {
-          da-layer = inputs.dream2nix.lib.evalModules {
-            packageSets.nixpkgs = pkgs;
-            modules = [
-              ./src/app/zeko/da-layer/dream2nix-module.nix
-            ];
-          };
-          inherit (import ./src/app/zeko/default.nix inputs system) mina-geth mina-geth-helper;
           inherit (ocamlPackages)
-            mina devnet mainnet mina_tests mina-ocaml-format mina_client_sdk test_executive with-instrumentation zeko-sequencer;
+            mina devnet mainnet mina_tests mina-ocaml-format mina_client_sdk test_executive with-instrumentation;
           inherit (pkgs)
             libp2p_helper kimchi_bindings_stubs snarky_js leaderboard
             validation trace-tool zkapp-cli;

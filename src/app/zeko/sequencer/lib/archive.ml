@@ -91,65 +91,91 @@ module Account_update_actions = struct
   [@@deriving sexp, yojson]
 end
 
+module Kvdb = struct
+  module Key_value = struct
+    type _ t =
+      | Events : (Account_id.t * Account_update_events.t list) t
+      | Actions : (Account_id.t * Account_update_actions.t list) t
+
+    let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
+     fun pair_type key ->
+      match pair_type with
+      | Events ->
+          Bigstring.(
+            concat
+              [ of_string "events"
+              ; of_string
+                  ( Signature_lib.Public_key.Compressed.to_base58_check
+                      (Account_id.public_key key)
+                  ^ "-"
+                  ^ Token_id.to_string (Account_id.token_id key) )
+              ])
+      | Actions ->
+          Bigstring.(
+            concat
+              [ of_string "actions"
+              ; of_string
+                  ( Signature_lib.Public_key.Compressed.to_base58_check
+                      (Account_id.public_key key)
+                  ^ "-"
+                  ^ Token_id.to_string (Account_id.token_id key) )
+              ])
+
+    let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
+     fun pair_type value ->
+      match pair_type with
+      | Events ->
+          Bigstring.of_string @@ Yojson.Safe.to_string
+          @@ `List (List.map value ~f:Account_update_events.to_yojson)
+      | Actions ->
+          Bigstring.of_string @@ Yojson.Safe.to_string
+          @@ `List (List.map value ~f:Account_update_actions.to_yojson)
+
+    let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
+     fun pair_type data ->
+      match pair_type with
+      | Events ->
+          Bigstring.to_string data |> Yojson.Safe.from_string
+          |> Yojson.Safe.Util.to_list
+          |> List.map ~f:(fun event ->
+                 ok_exn @@ Account_update_events.of_yojson event )
+      | Actions ->
+          Bigstring.to_string data |> Yojson.Safe.from_string
+          |> Yojson.Safe.Util.to_list
+          |> List.map ~f:(fun action ->
+                 ok_exn @@ Account_update_actions.of_yojson action )
+  end
+
+  include Kvdb_base.Make (Key_value)
+end
+
 module Archive = struct
   type t = Kvdb.t
 
   let create ~kvdb : t = kvdb
 
-  let serialize_key account_id =
-    Bigstring.of_string
-      ( Signature_lib.Public_key.Compressed.to_base58_check
-          (Account_id.public_key account_id)
-      ^ "-"
-      ^ Token_id.to_string (Account_id.token_id account_id) )
-
   let query_events t account_id =
-    let%bind events = Kvdb.get t ~key:(EVENTS account_id) in
-    let events =
-      Option.value ~default:"[]" @@ Option.map ~f:Bigstring.to_string events
-    in
-    List.map
-      ~f:(fun event -> ok_exn @@ Account_update_events.of_yojson event)
-      Yojson.Safe.(Util.to_list @@ from_string events)
+    Kvdb.get t Events ~key:account_id |> Option.value ~default:[]
 
   let query_actions t account_id =
-    let%bind actions = Kvdb.get t ~key:(ACTIONS account_id) in
-    let actions =
-      Option.value ~default:"[]" @@ Option.map ~f:Bigstring.to_string actions
-    in
-    List.map
-      ~f:(fun event -> ok_exn @@ Account_update_actions.of_yojson event)
-      Yojson.Safe.(Util.to_list @@ from_string actions)
+    Kvdb.get t Actions ~key:account_id |> Option.value ~default:[]
 
   let store_events t account_id events =
-    let events =
-      Yojson.Safe.to_string
-      @@ `List (List.map ~f:Account_update_events.to_yojson events)
-    in
-    let%bind () =
-      Kvdb.set t ~key:(EVENTS account_id) ~data:(Bigstring.of_string events)
-    in
-    ()
+    Kvdb.set t Events ~key:account_id ~data:events
 
   let store_actions t account_id actions =
-    let actions =
-      Yojson.Safe.to_string
-      @@ `List (List.map ~f:Account_update_actions.to_yojson actions)
-    in
-    let%bind () =
-      Kvdb.set t ~key:(ACTIONS account_id) ~data:(Bigstring.of_string actions)
-    in
-    ()
+    Kvdb.set t Actions ~key:account_id ~data:actions
 
-  let add_actions t (account_update : Account_update.t) transaction_info
-      (account : Account.t) =
+  let add_actions t ?(height = 0) (account_update : Account_update.t)
+      transaction_info (account : Account.t) =
     match account_update.body.actions with
     | [] ->
         ()
     | actions ->
         let zkapp : Zkapp_account.t = Option.value_exn account.zkapp in
         let action =
-          { Account_update_actions.block_info = Some Block_info.dummy
+          { Account_update_actions.block_info =
+              Some { Block_info.dummy with height }
           ; transaction_info
           ; action_state = zkapp.action_state
           ; account_update_id = 0
@@ -163,13 +189,15 @@ module Archive = struct
         let previous = query_actions t account in
         store_actions t account (action :: previous)
 
-  let add_events t (account_update : Account_update.t) transaction_info =
+  let add_events t ?(height = 0) (account_update : Account_update.t)
+      transaction_info =
     match account_update.body.events with
     | [] ->
         ()
     | events ->
         let event =
-          { Account_update_events.block_info = Some Block_info.dummy
+          { Account_update_events.block_info =
+              Some { Block_info.dummy with height }
           ; transaction_info
           ; events
           }
@@ -181,27 +209,50 @@ module Archive = struct
         let previous = query_events t account in
         store_events t account (event :: previous)
 
-  let add_account_update t (account_update : Account_update.t) account
-      transaction_info =
-    add_actions t account_update transaction_info account ;
-    add_events t account_update transaction_info
+  let add_account_update t ?(height = 0) (account_update : Account_update.t)
+      account transaction_info =
+    add_actions t ~height account_update transaction_info account ;
+    add_events t ~height account_update transaction_info
 
-  let get_actions t account_id from =
+  let get_actions t account_id ~from ~to_ =
     let open Account_update_actions in
-    let rec filter_start from actions =
-      match actions with
-      | [] ->
-          []
-      | ({ action_state; _ } as action) :: rest
-        when Stdlib.(Pickles_types.Vector.nth action_state 0 = from) ->
-          action :: rest
-      | _ :: rest ->
-          filter_start from rest
-    in
+    let open Snark_params.Tick in
     let all = List.rev @@ query_actions t account_id in
-    (* If the `from` wasn't found return all *)
-    (* Weird, but it's the same way in archive node *)
-    match filter_start from all with [] -> all | actions -> actions
+    let%bind.Result filtered_from =
+      match from with
+      | Some from
+        when Field.equal from Zkapp_account.Actions.empty_state_element ->
+          Ok all
+      | None ->
+          Ok all
+      | Some from -> (
+          match
+            List.drop_while all ~f:(fun { action_state; _ } ->
+                Stdlib.(Pickles_types.Vector.nth action_state 0 <> Some from) )
+          with
+          | [] ->
+              Error (sprintf "from %s not found" (Field.to_string from))
+          | actions ->
+              Ok actions )
+    in
+    let%bind.Result filtered_to =
+      match to_ with
+      | None ->
+          Ok filtered_from
+      | Some to_ when Field.equal to_ Zkapp_account.Actions.empty_state_element
+        ->
+          Ok []
+      | Some to_ -> (
+          match
+            List.findi filtered_from ~f:(fun _ { action_state; _ } ->
+                Stdlib.(Pickles_types.Vector.nth action_state 0 = Some to_) )
+          with
+          | None ->
+              Error (sprintf "to %s not found" (Field.to_string to_))
+          | Some (i, _) ->
+              Ok (List.take filtered_from (i + 1)) )
+    in
+    Ok filtered_to
 
   let get_events t account_id = List.rev @@ query_events t account_id
 end

@@ -3,6 +3,8 @@
  (inline_tests)
  (libraries
   zkapps_rollup
+  kvdb_base
+  da_layer
   ;; mina ;;
   mina_base
   mina_base.import
@@ -50,6 +52,7 @@
   init
   cli_lib
   ;; opam libraries ;;
+  base_quickcheck
   uri
   re2
   stdio
@@ -72,4 +75,4 @@
   cohttp
   cohttp-async)
  (preprocess
-  (pps ppx_jane ppx_mina)))
+  (pps ppx_let ppx_jane ppx_mina)))

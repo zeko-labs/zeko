@@ -23,26 +23,6 @@ let time label (d : 'a Deferred.t) =
   printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-let skip_transfers_before (transfers : Zkapps_rollup.TR.t list)
-    (pointer : Field.t) =
-  match
-    List.fold_right transfers
-      ~init:(`Hashing Zkapp_account.Actions.empty_state_element)
-      ~f:(fun transfer -> function
-      | `Hashing hash ->
-          if Field.equal hash pointer then `Accumulating [ transfer ]
-          else
-            `Hashing
-              (Zkapp_account.Actions.push_events hash
-                 (Zkapps_rollup.TR.to_actions transfer) )
-      | `Accumulating transfers ->
-          `Accumulating (transfer :: transfers) )
-  with
-  | `Hashing _ ->
-      []
-  | `Accumulating transfers_after_pointer ->
-      transfers_after_pointer
-
 (* Finds the account_id's account update and returns the 0th state update *)
 let get_state_transition pk command =
   let account_id = Account_id.create pk Token_id.default in
@@ -67,3 +47,11 @@ let get_state_transition pk command =
     |> Option.value ~default:Field.zero
   in
   Some (source, target)
+
+let get_inner_deposits_state_exn (module M : Zkapps_rollup.S) l =
+  let (old_deposits_commit :: _) =
+    let idx = Mina_ledger.Ledger.index_of_account_exn l M.Inner.account_id in
+    let inner_acc = Mina_ledger.Ledger.get_at_index_exn l idx in
+    (Option.value_exn inner_acc.zkapp).app_state
+  in
+  old_deposits_commit

@@ -129,6 +129,15 @@ module Make
                     Some timing_info.vesting_increment )
           ] )
 
+    let genesis_constants =
+      obj "GenesisConstants" ~fields:(fun _ ->
+          [ field "accountCreationFee" ~typ:(non_null fee)
+              ~doc:"The fee charged to create a new account"
+              ~args:Arg.[]
+              ~resolve:(fun _ () ->
+                Zeko_sequencer.constraint_constants.account_creation_fee )
+          ] )
+
     module AccountObj = struct
       module AnnotatedBalance = struct
         type t =
@@ -984,34 +993,28 @@ module Make
             ] )
     end
 
-    module Committed_transactions = struct
-      type json_account = { account_id : string; account : string }
-
-      type t =
-        { raw_committed_transactions : string list
-        ; json_genesis_accounts : json_account list
-        }
-
-      let t =
-        let json_account =
-          obj "jsonAccount" ~fields:(fun _ ->
-              [ field "accountId" ~typ:(non_null string) ~args:[]
-                  ~resolve:(fun _ a -> a.account_id)
-              ; field "account" ~typ:(non_null string) ~args:[]
-                  ~resolve:(fun _ a -> a.account)
-              ] )
-        in
-        obj "CommittedTransactions" ~fields:(fun _ ->
-            [ field "rawTransactions"
-                ~typ:(non_null (list (non_null string)))
-                ~doc:"List of raw committed transactions in base64 format"
+    module State_hashes = struct
+      let t : (Zeko_sequencer.t, Zeko_sequencer.State_hashes.t option) typ =
+        let open Snark_params.Tick in
+        obj "StateHashes" ~fields:(fun _ ->
+            [ field "provedLedgerHash" ~typ:(non_null string)
+                ~doc:"Ledger hash of latest proved state"
                 ~args:Arg.[]
-                ~resolve:(fun _ t -> t.raw_committed_transactions)
-            ; field "jsonGenesisAccounts"
-                ~typ:(non_null (list (non_null json_account)))
-                ~doc:"List of genesis accounts in json format"
+                ~resolve:(fun _ t ->
+                  Field.to_string
+                    Zeko_sequencer.State_hashes.(t.proved_ledger_hash) )
+            ; field "unprovedLedgerHash" ~typ:(non_null string)
+                ~doc:"Ledger hash of latest unproved state"
                 ~args:Arg.[]
-                ~resolve:(fun _ t -> t.json_genesis_accounts)
+                ~resolve:(fun _ t ->
+                  Field.to_string
+                    Zeko_sequencer.State_hashes.(t.unproved_ledger_hash) )
+            ; field "committedLedgerHash" ~typ:(non_null string)
+                ~doc:"Ledger hash of latest committed state"
+                ~args:Arg.[]
+                ~resolve:(fun _ t ->
+                  Field.to_string
+                    Zeko_sequencer.State_hashes.(t.committed_ledger_hash) )
             ] )
     end
 
@@ -1293,28 +1296,76 @@ module Make
               ]
       end
 
-      module Transfer = struct
-        type input = Zeko_sequencer.Transfer.t
+      module Bridge = struct
+        module Direction = struct
+          let arg_typ =
+            enum "TransferDirection"
+              ~values:
+                [ enum_value "DEPOSIT" ~value:Zeko_sequencer.Transfer.Deposit
+                ; enum_value "WITHDRAW" ~value:Zeko_sequencer.Transfer.Withdraw
+                ]
+        end
 
-        let arg_typ =
-          obj "TransferInput"
-            ~coerce:(fun address amount direction ->
-              (address, amount, direction) )
-            ~split:(fun f (x : input) -> f x.address x.amount x.direction)
-            ~fields:
-              [ arg "address" ~typ:(non_null PublicKey.arg_typ)
-              ; arg "amount" ~typ:(non_null UInt64.arg_typ)
-              ; arg "direction"
-                  ~typ:
-                    ( non_null
-                    @@ enum "TransferDirection"
-                         ~values:
-                           [ enum_value "DEPOSIT"
-                               ~value:Zeko_sequencer.Transfer.Deposit
-                           ; enum_value "WITHDRAW"
-                               ~value:Zeko_sequencer.Transfer.Withdraw
-                           ] )
-              ]
+        module Transfer = struct
+          type input = Zkapps_rollup.TR.t
+
+          let arg_typ =
+            obj "TransferInput"
+              ~coerce:(fun amount recipient ->
+                Zkapps_rollup.TR.{ amount = Amount.of_uint64 amount; recipient }
+                )
+              ~split:(fun f (x : input) ->
+                f (Currency.Amount.to_uint64 x.amount) x.recipient )
+              ~fields:
+                [ arg "amount" ~typ:(non_null UInt64.arg_typ)
+                ; arg "recipient" ~typ:(non_null PublicKey.arg_typ)
+                ]
+        end
+
+        module Request = struct
+          type input = Zeko_sequencer.Transfer.t
+
+          let arg_typ =
+            obj "TransferRequestInput"
+              ~coerce:(fun transfer direction ->
+                Zeko_sequencer.Transfer.{ transfer; direction } )
+              ~split:(fun f ({ transfer; direction } : input) ->
+                f transfer direction )
+              ~fields:
+                [ arg "transfer" ~typ:(non_null Transfer.arg_typ)
+                ; arg "direction" ~typ:(non_null @@ Direction.arg_typ)
+                ]
+        end
+
+        module Claim = struct
+          open Snark_params.Tick
+
+          type input = Zeko_sequencer.Transfer.claim
+
+          let arg_typ =
+            obj "TransferClaimInput"
+              ~coerce:(fun is_new pointer before after transfer ->
+                Zeko_sequencer.Transfer.
+                  { is_new
+                  ; pointer = Field.of_string pointer
+                  ; before
+                  ; after
+                  ; transfer
+                  } )
+              ~split:(fun f (x : input) ->
+                f x.is_new
+                  (Field.to_string x.pointer)
+                  x.before x.after x.transfer )
+              ~fields:
+                [ arg "isNew" ~typ:(non_null bool)
+                ; arg "pointer" ~typ:(non_null string)
+                ; arg "before"
+                    ~typ:(non_null (list @@ non_null Transfer.arg_typ))
+                ; arg "after"
+                    ~typ:(non_null (list @@ non_null Transfer.arg_typ))
+                ; arg "transfer" ~typ:(non_null Request.arg_typ)
+                ]
+        end
       end
 
       module Archive = struct
@@ -1362,6 +1413,27 @@ module Make
                 ]
         end
       end
+    end
+
+    module Statistics = struct
+      type t = Zeko_sequencer.Statistics.t
+
+      let t : ('context, t option) typ =
+        let open Zeko_sequencer.Statistics in
+        obj "Statistics" ~fields:(fun _ ->
+            [ field "transactions" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ x -> x.transactions)
+            ; field "deposits" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ x -> x.deposits)
+            ; field "luminaSwaps" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ x -> x.lumina_swaps)
+            ; field "luminaLiquidityPools" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ x -> x.lumina_lps)
+            ] )
     end
 
     module Archive = struct
@@ -1599,7 +1671,7 @@ module Make
                 | None ->
                     return (Error "Signature verification failed") )
           in
-          match
+          match%bind
             Zeko_sequencer.apply_user_command sequencer
               (Signed_command (Signed_command.forget_check command))
           with
@@ -1630,7 +1702,7 @@ module Make
         ~args:
           Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
         ~resolve:(fun { ctx = sequencer; _ } () zkapp_command ->
-          match
+          match%bind
             Zeko_sequencer.apply_user_command sequencer
               (Zkapp_command zkapp_command)
           with
@@ -1654,20 +1726,34 @@ module Make
               in
               return (Ok cmd_with_hash) )
 
-    let prove_transfer =
-      io_field "proveTransfer" ~doc:"Prove rollup transfer"
+    let prove_transfer_request =
+      io_field "proveTransferRequest" ~doc:"Prove rollup transfer request"
         ~typ:(non_null Types.Payload.prove_transfer)
-        ~args:Arg.[ arg "input" ~typ:(non_null Types.Input.Transfer.arg_typ) ]
-        ~resolve:(fun { ctx = sequencer; _ } () (address, amount, direction) ->
+        ~args:
+          Arg.[ arg "input" ~typ:(non_null Types.Input.Bridge.Request.arg_typ) ]
+        ~resolve:(fun { ctx = sequencer; _ } () transfer ->
           let key = Int.to_string @@ Random.int Int.max_value in
           don't_wait_for
-          @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer
+          @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer_request
                Zeko_sequencer.(sequencer.snark_q)
-               ~key
-               ~transfer:Zeko_sequencer.Transfer.{ address; amount; direction } ;
+               ~key ~transfer ;
           return (Ok key) )
 
-    let commands = [ send_payment; send_zkapp; prove_transfer ]
+    let prove_transfer_claim =
+      io_field "proveTransferClaim" ~doc:"Prove rollup transfer claim"
+        ~typ:(non_null Types.Payload.prove_transfer)
+        ~args:
+          Arg.[ arg "input" ~typ:(non_null Types.Input.Bridge.Claim.arg_typ) ]
+        ~resolve:(fun { ctx = sequencer; _ } () claim ->
+          let key = Int.to_string @@ Random.int Int.max_value in
+          don't_wait_for
+          @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer_claim
+               Zeko_sequencer.(sequencer.snark_q)
+               ~key ~claim ;
+          return (Ok key) )
+
+    let commands =
+      [ send_payment; send_zkapp; prove_transfer_request; prove_transfer_claim ]
   end
 
   module Queries = struct
@@ -1712,7 +1798,6 @@ module Make
           Types.AccountObj.Partial_account.of_full_account account
           |> Types.AccountObj.lift )
 
-    (* TODO *)
     let accounts_for_pk =
       field "accounts" ~doc:"Find all accounts for a public key"
         ~typ:(non_null (list (non_null Types.AccountObj.account)))
@@ -1721,10 +1806,51 @@ module Make
             [ arg "publicKey" ~doc:"Public key to find accounts for"
                 ~typ:(non_null Types.Input.PublicKey.arg_typ)
             ]
-        ~resolve:(fun _ () _ -> [])
+        ~resolve:(fun { ctx = sequencer; _ } () pk ->
+          let ledger = Ledger.of_database sequencer.db in
+          let tokens = Ledger.tokens ledger pk |> Set.to_list in
+          List.filter_map tokens ~f:(fun token ->
+              let%bind.Option location =
+                Ledger.location_of_account ledger (Account_id.create pk token)
+              in
+              let%map.Option account = Ledger.get ledger location in
+              Types.AccountObj.Partial_account.of_full_account account
+              |> Types.AccountObj.lift ) )
 
-    let transfer =
-      field "transfer"
+    let token_accounts =
+      io_field "tokenAccounts" ~doc:"Find all accounts for a token ID"
+        ~typ:(non_null (list (non_null Types.AccountObj.account)))
+        ~args:
+          Arg.
+            [ arg "tokenId" ~doc:"Token ID to find accounts for"
+                ~typ:(non_null Types.Input.TokenId.arg_typ)
+            ]
+        ~resolve:(fun { ctx = mina; _ } () token_id ->
+          let ledger = Ledger.of_database mina.db in
+          let%map account_ids = Ledger.accounts ledger in
+          Ok
+            (List.filter_map (Set.to_list account_ids) ~f:(fun account_id ->
+                 let token_id' = Account_id.token_id account_id in
+                 if Token_id.equal token_id token_id' then
+                   let%bind.Option location =
+                     Ledger.location_of_account ledger account_id
+                   in
+                   let%map.Option account = Ledger.get ledger location in
+                   Types.AccountObj.Partial_account.of_full_account account
+                   |> Types.AccountObj.lift
+                 else None ) ) )
+
+    let genesis_constants =
+      field "genesisConstants"
+        ~doc:
+          "The constants used to determine the configuration of the genesis \
+           block and all of its transitive dependencies"
+        ~args:Arg.[]
+        ~typ:(non_null Types.genesis_constants)
+        ~resolve:(fun _ () -> ())
+
+    let transfer_account_update =
+      field "transferAccountUpdate"
         ~doc:"Query proved account update for transfer in a JSON format"
         ~typ:string
         ~args:Arg.[ arg "key" ~typ:(non_null string) ]
@@ -1736,52 +1862,19 @@ module Make
           with
           | None ->
               None
-          | Some (_, account_update) ->
+          | Some (_, Ok account_update) ->
               Some
                 ( Yojson.Safe.to_string
-                @@ Zkapp_command.account_updates_to_json account_update ) )
+                @@ Zkapp_command.account_updates_to_json account_update )
+          | Some (_, Error msg) ->
+              Some msg )
 
-    let committed_transaction =
-      io_field "committedTransactions"
-        ~doc:
-          "Get list of raw committed transactions in base64 format. Useful for \
-           boostrapping archive node."
-        ~typ:Types.Committed_transactions.t
+    let state_hashes =
+      field "stateHashes" ~doc:"Get current state of the rollup"
+        ~typ:Types.State_hashes.t
         ~args:Arg.[]
         ~resolve:(fun { ctx = sequencer; _ } () ->
-          match
-            Zeko_sequencer.(
-              sequencer.snark_q.state.previous_committed_ledger_hash)
-          with
-          | None ->
-              return (Ok None)
-          | Some last_committed_ledger_hash ->
-              let%bind commands =
-                Da_layer.get_batches
-                  Zeko_sequencer.(sequencer.da_config)
-                  ~to_:
-                    (Frozen_ledger_hash.to_decimal_string
-                       last_committed_ledger_hash )
-              in
-              return
-                (Ok
-                   (Some
-                      Types.Committed_transactions.
-                        { raw_committed_transactions =
-                            List.map commands ~f:(fun c ->
-                                User_command.to_base64 c )
-                        ; json_genesis_accounts =
-                            List.map
-                              Zeko_sequencer.(sequencer.genesis_accounts)
-                              ~f:(fun (id, acc) ->
-                                { account_id =
-                                    Yojson.Safe.to_string
-                                    @@ Account_id.to_yojson id
-                                ; account =
-                                    Yojson.Safe.to_string
-                                    @@ Account.to_yojson acc
-                                } )
-                        } ) ) )
+          Some (Zeko_sequencer.get_latest_state sequencer) )
 
     let token_owner =
       field "tokenOwner" ~doc:"Find the account that owns a given token"
@@ -1797,9 +1890,22 @@ module Make
           let%map account_id = Ledger.token_owner l token in
           Types.AccountObj.get_best_ledger_account l account_id )
 
+    let statistics =
+      io_field "statistics"
+        ~typ:(non_null Types.Statistics.t)
+        ~args:
+          Arg.
+            [ arg "luminaFactory" ~typ:(non_null Types.Input.PublicKey.arg_typ)
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } () lumina_factory ->
+          let%bind statistics =
+            Zeko_sequencer.Statistics.get ~sequencer ~lumina_factory
+          in
+          return (Ok statistics) )
+
     module Archive = struct
       let actions =
-        field "actions"
+        io_field "actions"
           ~typ:(non_null @@ list @@ non_null Types.Archive.ActionOutput.t)
           ~args:
             Arg.
@@ -1809,11 +1915,15 @@ module Make
                        Types.Input.Archive.ActionFilterOptionsInput.arg_typ )
               ]
           ~resolve:(fun { ctx = sequencer; _ } ()
-                        (public_key, token_id, from_action_state, _) ->
+                        ( public_key
+                        , token_id
+                        , from_action_state
+                        , end_action_state ) ->
             let token_id = Option.value ~default:Token_id.default token_id in
-            Archive.get_actions sequencer.archive
-              (Account_id.create public_key token_id)
-              from_action_state )
+            return
+            @@ Archive.get_actions sequencer.archive
+                 (Account_id.create public_key token_id)
+                 ~from:from_action_state ~to_:end_action_state )
 
       let events =
         field "events"
@@ -1838,10 +1948,13 @@ module Make
       ; daemon_status
       ; account
       ; accounts_for_pk
-      ; transfer
-      ; committed_transaction
+      ; token_accounts
+      ; genesis_constants
+      ; transfer_account_update
+      ; state_hashes
       ; token_owner
       ; network_id
+      ; statistics
       ]
       @ Archive.commands
   end
@@ -1849,18 +1962,23 @@ module Make
   module Subscriptions = struct
     open Schema
 
-    let new_transaction =
-      subscription_field "newTransaction"
+    let state_hashes_changed =
+      subscription_field "stateHashesChanged"
         ~doc:
-          "Event that triggers when a new transaction is applied, returned in \
-           a base64 encoding of block with one transaction. Useful for archive \
-           node."
-        ~typ:(non_null string)
+          "Event that triggers when some of the state hashes are changed. Max \
+           once per minute."
+        ~typ:(non_null Types.State_hashes.t)
         ~args:Arg.[]
         ~resolve:(fun { ctx = sequencer; _ } ->
-          return (Ok Zeko_sequencer.(add_transactions_subscriber sequencer)) )
+          let r, w =
+            Zeko_sequencer.Subscriptions.add_state_hashes_subscriber
+              sequencer.subscriptions
+          in
+          Pipe.write_without_pushback_if_open w
+            (Zeko_sequencer.get_latest_state sequencer) ;
+          return (Ok r) )
 
-    let commands = [ new_transaction ]
+    let commands = [ state_hashes_changed ]
   end
 
   let schema =

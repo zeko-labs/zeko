@@ -4,6 +4,7 @@ open Async_kernel
 open Mina_base
 open Mina_transaction
 open Network_pool
+open Sequencer_lib
 module Ledger = Mina_ledger.Ledger
 
 let logger = Logger.create ()
@@ -34,6 +35,7 @@ type t =
   ; db : Ledger.Db.t
   ; commands : (string, User_command.t * Transaction_status.t) Hashtbl.t
   ; mutable pool : Indexed_pool.t
+  ; archive : Archive.t
   }
 
 let db t = t.db
@@ -56,6 +58,40 @@ let apply_command t ~command =
   in
 
   Ledger.Mask.Attached.commit l ;
+
+  let () =
+    match command with
+    | Zkapp_command zkapp_command ->
+        Zkapp_command.(
+          Call_forest.iteri (account_updates zkapp_command) ~f:(fun _ update ->
+              let account =
+                let account_id =
+                  Account_id.create
+                    (Account_update.public_key update)
+                    (Account_update.token_id update)
+                in
+                Option.(
+                  map
+                    (Ledger.location_of_account l account_id)
+                    ~f:(Ledger.get l)
+                  |> join |> value_exn)
+              in
+              Archive.add_account_update t.archive ~height:t.block_height update
+                account
+                (Some
+                   Archive.Transaction_info.
+                     { status = Applied
+                     ; hash =
+                         Mina_transaction.Transaction_hash.hash_command
+                           (Zkapp_command zkapp_command)
+                     ; memo = Zkapp_command.memo zkapp_command
+                     ; authorization_kind =
+                         Account_update.Body.authorization_kind
+                         @@ Account_update.body update
+                     } ) ))
+    | Signed_command _ ->
+        ()
+  in
 
   let txn_hash =
     Transaction_hash.to_base58_check @@ Transaction_hash.hash_command command
@@ -132,14 +168,17 @@ let create_new_block t =
   t.pool <- create_pool ()
 
 let create ~block_period ~db_dir () =
+  let db =
+    Ledger.Db.create ~directory_name:db_dir
+      ~depth:Constants.constraint_constants.ledger_depth ()
+  in
   let t =
     { block_period
     ; block_height = 0
-    ; db =
-        Ledger.Db.create ~directory_name:db_dir
-          ~depth:Constants.constraint_constants.ledger_depth ()
+    ; db
     ; commands = Hashtbl.create (module String)
     ; pool = create_pool ()
+    ; archive = Sequencer_lib.Archive.create ~kvdb:(Ledger.Db.zeko_kvdb db)
     }
   in
   match block_period with

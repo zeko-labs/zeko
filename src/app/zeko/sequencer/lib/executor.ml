@@ -16,7 +16,7 @@ type t =
   ; mutable nonce : Account.Nonce.t option
   ; max_attempts : int
   ; delay : Time_ns.Span.t
-  ; kvdb : Kvdb.t
+  ; kvdb : Mina_ledger.Ledger.Kvdb.t
   }
 
 let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce ~l1_uri
@@ -101,85 +101,5 @@ let process_command t (command : Zkapp_command.t) =
 
 let send_zkapp_command t command =
   Throttle.enqueue t.q (fun () -> process_command t command)
-
-module Commits_store = struct
-  type commit_id = Frozen_ledger_hash.t * Frozen_ledger_hash.t
-  [@@deriving yojson]
-
-  type index = commit_id list [@@deriving yojson]
-
-  let store_commit kvdb command ~source ~target =
-    (* Update index *)
-    let index =
-      Kvdb.get kvdb ~key:COMMIT_INDEX
-      |> Option.map ~f:(fun data ->
-             ok_exn @@ index_of_yojson @@ Yojson.Safe.from_string
-             @@ Bigstring.to_string data )
-      |> Option.value ~default:[]
-    in
-    let index = (source, target) :: index in
-    Kvdb.set kvdb ~key:COMMIT_INDEX
-      ~data:
-        (Bigstring.of_string @@ Yojson.Safe.to_string @@ index_to_yojson index) ;
-
-    (* Store commit *)
-    let commit_id = (source, target) in
-    Kvdb.set kvdb ~key:(COMMIT commit_id)
-      ~data:
-        ( Bigstring.of_string @@ Yojson.Safe.to_string
-        @@ Zkapp_command.to_yojson command )
-
-  let load_commit_exn kvdb commit_id =
-    let data = Option.value_exn @@ Kvdb.get kvdb ~key:(COMMIT commit_id) in
-    ok_exn @@ Zkapp_command.of_yojson @@ Yojson.Safe.from_string
-    @@ Bigstring.to_string data
-
-  let get_index kvdb =
-    Kvdb.get kvdb ~key:COMMIT_INDEX
-    |> Option.map ~f:(fun data ->
-           ok_exn @@ index_of_yojson @@ Yojson.Safe.from_string
-           @@ Bigstring.to_string data )
-    |> Option.value ~default:[]
-
-  let get_commit kvdb ~source ~target =
-    let index = get_index kvdb in
-    let%bind.Option commit_id =
-      List.find index ~f:(fun (s, t) ->
-          Frozen_ledger_hash.equal s source && Frozen_ledger_hash.equal t target )
-    in
-    Some (load_commit_exn kvdb commit_id)
-
-  let get_all kvdb =
-    let index = get_index kvdb in
-    let commits = List.map index ~f:(load_commit_exn kvdb) in
-    commits
-end
-
-let send_commit t command ~source ~target =
-  Commits_store.store_commit t.kvdb command ~source ~target ;
-  send_zkapp_command t command
-
-let recommit_all t ~zkapp_pk =
-  let%bind current_state =
-    Gql_client.infer_committed_state t.l1_uri ~zkapp_pk
-      ~signer_pk:(Public_key.compress t.signer.public_key)
-  in
-  let commits = Commits_store.get_index t.kvdb in
-  let rec recommit_next current_state =
-    match
-      List.find commits ~f:(fun (source, _) ->
-          Frozen_ledger_hash.equal source current_state )
-    with
-    | None ->
-        return ()
-    | Some (source, target) ->
-        printf "Recommitting %s -> %s\n%!"
-          (Frozen_ledger_hash.to_base58_check source)
-          (Frozen_ledger_hash.to_base58_check target) ;
-        let command = Commits_store.load_commit_exn t.kvdb (source, target) in
-        let%bind () = send_zkapp_command t command in
-        recommit_next target
-  in
-  recommit_next current_state
 
 let wait_to_finish t = Throttle.capacity_available t.q
