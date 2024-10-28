@@ -22,7 +22,7 @@ module Db = struct
 
   module Key_value = struct
     type _ t =
-      | Diff : (Ledger_hash.t * Diff.t) t
+      | Diff : (Ledger_hash.t * Diff.With_timestamp.t) t
       | Diff_index : (unit * Index.t) t
 
     let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
@@ -40,7 +40,7 @@ module Db = struct
      fun pair_type value ->
       match pair_type with
       | Diff ->
-          Diff.to_bigstring value
+          Diff.With_timestamp.to_bigstring value
       | Diff_index ->
           Index.to_bigstring value
 
@@ -48,7 +48,7 @@ module Db = struct
      fun pair_type data ->
       match pair_type with
       | Diff ->
-          Diff.of_bigstring data
+          Diff.With_timestamp.of_bigstring data
       | Diff_index ->
           Index.of_bigstring data
   end
@@ -78,7 +78,8 @@ type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
     4. Set each account in [diff.diff] to the [ledger_openings] and call the resulting ledger hash [target_ledger_hash].
     5. Sign [target_ledger_hash].
     6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
-    7. Store the diff under the [target_ledger_hash]. *)
+    7. Attach timestamp.
+    8. Store the diff under the [target_ledger_hash]. *)
 let post_diff t ~ledger_openings ~diff =
   let logger = t.logger in
   (* 1 *)
@@ -248,6 +249,11 @@ let post_diff t ~ledger_openings ~diff =
   in
 
   (* 7 *)
+  let diff =
+    (diff, Block_time.now (Block_time.Controller.basic ~logger:t.logger))
+  in
+
+  (* 8 *)
   (* We don't care if the diff already existed *)
   let () =
     match Db.add_diff t.db ~ledger_hash:target_ledger_hash ~diff with
@@ -331,12 +337,12 @@ let implementations t =
                 [%log warn] "Error posting diff: $error"
                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff.v1 (fun () query ->
+      ; Async.Rpc.Rpc.implement Rpc.Get_diff.v2 (fun () query ->
             Async.return @@ Db.get_diff t.db ~ledger_hash:query )
       ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.v1 (fun () () ->
             Async.return @@ Db.get_index t.db )
       ; Async.Rpc.Rpc.implement Rpc.Get_diff_source.v1 (fun () query ->
-            Async.return @@ Diff.source_ledger_hash
+            Async.return @@ Diff.source_ledger_hash @@ fst
             @@ Option.value_exn
                  ~error:
                    ( Error.of_string

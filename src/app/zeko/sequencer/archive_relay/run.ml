@@ -30,7 +30,7 @@ let time label (d : 'a Deferred.t) =
   return x
 
 module Cache = struct
-  type t = Da_layer.Diff.t Ledger_hash.Map.t
+  type t = Da_layer.Diff.With_timestamp.t Ledger_hash.Map.t
 
   let empty = Ledger_hash.Map.empty
 
@@ -134,7 +134,7 @@ let sync_archive ~(state : State.t) ~hash =
   let%bind diffs = Deferred.List.map chain ~f:(fetch_diff ~state) in
   Ledger.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
       let protocol_state = ref compile_time_genesis_state in
-      Deferred.List.iter diffs ~f:(fun diff ->
+      Deferred.List.iter diffs ~f:(fun (diff, diff_timestamp) ->
           match Da_layer.Diff.command_with_action_step_flags diff with
           | None ->
               (* Apply accounts diff *)
@@ -165,6 +165,7 @@ let sync_archive ~(state : State.t) ~hash =
                   ~protocol_state:!protocol_state ~ledger
                   ~txn:(Ledger.Transaction_applied.transaction txn_applied)
                   ~dummy_fee_payer:Zkapps_rollup.inner_public_key
+                  ~timestamp:diff_timestamp
               in
               protocol_state := new_protocol_state ;
               if State.has_been_relayed state (Ledger.merkle_root ledger) then

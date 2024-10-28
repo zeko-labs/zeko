@@ -143,7 +143,7 @@ module Builder = struct
   let zeko_transaction_added
       ~(constraint_constants : Genesis_constants.Constraint_constants.t)
       ~accounts_created ~new_state_hash ~protocol_state ~ledger ~txn
-      ~dummy_fee_payer =
+      ~dummy_fee_payer ~timestamp =
     let advance_protocol_state ~protocol_state ~new_state_hash
         ~increase_blockchain_length =
       let old_protocol_state = protocol_state in
@@ -164,6 +164,7 @@ module Builder = struct
                   ( Or_error.ok_exn
                   @@ Pending_coinbase.create
                        ~depth:constraint_constants.pending_coinbase_depth () ))
+          ; timestamp
           } )
       in
       let consensus_state =

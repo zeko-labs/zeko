@@ -38,9 +38,8 @@ module Rpc = struct
   let post_diff ~logger ~node_location ~ledger_openings ~diff =
     dispatch ~logger node_location Rpc.Post_diff.v1 { ledger_openings; diff }
 
-  let get_diff ~logger ~node_location ~ledger_hash :
-      (Diff.t option, Error.t) result Deferred.t =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.v1 ledger_hash
+  let get_diff ~logger ~node_location ~ledger_hash =
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.v2 ledger_hash
 
   let get_all_keys ~logger ~node_location () =
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.v1 ()
@@ -226,12 +225,16 @@ let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
   in
   let diffs_with_openings =
     lazy
-      (let%bind.Deferred.Result diffs =
+      (let%bind.Deferred.Result diffs_with_timestamps =
          Deferred.List.map ledger_hashes_chain ~how:(`Max_concurrent_jobs 5)
            ~f:(fun ledger_hash -> get_diff ~logger ~config ~ledger_hash)
          >>| Result.all
        in
-       return (Ok (attach_openings ~diffs ~depth)) )
+       return
+         (Ok
+            (attach_openings
+               ~diffs:(List.map diffs_with_timestamps ~f:fst)
+               ~depth ) ) )
   in
   Deferred.List.map config.nodes ~f:(fun node ->
       match%bind

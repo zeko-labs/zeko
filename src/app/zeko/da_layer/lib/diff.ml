@@ -31,3 +31,18 @@ let of_bigstring = Binable.of_bigstring (module Stable.Latest)
 (** [Ledger_hash.empty_hash] is [zero], so we need this for the genesis state of the rollup *)
 let empty_ledger_hash ~depth =
   Ledger.merkle_root @@ Ledger.create_ephemeral ~depth ()
+
+module With_timestamp = struct
+  [%%versioned
+  module Stable = struct
+    module V1 = struct
+      type t = Stable.V1.t * Block_time.Stable.V1.t [@@deriving yojson, sexp_of]
+
+      let to_latest = Fn.id
+    end
+  end]
+
+  let to_bigstring = Binable.to_bigstring (module Stable.Latest)
+
+  let of_bigstring = Binable.of_bigstring (module Stable.Latest)
+end
