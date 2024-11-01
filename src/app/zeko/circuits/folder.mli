@@ -4,6 +4,7 @@ open Snark_params.Tick
 open Zeko_util
 
 type tag_max_proofs_verified
+
 type tag_branches
 
 (** Define a provable state machine as a machine with some initial state
@@ -13,14 +14,8 @@ module Make : functor
      (** This is what the step function takes *)
      module Elem : SnarkType
 
-     (** This is what the step function takes when a step might not happen. *)
-     module ElemOption : SnarkType
-
-     (** Morally equivalent to `Some`. *)
-     val elem_to_option : Elem.t -> ElemOption.t
-
-     (** Morally equivalent to `None`, but you may use some dummy value. *)
-     val elem_option_none : ElemOption.t
+     (** Used to fill remainder of circuit with dummy values. *)
+     val dummy_elem : Elem.t
 
      (** This is the statement you're trying to prove. *)
      module Stmt : SnarkType
@@ -28,27 +23,15 @@ module Make : functor
      (** This is passed to `init` when initializing the state machine. This way, you can have several starting points. *)
      module Init : SnarkType
 
-     (* FIXME: Allow verifying proofs inside. *)
+     (* TODO: Allow verifying proofs inside. *)
      val init :
           check:Zeko_util.Boolean.var option
             (** The circuit must not fail if this is false. *)
        -> Init.var
        -> Stmt.var Checked.t
 
-     (* FIXME: Allow verifying proofs inside. *)
-     val step :
-          check:Zeko_util.Boolean.var option
-            (** The circuit must not fail if this is false. *)
-       -> Elem.var
-       -> Stmt.var
-       -> Stmt.var Checked.t
-
-     val step_option :
-          check:Zeko_util.Boolean.var option
-            (** The circuit must not fail if this is false. *)
-       -> ElemOption.var
-       -> Stmt.var
-       -> Stmt.var Checked.t
+     (** Step function. This must not fail when given dummy_elem. *)
+     val step : Elem.var -> Stmt.var -> Stmt.var Checked.t
 
      (** Set this as high as possible. Makes recursive circuits bigger. *)
      val leaf_iterations : int
@@ -74,14 +57,10 @@ module Make : functor
   module Trans : sig
     type t = { source : Stmt.t; target : Stmt.t } [@@deriving snarky]
   end
-  
+
   (** The tag for the Pickles rule. You need to specify this in your rule. *)
   val tag :
-    ( Trans.var
-    , Trans.t
-    , tag_max_proofs_verified
-    , tag_branches )
-    Pickles.Tag.t
+    (Trans.var, Trans.t, tag_max_proofs_verified, tag_branches) Pickles.Tag.t
     lazy_t
 
   module Make : functor
@@ -97,16 +76,13 @@ module Make : functor
          ?check:Boolean.var
            (** Set this to false if you don't want to check the proof after all. *)
       -> var (** What you're trying to verify *)
-      -> ( Trans.var
-         * ( Trans.var
-           , tag_max_proofs_verified )
-           Compile_simple.prev )
+      -> (Trans.var * (Trans.var, tag_max_proofs_verified) Compile_simple.prev)
          Checked.t
 
     (** Prove the state machine execution. *)
     val prove : Init.t -> Elem.t list -> t Promise.t
-    
-    (** FIXME: Implement *)
+
+    (** TODO: Implement *)
     (* val merge : t -> t -> t Promise.t *)
     (* val extend : t -> Elem.t list -> t Promise.t *)
     (* also a way to convert from one instantiation of a folder to another one with a different `get_iterations` count. *)

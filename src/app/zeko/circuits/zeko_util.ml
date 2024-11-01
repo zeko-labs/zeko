@@ -296,6 +296,51 @@ struct
   let typ : (var, t) Typ.t = Typ.list ~length:Len.length T.typ
 end
 
+module SnarkArray (Inputs : sig
+  module T : SnarkType
+
+  val max_length : int
+
+  val dummy_filler : T.t
+end) =
+struct
+  open Inputs
+
+  type t = T.t list
+
+  type var = { array : T.var array; length : int V.t }
+
+  let typ : (var, t) Typ.t =
+    let pad : int -> T.t list -> T.t array =
+     fun len list ->
+      let arr = Array.create ~len dummy_filler in
+      let rec go idx = function
+        | x :: xs ->
+            Array.set arr idx x ;
+            go (idx + 1) xs
+        | [] ->
+            ()
+      in
+      go 0 list ; arr
+    in
+    let rec extract : int -> int -> T.t array -> T.t list =
+     fun len offset array ->
+      match len with
+      | 0 ->
+          []
+      | _ ->
+          array.(offset) :: extract (len - 1) (offset + 1) array
+    in
+    let open Typ in
+    array ~length:max_length T.typ * V.typ
+    |> transport
+         ~there:(fun xs -> (pad max_length xs, 0))
+         ~back:(fun (xs, len) -> extract len 0 xs)
+    |> transport_var
+         ~there:(fun { array; length } -> (array, length))
+         ~back:(fun (array, length) -> { array; length })
+end
+
 module ProofV = MkV (Proof)
 
 module ProofOption = struct
@@ -487,13 +532,25 @@ let mktree (account_update, account_update_digest, calls) proof =
 let assert_equal :
     ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t =
  fun ?label (Typ typ) x y ->
-  let x, _ = typ.var_to_fields x in
-  let y, _ = typ.var_to_fields y in
-  let f (x, y) = Constraint.equal ?label x y in
+  let x_fields, _ = typ.var_to_fields x in
+  let y_fields, _ = typ.var_to_fields y in
   let constraints =
-    List.map ~f (List.zip_exn (Array.to_list x) (Array.to_list y))
+    Array.map2_exn ~f:(Constraint.equal ?label) x_fields y_fields
   in
-  assert_all ?label constraints
+  Array.to_list constraints |> assert_all ?label
+
+let var_equal : ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t =
+ fun (Typ typ) x y ->
+  let x_fields, _ = typ.var_to_fields x in
+  let y_fields, _ = typ.var_to_fields y in
+  let*| bools =
+    Checked.List.map
+      ~f:(fun (x_field, y_field) ->
+        let*| b = Field.Checked.equal x_field y_field in
+        Boolean.Expr.(!b) )
+      (List.zip_exn (Array.to_list x_fields) (Array.to_list y_fields))
+  in
+  Boolean.Expr.all bools
 
 module Checked32 = struct
   include Mina_numbers.Nat.Make32 ()
@@ -865,6 +922,8 @@ let compile_simple
     Compile_simple.result
     Promise.t =
   printf "(compile_simple) called for circuit %s\n" name ;
+  assert (Run.in_checked_computation () |> not) ;
+  assert (Run.in_prover () |> not) ;
   let@ () = time_promise ("(compile_simple) compiling circuit " ^ name) in
   let (Count_branches_result tag_length) = count_branches branches in
   let (module N_branches) = branches_length_to_module tag_length in

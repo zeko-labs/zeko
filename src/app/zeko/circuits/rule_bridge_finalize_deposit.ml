@@ -1,4 +1,3 @@
-(*
 open Core_kernel
 open Mina_base
 open Snark_params.Tick
@@ -109,6 +108,7 @@ struct
       type t =
         { params : Deposit_params.t
         ; action_state : Rollup_state.Outer_action_state.t
+        ; deposit_index : Checked32.t
         ; n_steps : Checked32.t
         ; is_rejected : Boolean.t
         ; is_accepted : Boolean.t
@@ -117,21 +117,22 @@ struct
     end
 
     module Elem = Rollup_state.Outer.Action
-    module ElemOption = Rollup_state.Outer.Action
 
-    let elem_to_option x = x
-
-    let elem_option_none = failwith "FIXME"
+    let dummy_elem =
+      Rollup_state.Outer.Action.Witness
+        { aux = Field.zero; children = []; slot_range = infinite_slot_range }
 
     module Init = struct
       type t =
         { params : Deposit_params.t
         ; original_action_state : Rollup_state.Outer_action_state.t
+        ; deposit_index : Checked32.t
         }
       [@@deriving snarky]
     end
 
-    let init ~check:_ ({ params; original_action_state } : Init.var) :
+    let init ~check:_
+        ({ params; original_action_state; deposit_index } : Init.var) :
         Stmt.var Checked.t =
       let* witness = deposit_action params in
       let* action_state =
@@ -140,15 +141,22 @@ struct
       Checked.return
         ( { params
           ; action_state
+          ; deposit_index
           ; n_steps = Checked32.Checked.zero
           ; is_rejected = Boolean.false_
           ; is_accepted = Boolean.false_
           }
           : Stmt.var )
 
-    let step ~check:_ (action : Rollup_state.Outer.Action.var)
-        ({ params; action_state; n_steps; is_rejected; is_accepted } : Stmt.var)
-        =
+    let step (action : Rollup_state.Outer.Action.var)
+        ({ params
+         ; action_state
+         ; n_steps
+         ; is_rejected
+         ; is_accepted
+         ; deposit_index
+         } :
+          Stmt.var ) =
       let* n_steps = Checked32.Checked.succ n_steps in
       let* action_state =
         Rollup_state.Outer.Action.push_var action action_state
@@ -164,27 +172,36 @@ struct
         Slot.Checked.(valid_while.lower > base_params.deposit.timeout)
         >>= ( &&& ) (not is_accepted) >>= ( ||| ) is_rejected
       in
+      let* deposit_index_before_commit =
+        Checked32.Checked.(
+          Rollup_state.Outer_action_state.With_length.length_var
+            action.case_commit.synchronized_outer_action_state
+          > deposit_index)
+      in
       let*| is_accepted =
         Slot.Checked.(valid_while.upper <= base_params.deposit.timeout)
+        >>= ( &&& ) deposit_index_before_commit
         >>= ( &&& ) action.is_commit >>= ( &&& ) (not is_rejected)
         >>= ( ||| ) is_accepted
       in
-      Stmt.{ params; action_state; n_steps; is_rejected; is_accepted }
-
-    let step_option ~check:_ (_ : Rollup_state.Outer.Action.var)
-        (_ : Stmt.var)
-        =
-      failwith "FIXME"
+      Stmt.
+        { params
+        ; action_state
+        ; n_steps
+        ; is_rejected
+        ; is_accepted
+        ; deposit_index
+        }
 
     let name = "deposit acceptance/rejection check"
 
-    let leaf_iterations = Int.pow 2 16
+    let leaf_iterations = Int.pow 2 8
 
-    let leaf_option_iterations = Int.pow 2 15
+    let leaf_option_iterations = Int.pow 2 7
 
-    let extend_iterations = Int.pow 2 15
+    let extend_iterations = Int.pow 2 8
 
-    let extend_option_iterations = Int.pow 2 14
+    let extend_option_iterations = Int.pow 2 7
 
     let override_wrap_domain = None
   end
@@ -217,10 +234,8 @@ struct
     [@@deriving snarky]
   end
 
-  include MkHandler (Witness)
-
   (** Prove that we have submitted a deposit, and that it's been accepted. *)
-  let main Pickles.Inductive_rule.{ public_input = () } =
+  let main (w : Witness.t V.t) =
     with_label ("main " ^ __LOC__) (fun () ->
         let* Witness.
                { token_id
@@ -232,20 +247,28 @@ struct
                ; check_accepted
                ; prev_next_deposit
                } =
-          exists_witness
+          exists Witness.typ ~compute:(V.get w)
         in
-        let* check_accepted, verify_check_accepted =
+        let* ( ({ source = _
+                ; target =
+                    { params
+                    ; action_state = mid_outer_action_state'
+                    ; deposit_index
+                    ; n_steps
+                    ; is_rejected
+                    ; is_accepted
+                    }
+                } :
+                 Check_accepted.Trans.var )
+             , verify_check_accepted ) =
           Check_accepted_inst.get check_accepted
         in
-        let params = check_accepted.target.params in
         let account_id = Account_id.Checked.create public_key token_id in
         let our_token_id =
           Account_id.Checked.derive_token_id ~owner:account_id
         in
-        let* () = Boolean.Assert.is_true check_accepted.target.is_accepted in
-        let* () =
-          Boolean.Assert.(Boolean.false_ = check_accepted.target.is_rejected)
-        in
+        let* () = Boolean.Assert.is_true is_accepted in
+        let* () = Boolean.Assert.(Boolean.false_ = is_rejected) in
         let* ( { source = mid_outer_action_state; target = outer_action_state }
              , verify_ase ) =
           Ase_inst.get ase
@@ -254,14 +277,20 @@ struct
           assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
             (Rollup_state.Outer_action_state.With_length.state_var
                mid_outer_action_state )
-            check_accepted.target.action_state
+            mid_outer_action_state'
+        in
+        let* () =
+          assert_equal ~label:__LOC__ Checked32.typ
+            (Rollup_state.Outer_action_state.With_length.length_var
+               mid_outer_action_state )
+            deposit_index
         in
         let* next_deposit =
           Checked32.Checked.(
             sub
               (Rollup_state.Outer_action_state.With_length.length_var
                  mid_outer_action_state )
-              check_accepted.target.n_steps)
+              n_steps)
         in
         let* () =
           assert_var __LOC__
@@ -329,22 +358,19 @@ struct
                 of_unsigned base_params.deposit.amount |> negate)
           }
         in
-        let* public_output, auxiliary_output =
+        let*| out =
           make_outputs account_update
             [ (helper_account, []); (witness_inner, []) ]
         in
-        let*| auxiliary_output = V.create auxiliary_output in
-        Pickles.Inductive_rule.
-          { previous_proof_statements = [ verify_check_accepted; verify_ase ]
-          ; public_output
-          ; auxiliary_output
-          } )
+        Compile_simple.
+          { prevs = Two_prevs (verify_check_accepted, verify_ase); out } )
 
-  let rule : _ Pickles.Inductive_rule.t =
-    { identifier = "zeko action witness"
-    ; prevs = [ force Check_accepted.tag; force Ase.tag_with_length ]
-    ; main = (fun x -> main x |> Run.run_checked)
-    ; feature_flags = Pickles_types.Plonk_types.Features.none_bool
+  let rule : _ Compile_simple.branch =
+    { branch_name = "zeko action witness"
+    ; tags =
+        Two_tags
+          (Tag (force Check_accepted.tag), Tag (force Ase.tag_with_length))
+    ; main
     }
 end
 
@@ -371,4 +397,3 @@ Make (struct
 
   module Deposit_params = Deposit_params_custom
 end)
-*)

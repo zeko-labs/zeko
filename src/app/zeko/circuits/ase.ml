@@ -15,8 +15,6 @@ module M (Length : sig
 
   module Checked : sig
     val succ : var -> var Checked.t
-
-    val succ_if : var -> Boolean.var -> var Checked.t
   end
 end) (Inputs : sig
   val name : string
@@ -29,41 +27,21 @@ struct
   end
 
   module Elem = Zkapp_account.Actions
-  module ElemOption = F
-
-  let elem_to_option (x : Zkapp_account.Actions.t) =
-    Zkapp_account.Actions.hash x
-
-  let elem_option_none = Outside_hash_image.t
+  
+  let dummy_elem = []
 
   module Init = Stmt
 
   let init ~check:_ x = Checked.return x
 
-  let step ~check:_ actions ({ action_state; length } : Stmt.var) =
+  let step actions ({ action_state; length } : Stmt.var) =
     let* length = Length.Checked.succ length in
     let*| action_state = push_events_checked action_state actions in
     Stmt.{ action_state; length }
 
-  let step_option ~check:_ actions ({ action_state; length } : Stmt.var) =
-    let* dummy_ref = As_prover.Ref.create (As_prover.return []) in
-    (* Bad unsafe use, with mismatching data and hash, but it works *)
-    let actions = Data_as_hash.make_unsafe actions dummy_ref in
-    let* is_dummy =
-      Field.Checked.equal
-        (Data_as_hash.hash actions)
-        (constant Field.typ Outside_hash_image.t)
-    in
-    let* action_state_else = push_events_checked action_state actions in
-    let* action_state =
-      Field.Checked.if_ is_dummy ~then_:action_state ~else_:action_state_else
-    in
-    let*| length = Length.Checked.succ_if length (Boolean.not is_dummy) in
-    Stmt.{ action_state; length }
-
   let name = name
 
-  (* FIXME: increase depending on whether length is used or not *)
+  (* TODO: increase depending on whether length is used or not *)
 
   let leaf_iterations = Int.pow 2 11
 
@@ -85,8 +63,6 @@ module Not_length = struct
 
   module Checked = struct
     let succ () = Checked.return ()
-
-    let succ_if () _ = Checked.return ()
   end
 end
 

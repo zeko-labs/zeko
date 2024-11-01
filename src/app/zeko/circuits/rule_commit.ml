@@ -5,13 +5,15 @@ module PC = Signature_lib.Public_key.Compressed
 open Mina_base
 open Rollup_state
 
-module Ase_outer_inst = Ase.Make_with_length (struct
+(** Used to prove that the synchronized outer action state is a predecessor of the current one. *)
+module Ase_outer_inst = Ase.Make_without_length (struct
   module Action_state = Outer_action_state
   module Action = Outer.Action
 
   let get_iterations = Int.pow 2 14
 end)
 
+(** Used to prove the length of the inner action state as stored on the outer account. *)
 module Ase_inner_inst = Ase.Make_with_length (struct
   module Action_state = Inner_action_state
   module Action = Inner.Action
@@ -19,6 +21,7 @@ module Ase_inner_inst = Ase.Make_with_length (struct
   let get_iterations = Int.pow 2 14
 end)
 
+(** Proves both Ase_outer_inst and Ase_inner_inst, to circumvent limitation of two recursive proof verifications per proof. *)
 module Verify_both_ases = struct
   let main (w : (Ase_outer_inst.t * Ase_inner_inst.t) V.t) =
     let* outer, inner =
@@ -33,7 +36,7 @@ module Verify_both_ases = struct
     { branch_name = "Verify_both_ases"
     ; tags =
         Two_tags
-          (Tag (force Ase.tag_with_length), Tag (force Ase.tag_with_length))
+          (Tag (force Ase.tag_without_length), Tag (force Ase.tag_with_length))
     ; main
     }
 
@@ -46,6 +49,7 @@ module Verify_both_ases = struct
 end
 
 module Make (Inputs : sig
+  (** max_valid_while_size signifies how big the valid_while can be for commits. *)
   val max_valid_while_size : int
 end)
 (T : Transaction_snark.S) =
@@ -56,6 +60,7 @@ struct
     type t = { right_side : F.t } [@@deriving snarky]
   end
 
+  (** Witness for path to inner account. Path is implicitly all left. *)
   module Path =
     SnarkList
       (PathElt)
@@ -78,7 +83,7 @@ struct
       ; ases_proof : ProofV.t
       ; old_inner_acc : Account.t
       ; old_inner_acc_path : Path.t
-      ; new_inner_acc : Account.t  (** Withdrawals to be processed this time *)
+      ; new_inner_acc : Account.t
       ; new_inner_acc_path : Path.t
       }
     [@@deriving snarky]
@@ -222,6 +227,9 @@ struct
       exists ~compute:(V.get w) Witness.typ
     in
 
+    (* We check that the valid while isn't too big. Do note that the slot_range is inclusive surprisingly,
+       so there should be no one-off bug below. In the case where lower and upper are equal,
+       max_valid_while_size must be at least 1. *)
     let* () =
       assert_var __LOC__ (fun () ->
           let* diff = Slot.Checked.diff slot_range.upper slot_range.lower in
@@ -231,15 +239,20 @@ struct
                 (Global_slot_span (Unsigned.UInt32.of_int max_valid_while_size))) )
     in
 
+    (* Calculate the root ledger hashes, to be checked against txn snark. *)
     let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
 
+    (* Extract txn snark statement. *)
     let* txn_snark_stmt =
       exists Transaction_snark.Statement.With_sok.typ
         ~compute:
           As_prover.(V.get txn_snark >>| Transaction_snark.statement_with_sok)
     in
 
+    (* Extract information from txn snark statement.
+       This function also makes sure it's valid in the context of Zeko.
+    *)
     let* { source_ledger; target_ledger } = extract_txn_snark txn_snark_stmt in
 
     (* We check that the paths provided for the inner account are correct. *)
@@ -268,14 +281,18 @@ struct
           PC.Checked.Assert.equal new_inner_acc.public_key
           @@ constant PC.typ Inner.public_key )
     in
+
+    (* Extract the zkapp portion of the accounts. *)
     let* old_inner_zkapp = get_zkapp old_inner_acc in
     let* new_inner_zkapp = get_zkapp new_inner_acc in
 
+    (* Extract the outer action state as synchronized to the new inner account. *)
     let synchronized_outer_action_state =
       (Inner.State.var_of_app_state new_inner_zkapp.app_state)
         .outer_action_state
     in
 
+    (* Extract information from Verify_both_ases wrapper proof. *)
     let ase_outer, ase_inner, verify_ases =
       let verify_ases : _ Compile_simple.prev =
         { public_input = (unverified_ase_outer, unverified_ase_inner)
@@ -300,15 +317,21 @@ struct
       ase_inner
     in
 
-    (* We want to transfer only deposits finalised with some certainty.
-       By submitting `delay_extension` we can prove that we are transfering older deposits. *)
+    (* The sequencer doesn't have to synchronize all actions immediately.
+       They can delay it by an arbitrary amount.
+       This checks that the source of the ase_outer proof is equal to the
+       synchronized outer action state.
+       We don't check the lengths here, since it isn't important for this purpose.
+    *)
     let* () =
       with_label __LOC__ (fun () ->
-          assert_equal Outer_action_state.With_length.typ
-            synchronized_outer_action_state synchronized_outer_action_state' )
+          assert_equal Outer_action_state.typ
+            (Outer_action_state.With_length.state_var
+               synchronized_outer_action_state )
+            synchronized_outer_action_state' )
     in
 
-    (* Withdrawals are registered in the inner account's action state *)
+    (* Extract the inner action states. *)
     let old_inner_action_state' =
       match old_inner_zkapp.action_state with
       | x :: _ ->
@@ -319,6 +342,7 @@ struct
       | x :: _ ->
           Inner_action_state.unsafe_var_of_field x
     in
+    (* We check that the above values match with what we got from ase_inner. *)
     let* () =
       assert_equal Inner_action_state.typ
         (Inner_action_state.With_length.state_var old_inner_action_state)
@@ -346,9 +370,16 @@ struct
                       (Inner_action_state.With_length.length_var
                          new_inner_action_state )
                 }
-            ; sequencer = Some sequencer
-            ; paused = Some Boolean.false_
-            ; pause_key = None
+                (* The inner action state as recorded now.
+                   Other zkapps can match on this, or deduce it
+                   directly from `ledger_hash`. There is no real difference
+                   currently.
+                   However, we also store the length here, which is of importance
+                   to many other zkapps.
+                *)
+            ; sequencer = None (* We don't update the sequencer. *)
+            ; paused = None (* We don't pause the rollup. *)
+            ; pause_key = None (* We don't update the pause key. *)
             }
           |> var_to_app_state_fine
       }
@@ -359,7 +390,7 @@ struct
           { default_account_update.preconditions.account with
             state =
               Outer.State.fine
-                { ledger_hash = Some source_ledger
+                { ledger_hash = Some source_ledger (* The original state of the rollup ledger. *)
                 ; inner_action_state =
                     { state =
                         Some
@@ -370,19 +401,24 @@ struct
                           (Inner_action_state.With_length.length_var
                              old_inner_action_state )
                     }
-                ; sequencer = Some sequencer
-                ; paused = Some Boolean.false_
-                ; pause_key = None
+                    (* The inner action state as recorded before.
+                       The state we already know from the ledger hash,
+                       but the length is information we didn't have before.
+                    *)
+                ; sequencer = Some sequencer (* We must be the sequencer. *)
+                ; paused = Some Boolean.false_ (* We must not be paused. *)
+                ; pause_key = None (* We don't care about who can pause the rollup. *)
                 }
               |> var_to_precondition_fine
           ; action_state =
               Or_ignore.Checked.make_unsafe Boolean.true_
-                (Outer_action_state.With_length.raw_var outer_action_state)
+                (Outer_action_state.raw_var outer_action_state)
               (* Our action state must match *)
           }
       ; valid_while = Slot_range.Checked.to_valid_while slot_range
       }
     in
+    (* We submit an action that summarizes what we did. Used as a way to timestamp when actions were synchronized. *)
     let* actions =
       Outer.Action.commit_to_actions_var
         Outer.Action.Commit.

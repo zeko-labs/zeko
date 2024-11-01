@@ -76,6 +76,7 @@ type deposit_params =
 
 (* L1 *)
 let deposit_action (params : deposit_params) : outer_action =
+  assert List.mem params.holder_account_l1 holder_accounts_l1 ;
   let a =
     { public_key = params.holder_account_l1
     ; token_id = token_id_l1
@@ -163,7 +164,7 @@ let do_finalize_deposit
      equal to the index of the lowest possible deposit we can finalize *)
   assert prev_next_deposit <= action_state_before_deposit.length ;
   let outer_action_state =
-    actions_after_deposit ++ deposit_action deposit_params :: action_state_before_deposit
+    List.append actions_after_deposit deposit_action deposit_params :: action_state_before_deposit
   in
   { account_id = account_id_l2
   ; balance_change = -deposit.amount
@@ -185,7 +186,7 @@ let do_finalize_deposit
         }
       }
     ; { public_key = inner_pk
-      ; preconditions = { app_state = { outer_action_state } } (* FIXME length used here *)
+      ; preconditions = { app_state = { outer_action_state ; outer_action_state_length = List.length outer_action_state } } (* FIXME length used here *)
       ; authorization_kind = inner_authorization_kind
       }
     ]
@@ -203,7 +204,7 @@ let do_finalize_cancelled_deposit
   assert check_accepted ~deposit ~actions_after_deposit = `Rejected ;
   assert prev_next_cancelled_deposit <= action_state_before_deposit.length ;
   let outer_action_state =
-    actions_after_deposit :: deposit_action deposit_params ++ action_state_before_deposit
+    actions_after_deposit :: List.append deposit_action deposit_params action_state_before_deposit
   in
   { account_id = holder_account_l1
   ; balance_change = -deposit.amount
@@ -256,10 +257,10 @@ let do_finalize_withdrawal
   let withdrawal = withdrawal_params.withdrawal in
   assert prev_next_withdrawal <= action_state_before_withdrawal.length ;
   let inner_action_state =
-    actions_after_withdrawal ++ withdraw_action withdrawal_params :: action_state_before_withdrawal
+    List.append actions_after_withdrawal withdraw_action withdrawal_params :: action_state_before_withdrawal
   in
   let outer_action_state =
-    actions_after_commit ++ Commit commit :: action_state_before_commit
+    List.append actions_after_commit @@ Commit commit :: action_state_before_commit
   in
   assert commit.inner_action_state = inner_action_state ;
   { account_id = holder_account_l1

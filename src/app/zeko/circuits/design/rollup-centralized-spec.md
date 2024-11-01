@@ -36,16 +36,19 @@ type outer_app_state =
 
 type inner_app_state =
   { outer_action_state : outer_action_state
+  ; outer_action_state_length : nat
   }
 
 (* happens inside rollup, on L2 *)
-let do_inner_step ~source_action_state ~actions =
+let do_inner_step ~source_action_state ~actions ~old_outer_action_state_length =
   [ { public_key = inner_pk
     ; app_state =
       { outer_action_state = List.append actions source_action_state
+      ; outer_action_state_length = List.length actions + old_outer_action_state_length
       }
     ; preconditions =
       { outer_action_state = Some source_action_state
+      ; outer_action_state_length = old_outer_action_state_length
       }
     }
   ]
@@ -60,6 +63,9 @@ let do_commit
   ~valid_while
   ~sequencer
   ~new_actions
+  ~new_inner_actions
+  ~old_inner_action_state_length
+  ~unsynchronized_actions
   ~pause_key
   =
   (* doesn't need to be at the same time as macroslot,
@@ -71,16 +77,20 @@ let do_commit
   let new_inner = get_account inner_pk txn_snark.target in
 
   let synchronized_outer_action_state = new_inner.app_state.outer_action_state in
-  let synchronized_outer_action_state_length = List.length synchronized_outer_action_state in
+
+  (* The new actions must be the difference between old synchronized outer action state and new synchronized outer action state. *)
+  assert List.append new_actions old_inner.app_state.outer_action_state = synchronized_outer_action_state ;
+
+  let synchronized_outer_action_state_length = List.length new_actions + old_synchronized_outer_action_state_length in
 
   let action_state =
     (* We don't force sequencer to match on latest action state,
        since it's unreliable and might roll back. *)
-    List.append new_actions synchronized_outer_action_state in
+    List.append unsynchronized_actions synchronized_outer_action_state in
 
   let ledger = txn_snark.target in
   let inner_action_state = new_inner.action_state in
-  let inner_action_state_length = List.length inner_action_state in
+  let inner_action_state_length = List.length new_inner_actions + old_inner_action_state_length in
 
   [ { public_key = zeko_pk
     ; actions = Commit
@@ -103,7 +113,7 @@ let do_commit
       { app_state =
         { ledger = txn_snark.source
         ; inner_action_state = old_inner.action_state
-        ; inner_action_state_length = List.length old_inner.action_state
+        ; inner_action_state_length = old_inner_action_state_length
         ; sequencer
         ; paused = false
         ; pause_key

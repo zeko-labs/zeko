@@ -178,6 +178,22 @@ module SnarkList : functor
   val typ : (var, t) Typ.t
 end
 
+module SnarkArray : functor
+  (Inputs : sig
+     module T : SnarkType
+
+     val max_length : int
+
+     val dummy_filler : T.t
+   end)
+  -> sig
+  type t = Inputs.T.t list
+
+  type var = { array : Inputs.T.var array; length : int V.t }
+
+  val typ : (var, t) Typ.t
+end
+
 module type V_S = sig
   type t
 
@@ -251,6 +267,9 @@ end
 
 val assert_equal :
   ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t
+
+val var_equal :
+  ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t
 
 module Checked32 : sig
   include module type of Mina_numbers.Nat.Make32 ()

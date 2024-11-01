@@ -13,6 +13,6 @@
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules rule_bridge_finalize_deposit bridge_state outer_rules inner_rules rule_commit rule_action_witness rule_inner_sync ase rollup_state folder zeko_util compile_simple_intf)
- ;; FIXME add (modules_without_implementation compile_simple_intf)
+ (modules zkapps_rollup zkapps_rollup_intf rule_bridge_finalize_deposit bridge_state outer_rules inner_rules rule_commit rule_action_witness rule_inner_sync ase rollup_state folder zeko_util compile_simple_intf)
+ (modules_without_implementation zkapps_rollup_intf)
  )

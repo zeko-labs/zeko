@@ -13,11 +13,7 @@ type tag_branches = Branches.n
 module Make (Inputs : sig
   module Elem : SnarkType
 
-  module ElemOption : SnarkType
-
-  val elem_to_option : Elem.t -> ElemOption.t
-
-  val elem_option_none : ElemOption.t
+  val dummy_elem : Elem.t
 
   module Stmt : SnarkType
 
@@ -25,11 +21,7 @@ module Make (Inputs : sig
 
   val init : check:Boolean.var option -> Init.var -> Stmt.var Checked.t
 
-  val step :
-    check:Boolean.var option -> Elem.var -> Stmt.var -> Stmt.var Checked.t
-
-  val step_option :
-    check:Boolean.var option -> ElemOption.var -> Stmt.var -> Stmt.var Checked.t
+  val step : Elem.var -> Stmt.var -> Stmt.var Checked.t
 
   val leaf_iterations : int
 
@@ -54,128 +46,164 @@ struct
     type t = { stmt : Stmt.t; proof : ProofOptionV.t } [@@deriving snarky]
   end
 
-  module Make_rule_leaf (Inputs : sig
+  let fold (middle_or_end : [ `Middle | `End ]) (source : Stmt.var)
+      (elems : Elem.var array) (length : int V.t) =
+    let f target elem =
+      let*| target' = step elem target in
+      (target', target')
+    in
+    let* last_target, targets = Checked.Array.fold_map ~f ~init:source elems in
+    match middle_or_end with
+    | `Middle ->
+        let* target =
+          exists Stmt.typ
+            ~compute:
+              (let+ length = V.get length in
+               (* there must be at least one element *)
+               assert (Int.(length > 0)) ;
+               As_prover.read Stmt.typ targets.(length - 1) )
+        in
+        (* TODO: Do this with a runtime table in the future. *)
+        let* equalities =
+          Checked.List.map (Array.to_list targets)
+            ~f:(var_equal Stmt.typ target)
+        in
+        let*| () =
+          let open Boolean.Expr in
+          any equalities |> assert_
+        in
+        target
+    | `End ->
+        Checked.return last_target
+
+  module Make_rule (Inputs : sig
+    val branch_name : string
+
     val iterations : int
 
-    module E : SnarkType
+    val middle_or_end : [ `Middle | `End ]
 
-    val step_e : E.var -> Stmt.var -> Stmt.var Checked.t
+    module Source : SnarkType
 
-    val identifier : string
+    type prevs
+
+    val unwrap_source :
+      Source.var -> (Stmt.var * prevs Compile_simple.prevs) Checked.t
+
+    val tags : (Transition.Stmt.var, prevs) Compile_simple.tags
   end) =
   struct
     open Inputs
 
-    module Es =
-      SnarkList
-        (E)
-        (struct
-          let length = iterations
-        end)
+    module Elems = SnarkArray (struct
+      module T = Elem
+
+      let max_length = iterations
+
+      let dummy_filler = dummy_elem
+    end)
 
     module Witness = struct
-      type t = { elems : Es.t; source : Stmt.t } [@@deriving snarky]
+      type t = { elems : Elems.t; source : Source.t } [@@deriving snarky]
     end
 
     let%snarkydef_ main (w : Witness.t V.t) =
       let* Witness.{ elems; source } = exists Witness.typ ~compute:(V.get w) in
-      let* target = Checked.List.fold ~f:(Fun.flip step_e) ~init:source elems in
-      Checked.return
-        Compile_simple.
-          { out = ({ source; target } : Transition.Stmt.var); prevs = No_prevs }
+      let* source, prevs = unwrap_source source in
+      let*| target = fold middle_or_end source elems.array elems.length in
+      Compile_simple.{ out = ({ source; target } : Transition.Stmt.var); prevs }
 
-    let rule : _ Compile_simple.branch =
-      { branch_name = identifier; tags = No_tags; main }
+    let rule : _ Compile_simple.branch = { branch_name; tags; main }
   end
 
-  module Rule_leaf = Make_rule_leaf (struct
-    let identifier = "state machine leaf"
-
-    module E = Elem
-
-    let step_e = step ~check:None
+  module Rule_leaf = Make_rule (struct
+    let branch_name = "Rule_leaf"
 
     let iterations = leaf_iterations
+
+    let middle_or_end = `End
+
+    module Source = Stmt
+
+    type prevs = Compile_simple.no_prevs
+
+    let unwrap_source stmt = Checked.return (stmt, Compile_simple.No_prevs)
+
+    let tags = Compile_simple.No_tags
   end)
 
-  module Rule_leaf_option = Make_rule_leaf (struct
-    let identifier = "state machine leaf option"
-
-    module E = ElemOption
-
-    let step_e = step_option ~check:None
+  module Rule_leaf_option = Make_rule (struct
+    let branch_name = "Rule_leaf_option"
 
     let iterations = leaf_option_iterations
+
+    let middle_or_end = `Middle
+
+    module Source = Stmt
+
+    type prevs = Compile_simple.no_prevs
+
+    let unwrap_source stmt = Checked.return (stmt, Compile_simple.No_prevs)
+
+    let tags = Compile_simple.No_tags
   end)
 
-  module Make_rule_extend (Inputs : sig
-    val iterations : int
-
-    module E : SnarkType
-
-    val step_e : E.var -> Stmt.var -> Stmt.var Checked.t
-
-    val identifier : string
-  end) =
-  struct
-    open Inputs
-
-    module Es =
-      SnarkList
-        (E)
-        (struct
-          let length = iterations
-        end)
-
-    module Witness = struct
-      type t = { elems : Es.t; prev : Transition.t } [@@deriving snarky]
-    end
-
-    let%snarkydef_ main (w : Witness.t V.t) =
-      let* Witness.{ elems; prev } = exists ~compute:(V.get w) Witness.typ in
-      let f (state : Stmt.var Checked.t) (elem : E.var) =
-        let* state in
-        step_e elem state
-      in
-      let* target =
-        List.fold_left ~f ~init:(Checked.return prev.stmt.target) elems
-      in
-      let* proof =
-        As_prover.(V.get prev.proof >>| fun x -> Option.value_exn x) |> V.create
-      in
-      Checked.return
-        Compile_simple.
-          { prevs =
-              One_prev
-                { proof_must_verify = Boolean.true_
-                ; public_input = prev.stmt
-                ; proof
-                }
-          ; out = ({ source = prev.stmt.source; target } : Transition.Stmt.var)
-          }
-
-    let rule : _ Compile_simple.branch =
-      { branch_name = identifier; tags = One_tag Own_tag; main }
-  end
-
-  module Rule_extend = Make_rule_extend (struct
-    let identifier = "state machine extend"
-
-    module E = Elem
-
-    let step_e = step ~check:None
+  module Rule_extend = Make_rule (struct
+    let branch_name = "Rule_extend"
 
     let iterations = extend_iterations
+
+    let middle_or_end = `End
+
+    module Source = Transition
+
+    type prevs =
+      (Transition.Stmt.var, Compile_simple.self_width) Compile_simple.one_prev
+
+    let unwrap_source (trans : Transition.var) =
+      let*| proof =
+        As_prover.(V.get trans.proof >>| fun x -> Option.value_exn x)
+        |> V.create
+      in
+      let prevs =
+        Compile_simple.One_prev
+          { proof_must_verify = Boolean.true_
+          ; public_input = trans.stmt
+          ; proof
+          }
+      in
+      (trans.stmt.target, prevs)
+
+    let tags = Compile_simple.One_tag Own_tag
   end)
 
-  module Rule_extend_option = Make_rule_extend (struct
-    let identifier = "state machine extend option"
-
-    module E = ElemOption
-
-    let step_e = step_option ~check:None
+  module Rule_extend_option = Make_rule (struct
+    let branch_name = "Rule_extend_option"
 
     let iterations = extend_option_iterations
+
+    let middle_or_end = `Middle
+
+    module Source = Transition
+
+    type prevs =
+      (Transition.Stmt.var, Compile_simple.self_width) Compile_simple.one_prev
+
+    let unwrap_source (trans : Transition.var) =
+      let*| proof =
+        As_prover.(V.get trans.proof >>| fun x -> Option.value_exn x)
+        |> V.create
+      in
+      let prevs =
+        Compile_simple.One_prev
+          { proof_must_verify = Boolean.true_
+          ; public_input = trans.stmt
+          ; proof
+          }
+      in
+      (trans.stmt.target, prevs)
+
+    let tags = Compile_simple.One_tag Own_tag
   end)
 
   module Rule_merge = struct
@@ -211,10 +239,7 @@ struct
           }
 
     let rule : _ Compile_simple.branch =
-      { branch_name = "state machine merge"
-      ; tags = Two_tags (Own_tag, Own_tag)
-      ; main
-      }
+      { branch_name = "Rule_merge"; tags = Two_tags (Own_tag, Own_tag); main }
   end
 
   let name = "State_machine.Make(" ^ name ^ ")"
@@ -222,9 +247,7 @@ struct
   let compilation_result =
     lazy
       (let@ () = Promise.block_on_async_exn in
-       printf "compiling %s\n" name ;
-       compile_simple
-         ?override_wrap_domain
+       compile_simple ?override_wrap_domain
          ~name:("folder(" ^ name ^ ")")
          ~branches:
            [ Rule_leaf.rule
@@ -253,7 +276,7 @@ struct
         let@ stmt, proof = leaf { elems; source } |> Promise.( >>| ) in
         ({ stmt; proof = Some proof } : Transition.t)
 
-  let leaf_option (source : Stmt.t) (elems : ElemOption.t list) :
+  let leaf_option (source : Stmt.t) (elems : Elem.t list) :
       Transition.t Promise.t =
     match force compilation_result with
     | Result { tag = _; provers = [ _; leaf_option; _; _; _ ]; tag_length = _ }
@@ -265,15 +288,17 @@ struct
       Transition.t Promise.t =
     match force compilation_result with
     | Result { tag = _; provers = [ _; _; extend; _; _ ]; tag_length = _ } ->
-        let@ stmt, proof = extend { elems; prev } |> Promise.( >>| ) in
+        let@ stmt, proof = extend { elems; source = prev } |> Promise.( >>| ) in
         ({ stmt; proof = Some proof } : Transition.t)
 
-  let extend_option (prev : Transition.t) (elems : ElemOption.t list) :
+  let extend_option (prev : Transition.t) (elems : Elem.t list) :
       Transition.t Promise.t =
     match force compilation_result with
     | Result
         { tag = _; provers = [ _; _; _; extend_option; _ ]; tag_length = _ } ->
-        let@ stmt, proof = extend_option { elems; prev } |> Promise.( >>| ) in
+        let@ stmt, proof =
+          extend_option { elems; source = prev } |> Promise.( >>| )
+        in
         ({ stmt; proof = Some proof } : Transition.t)
 
   let _merge (left : Transition.t) (right : Transition.t) :
@@ -295,29 +320,24 @@ struct
   struct
     open Inputs
 
-    module Elems =
-      SnarkList
-        (ElemOption)
-        (struct
-          let length = get_iterations
-        end)
+    module Elems = SnarkArray (struct
+      module T = Elem
 
-    module IntV = MkV (Int)
+      let max_length = get_iterations
+
+      let dummy_filler = dummy_elem
+    end)
 
     type t =
       { init_arg : Init.t
       ; proof_target : Stmt.t
       ; proof : ProofOptionV.t
       ; excess : Elems.t
-            (* FIXME: fix SnarkList such that the out-circuit values don't include dummies. *)
-      ; excess_nr_nones : IntV.t
       }
     [@@deriving snarky]
 
     let%snarkydef_ get ?(check : Boolean.var option)
-        ({ init_arg; proof_target; proof; excess; excess_nr_nones = _ } : var) =
-      let* () = Checked.return () in
-      printf "calling Folder.get\n" ;
+        ({ init_arg; proof_target; proof; excess } : var) =
       let* has_proof =
         exists Boolean.typ ~compute:As_prover.(V.get proof >>| Option.is_some)
       in
@@ -339,13 +359,8 @@ struct
       let* excess_init =
         if_ has_proof ~typ:Stmt.typ ~then_:proof_target ~else_:source
       in
-      let* target =
-        Checked.List.fold
-          ~f:(fun state elem -> step_option ~check elem state)
-          ~init:excess_init excess
-      in
+      let* target = fold `Middle excess_init excess.array excess.length in
       let stmt : Transition.Stmt.var = { source; target } in
-      printf "calling Folder.get done\n" ;
       Checked.return
         ( stmt
         , ( { public_input =
@@ -374,7 +389,6 @@ struct
       , { list = right; length = max (xs.length - count) 0 |> min xs.length } )
 
     let prove (init_arg : Init.t) (elems : Elem.t list) : t Promise.t =
-      printf "calling prove\n" ;
       let source =
         run_and_check_exn
           (let init_arg = constant Init.typ init_arg in
@@ -385,7 +399,6 @@ struct
       let ( let$| ) = Promise.( >>| ) in
       let rec go (trans : Transition.t) (elems : Elem.t list_with_length) :
           (Transition.t * Elem.t list_with_length) Promise.t =
-        printf "go called\n" ;
         if elems.length <= get_iterations then Promise.return (trans, elems)
         else if elems.length >= extend_iterations then
           let to_process, elems = split_n elems extend_iterations in
@@ -393,8 +406,9 @@ struct
           go trans elems
         else
           let to_process, elems =
-            split_n_pad elems extend_option_iterations ~f:elem_to_option
-              ~padding:elem_option_none
+            split_n_pad elems extend_option_iterations
+              ~f:(fun x -> x)
+              ~padding:dummy_elem
           in
           let$ trans = extend_option trans to_process in
           go trans elems
@@ -415,19 +429,14 @@ struct
           (trans.stmt.target, trans.proof, elems)
         else
           let to_process, elems =
-            split_n_pad elems leaf_option_iterations ~f:elem_to_option
-              ~padding:elem_option_none
+            split_n_pad elems leaf_option_iterations
+              ~f:(fun x -> x)
+              ~padding:dummy_elem
           in
           let$ trans = leaf_option source to_process in
           let$| trans, elems = go trans elems in
           (trans.stmt.target, trans.proof, elems)
       in
-      printf "done calling go\n" ;
-      let excess_nr_nones = get_iterations - elems.length in
-      let nones = List.init excess_nr_nones ~f:(fun _ -> elem_option_none) in
-      let excess = nones @ List.map ~f:elem_to_option elems.list in
-      printf "returning from Folder.prove\n" ;
-      Promise.return
-        ({ init_arg; proof_target; proof; excess; excess_nr_nones } : t)
+      Promise.return ({ init_arg; proof_target; proof; excess = elems.list } : t)
   end
 end
