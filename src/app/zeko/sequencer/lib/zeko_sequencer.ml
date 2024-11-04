@@ -597,7 +597,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                 (index, L.get_at_index_exn l index) )
           in
           let diff =
-            Da_layer.Diff.create
+            Da_layer.Diff.Without_timestamp.create
               ~source_ledger_hash:(Sparse_ledger.merkle_root first_pass_ledger)
               ~changed_accounts
               ~command_with_action_step_flags:
@@ -787,7 +787,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let%bind () =
       Deferred.List.iter ~how:`Sequential ledger_hashes_chain
         ~f:(fun ledger_hash ->
-          let%bind diff : Da_layer.Diff.t Deferred.t =
+          let%bind diff : Da_layer.Diff.Without_timestamp.t Deferred.t =
             Da_layer.Client.get_diff ~logger ~config:da_config ~ledger_hash
             >>| Or_error.ok_exn >>| fst
           in

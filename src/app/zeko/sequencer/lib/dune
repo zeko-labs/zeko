@@ -5,6 +5,7 @@
   zkapps_rollup
   kvdb_base
   da_layer
+  zeko_prover
   ;; mina ;;
   mina_base
   mina_base.import

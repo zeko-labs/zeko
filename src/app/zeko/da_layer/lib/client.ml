@@ -36,7 +36,7 @@ module Rpc = struct
     go max_tries []
 
   let post_diff ~logger ~node_location ~ledger_openings ~diff =
-    dispatch ~logger node_location Rpc.Post_diff.v1 { ledger_openings; diff }
+    dispatch ~logger node_location Rpc.Post_diff.v2 { ledger_openings; diff }
 
   let get_diff ~logger ~node_location ~ledger_hash =
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.v2 ledger_hash
@@ -198,7 +198,7 @@ let distribute_genesis_diff ~logger ~config ~ledger =
       ~f:(fun acc (index, _) -> Sparse_ledger.set_exn acc index Account.empty)
   in
   let diff =
-    Diff.create
+    Diff.Without_timestamp.create
       ~source_ledger_hash:(Diff.empty_ledger_hash ~depth:(Ledger.depth ledger))
       ~changed_accounts ~command_with_action_step_flags:None
   in

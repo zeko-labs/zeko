@@ -30,7 +30,7 @@ let time label (d : 'a Deferred.t) =
   return x
 
 module Cache = struct
-  type t = Da_layer.Diff.With_timestamp.t Ledger_hash.Map.t
+  type t = Da_layer.Diff.t Ledger_hash.Map.t
 
   let empty = Ledger_hash.Map.empty
 
