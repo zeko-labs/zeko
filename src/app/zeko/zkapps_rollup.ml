@@ -59,7 +59,7 @@ module TR = struct
     { amount : CA.t  (** Amount to be transferred *)
     ; recipient : PC.t  (** Recipient, i.e. pk of helper account *)
     }
-  [@@deriving snarky]
+  [@@deriving snarky, yojson]
 
   let to_actions (t : t) : Actions.t = value_to_actions typ t
 end

@@ -82,6 +82,7 @@ type call_forest_tree =
   , Zkapp_command.Digest.Account_update.t
   , Zkapp_command.Digest.Forest.t )
   Zkapp_command.Call_forest.Tree.t
+[@@deriving yojson]
 
 (** Given calls the zkapp wishes to make, constructs output that can be used to construct a full account update *)
 let make_outputs account_update calls =

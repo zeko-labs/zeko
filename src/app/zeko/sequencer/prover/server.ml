@@ -13,88 +13,72 @@ let time label (d : 'a Deferred.t) =
   printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-let sok_digest =
+let dummy_sok =
   Sok_message.digest
   @@ Sok_message.create ~fee:Currency.Fee.zero
-       ~prover:(Public_key.compress @@ (Keypair.create ()).public_key)
+       ~prover:(Public_key.compress (Keypair.create ()).public_key)
 
-module Command_witness = struct
+(* Unfortunately yojson doesn't support GADTs so it can't be one type, or maybe I'm just bad *)
+module Input = struct
   type t =
-    | Signed_command of
-        Sparse_ledger.t
+    | Wrapper_wrap of Transaction_snark.t
+    | Wrapper_merge of (Zkapps_rollup.t * Zkapps_rollup.t)
+    | Transaction_snark_of_signed_command of
+        ( Mina_state.Snarked_ledger_state.With_sok.t
         * Signed_command.With_valid_signature.t Transaction_protocol_state.t
-        * Transaction_snark.Statement.With_sok.t
-    | Zkapp_command of
-        ( Transaction_witness.Zkapp_command_segment_witness.t
-        * Transaction_snark.Zkapp_command_segment.Basic.t
-        * Mina_state.Snarked_ledger_state.With_sok.t )
-        list
-        * Zkapp_command.t
+        * Sparse_ledger.t )
+    | Transaction_snark_of_zkapp_command_segment of
+        ( Mina_state.Snarked_ledger_state.With_sok.t
+        * Transaction_witness.Zkapp_command_segment_witness.t
+        * Transaction_snark.Zkapp_command_segment.Basic.t )
+    | Transaction_snark_merge of (Transaction_snark.t * Transaction_snark.t)
+    | Submit_deposit of (Public_key.Compressed.t * Zkapps_rollup.TR.t)
+    | Submit_withdrawal of Zkapps_rollup.TR.t
   [@@deriving yojson]
 end
 
-module Input = struct
+module Output = struct
   type t =
-    { command_witness : Command_witness.t; last : Zkapps_rollup.t option }
+    | Wrapper_wrap of Zkapps_rollup.t
+    | Wrapper_merge of Zkapps_rollup.t
+    | Transaction_snark_of_signed_command of Transaction_snark.t
+    | Transaction_snark_of_zkapp_command_segment of Transaction_snark.t
+    | Transaction_snark_merge of Transaction_snark.t
+    | Submit_deposit of Zeko_util.call_forest_tree
+    | Submit_withdrawal of Zeko_util.call_forest_tree
   [@@deriving yojson]
 end
 
 module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
-  let wrap_and_merge last txn_snark command =
-    let%bind wrapped = M.Wrapper.wrap txn_snark in
-    let%bind final_snark =
-      match last with
-      | Some last' ->
-          M.Wrapper.merge last' wrapped
-      | None ->
-          return wrapped
-    in
-    return final_snark
-
-  let prove_signed_command last ~sparse_ledger ~user_command_in_block ~statement
-      =
-    let handler = unstage @@ Sparse_ledger.handler sparse_ledger in
-    let%bind txn_snark =
-      time "Transaction_snark.of_signed_command"
-        (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
-           ~statement user_command_in_block handler )
-    in
-    wrap_and_merge last txn_snark
-      (User_command.Signed_command
-         (Signed_command.forget_check user_command_in_block.transaction) )
-
-  let prove_zkapp_command last ~witnesses ~zkapp_command =
-    let%bind txn_snark =
-      match witnesses with
-      | [] ->
-          failwith "No witnesses"
-      | (witness, spec, statement) :: rest ->
-          let%bind p1 =
-            time "Transaction_snark.of_zkapp_command_segment"
-              (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
-          in
-          Deferred.List.fold ~init:p1 rest
-            ~f:(fun acc (witness, spec, statement) ->
-              let%bind prev = return acc in
-              let%bind curr =
-                time "Transaction_snark.of_zkapp_command_segment"
-                  (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
-              in
-              let%bind merged =
-                time "Transaction_snark.merge" (T.merge curr prev ~sok_digest)
-              in
-              return (Or_error.ok_exn merged) )
-    in
-    wrap_and_merge last txn_snark (User_command.Zkapp_command zkapp_command)
-
-  let prove last command_witness =
-    match command_witness with
-    | Command_witness.Signed_command
-        (sparse_ledger, user_command_in_block, statement) ->
-        prove_signed_command last ~sparse_ledger ~user_command_in_block
-          ~statement
-    | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
-        prove_zkapp_command last ~witnesses ~zkapp_command
+  let prove : Input.t -> Output.t Deferred.t = function
+    | Wrapper_wrap txn_snark ->
+        time "Wrapper.wrap" (M.Wrapper.wrap txn_snark)
+        >>| fun x -> Output.Wrapper_wrap x
+    | Wrapper_merge (last, wrapped) ->
+        time "Wrapper.merge" (M.Wrapper.merge last wrapped)
+        >>| fun x -> Output.Wrapper_merge x
+    | Transaction_snark_of_signed_command
+        (statement, user_command_in_block, sparse_ledger) ->
+        let handler = unstage @@ Sparse_ledger.handler sparse_ledger in
+        time "Transaction_snark.of_signed_command"
+          (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
+             ~statement user_command_in_block handler )
+        >>| fun x -> Output.Transaction_snark_of_signed_command x
+    | Transaction_snark_of_zkapp_command_segment (statement, witness, spec) ->
+        time "Transaction_snark.of_zkapp_command_segment"
+          (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
+        >>| fun x -> Output.Transaction_snark_of_zkapp_command_segment x
+    | Transaction_snark_merge (a, b) ->
+        time "Transaction_snark.merge" (T.merge a b ~sok_digest:dummy_sok)
+        >>| Or_error.ok_exn
+        >>| fun x -> Output.Transaction_snark_merge x
+    | Submit_deposit (pk, tr) ->
+        time "Submit_deposit"
+          (M.Outer.submit_deposit ~outer_public_key:pk ~deposit:tr)
+        >>| fun x -> Output.Submit_deposit x
+    | Submit_withdrawal tr ->
+        time "Submit_withdrawal" (M.Inner.submit_withdrawal ~withdrawal:tr)
+        >>| fun x -> Output.Submit_withdrawal x
 
   let run ~port =
     ignore
@@ -106,9 +90,13 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                     Yojson.Safe.from_string input
                     |> Input.of_yojson
                     |> function
-                    | Ok Input.{ last; command_witness } ->
-                        prove last command_witness >>| Zkapps_rollup.to_yojson
-                        >>| Yojson.Safe.to_string
+                    | Ok input -> (
+                        match%bind try_with (fun () -> prove input) with
+                        | Ok output ->
+                            Output.to_yojson output |> Yojson.Safe.to_string
+                            |> return
+                        | Error e ->
+                            return (Exn.to_string e) )
                     | Error e ->
                         return e ) ) ) ;
     printf "Listening on port %d\n" port ;
