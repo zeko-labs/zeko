@@ -4,33 +4,45 @@ module PC = Signature_lib.Public_key.Compressed
 open Rollup_state
 
 module Witness = struct
-  type t =
-    { public_key : PC.t; vk_hash : F.t; witness : Outer.Action.Witness.t }
+  type t = { public_key : PC.t; vk_hash : F.t; pause_key : PC.t }
   [@@deriving snarky]
 end
 
 let%snarkydef_ main (w : Witness.t V.t) =
-  let* Witness.{ public_key; vk_hash; witness } =
+  let* Witness.{ public_key; vk_hash; pause_key } =
     exists ~compute:(V.get w) Witness.typ
   in
-  let* actions = Outer.Action.witness_to_actions_var witness in
-  let valid_while = Slot_range.Checked.to_valid_while witness.slot_range in
+  let signature_witness =
+    { default_account_update with
+      public_key = pause_key
+    ; authorization_kind = authorization_signed ()
+    ; use_full_commitment = Boolean.true_ (* added here too to be extra sure *)
+    }
+  in
   let account_update =
     { default_account_update with
       public_key
     ; authorization_kind = authorization_vk_hash vk_hash
-    ; actions
+    ; update =
+        { default_account_update.update with
+          app_state =
+            Outer.State.fine
+              { pause_key = None
+              ; paused = Some Boolean.true_
+              ; ledger_hash = None
+              ; inner_action_state = { length = None; state = None }
+              ; sequencer = None
+              }
+            |> var_to_app_state_fine
+        }
     ; preconditions =
         { default_account_update.preconditions with
-          valid_while
-        ; account =
+          account =
             { default_account_update.preconditions.account with
               state =
                 Outer.State.fine
-                  { pause_key = None
-                  ; paused =
-                      Some Boolean.false_
-                      (* We don't allow adding actions if the rollup is paused since it signals something is wrong. *)
+                  { pause_key = Some pause_key
+                  ; paused = None
                   ; ledger_hash = None
                   ; inner_action_state = { length = None; state = None }
                   ; sequencer = None
@@ -40,7 +52,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
         }
     }
   in
-  let*| out = make_outputs account_update (Raw witness.children) in
+  let*| out = make_outputs account_update [ (signature_witness, []) ] in
   Compile_simple.{ prevs = No_prevs; out }
 
 let rule : _ Compile_simple.branch =

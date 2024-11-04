@@ -157,14 +157,18 @@ let do_finalize_deposit
   ~prev_next_deposit
   ~may_use_token
   ~inner_authorization_kind
+  ~deposit_index
   =
   let deposit = deposit_params.deposit in
-  assert check_accepted ~deposit ~actions_after_deposit = `Accepted ;
+  assert check_accepted ~deposit ~actions_after_deposit ~deposit_index = `Accepted ;
   (* the index of the deposit we're finalizing must be higher or
      equal to the index of the lowest possible deposit we can finalize *)
-  assert prev_next_deposit <= action_state_before_deposit.length ;
+  assert prev_next_deposit <= deposit_index ;
   let outer_action_state =
-    List.append actions_after_deposit deposit_action deposit_params :: action_state_before_deposit
+    List.append actions_after_deposit (deposit_action deposit_params :: action_state_before_deposit)
+  in
+  let outer_action_state_length =
+    List.length actions_after_deposit + 1 + deposit_index
   in
   { account_id = account_id_l2
   ; balance_change = -deposit.amount
@@ -177,7 +181,7 @@ let do_finalize_deposit
       ; use_full_commitment = true
       ; may_use_token = Parents_own_token
       ; app_state =
-        { next_deposit = action_state_before_deposit.length + 1
+        { next_deposit = deposit_index + 1
         }
       ; preconditions =
         { app_state =
@@ -186,7 +190,7 @@ let do_finalize_deposit
         }
       }
     ; { public_key = inner_pk
-      ; preconditions = { app_state = { outer_action_state ; outer_action_state_length = List.length outer_action_state } } (* FIXME length used here *)
+      ; preconditions = { app_state = { outer_action_state ; outer_action_state_length } }
       ; authorization_kind = inner_authorization_kind
       }
     ]
@@ -198,17 +202,38 @@ let do_finalize_cancelled_deposit
   ~actions_after_deposit
   ~action_state_before_deposit
   ~prev_next_cancelled_deposit
-  ~holder_account_l1
+  ~outer_authorization_kind
+  ~deposit_index
+  ~may_use_token
+  ~commit
+  ~action_state_before_commit
+  ~actions_after_commit
+  ~actions_after_synchronization
   =
   let deposit = deposit_params.deposit in
-  assert check_accepted ~deposit ~actions_after_deposit = `Rejected ;
-  assert prev_next_cancelled_deposit <= action_state_before_deposit.length ;
+  assert check_accepted ~deposit ~actions_after_deposit ~deposit_index = `Rejected ;
+  assert prev_next_cancelled_deposit <= deposit_index ;
   let outer_action_state =
-    actions_after_deposit :: List.append deposit_action deposit_params action_state_before_deposit
+    List.append actions_after_deposit (deposit_action deposit_params :: action_state_before_deposit)
   in
-  { account_id = holder_account_l1
+  let outer_action_state_length =
+    List.length actions_after_deposit + 1 + deposit_index
+  in
+  let outer_action_state' =
+    List.append actions_after_commit (Commit commit :: action_state_before_commit)
+  in
+  assert outer_action_state'' = outer_action_state ;
+  let outer_action_state =
+    List.append actions_after_synchronization commit.synchronized_outer_action_state
+  in
+  assert outer_action_state'' = outer_action_state ;
+  let outer_action_state_length' =
+    List.length actions_after_synchronization + commit.synchronized_outer_action_state_length
+  in
+  assert outer_action_state_length = outer_action_state_length' ;
+  { account_id = deposit_params.holder_account_l1
   ; balance_change = -deposit.amount
-  ; may_use_token = Parents_own_token
+  ; may_use_token
   ; authorization_kind = Proof
   ; children =
     [ { public_key = helper_token_owner_l1
@@ -220,7 +245,7 @@ let do_finalize_cancelled_deposit
           ; use_full_commitment = true
           ; may_use_token = Parents_own_token
           ; app_state =
-            { next_cancelled_deposit = action_state_before_deposit.length + 1
+            { next_cancelled_deposit = deposit_index + 1
             }
           ; preconditions =
             { app_state =
@@ -232,12 +257,71 @@ let do_finalize_cancelled_deposit
       }
     ; { public_key = zeko_pk
       ; preconditions =
-        { action_state = outer_action_state (* FIXME: precondition on length somehow *)
+        { action_state = outer_action_state
         ; app_state =
           { paused = false
           }
         }
-      ; authorization_kind = None
+      ; authorization_kind = outer_authorization_kind
+      }
+    ]
+  }
+
+(* L1 *)
+(* This does the same as the above but uses different information.
+   The above doesn't need all actions in existence, but this does,
+   in exchange for not needing to depend on the existence of a Commit action.
+*)
+let do_finalize_cancelled_deposit_simple
+  ~deposit_params
+  ~actions_before_deposit
+  ~actions_after_deposit
+  ~prev_next_cancelled_deposit
+  ~outer_authorization_kind
+  ~may_use_token
+  =
+  let deposit = deposit_params.deposit in
+  let deposit_index = List.length actions_before_deposit in
+  assert check_accepted ~deposit ~actions_after_deposit ~deposit_index = `Rejected ;
+  assert prev_next_cancelled_deposit <= deposit_index ;
+  let outer_action_state =
+    List.append actions_after_deposit (deposit_action deposit_params :: action_state_before_deposit)
+  in
+  let outer_action_state_length =
+    List.length outer_action_state
+  in
+  { account_id = deposit_params.holder_account_l1
+  ; balance_change = -deposit.amount
+  ; may_use_token
+  ; authorization_kind = Proof
+  ; children =
+    [ { public_key = helper_token_owner_l1
+      ; authorization_kind = Proof
+      ; children =
+        [ { public_key = deposit.recipient
+          ; token_id = helper_token_id
+          ; authorization_kind = Signature
+          ; use_full_commitment = true
+          ; may_use_token = Parents_own_token
+          ; app_state =
+            { next_cancelled_deposit = deposit_index + 1
+            }
+          ; preconditions =
+            { app_state =
+              { next_cancelled_deposit = prev_next_deposit
+              }
+            }
+          }
+        ]
+      }
+    ; { public_key = zeko_pk
+      ; preconditions =
+        { action_state = outer_action_state
+        ; app_state =
+          { paused = false
+          }
+        }
+      ; authorization_kind = outer_authorization_kind
       }
     ]
   }
@@ -253,9 +337,11 @@ let do_finalize_withdrawal
   ~action_state_before_commit
   ~commit
   ~prev_next_withdrawal
+  ~withdrawal_index
+  ~outer_authorization_kind
   =
   let withdrawal = withdrawal_params.withdrawal in
-  assert prev_next_withdrawal <= action_state_before_withdrawal.length ;
+  assert prev_next_withdrawal <= withdrawal_index ;
   let inner_action_state =
     List.append actions_after_withdrawal withdraw_action withdrawal_params :: action_state_before_withdrawal
   in
@@ -263,6 +349,7 @@ let do_finalize_withdrawal
     List.append actions_after_commit @@ Commit commit :: action_state_before_commit
   in
   assert commit.inner_action_state = inner_action_state ;
+  let inner_action_state_length = List.length actions_after_withdrawal + 1 + withdrawal_index in
   { account_id = holder_account_l1
   ; balance_change = -withdrawal.amount
   ; may_use_token = Parents_own_token
@@ -277,7 +364,7 @@ let do_finalize_withdrawal
           ; use_full_commitment = true
           ; may_use_token = Parents_own_token
           ; app_state =
-            { next_withdrawal = action_state_before_withdrawal.length + 1
+            { next_withdrawal = withdrawal_index + 1
             }
           ; preconditions =
             { app_state =
@@ -288,10 +375,10 @@ let do_finalize_withdrawal
         ]
       }
     ; { public_key = zeko_pk
-      ; authorization_kind = None
+      ; authorization_kind = outer_authorization_kind
       ; preconditions =
         { action_state = outer_action_state
-        ; app_state = { inner_action_state ; paused = false } (* FIXME: precondition on length *)
+        ; app_state = { inner_action_state ; inner_action_state_length ; paused = false }
         ; valid_while =
           { lower = commit.valid_while.upper + withdrawal_delay
           ; upper = infinity }

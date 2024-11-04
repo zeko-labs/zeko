@@ -1,9 +1,8 @@
 open Mina_base
 
 module type S = sig
-  type t
 
-  module Wrapper : sig
+   
     (** Wrap a ledger transition.
 
        The wrapped transition must be "whole", and must be made using
@@ -15,13 +14,6 @@ module type S = sig
        You can not wrap a single zkapp command segment either,
        you can only wrap at least a whole zkapp command.
     *)
-    val wrap : Transaction_snark.t -> t Deferred.t
-
-    (** Merge two wrapped ledger transitions, they must connect or this will fail. *)
-    val merge : t -> t -> t Deferred.t
-  end
-    
-  (*
 
   module Inner : sig
     val vk : Pickles.Side_loaded.Verification_key.t
@@ -100,21 +92,13 @@ module type Intf = sig
 
   val inner_account_id : Account_id.t
 
-  val read_outer_state :
-       Account.t
-    -> [ `Ledger_hash of Ledger_hash.t ] * [ `All_withdrawals of field ]
-
-  val read_inner_state : Account.t -> [ `All_deposits of field ]
-
-  val read_token_account_state : Account.t -> [ `Transfers_processed of field ]
+  (** Public key of inner account, closest point to 123456789 *)
+  val inner_public_key : Signature_lib.Public_key.Compressed.t
 
   (** Module type for output of Make *)
-  module type S = S with type t := t
+  module type S = S
 
   (** Compiles circuits *)
   module Make (T : Transaction_snark.S) : S
   [@@warning "-67"]
-
-  (** Public key of inner account, closest point to 123456789 *)
-  val inner_public_key : Public_key.Compressed.t
 end

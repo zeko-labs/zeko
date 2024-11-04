@@ -11,6 +11,8 @@ module Make (Inputs : sig
 
   val holder_accounts_l1 : PC.t list
 
+  val zeko_pk : PC.t
+
   module Deposit_params : sig
     include SnarkType
 
@@ -206,176 +208,350 @@ struct
     let override_wrap_domain = None
   end
 
-  module Check_accepted_params = struct
-    let get_iterations = Int.pow 2 16
-  end
+  module Finalize_deposit = struct
+    module Check_accepted_params = struct
+      let get_iterations = Int.pow 2 8
+    end
 
-  module Check_accepted = Folder.Make (Check_accepted_definition)
-  module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)
+    module Check_accepted = Folder.Make (Check_accepted_definition)
+    module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)
 
-  module Ase_inst = Ase.Make_with_length (struct
-    module Action_state = Rollup_state.Outer_action_state
-    module Action = Rollup_state.Outer.Action
+    module Ase_inst = Ase.Make_with_length (struct
+      module Action_state = Rollup_state.Outer_action_state
+      module Action = Rollup_state.Outer.Action
 
-    let get_iterations = Int.pow 2 14
-  end)
+      let get_iterations = Int.pow 2 8
+    end)
 
-  module Witness = struct
-    type t =
-      { token_id : Token_id.t
-      ; public_key : PC.t
-      ; vk_hash : F.t
-      ; may_use_token : May_use_token.t
-      ; inner_authorization_kind : A.t
-      ; ase : Ase_inst.t
-      ; check_accepted : Check_accepted_inst.t
-      ; prev_next_deposit : Checked32.t
-      }
-    [@@deriving snarky]
-  end
+    module Witness = struct
+      type t =
+        { token_id : Token_id.t
+        ; public_key : PC.t
+        ; vk_hash : F.t
+        ; may_use_token : May_use_token.t
+        ; inner_authorization_kind : A.t
+        ; ase : Ase_inst.t
+        ; check_accepted : Check_accepted_inst.t
+        ; prev_next_deposit : Checked32.t
+        }
+      [@@deriving snarky]
+    end
 
-  (** Prove that we have submitted a deposit, and that it's been accepted. *)
-  let main (w : Witness.t V.t) =
-    with_label ("main " ^ __LOC__) (fun () ->
-        let* Witness.
-               { token_id
-               ; public_key
-               ; vk_hash
-               ; may_use_token
-               ; inner_authorization_kind
-               ; ase
-               ; check_accepted
-               ; prev_next_deposit
-               } =
-          exists Witness.typ ~compute:(V.get w)
-        in
-        let* ( ({ source = _
-                ; target =
-                    { params
-                    ; action_state = mid_outer_action_state'
-                    ; deposit_index
-                    ; n_steps
-                    ; is_rejected
-                    ; is_accepted
-                    }
-                } :
-                 Check_accepted.Trans.var )
-             , verify_check_accepted ) =
-          Check_accepted_inst.get check_accepted
-        in
-        let account_id = Account_id.Checked.create public_key token_id in
-        let our_token_id =
-          Account_id.Checked.derive_token_id ~owner:account_id
-        in
-        let* () = Boolean.Assert.is_true is_accepted in
-        let* () = Boolean.Assert.(Boolean.false_ = is_rejected) in
-        let* ( { source = mid_outer_action_state; target = outer_action_state }
-             , verify_ase ) =
-          Ase_inst.get ase
-        in
-        let* () =
-          assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
-            (Rollup_state.Outer_action_state.With_length.state_var
-               mid_outer_action_state )
-            mid_outer_action_state'
-        in
-        let* () =
-          assert_equal ~label:__LOC__ Checked32.typ
-            (Rollup_state.Outer_action_state.With_length.length_var
-               mid_outer_action_state )
-            deposit_index
-        in
-        let* next_deposit =
-          Checked32.Checked.(
-            sub
-              (Rollup_state.Outer_action_state.With_length.length_var
+    (** Prove that we have submitted a deposit, and that it's been accepted. *)
+    let main (w : Witness.t V.t) =
+      with_label ("main " ^ __LOC__) (fun () ->
+          let* Witness.
+                 { token_id
+                 ; public_key
+                 ; vk_hash
+                 ; may_use_token
+                 ; inner_authorization_kind
+                 ; ase
+                 ; check_accepted
+                 ; prev_next_deposit
+                 } =
+            exists Witness.typ ~compute:(V.get w)
+          in
+          let* ( ({ source = _
+                  ; target =
+                      { params
+                      ; action_state = mid_outer_action_state'
+                      ; deposit_index
+                      ; n_steps
+                      ; is_rejected
+                      ; is_accepted
+                      }
+                  } :
+                   Check_accepted.Trans.var )
+               , verify_check_accepted ) =
+            Check_accepted_inst.get check_accepted
+          in
+          let account_id = Account_id.Checked.create public_key token_id in
+          let our_token_id =
+            Account_id.Checked.derive_token_id ~owner:account_id
+          in
+          let* () = Boolean.Assert.is_true is_accepted in
+          let* () = Boolean.Assert.(Boolean.false_ = is_rejected) in
+          let* ( { source = mid_outer_action_state; target = outer_action_state }
+               , verify_ase ) =
+            Ase_inst.get ase
+          in
+          let* () =
+            assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
+              (Rollup_state.Outer_action_state.With_length.state_var
                  mid_outer_action_state )
-              n_steps)
-        in
-        let* () =
-          assert_var __LOC__
-            Checked32.Checked.(fun () -> prev_next_deposit < next_deposit)
-        in
-        let base_params = Deposit_params.base params in
-        let helper_account =
-          { default_account_update with
-            public_key = base_params.deposit.recipient
-          ; token_id = our_token_id
-          ; authorization_kind = authorization_signed ()
-          ; use_full_commitment = Boolean.true_
-          ; may_use_token = constant May_use_token.typ Parents_own_token
-          ; update =
-              { default_account_update.update with
-                app_state =
-                  Inner_user_state.(var_to_app_state typ { next_deposit })
-              }
-          ; preconditions =
-              { default_account_update.preconditions with
-                account =
-                  { default_account_update.preconditions.account with
-                    state =
-                      Inner_user_state.fine
-                        { next_deposit = Some prev_next_deposit }
-                      |> var_to_precondition_fine
-                  }
-              }
-          }
-        in
-        let witness_inner =
-          { default_account_update with
-            public_key = constant PC.typ Rollup_state.Inner.public_key
-          ; authorization_kind = inner_authorization_kind
-          ; preconditions =
-              { default_account_update.preconditions with
-                account =
-                  { default_account_update.preconditions.account with
-                    state =
-                      Rollup_state.Inner.State.fine
-                        { outer_action_state =
-                            { state =
-                                Some
-                                  (Rollup_state.Outer_action_state.With_length
-                                   .state_var outer_action_state )
-                            ; length =
-                                Some
-                                  (Rollup_state.Outer_action_state.With_length
-                                   .length_var outer_action_state )
-                            }
-                        }
-                      |> var_to_precondition_fine
-                  }
-              }
-          }
-        in
-        let account_update =
-          { default_account_update with
-            public_key
-          ; token_id
-          ; may_use_token
-          ; authorization_kind = authorization_vk_hash vk_hash
-          ; balance_change =
-              Currency.Amount.Signed.Checked.(
-                of_unsigned base_params.deposit.amount |> negate)
-          }
-        in
-        let*| out =
-          make_outputs account_update
-            [ (helper_account, []); (witness_inner, []) ]
-        in
-        Compile_simple.
-          { prevs = Two_prevs (verify_check_accepted, verify_ase); out } )
+              mid_outer_action_state'
+          in
+          let* next_deposit =
+            Checked32.Checked.(
+              sub
+                (Rollup_state.Outer_action_state.With_length.length_var
+                   mid_outer_action_state )
+                n_steps)
+          in
+          let* next_deposit' = Checked32.Checked.succ deposit_index in
+          let* () =
+            assert_equal ~label:__LOC__ Checked32.typ next_deposit next_deposit'
+          in
+          let* () =
+            assert_var __LOC__
+              Checked32.Checked.(fun () -> prev_next_deposit < next_deposit)
+          in
+          let base_params = Deposit_params.base params in
+          let helper_account =
+            { default_account_update with
+              public_key = base_params.deposit.recipient
+            ; token_id = our_token_id
+            ; authorization_kind = authorization_signed ()
+            ; use_full_commitment = Boolean.true_
+            ; may_use_token = constant May_use_token.typ Parents_own_token
+            ; update =
+                { default_account_update.update with
+                  app_state =
+                    Inner_user_state.(var_to_app_state typ { next_deposit })
+                }
+            ; preconditions =
+                { default_account_update.preconditions with
+                  account =
+                    { default_account_update.preconditions.account with
+                      state =
+                        Inner_user_state.fine
+                          { next_deposit = Some prev_next_deposit }
+                        |> var_to_precondition_fine
+                    }
+                }
+            }
+          in
+          let witness_inner =
+            { default_account_update with
+              public_key = constant PC.typ Rollup_state.Inner.public_key
+            ; authorization_kind = inner_authorization_kind
+            ; preconditions =
+                { default_account_update.preconditions with
+                  account =
+                    { default_account_update.preconditions.account with
+                      state =
+                        Rollup_state.Inner.State.fine
+                          { outer_action_state =
+                              { state =
+                                  Some
+                                    (Rollup_state.Outer_action_state.With_length
+                                     .state_var outer_action_state )
+                              ; length =
+                                  Some
+                                    (Rollup_state.Outer_action_state.With_length
+                                     .length_var outer_action_state )
+                              }
+                          }
+                        |> var_to_precondition_fine
+                    }
+                }
+            }
+          in
+          let account_update =
+            { default_account_update with
+              public_key
+            ; token_id
+            ; may_use_token
+            ; authorization_kind = authorization_vk_hash vk_hash
+            ; balance_change =
+                Currency.Amount.Signed.Checked.(
+                  of_unsigned base_params.deposit.amount |> negate)
+            }
+          in
+          let*| out =
+            make_outputs account_update
+              [ (helper_account, []); (witness_inner, []) ]
+          in
+          Compile_simple.
+            { prevs = Two_prevs (verify_check_accepted, verify_ase); out } )
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "zeko action witness"
-    ; tags =
-        Two_tags
-          (Tag (force Check_accepted.tag), Tag (force Ase.tag_with_length))
-    ; main
-    }
+    let rule : _ Compile_simple.branch =
+      { branch_name = "finalize deposit"
+      ; tags =
+          Two_tags
+            (Tag (force Check_accepted.tag), Tag (force Ase.tag_with_length))
+      ; main
+      }
+  end
+
+  module Rule_finalize_cancelled_deposit_simple = struct
+    module Check_accepted_params = struct
+      let get_iterations = Int.pow 2 8
+    end
+
+    module Check_accepted = Folder.Make (Check_accepted_definition)
+    module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)
+
+    module Ase_inst = Ase.Make_with_length (struct
+      module Action_state = Rollup_state.Outer_action_state
+      module Action = Rollup_state.Outer.Action
+
+      let get_iterations = Int.pow 2 8
+    end)
+
+    module Witness = struct
+      type t =
+        { token_id : Token_id.t
+        ; public_key : PC.t
+        ; vk_hash : F.t
+        ; may_use_token : May_use_token.t
+        ; outer_authorization_kind : A.t
+        ; ase : Ase_inst.t
+        ; check_accepted : Check_accepted_inst.t
+        ; prev_next_cancelled_deposit : Checked32.t
+        }
+      [@@deriving snarky]
+    end
+
+    (** Prove that we have submitted a deposit, and that it's been accepted. *)
+    let main (w : Witness.t V.t) =
+      with_label ("main " ^ __LOC__) (fun () ->
+          let* Witness.
+                 { token_id
+                 ; public_key
+                 ; vk_hash
+                 ; may_use_token
+                 ; outer_authorization_kind
+                 ; ase
+                 ; check_accepted
+                 ; prev_next_cancelled_deposit
+                 } =
+            exists Witness.typ ~compute:(V.get w)
+          in
+          let* ( ({ source = _
+                  ; target =
+                      { params
+                      ; action_state = mid_outer_action_state'
+                      ; deposit_index
+                      ; n_steps
+                      ; is_rejected
+                      ; is_accepted
+                      }
+                  } :
+                   Check_accepted.Trans.var )
+               , verify_check_accepted ) =
+            Check_accepted_inst.get check_accepted
+          in
+          let account_id = Account_id.Checked.create public_key token_id in
+          let our_token_id =
+            Account_id.Checked.derive_token_id ~owner:account_id
+          in
+          let* () = Boolean.(Assert.is_true @@ not is_accepted) in
+          let* () = Boolean.Assert.is_true is_rejected in
+          let* ( { source = mid_outer_action_state; target = outer_action_state }
+               , verify_ase ) =
+            Ase_inst.get ase
+          in
+          let* () =
+            assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
+              (Rollup_state.Outer_action_state.With_length.state_var
+                 mid_outer_action_state )
+              mid_outer_action_state'
+          in
+          let* next_cancelled_deposit =
+            Checked32.Checked.(
+              sub
+                (Rollup_state.Outer_action_state.With_length.length_var
+                   mid_outer_action_state )
+                n_steps)
+          in
+          let* next_cancelled_deposit' = Checked32.Checked.succ deposit_index in
+          let* () =
+            assert_equal ~label:__LOC__ Checked32.typ next_cancelled_deposit
+              next_cancelled_deposit'
+          in
+          let* () =
+            assert_var __LOC__
+              Checked32.Checked.(
+                fun () -> prev_next_cancelled_deposit < next_cancelled_deposit)
+          in
+          let base_params = Deposit_params.base params in
+          let helper_account =
+            { default_account_update with
+              public_key = base_params.deposit.recipient
+            ; token_id = our_token_id
+            ; authorization_kind = authorization_signed ()
+            ; use_full_commitment = Boolean.true_
+            ; may_use_token = constant May_use_token.typ Parents_own_token
+            ; update =
+                { default_account_update.update with
+                  app_state =
+                    Outer_user_state.fine
+                      { next_cancelled_deposit = Some next_cancelled_deposit
+                      ; next_withdrawal = None
+                      }
+                    |> var_to_app_state_fine
+                }
+            ; preconditions =
+                { default_account_update.preconditions with
+                  account =
+                    { default_account_update.preconditions.account with
+                      state =
+                        Outer_user_state.fine
+                          { next_cancelled_deposit =
+                              Some prev_next_cancelled_deposit
+                          ; next_withdrawal = None
+                          }
+                        |> var_to_precondition_fine
+                    }
+                }
+            }
+          in
+          let witness_outer =
+            { default_account_update with
+              public_key = constant PC.typ zeko_pk
+            ; authorization_kind = outer_authorization_kind
+            ; preconditions =
+                { default_account_update.preconditions with
+                  account =
+                    { default_account_update.preconditions.account with
+                      state =
+                        Rollup_state.Outer.State.fine
+                          { pause_key = None
+                          ; paused =
+                              Some Boolean.false_ (* must not be paused *)
+                          ; ledger_hash = None
+                          ; inner_action_state = { state = None; length = None }
+                          ; sequencer = None
+                          }
+                        |> var_to_precondition_fine
+                    }
+                }
+            }
+          in
+          let account_update =
+            { default_account_update with
+              public_key
+            ; token_id
+            ; may_use_token
+            ; authorization_kind = authorization_vk_hash vk_hash
+            ; balance_change =
+                Currency.Amount.Signed.Checked.(
+                  of_unsigned base_params.deposit.amount |> negate)
+            }
+          in
+          let*| out =
+            make_outputs account_update
+              [ (helper_account, []); (witness_outer, []) ]
+          in
+          Compile_simple.
+            { prevs = Two_prevs (verify_check_accepted, verify_ase); out } )
+
+    let rule : _ Compile_simple.branch =
+      { branch_name = "finalize deposit"
+      ; tags =
+          Two_tags
+            (Tag (force Check_accepted.tag), Tag (force Ase.tag_with_length))
+      ; main
+      }
+  end
 end
 
 module Make_mina (Inputs : sig
   val holder_accounts_l1 : PC.t list
+
+  val zeko_pk : PC.t
 end) =
 Make (struct
   include Inputs
@@ -387,6 +563,8 @@ end)
 
 module Make_custom (Inputs : sig
   val token_owner_l1 : Account_id.t
+
+  val zeko_pk : PC.t
 
   val holder_accounts_l1 : PC.t list
 end) =
