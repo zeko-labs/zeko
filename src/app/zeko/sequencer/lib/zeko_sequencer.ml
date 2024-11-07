@@ -167,6 +167,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; executor : Executor.t
       ; kvdb : Kvdb.t
       ; mutable state : State.t
+      ; provers : Zeko_prover.Client.State.t
       }
 
     let create ~da_client ~config ~signer ~kvdb =
@@ -177,6 +178,13 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; executor = Executor.create ~l1_uri:config.l1_uri ~signer ~kvdb ()
       ; kvdb
       ; state = State.create ()
+      ; provers =
+          Zeko_prover.Client.State.create
+            [ Tcp.Where_to_connect.of_host_and_port
+                (Host_and_port.create ~host:"localhost" ~port:9990)
+            ; Tcp.Where_to_connect.of_host_and_port
+                (Host_and_port.create ~host:"localhost" ~port:9991)
+            ]
       }
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
@@ -187,11 +195,11 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let get_state ~kvdb = Kvdb.get kvdb Snark_queue_state ~key:()
 
     let wrap_and_merge t txn_snark command =
-      let%bind wrapped = M.Wrapper.wrap txn_snark in
+      let%bind wrapped = Zeko_prover.Client.wrapper_wrap t.provers txn_snark in
       let%bind final_snark =
         match t.state.last with
         | Some last' ->
-            M.Wrapper.merge last' wrapped
+            Zeko_prover.Client.wrapper_merge t.provers last' wrapped
         | None ->
             return wrapped
       in
@@ -202,11 +210,10 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
     let prove_signed_command t ~sparse_ledger ~user_command_in_block ~statement
         =
-      let handler = unstage @@ Sparse_ledger.handler sparse_ledger in
       let%bind txn_snark =
         Utils.print_time "Transaction_snark.of_signed_command"
-          (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
-             ~statement user_command_in_block handler )
+          (Zeko_prover.Client.transaction_snark_of_signed_command t.provers
+             statement user_command_in_block sparse_ledger )
       in
       wrap_and_merge t txn_snark
         (User_command.Signed_command
@@ -220,20 +227,24 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         | (witness, spec, statement) :: rest ->
             let%bind p1 =
               Utils.print_time "Transaction_snark.of_zkapp_command_segment"
-                (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
+                (Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
+                   t.provers statement witness spec )
             in
             Deferred.List.fold ~init:p1 rest
               ~f:(fun acc (witness, spec, statement) ->
                 let%bind prev = return acc in
                 let%bind curr =
                   Utils.print_time "Transaction_snark.of_zkapp_command_segment"
-                    (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
+                    (Zeko_prover.Client
+                     .transaction_snark_of_zkapp_command_segment t.provers
+                       statement witness spec )
                 in
                 let%bind merged =
                   Utils.print_time "Transaction_snark.merge"
-                    (T.merge curr prev ~sok_digest)
+                    (Zeko_prover.Client.transaction_snark_merge t.provers curr
+                       prev )
                 in
-                return (Or_error.ok_exn merged) )
+                return merged )
       in
       wrap_and_merge t txn_snark (User_command.Zkapp_command zkapp_command)
 
@@ -261,10 +272,10 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             try_with (fun () ->
                 match transfer with
                 | { direction = Deposit; transfer } ->
-                    M.Outer.submit_deposit ~outer_public_key:t.config.zkapp_pk
-                      ~deposit:transfer
+                    Zeko_prover.Client.submit_deposit t.provers
+                      t.config.zkapp_pk transfer
                 | { direction = Withdraw; transfer } ->
-                    M.Inner.submit_withdrawal ~withdrawal:transfer )
+                    Zeko_prover.Client.submit_withdrawal t.provers transfer )
           in
           let () =
             match result with

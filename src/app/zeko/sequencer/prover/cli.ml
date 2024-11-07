@@ -16,7 +16,8 @@ let run_server =
        end) in
        let module M = Zkapps_rollup.Make (T) in
        let module S = Server.Make (T) (M) in
-       fun () -> S.run ~port ) )
+       let logger = Logger.create () in
+       fun () -> S.run ~logger ~port ) )
 
 let () =
   Command.group ~summary:"Zeko prover CLI" [ run_server ] |> Command_unix.run

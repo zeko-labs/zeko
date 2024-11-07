@@ -6,11 +6,13 @@ open Signature_lib
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
-let time label (d : 'a Deferred.t) =
+let time ~logger label (d : 'a Deferred.t) =
+  [%log info] "Starting %s\n%!" label ;
   let start = Time.now () in
   let%bind x = d in
   let stop = Time.now () in
-  printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
+  [%log info] "%s: %s\n%!" label
+    (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
 let dummy_sok =
@@ -50,40 +52,42 @@ module Output = struct
 end
 
 module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
-  let prove : Input.t -> Output.t Deferred.t = function
+  let prove ~logger : Input.t -> Output.t Deferred.t = function
     | Wrapper_wrap txn_snark ->
-        time "Wrapper.wrap" (M.Wrapper.wrap txn_snark)
+        time ~logger "Wrapper.wrap" (M.Wrapper.wrap txn_snark)
         >>| fun x -> Output.Wrapper_wrap x
     | Wrapper_merge (last, wrapped) ->
-        time "Wrapper.merge" (M.Wrapper.merge last wrapped)
+        time ~logger "Wrapper.merge" (M.Wrapper.merge last wrapped)
         >>| fun x -> Output.Wrapper_merge x
     | Transaction_snark_of_signed_command
         (statement, user_command_in_block, sparse_ledger) ->
         let handler = unstage @@ Sparse_ledger.handler sparse_ledger in
-        time "Transaction_snark.of_signed_command"
+        time ~logger "Transaction_snark.of_signed_command"
           (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
              ~statement user_command_in_block handler )
         >>| fun x -> Output.Transaction_snark_of_signed_command x
     | Transaction_snark_of_zkapp_command_segment (statement, witness, spec) ->
-        time "Transaction_snark.of_zkapp_command_segment"
+        time ~logger "Transaction_snark.of_zkapp_command_segment"
           (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
         >>| fun x -> Output.Transaction_snark_of_zkapp_command_segment x
     | Transaction_snark_merge (a, b) ->
-        time "Transaction_snark.merge" (T.merge a b ~sok_digest:dummy_sok)
+        time ~logger "Transaction_snark.merge"
+          (T.merge a b ~sok_digest:dummy_sok)
         >>| Or_error.ok_exn
         >>| fun x -> Output.Transaction_snark_merge x
     | Submit_deposit (pk, tr) ->
-        time "Submit_deposit"
+        time ~logger "Submit_deposit"
           (M.Outer.submit_deposit ~outer_public_key:pk ~deposit:tr)
         >>| fun x -> Output.Submit_deposit x
     | Submit_withdrawal tr ->
-        time "Submit_withdrawal" (M.Inner.submit_withdrawal ~withdrawal:tr)
+        time ~logger "Submit_withdrawal"
+          (M.Inner.submit_withdrawal ~withdrawal:tr)
         >>| fun x -> Output.Submit_withdrawal x
 
-  let run ~port =
+  let run ~logger ~port =
     ignore
     @@ Tcp.Server.create (Tcp.Where_to_listen.of_port port)
-         ~on_handler_error:`Ignore (fun _ r w ->
+         ~on_handler_error:`Ignore (fun s r w ->
            Pipe.transfer' ~max_queue_length:1 (Reader.pipe r) (Writer.pipe w)
              ~f:
                (Deferred.Queue.map ~how:`Sequential ~f:(fun input ->
@@ -91,14 +95,14 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                     |> Input.of_yojson
                     |> function
                     | Ok input -> (
-                        match%bind try_with (fun () -> prove input) with
+                        match%bind try_with (fun () -> prove ~logger input) with
                         | Ok output ->
                             Output.to_yojson output |> Yojson.Safe.to_string
-                            |> return
+                            |> fun s -> String.concat [ s; "\n" ] |> return
                         | Error e ->
                             return (Exn.to_string e) )
                     | Error e ->
                         return e ) ) ) ;
-    printf "Listening on port %d\n" port ;
+    [%log info] "Listening on port %d\n" port ;
     Deferred.never ()
 end
