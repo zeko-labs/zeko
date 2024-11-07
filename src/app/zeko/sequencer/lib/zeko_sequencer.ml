@@ -170,7 +170,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; provers : Zeko_prover.Client.State.t
       }
 
-    let create ~da_client ~config ~signer ~kvdb =
+    let create ~da_client ~config ~signer ~kvdb ~provers =
       { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
       ; da_client
       ; config
@@ -180,11 +180,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; state = State.create ()
       ; provers =
           Zeko_prover.Client.State.create
-            [ Tcp.Where_to_connect.of_host_and_port
-                (Host_and_port.create ~host:"localhost" ~port:9990)
-            ; Tcp.Where_to_connect.of_host_and_port
-                (Host_and_port.create ~host:"localhost" ~port:9991)
-            ]
+            (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
       }
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
@@ -850,7 +846,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
       ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~network_id
-      ~deposit_delay_blocks =
+      ~deposit_delay_blocks ~provers =
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -880,7 +876,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       ; da_client
       ; snark_q =
           Snark_queue.create ~da_client ~config ~signer
-            ~kvdb:(L.Db.zeko_kvdb db)
+            ~kvdb:(L.Db.zeko_kvdb db) ~provers
       ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
       ; subscriptions = Subscriptions.create ()
@@ -963,6 +959,11 @@ let%test_module "Sequencer tests" =
       }
 
     let da_config = Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555" ]
+
+    let provers =
+      [ Host_and_port.create ~host:"localhost" ~port:9990
+      ; Host_and_port.create ~host:"localhost" ~port:9991
+      ]
 
     module Sequencer_test_spec = struct
       type t =
@@ -1054,7 +1055,7 @@ let%test_module "Sequencer tests" =
                 ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
                 ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
                 ~signer ~network_id:"testnet"
-                ~deposit_delay_blocks:delay_deposit )
+                ~deposit_delay_blocks:delay_deposit ~provers )
         in
 
         Quickcheck.Generator.return
@@ -1373,7 +1374,7 @@ let%test_module "Sequencer tests" =
                     Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                   ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
                   ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
-                  ~signer ~network_id:"testnet" ~deposit_delay_blocks:0
+                  ~signer ~network_id:"testnet" ~deposit_delay_blocks:0 ~provers
               in
               return
               @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)

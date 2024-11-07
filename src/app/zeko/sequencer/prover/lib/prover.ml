@@ -88,21 +88,30 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     ignore
     @@ Tcp.Server.create (Tcp.Where_to_listen.of_port port)
          ~on_handler_error:`Ignore (fun s r w ->
-           Pipe.transfer' ~max_queue_length:1 (Reader.pipe r) (Writer.pipe w)
-             ~f:
-               (Deferred.Queue.map ~how:`Sequential ~f:(fun input ->
-                    Yojson.Safe.from_string input
-                    |> Input.of_yojson
-                    |> function
-                    | Ok input -> (
-                        match%bind try_with (fun () -> prove ~logger input) with
-                        | Ok output ->
-                            Output.to_yojson output |> Yojson.Safe.to_string
-                            |> fun s -> String.concat [ s; "\n" ] |> return
-                        | Error e ->
-                            return (Exn.to_string e) )
-                    | Error e ->
-                        return e ) ) ) ;
+           [%log info] "Accepted connection from %s"
+             (Socket.Address.Inet.to_string s) ;
+           let%bind () =
+             Pipe.transfer' ~max_queue_length:1 (Reader.pipe r) (Writer.pipe w)
+               ~f:
+                 (Deferred.Queue.map ~how:`Sequential ~f:(fun input ->
+                      Yojson.Safe.from_string input
+                      |> Input.of_yojson
+                      |> function
+                      | Ok input -> (
+                          match%bind
+                            try_with (fun () -> prove ~logger input)
+                          with
+                          | Ok output ->
+                              Output.to_yojson output |> Yojson.Safe.to_string
+                              |> fun s -> String.concat [ s; "\n" ] |> return
+                          | Error e ->
+                              return (Exn.to_string e) )
+                      | Error e ->
+                          return e ) )
+           in
+           return
+             ([%log info] "Closed connection from %s"
+                (Socket.Address.Inet.to_string s) ) ) ;
     [%log info] "Listening on port %d\n" port ;
     Deferred.never ()
 end

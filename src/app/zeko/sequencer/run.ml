@@ -6,7 +6,8 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-    ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks () =
+    ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks
+    ~provers () =
   let (module T), (module M) = Lazy.force Zeko_sequencer.prover_modules in
   let module Sequencer = Zeko_sequencer.Make (T) (M) in
   let module Gql = Gql.Make (T) (M) (Sequencer) in
@@ -24,7 +25,8 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
-              @@ Private_key.of_base58_check_exn signer) )
+              @@ Private_key.of_base58_check_exn signer)
+          ~provers )
   in
 
   Sequencer.run_committer sequencer ;
@@ -71,6 +73,10 @@ let () =
      and da_quorum =
        flag "--da-quorum" (required int)
          ~doc:"string Quorum for the DA signature count"
+     and provers =
+       flag "--prover" (listed string)
+         ~doc:
+           "string Address of the prover server, can be supplied multiple times"
      and db_dir =
        flag "--db-dir"
          (optional_with_default "db" string)
@@ -93,6 +99,8 @@ let () =
        Cli_lib.Flag.Types.
          { value = Uri.of_string archive_uri; name = "archive-uri" }
      in
+     let provers = List.map provers ~f:Host_and_port.of_string in
      run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-       ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks )
+       ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks
+       ~provers )
   |> Command_unix.run
