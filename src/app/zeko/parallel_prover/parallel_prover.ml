@@ -1,0 +1,263 @@
+open Core_kernel
+open Async
+
+let generate_id () = Uuid_unix.create () |> Uuid.to_string
+
+module Make (Merge : sig
+  type t [@@deriving yojson]
+
+  val process : t -> t -> t Deferred.t
+end) (Base : sig
+  type t [@@deriving yojson]
+
+  val process : t -> Merge.t Deferred.t
+end) (Commit : sig
+  type aux [@@deriving yojson]
+
+  type t = aux * Merge.t [@@deriving yojson]
+
+  val process : t -> unit Deferred.t
+end) =
+struct
+  module Available_job = struct
+    type t = Base of Base.t | Merge of Merge.t * Merge.t [@@deriving yojson]
+  end
+
+  (* Finished job will be always of type `Merge.t` *)
+  module Finished_job = struct
+    type t = Merge.t [@@deriving yojson]
+  end
+
+  module Job_status = struct
+    type t =
+      | Todo of Available_job.t
+      | Done of Finished_job.t
+      | Commit of Commit.t
+    [@@deriving yojson]
+  end
+
+  module With_id = struct
+    type 'd t = { id : string; value : 'd } [@@deriving sexp, yojson]
+  end
+
+  module Ivar = struct
+    include Ivar
+
+    let to_yojson _ _ = `String "<opaque>"
+
+    let of_yojson _ _ = Ok (Ivar.create ())
+  end
+
+  (* We store the jobs in a list because we care only about the actionable jobs, not the old ones *)
+  module Tree = struct
+    type t =
+      { mutable jobs : Job_status.t With_id.t list
+      ; mutable closed : bool  (** No new jobs can be added *)
+      ; mutable finished : Finished_job.t Ivar.t  (** All jobs are done *)
+      ; mutable commit_aux : Commit.aux option
+      }
+    [@@deriving yojson]
+
+    let create () =
+      { jobs = []
+      ; closed = false
+      ; finished = Ivar.create ()
+      ; commit_aux = None
+      }
+
+    let append_base t ~id ~(data : Base.t) =
+      t.jobs <- t.jobs @ [ With_id.{ id; value = Job_status.Todo (Base data) } ]
+
+    let check_finished t =
+      match t with
+      | { closed = true
+        ; jobs = [ { value = Done job; _ } ] (* One job with status done *)
+        ; commit_aux = Some aux (* Commit aux is already set *)
+        ; _
+        } ->
+          don't_wait_for
+            (let%bind () = Commit.process (aux, job) in
+             return (Ivar.fill t.finished job) )
+      | _ ->
+          ()
+
+    let commit t ~aux =
+      t.closed <- true ;
+      t.commit_aux <- Some aux ;
+      check_finished t ;
+      Ivar.read t.finished
+
+    (* If finishing job created opportunity to merge, start merging *)
+    (* If it's already closed and it's last job, mark as finished *)
+    let rec finish_job_exn t ~id ~(data : Merge.t) =
+      (* Mark job as Done *)
+      let found, new_jobs =
+        List.fold_map t.jobs ~init:false ~f:(fun found job ->
+            match job with
+            | With_id.{ value = Job_status.Todo _; _ } when String.(job.id = id)
+              ->
+                (true, { job with value = Job_status.Done data })
+            | _ ->
+                (found, job) )
+      in
+      if not found then failwithf "Job with id '%s' not found" id () ;
+      t.jobs <- new_jobs ;
+
+      (* merge only the first opportunity *)
+      (* finishing job can't produce more than 1 opportunity to merge *)
+      let rec merge_done_jobs l =
+        let open With_id in
+        match l with
+        (* first done && second done *)
+        | { value = Job_status.Done fst_data; _ }
+          :: { value = Done snd_data; _ } :: rest ->
+            let job =
+              { id = generate_id ()
+              ; value = Job_status.Todo (Merge (fst_data, snd_data))
+              }
+            in
+            (Some job, job :: rest)
+        | head :: tail ->
+            let merge_job_opt, jobs = merge_done_jobs tail in
+            (merge_job_opt, head :: jobs)
+        | [] ->
+            (None, [])
+      in
+      (* Create Todo merge job *)
+      let merge_job_opt, new_jobs = merge_done_jobs t.jobs in
+      t.jobs <- new_jobs ;
+      match merge_job_opt with
+      | None ->
+          check_finished t ; return ()
+      | Some { value = Todo (Merge (fst, snd)); id } ->
+          let%bind result = Merge.process fst snd in
+          finish_job_exn t ~id ~data:result
+      | Some _ ->
+          failwith "Invalid merge job"
+
+    let add_job_exn t ~id ~(data : Base.t) =
+      if t.closed then failwith "Tree has been already closed" ;
+      append_base t ~id ~data ;
+      let%bind result = Base.process data in
+      finish_job_exn t ~id ~data:result
+
+    let get_result t =
+      match t with
+      | [ With_id.{ value = Job_status.Done result; _ } ] ->
+          Some result
+      | _ ->
+          None
+  end
+
+  type t = { mutable trees : Tree.t list } [@@deriving yojson]
+
+  let create () = { trees = [] }
+
+  let start_new_tree t = t.trees <- t.trees @ [ Tree.create () ]
+
+  let commit_exn t ~aux =
+    let tree = List.last_exn t.trees in
+    start_new_tree t ; Tree.commit tree ~aux
+
+  let rec add_job t ~(data : Base.t) =
+    match List.last t.trees with
+    | None ->
+        start_new_tree t ; add_job t ~data
+    | Some last ->
+        Tree.add_job_exn last ~id:(generate_id ()) ~data
+
+  let get_pending_jobs t =
+    List.concat t
+    |> List.filter_map ~f:(function
+         | With_id.{ id; value = Job_status.Todo job } ->
+             Some With_id.{ id; value = job }
+         | _ ->
+             None )
+
+  let pp t = print_endline @@ Yojson.Safe.pretty_to_string @@ to_yojson t
+end
+
+let%test_module "parallel_merge on (+)" =
+  ( module struct
+    let () = Backtrace.elide := false
+
+    module Merge = struct
+      type t = int64 [@@deriving yojson]
+
+      let process x y =
+        let time = Quickcheck.random_value (Float.gen_incl 0.0 0.1) in
+        let%bind () = Clock.after (Time.Span.of_sec time) in
+        return Int64.(x + y)
+    end
+
+    module Base = struct
+      type t = int32 [@@deriving yojson]
+
+      let process x =
+        let time = Quickcheck.random_value (Float.gen_incl 0.0 0.1) in
+        let%bind () = Clock.after (Time.Span.of_sec time) in
+        return Int64.(of_int32_exn x)
+    end
+
+    module Commit = struct
+      type aux = string [@@deriving yojson]
+
+      type t = aux * Merge.t [@@deriving yojson]
+
+      let process (aux_value, x) =
+        let time = Quickcheck.random_value (Float.gen_incl 0.0 0.1) in
+        let%bind () = Clock.after (Time.Span.of_sec time) in
+        printf "Commit %d with aux value %s\n%!" (Int64.to_int_exn x) aux_value ;
+        return ()
+    end
+
+    module Prover = Make (Merge) (Base) (Commit)
+
+    let%test_unit "one tree" =
+      print_endline "Testing one tree" ;
+      let g = Quickcheck.Generator.list_non_empty Int32.quickcheck_generator in
+      Quickcheck.test g ~trials:20 ~f:(fun data ->
+          let expected_result =
+            List.sum (module Int64) ~f:Int64.of_int32_exn data
+          in
+          let state = Prover.create () in
+
+          let final_result =
+            Thread_safe.block_on_async_exn (fun () ->
+                (* Create jobs *)
+                let%bind () =
+                  Deferred.List.iter ~how:`Parallel data ~f:(fun data ->
+                      Prover.add_job state ~data )
+                in
+
+                Prover.commit_exn state ~aux:"aux" )
+          in
+
+          [%test_eq: int64] final_result expected_result )
+
+    let%test_unit "multiple trees" =
+      print_endline "Testing multiple trees" ;
+      let g =
+        Quickcheck.Generator.(
+          list_non_empty @@ list_non_empty Int32.quickcheck_generator)
+      in
+      Quickcheck.test g ~trials:20 ~f:(fun data ->
+          let expected_results =
+            List.map data ~f:(fun data ->
+                List.sum (module Int64) ~f:Int64.of_int32_exn data )
+          in
+          let state = Prover.create () in
+
+          let results =
+            Thread_safe.block_on_async_exn (fun () ->
+                let results =
+                  List.map data ~f:(fun data ->
+                      List.iter data ~f:(fun data ->
+                          don't_wait_for @@ Prover.add_job state ~data ) ;
+                      Prover.commit_exn state ~aux:"aux" )
+                in
+                Deferred.List.all results )
+          in
+
+          [%test_eq: int64 list] results expected_results )
+  end )
