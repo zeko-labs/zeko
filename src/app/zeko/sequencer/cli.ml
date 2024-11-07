@@ -71,10 +71,7 @@ let snark_queue =
          in
          fun () ->
            let kvdb = Committer.Store.Kvdb.create db_dir in
-           let (module T), (module M) =
-             Lazy.force Zeko_sequencer.prover_modules
-           in
-           let module Sequencer = Zeko_sequencer.Make (T) (M) in
+           let module Sequencer = Zeko_sequencer.Make () in
            let open Sequencer.Snark_queue in
            match get_state ~kvdb with
            | None ->
@@ -97,10 +94,7 @@ let snark_queue =
          in
          fun () ->
            let kvdb = Committer.Store.Kvdb.create db_dir in
-           let (module T), (module M) =
-             Lazy.force Zeko_sequencer.prover_modules
-           in
-           let module Sequencer = Zeko_sequencer.Make (T) (M) in
+           let module Sequencer = Zeko_sequencer.Make () in
            let open Sequencer.Snark_queue in
            match get_state ~kvdb with
            | None ->
@@ -123,15 +117,12 @@ let snark_queue =
                ~depth:Zeko_sequencer.constraint_constants.ledger_depth ()
            in
            let kvdb = Mina_ledger.Ledger.Db.zeko_kvdb db in
-           let (module T), (module M) =
-             Lazy.force Zeko_sequencer.prover_modules
-           in
-           let module Sequencer = Zeko_sequencer.Make (T) (M) in
+           let module Sequencer = Zeko_sequencer.Make () in
            let open Sequencer.Snark_queue in
            let sparse_ledger =
              Mina_ledger.Sparse_ledger.of_ledger_subset_exn
                Mina_ledger.Ledger.(of_database db)
-               [ M.Inner.account_id ]
+               [ Zkapps_rollup.inner_account_id ]
            in
            let new_state =
              State.(reset_for_new_batch (create ()) sparse_ledger)

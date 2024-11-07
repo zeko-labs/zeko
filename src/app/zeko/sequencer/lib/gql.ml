@@ -8,11 +8,7 @@ open Signature_lib
 open Currency
 module Schema = Graphql_wrapper.Make (Schema)
 
-module Make
-    (T : Transaction_snark.S)
-    (M : Zkapps_rollup.S)
-    (Zeko_sequencer : module type of Zeko_sequencer.Make (T) (M)) =
-    struct
+module Make (Zeko_sequencer : module type of Zeko_sequencer.Make ()) = struct
   module Types = struct
     open Schema
 

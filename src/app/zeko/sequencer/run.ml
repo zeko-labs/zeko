@@ -8,9 +8,8 @@ module Graphql_cohttp_async =
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
     ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks
     ~provers () =
-  let (module T), (module M) = Lazy.force Zeko_sequencer.prover_modules in
-  let module Sequencer = Zeko_sequencer.Make (T) (M) in
-  let module Gql = Gql.Make (T) (M) (Sequencer) in
+  let module Sequencer = Zeko_sequencer.Make () in
+  let module Gql = Gql.Make (Sequencer) in
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty

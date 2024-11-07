@@ -10,7 +10,7 @@ module Field = Snark_params.Tick.Field
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
-module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
+module Make () = struct
   let constraint_constants = constraint_constants
 
   module Config = struct
@@ -595,7 +595,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
               User_command.accounts_referenced command
               |> List.map ~f:(fun id ->
                      if Public_key.Compressed.(Account_id.public_key id = empty)
-                     then M.Inner.account_id
+                     then Zkapps_rollup.inner_account_id
                      else id )
               |> List.stable_dedup
             in
@@ -693,7 +693,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
 
   let update_inner_account t =
     let old_deposits_state =
-      Utils.get_inner_deposits_state_exn (module M) (L.of_database t.db)
+      Utils.get_inner_deposits_state_exn (L.of_database t.db)
     in
     let%bind new_deposits =
       Gql_client.fetch_transfers t.config.archive_uri
@@ -763,7 +763,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.db)
-        [ M.Inner.account_id ]
+        [ Zkapps_rollup.inner_account_id ]
     in
     Snark_queue.enqueue_prove_commit t.snark_q ~target_ledger
       ~old_deposits_pointer ~processed_deposits_pointer:processed_pointer
@@ -839,7 +839,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let sparse_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.db)
-        [ M.Inner.account_id ]
+        [ Zkapps_rollup.inner_account_id ]
     in
     t.snark_q.state <-
       Snark_queue.State.reset_for_new_batch t.snark_q.state sparse_ledger ;
@@ -924,17 +924,6 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     return t
 end
 
-let prover_modules :
-    ((module Transaction_snark.S) * (module Zkapps_rollup.S)) lazy_t =
-  lazy
-    (let module T = Transaction_snark.Make (struct
-       let constraint_constants = constraint_constants
-
-       let proof_level = Genesis_constants.Proof_level.Full
-     end) in
-    let module M = Zkapps_rollup.Make (T) in
-    ((module T), (module M)) )
-
 let%test_module "Sequencer tests" =
   ( module struct
     let () = Base.Backtrace.elide := false
@@ -948,7 +937,9 @@ let%test_module "Sequencer tests" =
     end)
 
     module M = Zkapps_rollup.Make (T)
-    module Sequencer = Make (T) (M)
+
+    module Sequencer = Make ()
+
     open Sequencer
 
     let number_of_transactions = 5
@@ -1573,9 +1564,7 @@ let%test_module "Sequencer tests" =
               return () ) ;
 
           let deposits_state =
-            Utils.get_inner_deposits_state_exn
-              (module M)
-              (L.of_database sequencer.db)
+            Utils.get_inner_deposits_state_exn (L.of_database sequencer.db)
           in
           let expected_deposits_state =
             (* Expected should be only first 2 deposits *)
@@ -1619,9 +1608,7 @@ let%test_module "Sequencer tests" =
               return () ) ;
 
           let deposits_state =
-            Utils.get_inner_deposits_state_exn
-              (module M)
-              (L.of_database sequencer.db)
+            Utils.get_inner_deposits_state_exn (L.of_database sequencer.db)
           in
           let expected_deposits_state =
             List.fold deposits ~init:Zkapp_account.Actions.empty_state_element
