@@ -35,7 +35,7 @@ module State = struct
 end
 
 (* Get the reference of next prover.
-   If it fails to connect or times out, replace the reference with new connection and try next prover *)
+   If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
 let rec send ?(timeout = 10.) ?(attempts = 5) t (input : Prover.Input.t) :
     Prover.Output.t Deferred.t =
   let connection_ref, where_to_connect = State.next_prover t in
@@ -66,26 +66,26 @@ let rec send ?(timeout = 10.) ?(attempts = 5) t (input : Prover.Input.t) :
   | `Result (`Ok r) ->
       return r
   | `Timeout | `Result `Connection_error ->
-      printf "Timeout while proving, retrying attempts remaining: %d\n%!"
-        attempts ;
+      printf "Timeout while proving %f, retrying attempts remaining: %d\n%!"
+        timeout attempts ;
       if attempts > 0 then (
         connection_ref := lazy (try_connect where_to_connect) ;
         send ~timeout ~attempts:(attempts - 1) t input )
       else failwith "Timeout while proving"
 
-let wrapper_wrap t txn_snark =
-  send t (Prover.Input.Wrapper_wrap txn_snark)
+let wrapper_wrap ?timeout t ~txn_snark =
+  send ?timeout t (Prover.Input.Wrapper_wrap txn_snark)
   >>| function
   | Prover.Output.Wrapper_wrap x -> x | _ -> failwith "Unexpected response"
 
-let wrapper_merge t last wrapped =
-  send t (Prover.Input.Wrapper_merge (last, wrapped))
+let wrapper_merge ?timeout t a b =
+  send ?timeout t (Prover.Input.Wrapper_merge (a, b))
   >>| function
   | Prover.Output.Wrapper_merge x -> x | _ -> failwith "Unexpected response"
 
-let transaction_snark_of_signed_command t statement user_command_in_block
-    sparse_ledger =
-  send t
+let transaction_snark_of_signed_command ?timeout t ~statement
+    ~user_command_in_block ~sparse_ledger =
+  send ?timeout t
     (Prover.Input.Transaction_snark_of_signed_command
        (statement, user_command_in_block, sparse_ledger) )
   >>| function
@@ -94,8 +94,9 @@ let transaction_snark_of_signed_command t statement user_command_in_block
   | _ ->
       failwith "Unexpected response"
 
-let transaction_snark_of_zkapp_command_segment t statement witness spec =
-  send t
+let transaction_snark_of_zkapp_command_segment ?timeout t ~statement ~witness
+    ~spec =
+  send ?timeout t
     (Prover.Input.Transaction_snark_of_zkapp_command_segment
        (statement, witness, spec) )
   >>| function
@@ -104,20 +105,55 @@ let transaction_snark_of_zkapp_command_segment t statement witness spec =
   | _ ->
       failwith "Unexpected response"
 
-let transaction_snark_merge t a b =
-  send t (Prover.Input.Transaction_snark_merge (a, b))
+let transaction_snark_merge ?timeout t a b =
+  send ?timeout t (Prover.Input.Transaction_snark_merge (a, b))
   >>| function
   | Prover.Output.Transaction_snark_merge x ->
       x
   | _ ->
       failwith "Unexpected response"
 
-let submit_deposit t pk tr =
-  send t (Prover.Input.Submit_deposit (pk, tr))
+let submit_deposit ?timeout t ~outer_pk ~deposit =
+  send ?timeout t (Prover.Input.Submit_deposit (outer_pk, deposit))
   >>| function
   | Prover.Output.Submit_deposit x -> x | _ -> failwith "Unexpected response"
 
-let submit_withdrawal t tr =
-  send t (Prover.Input.Submit_withdrawal tr)
+let submit_withdrawal ?timeout t ~withdrawal =
+  send ?timeout t (Prover.Input.Submit_withdrawal withdrawal)
   >>| function
   | Prover.Output.Submit_withdrawal x -> x | _ -> failwith "Unexpected response"
+
+let process_deposit ?timeout t ~is_new ~pointer ~before ~after ~deposit =
+  send ?timeout t
+    (Prover.Input.Process_deposit (is_new, pointer, before, after, deposit))
+  >>| function
+  | Prover.Output.Process_deposit x -> x | _ -> failwith "Unexpected response"
+
+let process_withdrawal ?timeout t ~outer_pk ~is_new ~pointer ~before ~after
+    ~withdrawal =
+  send ?timeout t
+    (Prover.Input.Process_withdrawal
+       (outer_pk, is_new, pointer, before, after, withdrawal) )
+  >>| function
+  | Prover.Output.Process_withdrawal x ->
+      x
+  | _ ->
+      failwith "Unexpected response"
+
+let outer_step ?timeout t ~last ~outer_public_key ~new_deposits
+    ~unprocessed_deposits ~old_inner_ledger ~new_inner_ledger =
+  send ?timeout t
+    (Prover.Input.Outer_step
+       ( last
+       , outer_public_key
+       , new_deposits
+       , unprocessed_deposits
+       , old_inner_ledger
+       , new_inner_ledger ) )
+  >>| function
+  | Prover.Output.Outer_step x -> x | _ -> failwith "Unexpected response"
+
+let inner_step ?timeout t ~all_deposits =
+  send ?timeout t (Prover.Input.Inner_step all_deposits)
+  >>| function
+  | Prover.Output.Inner_step x -> x | _ -> failwith "Unexpected response"

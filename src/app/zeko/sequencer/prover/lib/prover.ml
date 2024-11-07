@@ -4,6 +4,13 @@ open Mina_base
 open Mina_ledger
 open Signature_lib
 
+(* Only for yojson serialization of Field *)
+module Field = Data_hash.Make_full_size (struct
+  let description = "Field"
+
+  let version_byte = '\x00'
+end)
+
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
 let time ~logger label (d : 'a Deferred.t) =
@@ -36,8 +43,31 @@ module Input = struct
     | Transaction_snark_merge of (Transaction_snark.t * Transaction_snark.t)
     | Submit_deposit of (Public_key.Compressed.t * Zkapps_rollup.TR.t)
     | Submit_withdrawal of Zkapps_rollup.TR.t
+    | Process_deposit of
+        ( bool
+        * Field.t
+        * Zkapps_rollup.TR.t list
+        * Zkapps_rollup.TR.t list
+        * Zkapps_rollup.TR.t )
+    | Process_withdrawal of
+        ( Public_key.Compressed.t
+        * bool
+        * Field.t
+        * Zkapps_rollup.TR.t list
+        * Zkapps_rollup.TR.t list
+        * Zkapps_rollup.TR.t )
+    | Outer_step of
+        ( Zkapps_rollup.t
+        * Public_key.Compressed.t
+        * Zkapps_rollup.TR.t list
+        * Zkapps_rollup.TR.t list
+        * Sparse_ledger.t
+        * Sparse_ledger.t )
+    | Inner_step of Field.t
   [@@deriving yojson]
 end
+
+let asd = Ledger_hash.to_yojson
 
 module Output = struct
   type t =
@@ -48,6 +78,10 @@ module Output = struct
     | Transaction_snark_merge of Transaction_snark.t
     | Submit_deposit of Zeko_util.call_forest_tree
     | Submit_withdrawal of Zeko_util.call_forest_tree
+    | Process_deposit of Zeko_util.call_forest
+    | Process_withdrawal of Zeko_util.call_forest
+    | Outer_step of Zeko_util.call_forest_tree
+    | Inner_step of Zeko_util.call_forest_tree
   [@@deriving yojson]
 end
 
@@ -75,14 +109,38 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
           (T.merge a b ~sok_digest:dummy_sok)
         >>| Or_error.ok_exn
         >>| fun x -> Output.Transaction_snark_merge x
-    | Submit_deposit (pk, tr) ->
-        time ~logger "Submit_deposit"
-          (M.Outer.submit_deposit ~outer_public_key:pk ~deposit:tr)
+    | Submit_deposit (outer_public_key, deposit) ->
+        time ~logger "Outer.Submit_deposit"
+          (M.Outer.submit_deposit ~outer_public_key ~deposit)
         >>| fun x -> Output.Submit_deposit x
-    | Submit_withdrawal tr ->
-        time ~logger "Submit_withdrawal"
-          (M.Inner.submit_withdrawal ~withdrawal:tr)
+    | Submit_withdrawal withdrawal ->
+        time ~logger "Inner.Submit_withdrawal"
+          (M.Inner.submit_withdrawal ~withdrawal)
         >>| fun x -> Output.Submit_withdrawal x
+    | Process_deposit (is_new, pointer, before, after, deposit) ->
+        time ~logger "Inner.Process_deposit"
+          (M.Inner.process_deposit ~is_new ~pointer ~before ~after ~deposit)
+        >>| fun (_, x) -> Output.Process_deposit x
+    | Process_withdrawal
+        (outer_public_key, is_new, pointer, before, after, withdrawal) ->
+        time ~logger "Outer.Process_withdrawal"
+          (M.Outer.process_withdrawal ~outer_public_key ~is_new ~pointer ~before
+             ~after ~withdrawal )
+        >>| fun (_, x) -> Output.Process_withdrawal x
+    | Outer_step
+        ( last
+        , outer_public_key
+        , new_deposits
+        , unprocessed_deposits
+        , old_inner_ledger
+        , new_inner_ledger ) ->
+        time ~logger "Outer.step"
+          (M.Outer.step last ~outer_public_key ~new_deposits
+             ~unprocessed_deposits ~old_inner_ledger ~new_inner_ledger )
+        >>| fun x -> Output.Outer_step x
+    | Inner_step all_deposits ->
+        time ~logger "Inner.step" (M.Inner.step ~all_deposits)
+        >>| fun x -> Output.Inner_step x
 
   let run ~logger ~port =
     ignore

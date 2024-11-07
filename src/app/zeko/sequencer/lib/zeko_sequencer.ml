@@ -191,7 +191,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
     let get_state ~kvdb = Kvdb.get kvdb Snark_queue_state ~key:()
 
     let wrap_and_merge t txn_snark command =
-      let%bind wrapped = Zeko_prover.Client.wrapper_wrap t.provers txn_snark in
+      let%bind wrapped = Zeko_prover.Client.wrapper_wrap t.provers ~txn_snark in
       let%bind final_snark =
         match t.state.last with
         | Some last' ->
@@ -209,7 +209,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       let%bind txn_snark =
         Utils.print_time "Transaction_snark.of_signed_command"
           (Zeko_prover.Client.transaction_snark_of_signed_command t.provers
-             statement user_command_in_block sparse_ledger )
+             ~statement ~user_command_in_block ~sparse_ledger )
       in
       wrap_and_merge t txn_snark
         (User_command.Signed_command
@@ -224,7 +224,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
             let%bind p1 =
               Utils.print_time "Transaction_snark.of_zkapp_command_segment"
                 (Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
-                   t.provers statement witness spec )
+                   t.provers ~statement ~witness ~spec )
             in
             Deferred.List.fold ~init:p1 rest
               ~f:(fun acc (witness, spec, statement) ->
@@ -233,7 +233,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                   Utils.print_time "Transaction_snark.of_zkapp_command_segment"
                     (Zeko_prover.Client
                      .transaction_snark_of_zkapp_command_segment t.provers
-                       statement witness spec )
+                       ~statement ~witness ~spec )
                 in
                 let%bind merged =
                   Utils.print_time "Transaction_snark.merge"
@@ -269,9 +269,10 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                 match transfer with
                 | { direction = Deposit; transfer } ->
                     Zeko_prover.Client.submit_deposit t.provers
-                      t.config.zkapp_pk transfer
+                      ~outer_pk:t.config.zkapp_pk ~deposit:transfer
                 | { direction = Withdraw; transfer } ->
-                    Zeko_prover.Client.submit_withdrawal t.provers transfer )
+                    Zeko_prover.Client.submit_withdrawal t.provers
+                      ~withdrawal:transfer )
           in
           let () =
             match result with
@@ -297,21 +298,21 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                   ; before
                   ; after
                   } ->
-                    M.Inner.process_deposit ~is_new ~pointer ~before ~after
-                      ~deposit:transfer
+                    Zeko_prover.Client.process_deposit t.provers ~is_new
+                      ~pointer ~before ~after ~deposit:transfer
                 | { transfer = { direction = Withdraw; transfer }
                   ; is_new
                   ; pointer
                   ; before
                   ; after
                   } ->
-                    M.Outer.process_withdrawal
-                      ~outer_public_key:t.config.zkapp_pk ~is_new ~pointer
-                      ~before ~after ~withdrawal:transfer )
+                    Zeko_prover.Client.process_withdrawal t.provers
+                      ~outer_pk:t.config.zkapp_pk ~is_new ~pointer ~before
+                      ~after ~withdrawal:transfer )
           in
           let () =
             match result with
-            | Ok (_, forest) ->
+            | Ok forest ->
                 Transfers_memory.add t.transfers_memory key (Ok forest)
             | Error e ->
                 printf "Warning: prove_transfer_claim failed %s\n%!"
@@ -359,8 +360,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
                       ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
 
                     let%bind command =
-                      Committer.prove_commit
-                        (module M)
+                      Committer.prove_commit ~provers:t.provers
                         ~executor:t.executor ~zkapp_pk:t.config.zkapp_pk
                         ~archive_uri:t.config.archive_uri commit_witness
                     in
@@ -714,7 +714,8 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
       return (old_deposits_state, old_deposits_state)
     else
       let%bind inner_account_update =
-        M.Inner.step ~all_deposits:processed_pointer
+        Zeko_prover.Client.inner_step t.snark_q.provers
+          ~all_deposits:processed_pointer
       in
       let fee = Currency.Fee.of_mina_int_exn 0 in
       let command : Zkapp_command.t =
@@ -905,8 +906,7 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
         return () )
     in
     let%bind () =
-      Committer.recommit_all
-        (module M)
+      Committer.recommit_all ~provers:t.snark_q.provers
         ~executor:t.snark_q.executor ~db ~zkapp_pk:config.zkapp_pk
         ~archive_uri:config.archive_uri
     in
