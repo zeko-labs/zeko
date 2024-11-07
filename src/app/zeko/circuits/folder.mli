@@ -54,14 +54,36 @@ module Make : functor
   -> sig
   open Inputs
 
-  module Trans : sig
-    type t = { source : Stmt.t; target : Stmt.t } [@@deriving snarky]
-  end
+  type t =
+    { source : Stmt.t; target : Stmt.t; proof : Pickles.Side_loaded.Proof.t }
+
+  val leaf : Stmt.t -> Elem.t list -> t Promise.t
+
+  val leaf_iterations : int
+
+  val leaf_option : Stmt.t -> Elem.t list -> t Promise.t
+
+  val leaf_option_iterations : int
+
+  val extend : t -> Elem.t list -> t Promise.t
+
+  val extend_iterations : int
+
+  val extend_option : t -> Elem.t list -> t Promise.t
+
+  val extend_option_iterations : int
+
+  val merge : t -> t -> t Promise.t
+
+  type tag_t
+
+  type tag_var
 
   (** The tag for the Pickles rule. You need to specify this in your rule. *)
   val tag :
-    (Trans.var, Trans.t, tag_max_proofs_verified, tag_branches) Pickles.Tag.t
-    lazy_t
+    (tag_var, tag_t, tag_max_proofs_verified, tag_branches) Pickles.Tag.t lazy_t
+
+  type t' := t
 
   module Make : functor
     (Inputs : sig
@@ -76,15 +98,22 @@ module Make : functor
          ?check:Boolean.var
            (** Set this to false if you don't want to check the proof after all. *)
       -> var (** What you're trying to verify *)
-      -> (Trans.var * (Trans.var, tag_max_proofs_verified) Compile_simple.prev)
+      -> (Stmt.var * (tag_var, tag_max_proofs_verified) Compile_simple.prev)
          Checked.t
 
-    (** Prove the state machine execution. *)
-    val prove : Init.t -> Elem.t list -> t Promise.t
+    val get_full :
+         ?check:Boolean.var
+           (** Set this to false if you don't want to check the proof after all. *)
+      -> var (** What you're trying to verify *)
+      -> ( [ `Source of Stmt.var ]
+         * [ `Target of Stmt.var ]
+         * (tag_var, tag_max_proofs_verified) Compile_simple.prev )
+         Checked.t
 
-    (** TODO: Implement *)
-    (* val merge : t -> t -> t Promise.t *)
-    (* val extend : t -> Elem.t list -> t Promise.t *)
-    (* also a way to convert from one instantiation of a folder to another one with a different `get_iterations` count. *)
+    val make : t' -> Init.t -> Elem.t list -> t Promise.t
+
+    val make_proofless : Init.t -> Elem.t list -> t
+
+    val get_iterations : int
   end
 end

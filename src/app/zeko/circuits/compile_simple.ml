@@ -6,10 +6,6 @@ let ( let* ) = Checked.Let_syntax.( >>= )
 
 let ( let*| ) = Checked.Let_syntax.( >>| )
 
-let ( let+ ) = As_prover.Let_syntax.( >>= )
-
-let ( let+| ) = As_prover.Let_syntax.( >>| )
-
 let ( let@ ) : (('a -> 'b) -> 'c) -> ('a -> 'b) -> 'c = ( @@ )
 
 let time_promise : string -> (unit -> 'a Promise.t) -> 'a Promise.t =

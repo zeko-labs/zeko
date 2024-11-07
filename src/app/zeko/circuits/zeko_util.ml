@@ -365,3 +365,5 @@ module Checked32 = struct
 
   type var = Checked.t
 end
+
+module Proof = Proof

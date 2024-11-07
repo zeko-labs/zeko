@@ -84,13 +84,13 @@ module M_without_length =
 
 module Made_without_length = Folder.Make (M_without_length)
 
-type tag_with_length_t = Made_with_length.Trans.t
+type tag_with_length_t = Made_with_length.tag_t
 
-type tag_without_length_t = Made_without_length.Trans.t
+type tag_without_length_t = Made_without_length.tag_t
 
-type tag_with_length_var = Made_with_length.Trans.var
+type tag_with_length_var = Made_with_length.tag_var
 
-type tag_without_length_var = Made_without_length.Trans.var
+type tag_without_length_var = Made_without_length.tag_var
 
 let tag_with_length = Made_with_length.tag
 
@@ -129,16 +129,16 @@ struct
   let typ = Made_2.typ
 
   let get ?check t =
-    let*| trans, verifier = Made_2.get ?check t in
+    let*| `Source source, `Target target, verifier = Made_2.get_full ?check t in
     let source =
       Action_state.With_length.unsafe_var_of_fields
-        ~state:(Action_state.unsafe_var_of_field trans.source.action_state)
-        ~length:trans.source.length
+        ~state:(Action_state.unsafe_var_of_field source.action_state)
+        ~length:source.length
     in
     let target =
       Action_state.With_length.unsafe_var_of_fields
-        ~state:(Action_state.unsafe_var_of_field trans.target.action_state)
-        ~length:trans.target.length
+        ~state:(Action_state.unsafe_var_of_field target.action_state)
+        ~length:target.length
     in
     (({ source; target } : Stmt.var), verifier)
 

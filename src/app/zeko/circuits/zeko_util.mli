@@ -175,3 +175,5 @@ module Checked32 : sig
 
   type var = Checked.t
 end
+
+module Proof = Mina_base.Proof
