@@ -1,10 +1,19 @@
 open Async
 open Core_kernel
 
+let try_connect where_to_connect =
+  match%bind try_with (fun () -> Tcp.connect where_to_connect) with
+  | Ok x ->
+      return (Some x)
+  | Error exn ->
+      printf "Error connecting to prover: %s\n%!" (Exn.to_string exn) ;
+      return None
+
 module State = struct
   type t =
     { provers :
         ( (([ `Active ], Socket.Address.Inet.t) Socket.t * Reader.t * Writer.t)
+          option
           Deferred.t
           lazy_t
           ref
@@ -15,7 +24,7 @@ module State = struct
 
   let create provers =
     let connections =
-      List.map provers ~f:(fun x -> (ref (lazy (Tcp.connect x)), x))
+      List.map provers ~f:(fun x -> (ref (lazy (try_connect x)), x))
     in
     { provers = Array.of_list connections; next = 0 }
 
@@ -25,37 +34,42 @@ module State = struct
     Array.get t.provers n
 end
 
+(* Get the reference of next prover.
+   If it fails to connect or times out, replace the reference with new connection and try next prover *)
 let rec send ?(timeout = 10.) ?(attempts = 5) t (input : Prover.Input.t) :
     Prover.Output.t Deferred.t =
   let connection_ref, where_to_connect = State.next_prover t in
   match%bind
     Async.with_timeout (Time.Span.of_sec timeout)
-      (let%bind _, r, w = Lazy.force !connection_ref in
-       match%bind
-         let () =
-           Prover.Input.to_yojson input
-           |> Yojson.Safe.to_string |> Writer.write_line w
-         in
-         Reader.really_read_line ~wait_time:(Time.Span.of_sec 60.) r
-       with
-       | Some response -> (
-           match
-             Yojson.Safe.from_string response |> Prover.Output.of_yojson
-           with
-           | Ok output ->
-               return output
-           | Error _ ->
-               failwith "Error parsing response" )
-       | None ->
-           failwith "Timeout while proving" )
+      ( match%bind Lazy.force !connection_ref with
+      | None ->
+          return `Connection_error
+      | Some (_, r, w) -> (
+          match%bind
+            let () =
+              Prover.Input.to_yojson input
+              |> Yojson.Safe.to_string |> Writer.write_line w
+            in
+            Reader.really_read_line ~wait_time:(Time.Span.of_sec 60.) r
+          with
+          | Some response -> (
+              match
+                Yojson.Safe.from_string response |> Prover.Output.of_yojson
+              with
+              | Ok output ->
+                  return (`Ok output)
+              | Error _ ->
+                  failwith "Error parsing response" )
+          | None ->
+              failwith "Timeout while proving" ) )
   with
-  | `Result r ->
+  | `Result (`Ok r) ->
       return r
-  | `Timeout ->
+  | `Timeout | `Result `Connection_error ->
       printf "Timeout while proving, retrying attempts remaining: %d\n%!"
         attempts ;
       if attempts > 0 then (
-        connection_ref := lazy (Tcp.connect where_to_connect) ;
+        connection_ref := lazy (try_connect where_to_connect) ;
         send ~timeout ~attempts:(attempts - 1) t input )
       else failwith "Timeout while proving"
 
