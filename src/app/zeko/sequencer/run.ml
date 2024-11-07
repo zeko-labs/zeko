@@ -4,12 +4,11 @@ open Sequencer_lib
 module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
+module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
     ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks
     ~provers () =
-  let module Sequencer = Zeko_sequencer.Make () in
-  let module Gql = Gql.Make (Sequencer) in
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty

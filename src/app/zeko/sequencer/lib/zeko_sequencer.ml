@@ -10,7 +10,7 @@ module Field = Snark_params.Tick.Field
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
-module Make () = struct
+module Sequencer = struct
   let constraint_constants = constraint_constants
 
   module Config = struct
@@ -937,9 +937,6 @@ let%test_module "Sequencer tests" =
     end)
 
     module M = Zkapps_rollup.Make (T)
-
-    module Sequencer = Make ()
-
     open Sequencer
 
     let number_of_transactions = 5

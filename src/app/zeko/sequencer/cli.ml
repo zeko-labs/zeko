@@ -2,6 +2,7 @@ open Core
 open Async
 open Sequencer_lib
 open Mina_base
+module Sequencer = Zeko_sequencer.Sequencer
 
 let printf = Core.printf
 
@@ -71,7 +72,6 @@ let snark_queue =
          in
          fun () ->
            let kvdb = Committer.Store.Kvdb.create db_dir in
-           let module Sequencer = Zeko_sequencer.Make () in
            let open Sequencer.Snark_queue in
            match get_state ~kvdb with
            | None ->
@@ -94,7 +94,6 @@ let snark_queue =
          in
          fun () ->
            let kvdb = Committer.Store.Kvdb.create db_dir in
-           let module Sequencer = Zeko_sequencer.Make () in
            let open Sequencer.Snark_queue in
            match get_state ~kvdb with
            | None ->
@@ -117,7 +116,6 @@ let snark_queue =
                ~depth:Zeko_sequencer.constraint_constants.ledger_depth ()
            in
            let kvdb = Mina_ledger.Ledger.Db.zeko_kvdb db in
-           let module Sequencer = Zeko_sequencer.Make () in
            let open Sequencer.Snark_queue in
            let sparse_ledger =
              Mina_ledger.Sparse_ledger.of_ledger_subset_exn
