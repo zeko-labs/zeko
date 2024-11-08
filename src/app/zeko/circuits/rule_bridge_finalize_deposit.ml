@@ -401,7 +401,6 @@ struct
       [@@deriving snarky]
     end
 
-    (** Prove that we have submitted a deposit, and that it's been accepted. *)
     let main (w : Witness.t V.t) =
       with_label ("main " ^ __LOC__) (fun () ->
           let* Witness.
@@ -532,7 +531,7 @@ struct
             { prevs = Two_prevs (verify_check_accepted, verify_ase); out } )
 
     let rule : _ Compile_simple.branch =
-      { branch_name = "finalize deposit"
+      { branch_name = "finalize cancelled deposit"
       ; tags =
           Two_tags
             (Tag (force Check_accepted.tag), Tag (force Ase.With_length.tag))

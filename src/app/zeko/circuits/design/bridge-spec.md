@@ -197,6 +197,25 @@ let do_finalize_deposit
   }
 
 (* L1 *)
+(*
+  Prove that we have submitted a deposit, and that it's been rejected.
+  We do this by showing that there is a historical action state after
+  which our deposit comes, and after which there are actions that reject it
+  before accepting it.
+  
+  We then update the stored next_cancelled_deposit index as done in the other cases.
+  
+  The challenge lies in that we need to prove that the deposit index is correct,
+  since we're counting from the beginning, and not from the end.
+  We need to know that there indeed was that many actions before our deposit,
+  but we would like to prevent having to count back to the dawn of our rollup.
+  
+  We instead find a commit in the past to use its synchronization point to skip
+  most of the history.
+  We count from the synchronization point to the current outer action state to
+  calculate the current length of the outer action state.
+  We use that to ensure that our deposit index is correct.
+*)
 let do_finalize_cancelled_deposit
   ~deposit_params
   ~actions_after_deposit
@@ -274,21 +293,17 @@ let do_finalize_cancelled_deposit
 *)
 let do_finalize_cancelled_deposit_simple
   ~deposit_params
-  ~actions_before_deposit
   ~actions_after_deposit
   ~prev_next_cancelled_deposit
   ~outer_authorization_kind
   ~may_use_token
   =
   let deposit = deposit_params.deposit in
-  let deposit_index = List.length actions_before_deposit in
+  let deposit_index = List.length action_state_before_deposit in
   assert check_accepted ~deposit ~actions_after_deposit ~deposit_index = `Rejected ;
   assert prev_next_cancelled_deposit <= deposit_index ;
   let outer_action_state =
     List.append actions_after_deposit (deposit_action deposit_params :: action_state_before_deposit)
-  in
-  let outer_action_state_length =
-    List.length outer_action_state
   in
   { account_id = deposit_params.holder_account_l1
   ; balance_change = -deposit.amount
