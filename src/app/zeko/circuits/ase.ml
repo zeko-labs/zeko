@@ -1,47 +1,33 @@
 (** Rules for proving extensions of action states with length too *)
 
 open Core_kernel
-open Mina_base
 open Snark_params.Tick
 open Zeko_util
-open Checked.Let_syntax
 
 let push_events_checked state actions =
-  make_checked (fun () ->
-      Zkapp_account.Actions.push_events_checked state actions )
+  let@ () = make_checked in
+  Random_oracle.Checked.hash ~init:Hash_prefix_states.zkapp_actions
+    [| state; actions |]
 
-module M (Length : sig
-  include SnarkType
-
-  module Checked : sig
-    val succ : var -> var Checked.t
-  end
-end) (Inputs : sig
-  val name : string
-end) =
-struct
-  open Inputs
-
+module M_with_length = struct
   module Stmt = struct
-    type t = { action_state : F.t; length : Length.t } [@@deriving snarky]
+    type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
   end
 
-  module Elem = Zkapp_account.Actions
-  
-  let dummy_elem = []
+  module Elem = F
+
+  let dummy_elem = Field.zero
 
   module Init = Stmt
 
   let init ~check:_ x = Checked.return x
 
   let step actions ({ action_state; length } : Stmt.var) =
-    let* length = Length.Checked.succ length in
+    let* length = Checked32.Checked.succ length in
     let*| action_state = push_events_checked action_state actions in
     Stmt.{ action_state; length }
 
-  let name = name
-
-  (* TODO: increase depending on whether length is used or not *)
+  let name = "action state extension"
 
   let leaf_iterations = Int.pow 2 11
 
@@ -51,159 +37,119 @@ struct
 
   let extend_option_iterations = Int.pow 2 9
 
-  let override_wrap_domain = Some Pickles_base.Proofs_verified.N1
+  let override_wrap_domain = None
 end
 
-module Not_length = struct
-  type t = unit
+module M_without_length = struct
+  module Stmt = F
+  module Elem = F
 
-  type var = unit
+  let dummy_elem = Field.zero
 
-  let typ = Typ.unit
+  module Init = Stmt
 
-  module Checked = struct
-    let succ () = Checked.return ()
-  end
+  let init ~check:_ x = Checked.return x
+
+  let step actions action_state = push_events_checked action_state actions
+
+  let name = "action state extension with length"
+
+  let leaf_iterations = Int.pow 2 12
+
+  let leaf_option_iterations = Int.pow 2 11
+
+  let extend_iterations = Int.pow 2 11
+
+  let extend_option_iterations = Int.pow 2 10
+
+  let override_wrap_domain = None
 end
-
-module M_with_length =
-  M
-    (Checked32)
-    (struct
-      let name = "Ase with length"
-    end)
-
-module Made_with_length = Folder.Make (M_with_length)
-
-module M_without_length =
-  M
-    (Not_length)
-    (struct
-      let name = "Ase without length"
-    end)
 
 module Made_without_length = Folder.Make (M_without_length)
+module Made_with_length = Folder.Make (M_with_length)
 
-type tag_with_length_t = Made_with_length.tag_t
+module With_length = struct
+  include Made_with_length
 
-type tag_without_length_t = Made_without_length.tag_t
+  type stmt = M_with_length.Stmt.t =
+    { action_state : F.t; length : Checked32.t }
 
-type tag_with_length_var = Made_with_length.tag_var
+  module Make (Inputs : sig
+    module Action_state : Rollup_state.Action_state_type
 
-type tag_without_length_var = Made_without_length.tag_var
+    val get_iterations : int
+  end) =
+  struct
+    open Inputs
 
-let tag_with_length = Made_with_length.tag
+    module Made_2 = Made_with_length.Make (struct
+      let get_iterations = get_iterations
+    end)
 
-let tag_without_length = Made_without_length.tag
+    module Stmt = struct
+      type t =
+        { source : Action_state.With_length.t
+        ; target : Action_state.With_length.t
+        }
+      [@@deriving snarky]
+    end
 
-module Make_with_length (Inputs : sig
-  module Action_state : Rollup_state.Action_state_type
+    type t = Made_2.t
 
-  module Action : sig
-    include SnarkType
+    type var = Made_2.var
 
-    val to_actions_var : var -> Mina_base.Zkapp_account.Actions.var Checked.t
+    let typ = Made_2.typ
+
+    let get ?check t =
+      let*| `Source source, `Target target, verifier =
+        Made_2.get_full ?check t
+      in
+      let source =
+        Action_state.With_length.unsafe_var_of_fields
+          ~state:(Action_state.unsafe_var_of_field source.action_state)
+          ~length:source.length
+      in
+      let target =
+        Action_state.With_length.unsafe_var_of_fields
+          ~state:(Action_state.unsafe_var_of_field target.action_state)
+          ~length:target.length
+      in
+      (({ source; target } : Stmt.var), verifier)
   end
-
-  val get_iterations : int
-end) =
-struct
-  open Inputs
-
-  module Made_2 = Made_with_length.Make (struct
-    let get_iterations = get_iterations
-  end)
-
-  module Stmt = struct
-    type t =
-      { source : Action_state.With_length.t
-      ; target : Action_state.With_length.t
-      }
-    [@@deriving snarky]
-  end
-
-  type t = Made_2.t
-
-  type var = Made_2.var
-
-  let typ = Made_2.typ
-
-  let get ?check t =
-    let*| `Source source, `Target target, verifier = Made_2.get_full ?check t in
-    let source =
-      Action_state.With_length.unsafe_var_of_fields
-        ~state:(Action_state.unsafe_var_of_field source.action_state)
-        ~length:source.length
-    in
-    let target =
-      Action_state.With_length.unsafe_var_of_fields
-        ~state:(Action_state.unsafe_var_of_field target.action_state)
-        ~length:target.length
-    in
-    (({ source; target } : Stmt.var), verifier)
-
-  let prove (action_state : Action_state.With_length.t) (actions : Action.t list)
-      =
-    let f action =
-      run_and_check_exn
-        ( constant Action.typ action |> Action.to_actions_var
-        >>| As_prover.read Zkapp_account.Actions.typ )
-    in
-    let actions = List.map ~f actions in
-    Made_2.prove
-      { action_state = Action_state.With_length.raw action_state
-      ; length = Action_state.With_length.length action_state
-      }
-      actions
 end
 
-module Make_without_length (Inputs : sig
-  module Action_state : Rollup_state.Action_state_type
+module Without_length = struct
+  include Made_without_length
 
-  module Action : sig
-    include SnarkType
+  module Make (Inputs : sig
+    module Action_state : Rollup_state.Action_state_type
 
-    val to_actions_var : var -> Mina_base.Zkapp_account.Actions.var Checked.t
-  end
+    val get_iterations : int
+  end) =
+  struct
+    open Inputs
 
-  val get_iterations : int
-end) =
-struct
-  open Inputs
+    module Made_2 = Made_without_length.Make (struct
+      let get_iterations = get_iterations
+    end)
 
-  module Made_2 = Made_without_length.Make (struct
-    let get_iterations = get_iterations
-  end)
+    module Stmt = struct
+      type t = { source : Action_state.t; target : Action_state.t }
+      [@@deriving snarky]
+    end
 
-  module Stmt = struct
-    type t = { source : Action_state.t; target : Action_state.t }
-    [@@deriving snarky]
-  end
+    type t = Made_2.t
 
-  type t = Made_2.t
+    type var = Made_2.var
 
-  type var = Made_2.var
+    let typ = Made_2.typ
 
-  let typ = Made_2.typ
-
-  let get ?check t =
-    let*| trans, verifier = Made_2.get ?check t in
-    let source = Action_state.unsafe_var_of_field trans.source.action_state in
-    let target = Action_state.unsafe_var_of_field trans.target.action_state in
-    (({ source; target } : Stmt.var), verifier)
-
-  let prove (action_state : Action_state.t) (actions : Action.t list) =
-    let f action =
-      printf "preparing checked computation\n" ;
-      let computation =
-        constant Action.typ action |> Action.to_actions_var
-        >>| As_prover.read Zkapp_account.Actions.typ
+    let get ?check t =
+      let*| `Source source, `Target target, verifier =
+        Made_2.get_full ?check t
       in
-      printf "running checked computation\n" ;
-      run_and_check_exn computation
-    in
-    let actions = List.map ~f actions in
-    Made_2.prove
-      { action_state = Action_state.raw action_state; length = () }
-      actions
+      let source = Action_state.unsafe_var_of_field source in
+      let target = Action_state.unsafe_var_of_field target in
+      (({ source; target } : Stmt.var), verifier)
+  end
 end

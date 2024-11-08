@@ -20,6 +20,8 @@ module Make (Inputs : sig
 
     val custom : var -> Deposit_params_custom.var option
   end
+
+  val inner_public_key : PC.t
 end) =
 struct
   open Inputs
@@ -47,7 +49,7 @@ struct
     { lower = Slot.zero; upper = Slot.max_value }
 
   let deposit_action (params : Deposit_params.var) :
-      Rollup_state.Outer.Action.Witness.var Checked.t =
+      Rollup_state.Outer_action.Witness.var Checked.t =
     (* The chosen account must be one of the valid holder accounts.
        NB: If we invalidate an account later on,
        a yet unfinalized deposit will be made unfinalizable.
@@ -103,7 +105,7 @@ struct
         ; children = children'
         ; slot_range = constant Slot_range.typ infinite_slot_range
         }
-        : Rollup_state.Outer.Action.Witness.var )
+        : Rollup_state.Outer_action.Witness.var )
 
   module Check_accepted_definition = struct
     module Stmt = struct
@@ -118,10 +120,10 @@ struct
       [@@deriving snarky]
     end
 
-    module Elem = Rollup_state.Outer.Action
+    module Elem = Rollup_state.Outer_action
 
     let dummy_elem =
-      Rollup_state.Outer.Action.Witness
+      Rollup_state.Outer_action.Witness
         { aux = Field.zero; children = []; slot_range = infinite_slot_range }
 
     module Init = struct
@@ -138,7 +140,7 @@ struct
         Stmt.var Checked.t =
       let* witness = deposit_action params in
       let* action_state =
-        Rollup_state.Outer.Action.push_witness_var witness original_action_state
+        Rollup_state.Outer_action.push_witness_var witness original_action_state
       in
       Checked.return
         ( { params
@@ -150,7 +152,7 @@ struct
           }
           : Stmt.var )
 
-    let step (action : Rollup_state.Outer.Action.var)
+    let step (action : Rollup_state.Outer_action.var)
         ({ params
          ; action_state
          ; n_steps
@@ -161,7 +163,7 @@ struct
           Stmt.var ) =
       let* n_steps = Checked32.Checked.succ n_steps in
       let* action_state =
-        Rollup_state.Outer.Action.push_var action action_state
+        Rollup_state.Outer_action.push_var action action_state
       in
       let* valid_while =
         if_ ~typ:Slot_range.typ action.is_witness
@@ -216,9 +218,8 @@ struct
     module Check_accepted = Folder.Make (Check_accepted_definition)
     module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)
 
-    module Ase_inst = Ase.Make_with_length (struct
+    module Ase_inst = Ase.With_length.Make (struct
       module Action_state = Rollup_state.Outer_action_state
-      module Action = Rollup_state.Outer.Action
 
       let get_iterations = Int.pow 2 8
     end)
@@ -252,17 +253,13 @@ struct
                  } =
             exists Witness.typ ~compute:(V.get w)
           in
-          let* ( ({ source = _
-                  ; target =
-                      { params
-                      ; action_state = mid_outer_action_state'
-                      ; deposit_index
-                      ; n_steps
-                      ; is_rejected
-                      ; is_accepted
-                      }
-                  } :
-                   Check_accepted.Trans.var )
+          let* ( { params
+                 ; action_state = mid_outer_action_state'
+                 ; deposit_index
+                 ; n_steps
+                 ; is_rejected
+                 ; is_accepted
+                 }
                , verify_check_accepted ) =
             Check_accepted_inst.get check_accepted
           in
@@ -308,7 +305,8 @@ struct
             ; update =
                 { default_account_update.update with
                   app_state =
-                    Inner_user_state.(var_to_app_state typ { next_deposit })
+                    Inner_user_state.fine { next_deposit = Some next_deposit }
+                    |> var_to_app_state_fine
                 }
             ; preconditions =
                 { default_account_update.preconditions with
@@ -324,14 +322,14 @@ struct
           in
           let witness_inner =
             { default_account_update with
-              public_key = constant PC.typ Rollup_state.Inner.public_key
+              public_key = constant PC.typ inner_public_key
             ; authorization_kind = inner_authorization_kind
             ; preconditions =
                 { default_account_update.preconditions with
                   account =
                     { default_account_update.preconditions.account with
                       state =
-                        Rollup_state.Inner.State.fine
+                        Rollup_state.Inner_state.fine
                           { outer_action_state =
                               { state =
                                   Some
@@ -370,7 +368,7 @@ struct
       { branch_name = "finalize deposit"
       ; tags =
           Two_tags
-            (Tag (force Check_accepted.tag), Tag (force Ase.tag_with_length))
+            (Tag (force Check_accepted.tag), Tag (force Ase.With_length.tag))
       ; main
       }
   end
@@ -383,9 +381,8 @@ struct
     module Check_accepted = Folder.Make (Check_accepted_definition)
     module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)
 
-    module Ase_inst = Ase.Make_with_length (struct
+    module Ase_inst = Ase.With_length.Make (struct
       module Action_state = Rollup_state.Outer_action_state
-      module Action = Rollup_state.Outer.Action
 
       let get_iterations = Int.pow 2 8
     end)
@@ -419,17 +416,13 @@ struct
                  } =
             exists Witness.typ ~compute:(V.get w)
           in
-          let* ( ({ source = _
-                  ; target =
-                      { params
-                      ; action_state = mid_outer_action_state'
-                      ; deposit_index
-                      ; n_steps
-                      ; is_rejected
-                      ; is_accepted
-                      }
-                  } :
-                   Check_accepted.Trans.var )
+          let* ( { params
+                 ; action_state = mid_outer_action_state'
+                 ; deposit_index
+                 ; n_steps
+                 ; is_rejected
+                 ; is_accepted
+                 }
                , verify_check_accepted ) =
             Check_accepted_inst.get check_accepted
           in
@@ -507,7 +500,7 @@ struct
                   account =
                     { default_account_update.preconditions.account with
                       state =
-                        Rollup_state.Outer.State.fine
+                        Rollup_state.Outer_state.fine
                           { pause_key = None
                           ; paused =
                               Some Boolean.false_ (* must not be paused *)
@@ -542,7 +535,7 @@ struct
       { branch_name = "finalize deposit"
       ; tags =
           Two_tags
-            (Tag (force Check_accepted.tag), Tag (force Ase.tag_with_length))
+            (Tag (force Check_accepted.tag), Tag (force Ase.With_length.tag))
       ; main
       }
   end
@@ -552,6 +545,8 @@ module Make_mina (Inputs : sig
   val holder_accounts_l1 : PC.t list
 
   val zeko_pk : PC.t
+
+  val inner_public_key : PC.t
 end) =
 Make (struct
   include Inputs
@@ -567,6 +562,8 @@ module Make_custom (Inputs : sig
   val zeko_pk : PC.t
 
   val holder_accounts_l1 : PC.t list
+
+  val inner_public_key : PC.t
 end) =
 Make (struct
   include Inputs

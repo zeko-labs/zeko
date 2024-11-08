@@ -366,4 +366,4 @@ module Checked32 = struct
   type var = Checked.t
 end
 
-module Proof = Proof
+module Proof = Pickles.Side_loaded.Proof

@@ -5,7 +5,7 @@ open Rollup_state
 
 module Witness = struct
   type t =
-    { public_key : PC.t; vk_hash : F.t; witness : Inner.Action.t }
+    { public_key : PC.t; vk_hash : F.t; witness : Inner_action.t }
   [@@deriving snarky]
 end
 
@@ -13,7 +13,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
   let* Witness.{ public_key; vk_hash; witness } =
     exists ~compute:(V.get w) Witness.typ
   in
-  let* actions = Inner.Action.to_actions_var witness in
+  let* actions = Inner_action.to_actions_var witness in
   let account_update =
     { default_account_update with
       public_key

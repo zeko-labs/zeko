@@ -2,9 +2,6 @@ open Core_kernel
 open Snark_params.Tick
 open Zeko_util
 open Mina_base
-module Max_proofs_verified = Pickles_types.Nat.N2
-
-type tag_max_proofs_verified = Max_proofs_verified.n
 
 module Branches = Pickles_types.Nat.N5
 
@@ -36,7 +33,7 @@ module Make (Inputs : sig
   val override_wrap_domain : Pickles_base.Proofs_verified.t option
 end) =
 struct
-  open Inputs
+  include Inputs
 
   module Trans = struct
     type t = { source : Stmt.t; target : Stmt.t } [@@deriving snarky]
@@ -326,7 +323,7 @@ struct
     val get_iterations : int
   end) =
   struct
-    open Inputs
+    include Inputs
 
     module Elems = SnarkArray (struct
       module T = Elem
@@ -381,5 +378,13 @@ struct
     let%snarkydef_ get ?check t =
       let*| `Source _source, `Target target, verify = get_full ?check t in
       (target, verify)
+
+    let make ~(proof_target : Stmt.t) ~(proof : Proof.t) (init_arg : Init.t)
+        (excess : Elem.t list) : t =
+      ({ init_arg; proof_target; proof = Some proof; excess } : t)
+
+    let make_proofless ~(dummy_proof_target : Stmt.t) (init_arg : Init.t)
+        (excess : Elem.t list) : t =
+      ({ init_arg; proof_target = dummy_proof_target; proof = None; excess } : t)
   end
 end

@@ -26,7 +26,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
     ; update =
         { default_account_update.update with
           app_state =
-            Outer.State.fine
+            Outer_state.fine
               { pause_key = None
               ; paused = Some Boolean.true_
               ; ledger_hash = None
@@ -40,7 +40,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
           account =
             { default_account_update.preconditions.account with
               state =
-                Outer.State.fine
+                Outer_state.fine
                   { pause_key = Some pause_key
                   ; paused = None
                   ; ledger_hash = None

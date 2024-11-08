@@ -6,17 +6,15 @@ open Mina_base
 open Rollup_state
 
 (** Used to prove that the synchronized outer action state is a predecessor of the current one. *)
-module Ase_outer_inst = Ase.Make_without_length (struct
+module Ase_outer_inst = Ase.Without_length.Make (struct
   module Action_state = Outer_action_state
-  module Action = Outer.Action
 
   let get_iterations = Int.pow 2 14
 end)
 
 (** Used to prove the length of the inner action state as stored on the outer account. *)
-module Ase_inner_inst = Ase.Make_with_length (struct
+module Ase_inner_inst = Ase.With_length.Make (struct
   module Action_state = Inner_action_state
-  module Action = Inner.Action
 
   let get_iterations = Int.pow 2 14
 end)
@@ -36,14 +34,14 @@ module Verify_both_ases = struct
     { branch_name = "Verify_both_ases"
     ; tags =
         Two_tags
-          (Tag (force Ase.tag_without_length), Tag (force Ase.tag_with_length))
+          (Tag (force Ase.Without_length.tag), Tag (force Ase.With_length.tag))
     ; main
     }
 
   let compilation_result =
     lazy
       (let@ () = Promise.block_on_async_exn in
-       compile_simple ~name:"Verify_both_ases" ~branches:[ rule ]
+       Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
          ~out_typ:Typ.(Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
          () )
 end
@@ -51,6 +49,9 @@ end
 module Make (Inputs : sig
   (** max_valid_while_size signifies how big the valid_while can be for commits. *)
   val max_valid_while_size : int
+  
+  (** The public key of the inner account *)
+  val inner_public_key : PC.t
 end)
 (T : Transaction_snark.S) =
 struct
@@ -65,7 +66,8 @@ struct
     SnarkList
       (PathElt)
       (struct
-        let length = constraint_constants.ledger_depth
+        let length =
+          Genesis_constants.Constraint_constants.compiled.ledger_depth
       end)
 
   module Transaction_snark_V = MkV (Transaction_snark)
@@ -97,6 +99,8 @@ struct
       -> extract_txn_snark_result Checked.t =
     let open struct
       let dummy_pc_init = Pending_coinbase.Stack.empty
+
+      let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
       let genesis_constants = Genesis_constants.compiled
 
@@ -273,13 +277,13 @@ struct
     let* () =
       with_label __LOC__ (fun () ->
           PC.Checked.Assert.equal old_inner_acc.public_key
-            (constant PC.typ Inner.public_key) )
+            (constant PC.typ inner_public_key) )
     in
     (* We repeat the above check for the new account. *)
     let* () =
       with_label __LOC__ (fun () ->
           PC.Checked.Assert.equal new_inner_acc.public_key
-          @@ constant PC.typ Inner.public_key )
+          @@ constant PC.typ inner_public_key )
     in
 
     (* Extract the zkapp portion of the accounts. *)
@@ -288,7 +292,7 @@ struct
 
     (* Extract the outer action state as synchronized to the new inner account. *)
     let synchronized_outer_action_state =
-      (Inner.State.var_of_app_state new_inner_zkapp.app_state)
+      (Inner_state.var_of_app_state new_inner_zkapp.app_state)
         .outer_action_state
     in
 
@@ -358,7 +362,7 @@ struct
     let update =
       { default_account_update.update with
         app_state =
-          Outer.State.fine
+          Outer_state.fine
             { ledger_hash = Some target_ledger
             ; inner_action_state =
                 { state =
@@ -389,8 +393,10 @@ struct
         account =
           { default_account_update.preconditions.account with
             state =
-              Outer.State.fine
-                { ledger_hash = Some source_ledger (* The original state of the rollup ledger. *)
+              Outer_state.fine
+                { ledger_hash =
+                    Some source_ledger
+                    (* The original state of the rollup ledger. *)
                 ; inner_action_state =
                     { state =
                         Some
@@ -407,11 +413,12 @@ struct
                     *)
                 ; sequencer = Some sequencer (* We must be the sequencer. *)
                 ; paused = Some Boolean.false_ (* We must not be paused. *)
-                ; pause_key = None (* We don't care about who can pause the rollup. *)
+                ; pause_key =
+                    None (* We don't care about who can pause the rollup. *)
                 }
               |> var_to_precondition_fine
           ; action_state =
-              Or_ignore.Checked.make_unsafe Boolean.true_
+              Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.true_
                 (Outer_action_state.raw_var outer_action_state)
               (* Our action state must match *)
           }
@@ -420,8 +427,8 @@ struct
     in
     (* We submit an action that summarizes what we did. Used as a way to timestamp when actions were synchronized. *)
     let* actions =
-      Outer.Action.commit_to_actions_var
-        Outer.Action.Commit.
+      Outer_action.commit_to_actions_var
+        Outer_action.Commit.
           { ledger = target_ledger
           ; inner_action_state = new_inner_action_state
           ; synchronized_outer_action_state

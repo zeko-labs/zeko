@@ -3,25 +3,39 @@ open Rollup_state
 open Zeko_util
 open Snark_params.Tick
 
-module Ase_inst = Ase.Make_with_length (struct
+module Ase_inst = Ase.With_length.Make (struct
   module Action_state = Outer_action_state
-  module Action = Outer.Action
 
   let get_iterations = Int.pow 2 14
 end)
 
 module Witness = struct
-  type t = { vk_hash : F.t; ase : Ase_inst.t } [@@deriving snarky]
+  type t =
+    { public_key : Signature_lib.Public_key.Compressed.t
+    ; vk_hash : F.t
+    ; ase : Ase_inst.t
+    }
+  [@@deriving snarky]
 end
 
 let%snarkydef_ main (w : Witness.t V.t) =
-  let* Witness.{ vk_hash; ase } = exists ~compute:(V.get w) Witness.typ in
+  let* Witness.{ public_key; vk_hash; ase } =
+    exists ~compute:(V.get w) Witness.typ
+  in
   let* ase, verify_ase = Ase_inst.get ase in
   let update =
     { default_account_update.update with
       app_state =
-        Inner.State.(var_to_app_state typ { outer_action_state = ase.target })
-        (* This is equal to outer action state and is checked in outer account rule *)
+        Inner_state.fine
+          { outer_action_state =
+              { length =
+                  Some (Outer_action_state.With_length.length_var ase.target)
+              ; state =
+                  Some (Outer_action_state.With_length.state_var ase.target)
+              }
+              (* This is equal to outer action state and is checked in outer account rule *)
+          }
+        |> var_to_app_state_fine
     }
   in
   let preconditions =
@@ -29,7 +43,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
       account =
         { default_account_update.preconditions.account with
           state =
-            Inner.State.fine
+            Inner_state.fine
               { outer_action_state =
                   { state =
                       Some (Outer_action_state.With_length.state_var ase.source)
@@ -42,8 +56,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
   in
   let account_update =
     { default_account_update with
-      public_key =
-        constant Signature_lib.Public_key.Compressed.typ Inner.public_key
+      public_key
     ; authorization_kind = authorization_vk_hash vk_hash
     ; update
     ; preconditions
@@ -54,6 +67,6 @@ let%snarkydef_ main (w : Witness.t V.t) =
 
 let rule : _ Compile_simple.branch =
   { branch_name = "Rollup inner account step"
-  ; tags = One_tag (Tag (force Ase.tag_with_length))
+  ; tags = One_tag (Tag (force Ase.With_length.tag))
   ; main
   }

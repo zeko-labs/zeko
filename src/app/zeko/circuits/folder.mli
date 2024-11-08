@@ -3,8 +3,6 @@
 open Snark_params.Tick
 open Zeko_util
 
-type tag_max_proofs_verified
-
 type tag_branches
 
 (** Define a provable state machine as a machine with some initial state
@@ -81,9 +79,8 @@ module Make : functor
 
   (** The tag for the Pickles rule. You need to specify this in your rule. *)
   val tag :
-    (tag_var, tag_t, tag_max_proofs_verified, tag_branches) Pickles.Tag.t lazy_t
-
-  type t' := t
+    (tag_var, tag_t, Compile_simple.self_width, tag_branches) Pickles.Tag.t
+    lazy_t
 
   module Make : functor
     (Inputs : sig
@@ -98,7 +95,7 @@ module Make : functor
          ?check:Boolean.var
            (** Set this to false if you don't want to check the proof after all. *)
       -> var (** What you're trying to verify *)
-      -> (Stmt.var * (tag_var, tag_max_proofs_verified) Compile_simple.prev)
+      -> (Stmt.var * (tag_var, Compile_simple.self_width) Compile_simple.prev)
          Checked.t
 
     val get_full :
@@ -107,12 +104,13 @@ module Make : functor
       -> var (** What you're trying to verify *)
       -> ( [ `Source of Stmt.var ]
          * [ `Target of Stmt.var ]
-         * (tag_var, tag_max_proofs_verified) Compile_simple.prev )
+         * (tag_var, Compile_simple.self_width) Compile_simple.prev )
          Checked.t
 
-    val make : t' -> Init.t -> Elem.t list -> t Promise.t
+    val make :
+      proof_target:Stmt.t -> proof:Proof.t -> Init.t -> Elem.t list -> t
 
-    val make_proofless : Init.t -> Elem.t list -> t
+    val make_proofless : dummy_proof_target:Stmt.t -> Init.t -> Elem.t list -> t
 
     val get_iterations : int
   end
