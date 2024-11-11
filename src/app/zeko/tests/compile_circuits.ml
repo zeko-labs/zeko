@@ -61,7 +61,8 @@ module Example = struct
   let () =
     printf "about to compile my circuit\n" ;
 
-    let (Compile_simple.Result { tag = _ ; provers = [ prove ]; tag_length = _ }) =
+    let (Compile_simple.Result { tag = _; provers = [ prove ]; tag_length = _ })
+        =
       let@ () = Promise.block_on_async_exn in
       compile_simple ~out_typ:Typ.unit ~branches:[ rule ]
         ~name:"my example jduaihx" ~override_wrap_domain:N1 ()

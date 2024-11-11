@@ -49,7 +49,7 @@ end
 module Make (Inputs : sig
   (** max_valid_while_size signifies how big the valid_while can be for commits. *)
   val max_valid_while_size : int
-  
+
   (** The public key of the inner account *)
   val inner_public_key : PC.t
 end)

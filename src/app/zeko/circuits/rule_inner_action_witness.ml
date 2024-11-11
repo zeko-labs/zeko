@@ -4,8 +4,7 @@ module PC = Signature_lib.Public_key.Compressed
 open Rollup_state
 
 module Witness = struct
-  type t =
-    { public_key : PC.t; vk_hash : F.t; witness : Inner_action.t }
+  type t = { public_key : PC.t; vk_hash : F.t; witness : Inner_action.t }
   [@@deriving snarky]
 end
 
@@ -24,5 +23,5 @@ let%snarkydef_ main (w : Witness.t V.t) =
   let*| out = make_outputs account_update (Raw witness.children) in
   Compile_simple.{ prevs = No_prevs; out }
 
-let rule : _ Compile_simple.branch =  { branch_name = "zeko action witness"; tags = No_tags; main }
-
+let rule : _ Compile_simple.branch =
+  { branch_name = "zeko action witness"; tags = No_tags; main }

@@ -23,10 +23,13 @@ module Fine : sig
 end
 
 val var_to_precondition_fine :
-  Fine.t -> Field.Var.t Zkapp_basic.Or_ignore.Checked.t Pickles_types.Vector.Vector_8.t
+     Fine.t
+  -> Field.Var.t Zkapp_basic.Or_ignore.Checked.t Pickles_types.Vector.Vector_8.t
 
 val var_to_app_state_fine :
-  Fine.t -> Field.Var.t Zkapp_basic.Set_or_keep.Checked.t Pickles_types.Vector.Vector_8.t
+     Fine.t
+  -> Field.Var.t Zkapp_basic.Set_or_keep.Checked.t
+     Pickles_types.Vector.Vector_8.t
 
 val var_to_actions :
   ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t
@@ -121,9 +124,9 @@ val make_outputs :
      * ( Mina_base.Account_update.Body.t
        * Mina_base.Zkapp_command.Digest.Account_update.t
        * ( Mina_base.Account_update.t
-  , Mina_base.Zkapp_command.Digest.Account_update.t
-  , Mina_base.Zkapp_command.Digest.Forest.t )
-  Mina_base.Zkapp_command.Call_forest.t )
+         , Mina_base.Zkapp_command.Digest.Account_update.t
+         , Mina_base.Zkapp_command.Digest.Forest.t )
+         Mina_base.Zkapp_command.Call_forest.t )
        V.t )
      Checked.t
 
@@ -184,4 +187,5 @@ end
 
 module Proof = Pickles.Side_loaded.Proof
 
-val push_actions_var : actions:Field.Var.t -> Field.Var.t -> Field.Var.t Checked.t
+val push_actions_var :
+  actions:Field.Var.t -> Field.Var.t -> Field.Var.t Checked.t

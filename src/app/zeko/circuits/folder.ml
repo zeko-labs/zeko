@@ -2,7 +2,6 @@ open Core_kernel
 open Snark_params.Tick
 open Zeko_util
 open Mina_base
-
 module Branches = Pickles_types.Nat.N5
 
 type tag_branches = Branches.n
@@ -30,7 +29,7 @@ module Make (Inputs : sig
 
   val name : string
 
-  val override_wrap_domain : [`N0 | `N1 | `N2] option
+  val override_wrap_domain : [ `N0 | `N1 | `N2 ] option
 end) =
 struct
   include Inputs

@@ -76,10 +76,7 @@ module Branches = struct
     | ( :: ) :
         ('input, 'out_var, 'prevs) branch
         * ('out_var, 'branches, 'n_available_branches available_branch) t
-        -> ( 'out_var
-           , ('input, 'branches) cons_branch
-           , 'n_available_branches )
-           t
+        -> ('out_var, ('input, 'branches) cons_branch, 'n_available_branches) t
 end
 
 type ('branches, 'n_branches) branches_length =

@@ -1,7 +1,7 @@
 include module type of Compile_simple_intf
 
 val compile :
-     ?override_wrap_domain:[`N0 | `N1 | `N2]
+     ?override_wrap_domain:[ `N0 | `N1 | `N2 ]
   -> name:string
   -> branches:
        ( 'out_var
