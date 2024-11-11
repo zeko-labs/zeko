@@ -1816,11 +1816,12 @@ module Make_str (A : Wire_types.Concrete) = struct
              (issue #63) *)
           | Check_valid_while_precondition (valid_while, _global_state) ->
               Boolean.not (Zkapp_basic.Or_ignore.Checked.is_check valid_while)
-          | Check_protocol_state_precondition (protocol_state, _global_state)
-            -> (
+          | Check_protocol_state_precondition (protocol_state, _global_state) ->
+              let
               (* ZEKO NOTE: we shittily check if the precondition
                  is the default one. *)
-              let open Zkapp_precondition.Protocol_state in
+              open
+                Zkapp_precondition.Protocol_state in
               let accept = constant typ accept in
               let (Typ typ) = typ in
               let fields, _ = typ.var_to_fields protocol_state in
@@ -1829,7 +1830,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                 List.zip_exn (Array.to_list fields) (Array.to_list fields')
               in
               (* All fields must be equal. *)
-              (Boolean.all (List.map zipped ~f:(fun (x, y) -> Field.equal x y))))
+              Boolean.all (List.map zipped ~f:(fun (x, y) -> Field.equal x y))
           | Check_account_precondition
               ({ account_update; _ }, account, new_account, local_state) ->
               let local_state = ref local_state in
