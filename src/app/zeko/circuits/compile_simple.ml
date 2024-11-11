@@ -339,7 +339,7 @@ let rec branches_to_choices :
                 } ) )
 
 let compile
-    ?(override_wrap_domain : Pickles_base.Proofs_verified.t option)
+    ?(override_wrap_domain : [`N0 | `N1 | `N2] option)
     ~(name : string)
     ~(branches :
        ( 'out_var
@@ -353,6 +353,12 @@ let compile
   let@ () = time_promise ("(compile_simple) compiling circuit " ^ name) in
   let (Count_branches_result tag_length) = count_branches branches in
   let (module N_branches) = branches_length_to_module tag_length in
+  let override_wrap_domain : Pickles_base.Proofs_verified.t option = match override_wrap_domain with
+    | None -> None
+    | Some `N0 -> Some N0
+    | Some `N1 -> Some N1
+    | Some `N2 -> Some N2
+  in
   match branches_to_choices ~name branches with
   | Choices { rules; transform_provers } ->
       let tag, _cache, _proof_module, provers =

@@ -52,6 +52,8 @@ module type Action_state_type = sig
       { state : without_length_var option; length : Checked32.var option }
 
     val fine : fine -> Fine.t
+
+    val unsafe_push_var : actions:F.var -> var -> var Checked.t
   end
 end
 
@@ -103,6 +105,11 @@ module Make_typed_action_state () : Action_state_type = struct
 
     let fine ({ state; length } : fine) : Fine.t =
       [ Whole (F.typ, state); Whole (Checked32.typ, length) ]
+
+    let unsafe_push_var ~actions ({ state; length } : var) =
+      let* state = push_actions_var ~actions state in
+      let*| length = Checked32.Checked.succ length in
+      ({ state; length } : var)
   end
 end
 

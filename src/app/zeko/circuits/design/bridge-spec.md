@@ -54,6 +54,8 @@ type outer_state =
   ; enable_offset_lower : nat
   ; enable_offset_upper : nat
   ; enable_period : nat
+  ; disabled_vk : vk
+  ; enabled_vk ; vk
   } (* maybe should be ints? *)
 
 type outer_helper_state =
@@ -112,7 +114,7 @@ let withdraw_action
   let a =
     { public_key = public_key_l2
     ; token_id = token_id_l2
-    ; balance_change = withdrawal.amount
+    ; balance_change = params.withdrawal.amount
     ; may_use_token = Parents_own_token
     ; authorization_kind = None
     }
@@ -241,7 +243,7 @@ let do_finalize_cancelled_deposit
   let outer_action_state' =
     List.append actions_after_commit (Commit commit :: action_state_before_commit)
   in
-  assert outer_action_state'' = outer_action_state ;
+  assert outer_action_state' = outer_action_state ;
   let outer_action_state =
     List.append actions_after_synchronization commit.synchronized_outer_action_state
   in
@@ -354,6 +356,7 @@ let do_finalize_withdrawal
   ~prev_next_withdrawal
   ~withdrawal_index
   ~outer_authorization_kind
+  ~may_use_token
   =
   let withdrawal = withdrawal_params.withdrawal in
   assert prev_next_withdrawal <= withdrawal_index ;
@@ -367,7 +370,7 @@ let do_finalize_withdrawal
   let inner_action_state_length = List.length actions_after_withdrawal + 1 + withdrawal_index in
   { account_id = holder_account_l1
   ; balance_change = -withdrawal.amount
-  ; may_use_token = Parents_own_token
+  ; may_use_token
   ; authorization_kind = Proof
   ; children =
     [ { public_key = helper_token_owner_l1
@@ -381,7 +384,7 @@ let do_finalize_withdrawal
           ; app_state =
             { next_withdrawal = withdrawal_index + 1
             }
-          ; preconditions =
+         ; preconditions =
             { app_state =
               { next_withdrawal = prev_next_withdrawal
               }
@@ -402,50 +405,57 @@ let do_finalize_withdrawal
     ]
   }
 
-let get_valid_while_for_disable outer_state idx =
-  { lower = outer_state.disable_offset_lower + idx * outer_state.disable_period
-  ; upper = outer_state.disable_offset_upper + idx * outer_state.disable_period
-  }
-  (*
-  { lower = (account_idx + 1 + idx * List.length holder_accounts_l1) * window_size
-  ; upper = (account_idx + (1 + idx) * List.length holder_accounts_l1) * window_size - 1
-  }
-  *)
-
-let do_disable account_idx idx =
+let do_disable ~disabled_vk ~disable_offset_lower ~disable_offset_upper ~disable_period idx =
   { account_id = holder_accounts_l1.(account_idx)
   ; set_permissions =
     { send = Impossible
     }
-  ; set_vk = <vk for next circuit>
+  ; set_vk = disabled_vk
   ; preconditions =
-    { valid_while = get_valid_while_for_disable account_idx idx
+    { valid_while =
+      { lower = disable_offset_lower + idx * disable_period
+      ; upper = disable_offset_upper + idx * disable_period
+      }
+      (*
+      { lower = (account_idx + 1 + idx * List.length holder_accounts_l1) * window_size
+      ; upper = (account_idx + (1 + idx) * List.length holder_accounts_l1) * window_size - 1
+      }
+      *)
+    ; app_state =
+      { disable_offset_upper
+      ; disable_offset_lower
+      ; disable_period
+      ; disabled_vk
+      }
     }
   }
 ```
 
 Circuit when disabled
 ```ocaml
-let get_valid_while_for_enable outer_state idx =
-  { lower = outer_state.enable_offset_lower + idx * outer_state.enable_period
-  ; upper = outer_state.enable_offset_upper + idx * outer_state.enable_period
-  }
-  (*
-  { lower = (account_idx + idx * List.length holder_accounts_l1) * window_size
-  ; upper = (account_idx + idx * List.length holder_accounts_l1 + 1) * window_size - 1
-  }
-  *)
-
-let do_enable =
-  { account_id = holder_account_l1
+let do_enable ~enabled_vk ~enable_offset_lower ~enable_offset_upper ~enable_period idx =
+  { account_id = holder_accounts_l1.(account_idx)
   ; set_permissions =
-    { send = Proof
+    { send = Impossible
     }
-  ; set_vk = <vk for previous circuit>
+  ; set_vk = enabled_vk
   ; preconditions =
-    { valid_while = get_valid_while_for_enable account_idx idx
+    { valid_while =
+      { lower = enable_offset_lower + idx * enable_period
+      ; upper = enable_offset_upper + idx * enable_period
+      }
+      (*
+      { lower = (account_idx + 1 + idx * List.length holder_accounts_l1) * window_size
+      ; upper = (account_idx + (1 + idx) * List.length holder_accounts_l1) * window_size - 1
+      }
+      *)
+    ; app_state =
+      { enable_offset_upper
+      ; enable_offset_lower
+      ; enable_period
+      ; enabled_vk
+      }
     }
-  }
   }
 ```
 

@@ -239,6 +239,12 @@ module Slot = struct
   type var = Checked.t
 end
 
+module Slot_span = struct
+  include Mina_numbers.Global_slot_span
+
+  type var = Checked.t
+end
+
 module Slot_range = struct
   type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky]
 
@@ -273,9 +279,9 @@ module Calls = struct
     | Raw of Zkapp_call_forest.Checked.t
 
   let rec hash : t -> Zkapp_call_forest.Checked.t Checked.t =
-
     let attach_control_var :
-        Account_update.Body.Checked.t -> Zkapp_call_forest.Checked.account_update =
+           Account_update.Body.Checked.t
+        -> Zkapp_call_forest.Checked.account_update =
      fun account_update ->
       { account_update =
           { data = account_update
@@ -307,10 +313,8 @@ let make_outputs :
        Account_update.Checked.t
     -> Calls.t
     -> ( Zkapp_statement.Checked.t
-       * ( Account_update.Body.t
-         * Zkapp_command.Digest.Account_update.t
-         * _ )
-         V.t )
+       * (Account_update.Body.t * Zkapp_command.Digest.Account_update.t * _) V.t
+       )
        Checked.t =
  fun account_update calls ->
   let* calls = Calls.hash calls in
@@ -367,3 +371,8 @@ module Checked32 = struct
 end
 
 module Proof = Pickles.Side_loaded.Proof
+
+let push_actions_var ~actions state =
+  let@ () = make_checked in
+  Random_oracle.Checked.hash ~init:Hash_prefix_states.zkapp_actions
+    [| state; actions |]

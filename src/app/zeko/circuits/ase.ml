@@ -4,11 +4,6 @@ open Core_kernel
 open Snark_params.Tick
 open Zeko_util
 
-let push_events_checked state actions =
-  let@ () = make_checked in
-  Random_oracle.Checked.hash ~init:Hash_prefix_states.zkapp_actions
-    [| state; actions |]
-
 module M_with_length = struct
   module Stmt = struct
     type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
@@ -24,7 +19,7 @@ module M_with_length = struct
 
   let step actions ({ action_state; length } : Stmt.var) =
     let* length = Checked32.Checked.succ length in
-    let*| action_state = push_events_checked action_state actions in
+    let*| action_state = push_actions_var action_state ~actions in
     Stmt.{ action_state; length }
 
   let name = "action state extension"
@@ -50,7 +45,7 @@ module M_without_length = struct
 
   let init ~check:_ x = Checked.return x
 
-  let step actions action_state = push_events_checked action_state actions
+  let step actions action_state = push_actions_var action_state ~actions
 
   let name = "action state extension with length"
 

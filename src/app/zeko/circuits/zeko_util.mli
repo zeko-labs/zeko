@@ -156,6 +156,12 @@ module Slot : sig
   type var = Checked.t
 end
 
+module Slot_span : sig
+  include module type of Mina_numbers.Global_slot_span
+
+  type var = Checked.t
+end
+
 module Slot_range : sig
   type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky]
 
@@ -177,3 +183,5 @@ module Checked32 : sig
 end
 
 module Proof = Pickles.Side_loaded.Proof
+
+val push_actions_var : actions:Field.Var.t -> Field.Var.t -> Field.Var.t Checked.t

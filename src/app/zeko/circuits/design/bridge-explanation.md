@@ -133,7 +133,7 @@ and those account updates can have as children the helper token account,
 with permissions set to Parents_own_token at the first level and inherit
 at the second.
 
-## Withdrawal failsafe (unimplemented)
+## Withdrawal failsafe
 
 Consider the possibility that there is a bug in our token outer circuit,
 allowing the user to withdraw all the deposited funds without doing a corresponding

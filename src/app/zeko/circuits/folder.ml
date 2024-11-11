@@ -30,7 +30,7 @@ module Make (Inputs : sig
 
   val name : string
 
-  val override_wrap_domain : Pickles_base.Proofs_verified.t option
+  val override_wrap_domain : [`N0 | `N1 | `N2] option
 end) =
 struct
   include Inputs

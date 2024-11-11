@@ -47,7 +47,7 @@ module Make : functor
      val name : string
 
      (** The size of the circuit. Set to None to deduce automatically via default Pickles mechanism. *)
-     val override_wrap_domain : Pickles_base.Proofs_verified.t option
+     val override_wrap_domain : [`N0 | `N1 | `N2] option
    end)
   -> sig
   open Inputs
