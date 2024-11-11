@@ -5,7 +5,8 @@ open Snark_params
 open Currency
 
 (* ZEKO NOTE: issue #64 *)
-type env = < mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
+type zeko_env =
+  < zeko_mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
 
 module type Full = sig
   module Transaction_validator = Transaction_validator
@@ -162,11 +163,11 @@ module type Full = sig
       -> spec:Zkapp_command_segment.Basic.t
       -> t Async.Deferred.t
 
-    (* ZEKO NOTE: issue #64, allows passing in env *)
+    (* ZEKO NOTE: issue #64, allows passing in zeko_env *)
     val of_zkapp_command_segment_zeko_exn :
          statement:Statement.With_sok.t
       -> witness:Zkapp_command_segment.Witness.t
-      -> env:env
+      -> zeko_env:zeko_env
       -> spec:Zkapp_command_segment.Basic.t
       -> t Async.Deferred.t
 
@@ -266,7 +267,7 @@ module type Full = sig
     module Zkapp_command_snark : sig
       val main :
            ?witness:Zkapp_command_segment.Witness.t
-        -> ?env:env
+        -> ?zeko_env:zeko_env
         -> Zkapp_command_segment.Spec.t
         -> constraint_constants:Genesis_constants.Constraint_constants.t
         -> Statement.With_sok.var

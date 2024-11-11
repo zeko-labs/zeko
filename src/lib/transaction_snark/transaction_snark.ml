@@ -12,11 +12,12 @@ module Wire_types = Mina_wire_types.Transaction_snark
 let proof_cache = ref None
 
 (* ZEKO NOTE: issue #64 *)
-type env = < mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
+type zeko_env =
+  < zeko_mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
 
-let dummy_env : env =
+let zeko_dummy_env : zeko_env =
   object
-    method mark_shifted_and_get_previous_shiftedness _ = true
+    method zeko_mark_shifted_and_get_previous_shiftedness _ = true
   end
 
 module Make_sig (A : Wire_types.Types.S) = struct
@@ -680,7 +681,7 @@ module Make_str (A : Wire_types.Concrete) = struct
 
         val set_must_verify : Boolean.var -> unit
 
-        val env : env
+        val zeko_env : zeko_env
       end
 
       type account_update = Zkapp_call_forest.Checked.account_update =
@@ -1853,7 +1854,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               (* ZEKO NOTE: issue #64 *)
               let compute () =
                 let a = As_prover.read Account.Checked.Unhashed.typ a.data in
-                env#mark_shifted_and_get_previous_shiftedness
+                zeko_env#zeko_mark_shifted_and_get_previous_shiftedness
                   (Account_id.create a.public_key a.token_id)
               in
               exists Boolean.typ ~compute
@@ -1896,8 +1897,9 @@ module Make_str (A : Wire_types.Concrete) = struct
                 Boolean.Assert.all
                   [ correct_coinbase_target_stack; valid_init_state ] ) )
 
-      let main ?(witness : Witness.t option) ?(env = dummy_env) (spec : Spec.t)
-          ~constraint_constants (statement : Statement.With_sok.Checked.t) =
+      let main ?(witness : Witness.t option) ?(zeko_env = zeko_dummy_env)
+          (spec : Spec.t) ~constraint_constants
+          (statement : Statement.With_sok.Checked.t) =
         let open Impl in
         run_checked (dummy_constraints ()) ;
         let ( ! ) x = Option.value_exn x in
@@ -1983,7 +1985,7 @@ module Make_str (A : Wire_types.Concrete) = struct
 
                 let set_must_verify x = must_verify := x
 
-                let env = env
+                let zeko_env = zeko_env
               end) in
               let finish v =
                 let open Mina_transaction_logic.Zkapp_command_logic.Start_data in
@@ -2128,8 +2130,8 @@ module Make_str (A : Wire_types.Concrete) = struct
       (* Horrible hack :( *)
       let witness : Witness.t option ref = ref None
 
-      (* ZEKO NOTE: We extend this horrible hack for our own env too, for issue #64 *)
-      let env : env option ref = ref None
+      (* ZEKO NOTE: We extend this horrible hack for our own zeko_env too, for issue #64 *)
+      let zeko_env : zeko_env option ref = ref None
 
       let rule (type a b c d) ~constraint_constants ~proof_level
           (t : (a, b, c, d) Basic.t_typed) :
@@ -2163,8 +2165,8 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input, `Must_verify must_verify =
-                    main ?witness:!witness ?env:!env s ~constraint_constants
-                      stmt
+                    main ?witness:!witness ?zeko_env:!zeko_env s
+                      ~constraint_constants stmt
                   in
                   let proof =
                     Run.exists (Typ.Internal.ref ()) ~request:(fun () ->
@@ -2187,8 +2189,8 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input_opt, _ =
-                    main ?witness:!witness ?env:!env s ~constraint_constants
-                      stmt
+                    main ?witness:!witness ?zeko_env:!zeko_env s
+                      ~constraint_constants stmt
                   in
                   assert (Option.is_none zkapp_input_opt) ;
                   { previous_proof_statements = []
@@ -2203,8 +2205,8 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input_opt, _ =
-                    main ?witness:!witness ?env:!env s ~constraint_constants
-                      stmt
+                    main ?witness:!witness ?zeko_env:!zeko_env s
+                      ~constraint_constants stmt
                   in
                   assert (Option.is_none zkapp_input_opt) ;
                   { previous_proof_statements = []
@@ -3442,7 +3444,7 @@ module Make_str (A : Wire_types.Concrete) = struct
     val of_zkapp_command_segment_zeko_exn :
          statement:Statement.With_sok.t
       -> witness:Zkapp_command_segment.Witness.t
-      -> env:env
+      -> zeko_env:zeko_env
       -> spec:Zkapp_command_segment.Basic.t
       -> t Async.Deferred.t
 
@@ -4088,10 +4090,10 @@ module Make_str (A : Wire_types.Concrete) = struct
       (pi, vk)
 
     let of_zkapp_command_segment_zeko_exn ~(statement : Proof.statement)
-        ~witness ~env ~(spec : Zkapp_command_segment.Basic.t) :
+        ~witness ~zeko_env ~(spec : Zkapp_command_segment.Basic.t) :
         t Async.Deferred.t =
       Base.Zkapp_command_snark.witness := Some witness ;
-      Base.Zkapp_command_snark.env := Some env ;
+      Base.Zkapp_command_snark.zeko_env := Some zeko_env ;
       let res =
         match spec with
         | Opt_signed ->
@@ -4111,12 +4113,13 @@ module Make_str (A : Wire_types.Concrete) = struct
       let open Async in
       let%map (), (), proof = res in
       Base.Zkapp_command_snark.witness := None ;
-      Base.Zkapp_command_snark.env := None ;
+      Base.Zkapp_command_snark.zeko_env := None ;
       { proof; statement }
 
     let of_zkapp_command_segment_exn ~statement ~witness ~spec :
         t Async.Deferred.t =
-      of_zkapp_command_segment_zeko_exn ~statement ~witness ~env:dummy_env ~spec
+      of_zkapp_command_segment_zeko_exn ~statement ~witness
+        ~zeko_env:zeko_dummy_env ~spec
 
     let of_transaction_union ~statement ~init_stack transaction state_body
         global_slot handler =
