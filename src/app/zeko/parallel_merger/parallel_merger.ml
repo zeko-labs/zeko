@@ -241,7 +241,7 @@ let%test_module "parallel_merge on (+)" =
         Context.add ctx aux_value ; return ()
     end
 
-    module Prover = Make (Context) (Merge) (Base) (Commit)
+    module Merger = Make (Context) (Merge) (Base) (Commit)
 
     let%test_unit "one tree" =
       printf "Testing one tree\n%!" ;
@@ -251,17 +251,17 @@ let%test_module "parallel_merge on (+)" =
           let expected_result =
             List.sum (module Int64) ~f:Int64.of_int32_exn data
           in
-          let state = Prover.create () in
+          let state = Merger.create () in
 
           let final_result =
             Thread_safe.block_on_async_exn (fun () ->
                 (* Create jobs *)
                 let%bind () =
                   Deferred.List.iter ~how:`Parallel data ~f:(fun data ->
-                      Prover.add_job state ctx ~data )
+                      Merger.add_job state ctx ~data )
                 in
 
-                Prover.commit_exn state ctx ~aux:42 )
+                Merger.commit_exn state ctx ~aux:42 )
           in
 
           [%test_eq: int64] final_result expected_result )
@@ -279,16 +279,16 @@ let%test_module "parallel_merge on (+)" =
                 List.sum (module Int64) ~f:Int64.of_int32_exn data )
           in
 
-          let state = Prover.create () in
+          let state = Merger.create () in
 
           let results =
             Thread_safe.block_on_async_exn (fun () ->
                 Deferred.List.mapi ~how:`Parallel data ~f:(fun i data ->
                     let () =
                       List.iter data ~f:(fun data ->
-                          don't_wait_for @@ Prover.add_job state ctx ~data )
+                          don't_wait_for @@ Merger.add_job state ctx ~data )
                     in
-                    Prover.commit_exn state ctx ~aux:i ) )
+                    Merger.commit_exn state ctx ~aux:i ) )
           in
 
           let expected_order = List.mapi data ~f:(fun i _ -> i) in
@@ -300,20 +300,20 @@ let%test_module "parallel_merge on (+)" =
       printf "Testing fast batch after slow batch\n%!" ;
       let ctx = Context.create () in
 
-      let state = Prover.create () in
+      let state = Merger.create () in
 
       Thread_safe.block_on_async_exn (fun () ->
-          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
-          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
-          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
-          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
-          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
           ( don't_wait_for
-          @@ let%map _ = Prover.commit_exn state ctx ~aux:0 in
+          @@ let%map _ = Merger.commit_exn state ctx ~aux:0 in
              () ) ;
 
-          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
-          let%bind _ = Prover.commit_exn state ctx ~aux:1 in
+          don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          let%bind _ = Merger.commit_exn state ctx ~aux:1 in
 
           return () ) ;
 

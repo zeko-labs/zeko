@@ -4,7 +4,7 @@
    (:standard -w -4))))
 
 (library
- (name parallel_prover)
+ (name parallel_merger)
  (inline_tests)
  (libraries async core_kernel yojson sexplib sexplib0)
  (preprocess
