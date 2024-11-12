@@ -3,20 +3,22 @@ open Async
 
 let generate_id () = Uuid_unix.create () |> Uuid.to_string
 
-module Make (Merge : sig
+module Make (Context : sig
+  type t
+end) (Merge : sig
   type t [@@deriving yojson]
 
-  val process : t -> t -> t Deferred.t
+  val process : Context.t -> t -> t -> t Deferred.t
 end) (Base : sig
   type t [@@deriving yojson]
 
-  val process : t -> Merge.t Deferred.t
+  val process : Context.t -> t -> Merge.t Deferred.t
 end) (Commit : sig
   type aux [@@deriving yojson]
 
   type t = aux * Merge.t [@@deriving yojson]
 
-  val process : t -> unit Deferred.t
+  val process : Context.t -> t -> unit Deferred.t
 end) =
 struct
   module Available_job = struct
@@ -72,7 +74,7 @@ struct
     let append_base t ~id ~(data : Base.t) =
       t.jobs <- t.jobs @ [ With_id.{ id; value = Job_status.Todo (Base data) } ]
 
-    let check_finished t =
+    let check_finished t ctx =
       match t with
       | { closed = true
         ; jobs = [ { value = Done job; _ } ] (* One job with status done *)
@@ -80,20 +82,20 @@ struct
         ; _
         } ->
           don't_wait_for
-            (let%bind () = Commit.process (aux, job) in
+            (let%bind () = Commit.process ctx (aux, job) in
              return (Ivar.fill t.finished job) )
       | _ ->
           ()
 
-    let commit t ~aux =
+    let commit t ctx ~aux =
       close t ;
       t.commit_aux <- Some aux ;
-      check_finished t ;
+      check_finished t ctx ;
       wait_till_finished t
 
     (* If finishing job created opportunity to merge, start merging *)
     (* If it's already closed and it's last job, mark as finished *)
-    let rec finish_job_exn t ~id ~(data : Merge.t) =
+    let rec finish_job_exn t ctx ~id ~(data : Merge.t) =
       (* Mark job as Done *)
       let found, new_jobs =
         List.fold_map t.jobs ~init:false ~f:(fun found job ->
@@ -132,18 +134,18 @@ struct
       t.jobs <- new_jobs ;
       match merge_job_opt with
       | None ->
-          check_finished t ; return ()
+          check_finished t ctx ; return ()
       | Some { value = Todo (Merge (fst, snd)); id } ->
-          let%bind result = Merge.process fst snd in
-          finish_job_exn t ~id ~data:result
+          let%bind result = Merge.process ctx fst snd in
+          finish_job_exn t ctx ~id ~data:result
       | Some _ ->
           failwith "Invalid merge job"
 
-    let add_job_exn t ~id ~(data : Base.t) =
+    let add_job_exn t ctx ~id ~(data : Base.t) =
       if t.closed then failwith "Tree has been already closed" ;
       append_base t ~id ~data ;
-      let%bind result = Base.process data in
-      finish_job_exn t ~id ~data:result
+      let%bind result = Base.process ctx data in
+      finish_job_exn t ctx ~id ~data:result
 
     let get_result t =
       match t with
@@ -161,7 +163,7 @@ struct
 
   let start_new_tree t = t.trees <- t.trees @ [ Tree.create () ]
 
-  let commit_exn t ~aux =
+  let commit_exn t ctx ~aux =
     (* Create new tree before waiting, so new transactions go there *)
     start_new_tree t ;
     match List.rev t.trees with
@@ -172,7 +174,7 @@ struct
               let%bind _ = Tree.wait_till_finished tree in
               return () )
         in
-        Tree.commit last ~aux
+        Tree.commit last ctx ~aux
     | _ ->
         failwith "No trees to commit"
 
@@ -198,22 +200,22 @@ let%test_module "parallel_merge on (+)" =
 
     let printf = Core.printf
 
-    module Global_state = struct
-      let t = ref []
+    module Context = struct
+      type t = int list ref
 
-      let reset () = t := []
+      let create () = ref []
 
-      let get () = !t
+      let get t = !t
 
       (* let pp () = printf !"%{sexp: int list}\n%!" (get ()) *)
 
-      let add x = t := !t @ [ x ]
+      let add t x = t := !t @ [ x ]
     end
 
     module Merge = struct
       type t = int64 [@@deriving yojson]
 
-      let process x y =
+      let process _ x y =
         let time = Quickcheck.random_value (Float.gen_incl 0.0 0.1) in
         let%bind () = Clock.after (Time.Span.of_sec time) in
         return Int64.(x + y)
@@ -222,7 +224,7 @@ let%test_module "parallel_merge on (+)" =
     module Base = struct
       type t = int32 [@@deriving yojson]
 
-      let process x =
+      let process _ x =
         let time = Quickcheck.random_value (Float.gen_incl 0.0 0.1) in
         let%bind () = Clock.after (Time.Span.of_sec time) in
         return Int64.(of_int32_exn x)
@@ -233,19 +235,19 @@ let%test_module "parallel_merge on (+)" =
 
       type t = aux * Merge.t [@@deriving yojson]
 
-      let process (aux_value, _) =
+      let process ctx (aux_value, _) =
         let time = Quickcheck.random_value (Float.gen_incl 0.0 0.1) in
         let%bind () = Clock.after (Time.Span.of_sec time) in
-        Global_state.add aux_value ; return ()
+        Context.add ctx aux_value ; return ()
     end
 
-    module Prover = Make (Merge) (Base) (Commit)
+    module Prover = Make (Context) (Merge) (Base) (Commit)
 
     let%test_unit "one tree" =
       printf "Testing one tree\n%!" ;
       let g = Quickcheck.Generator.list_non_empty Int32.quickcheck_generator in
       Quickcheck.test g ~trials:20 ~f:(fun data ->
-          Global_state.reset () ;
+          let ctx = Context.create () in
           let expected_result =
             List.sum (module Int64) ~f:Int64.of_int32_exn data
           in
@@ -256,10 +258,10 @@ let%test_module "parallel_merge on (+)" =
                 (* Create jobs *)
                 let%bind () =
                   Deferred.List.iter ~how:`Parallel data ~f:(fun data ->
-                      Prover.add_job state ~data )
+                      Prover.add_job state ctx ~data )
                 in
 
-                Prover.commit_exn state ~aux:42 )
+                Prover.commit_exn state ctx ~aux:42 )
           in
 
           [%test_eq: int64] final_result expected_result )
@@ -271,7 +273,7 @@ let%test_module "parallel_merge on (+)" =
           list_non_empty @@ list_non_empty Int32.quickcheck_generator)
       in
       Quickcheck.test g ~trials:20 ~f:(fun data ->
-          Global_state.reset () ;
+          let ctx = Context.create () in
           let expected_results =
             List.map data ~f:(fun data ->
                 List.sum (module Int64) ~f:Int64.of_int32_exn data )
@@ -284,37 +286,37 @@ let%test_module "parallel_merge on (+)" =
                 Deferred.List.mapi ~how:`Parallel data ~f:(fun i data ->
                     let () =
                       List.iter data ~f:(fun data ->
-                          don't_wait_for @@ Prover.add_job state ~data )
+                          don't_wait_for @@ Prover.add_job state ctx ~data )
                     in
-                    Prover.commit_exn state ~aux:i ) )
+                    Prover.commit_exn state ctx ~aux:i ) )
           in
 
           let expected_order = List.mapi data ~f:(fun i _ -> i) in
-          [%test_eq: int list] (Global_state.get ()) expected_order ;
+          [%test_eq: int list] (Context.get ctx) expected_order ;
 
           [%test_eq: int64 list] results expected_results )
 
     let%test_unit "test fast batch after slow batch" =
       printf "Testing fast batch after slow batch\n%!" ;
-      Global_state.reset () ;
+      let ctx = Context.create () in
 
       let state = Prover.create () in
 
       Thread_safe.block_on_async_exn (fun () ->
-          don't_wait_for @@ Prover.add_job state ~data:(Int32.of_int_exn 42) ;
-          don't_wait_for @@ Prover.add_job state ~data:(Int32.of_int_exn 42) ;
-          don't_wait_for @@ Prover.add_job state ~data:(Int32.of_int_exn 42) ;
-          don't_wait_for @@ Prover.add_job state ~data:(Int32.of_int_exn 42) ;
-          don't_wait_for @@ Prover.add_job state ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
           ( don't_wait_for
-          @@ let%map _ = Prover.commit_exn state ~aux:0 in
+          @@ let%map _ = Prover.commit_exn state ctx ~aux:0 in
              () ) ;
 
-          don't_wait_for @@ Prover.add_job state ~data:(Int32.of_int_exn 42) ;
-          let%bind _ = Prover.commit_exn state ~aux:1 in
+          don't_wait_for @@ Prover.add_job state ctx ~data:(Int32.of_int_exn 42) ;
+          let%bind _ = Prover.commit_exn state ctx ~aux:1 in
 
           return () ) ;
 
       let expected_order = [ 0; 1 ] in
-      [%test_eq: int list] (Global_state.get ()) expected_order
+      [%test_eq: int list] (Context.get ctx) expected_order
   end )
