@@ -1757,10 +1757,9 @@ module Mutations = struct
         | Error err ->
             return (Error (Error.to_string_mach err))
         | Ok (_, command_witness) ->
-            let provers, context = sequencer.transactions_prover in
             don't_wait_for
-            @@ Zeko_sequencer.Transactions_prover.P.add_job provers context
-                 ~data:command_witness ;
+            @@ Zeko_sequencer.Merger.P.add_job sequencer.merger
+                 sequencer.merger_ctx ~data:command_witness ;
             let cmd =
               { Types.User_command.With_status.data =
                   Signed_command.forget_check command
@@ -1789,11 +1788,9 @@ module Mutations = struct
         | Error err ->
             return (Error (Error.to_string_mach err))
         | Ok (_, command_witness) ->
-            let provers, context = sequencer.transactions_prover in
             don't_wait_for
-            @@ Zeko_sequencer.Transactions_prover.P.add_job provers context
-                 ~data:command_witness ;
-
+            @@ Zeko_sequencer.Merger.P.add_job sequencer.merger
+                 sequencer.merger_ctx ~data:command_witness ;
             let cmd =
               { Types.Zkapp_command.With_status.data = zkapp_command
               ; status = Applied
