@@ -469,8 +469,9 @@ module Sequencer = struct
           let%bind.Deferred.Result () =
             return
             @@
-            if Snark_queue.queue_size t.snark_q >= t.config.max_pool_size then
-              Error (Error.of_string "Maximum pool size reached, try later")
+            if
+              Merger.P.get_number_of_wip_jobs t.merger >= t.config.max_pool_size
+            then Error (Error.of_string "Maximum pool size reached, try later")
             else Ok ()
           in
 

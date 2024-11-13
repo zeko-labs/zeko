@@ -153,6 +153,13 @@ struct
           Some result
       | _ ->
           None
+
+    let get_number_of_wip_jobs t =
+      List.count t.jobs ~f:(function
+        | { value = Todo _; _ } ->
+            true
+        | _ ->
+            false )
   end
 
   type t = { mutable trees : Tree.t list } [@@deriving yojson]
@@ -192,6 +199,12 @@ struct
              Some With_id.{ id; value = job }
          | _ ->
              None )
+
+  let get_number_of_wip_jobs t =
+    List.sum
+      (module Int)
+      t.trees
+      ~f:(fun tree -> Tree.get_number_of_wip_jobs tree)
 end
 
 let%test_module "parallel_merge on (+)" =
