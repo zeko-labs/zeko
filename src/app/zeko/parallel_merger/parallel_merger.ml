@@ -178,12 +178,12 @@ struct
     | _ ->
         failwith "No trees to commit"
 
-  let rec add_job t ~(data : Base.t) =
+  let rec add_job t context ~(data : Base.t) =
     match List.last t.trees with
     | None ->
-        start_new_tree t ; add_job t ~data
+        start_new_tree t ; add_job t context ~data
     | Some last ->
-        Tree.add_job_exn last ~id:(generate_id ()) ~data
+        Tree.add_job_exn last context ~id:(generate_id ()) ~data
 
   let get_pending_jobs t =
     List.concat t

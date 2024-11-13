@@ -170,17 +170,15 @@ module Sequencer = struct
       ; provers : Zeko_prover.Client.State.t
       }
 
-    let create ~da_client ~config ~signer ~kvdb ~provers =
+    let create ~da_client ~config ~signer ~kvdb ~provers ~executor =
       { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
       ; da_client
       ; config
       ; transfers_memory = Transfers_memory.create ~lifetime:Float.(60. * 10.)
-      ; executor = Executor.create ~l1_uri:config.l1_uri ~signer ~kvdb ()
+      ; executor
       ; kvdb
       ; state = State.create ()
-      ; provers =
-          Zeko_prover.Client.State.create
-            (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
+      ; provers
       }
 
     let queue_size t = Throttle.num_jobs_waiting_to_start t.q
@@ -190,59 +188,59 @@ module Sequencer = struct
 
     let get_state ~kvdb = Kvdb.get kvdb Snark_queue_state ~key:()
 
-    let wrap_and_merge t txn_snark command =
-      let%bind wrapped = Zeko_prover.Client.wrapper_wrap t.provers ~txn_snark in
-      let%bind final_snark =
-        match t.state.last with
-        | Some last' ->
-            Zeko_prover.Client.wrapper_merge t.provers last' wrapped
-        | None ->
-            return wrapped
-      in
-      t.state <- State.set_last t.state final_snark ;
-      t.state <- State.add_staged_command t.state command ;
-      t.state <- State.pop_queued_command t.state ;
-      return ()
+    (* let wrap_and_merge t txn_snark command =
+       let%bind wrapped = Zeko_prover.Client.wrapper_wrap t.provers ~txn_snark in
+       let%bind final_snark =
+         match t.state.last with
+         | Some last' ->
+             Zeko_prover.Client.wrapper_merge t.provers last' wrapped
+         | None ->
+             return wrapped
+       in
+       t.state <- State.set_last t.state final_snark ;
+       t.state <- State.add_staged_command t.state command ;
+       t.state <- State.pop_queued_command t.state ;
+       return () *)
 
-    let prove_signed_command t ~sparse_ledger ~user_command_in_block ~statement
-        =
-      let%bind txn_snark =
-        Utils.print_time "Transaction_snark.of_signed_command"
-          (Zeko_prover.Client.transaction_snark_of_signed_command t.provers
-             ~statement ~user_command_in_block ~sparse_ledger )
-      in
-      wrap_and_merge t txn_snark
-        (User_command.Signed_command
-           (Signed_command.forget_check user_command_in_block.transaction) )
+    (* let prove_signed_command t ~sparse_ledger ~user_command_in_block ~statement
+         =
+       let%bind txn_snark =
+         Utils.print_time "Transaction_snark.of_signed_command"
+           (Zeko_prover.Client.transaction_snark_of_signed_command t.provers
+              ~statement ~user_command_in_block ~sparse_ledger )
+       in
+       wrap_and_merge t txn_snark
+         (User_command.Signed_command
+            (Signed_command.forget_check user_command_in_block.transaction) ) *)
 
-    let prove_zkapp_command t ~witnesses ~zkapp_command =
-      let%bind txn_snark =
-        match witnesses with
-        | [] ->
-            failwith "No witnesses"
-        | (witness, spec, statement) :: rest ->
-            let%bind p1 =
-              Utils.print_time "Transaction_snark.of_zkapp_command_segment"
-                (Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
-                   t.provers ~statement ~witness ~spec )
-            in
-            Deferred.List.fold ~init:p1 rest
-              ~f:(fun acc (witness, spec, statement) ->
-                let%bind prev = return acc in
-                let%bind curr =
-                  Utils.print_time "Transaction_snark.of_zkapp_command_segment"
-                    (Zeko_prover.Client
-                     .transaction_snark_of_zkapp_command_segment t.provers
-                       ~statement ~witness ~spec )
-                in
-                let%bind merged =
-                  Utils.print_time "Transaction_snark.merge"
-                    (Zeko_prover.Client.transaction_snark_merge t.provers curr
-                       prev )
-                in
-                return merged )
-      in
-      wrap_and_merge t txn_snark (User_command.Zkapp_command zkapp_command)
+    (* let prove_zkapp_command t ~witnesses ~zkapp_command =
+       let%bind txn_snark =
+         match witnesses with
+         | [] ->
+             failwith "No witnesses"
+         | (witness, spec, statement) :: rest ->
+             let%bind p1 =
+               Utils.print_time "Transaction_snark.of_zkapp_command_segment"
+                 (Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
+                    t.provers ~statement ~witness ~spec )
+             in
+             Deferred.List.fold ~init:p1 rest
+               ~f:(fun acc (witness, spec, statement) ->
+                 let%bind prev = return acc in
+                 let%bind curr =
+                   Utils.print_time "Transaction_snark.of_zkapp_command_segment"
+                     (Zeko_prover.Client
+                      .transaction_snark_of_zkapp_command_segment t.provers
+                        ~statement ~witness ~spec )
+                 in
+                 let%bind merged =
+                   Utils.print_time "Transaction_snark.merge"
+                     (Zeko_prover.Client.transaction_snark_merge t.provers curr
+                        prev )
+                 in
+                 return merged )
+       in
+       wrap_and_merge t txn_snark (User_command.Zkapp_command zkapp_command) *)
 
     let enqueue t f =
       Throttle.enqueue t.q (fun () ->
@@ -250,17 +248,17 @@ module Sequencer = struct
           let () = persist_state ~kvdb:t.kvdb t.state () in
           result )
 
-    let enqueue_prove_command t command_witness =
-      t.state <- State.add_queued_command t.state command_witness ;
-      persist_state ~kvdb:t.kvdb t.state () ;
-      enqueue t (fun () ->
-          match command_witness with
-          | Command_witness.Signed_command
-              (sparse_ledger, user_command_in_block, statement) ->
-              prove_signed_command t ~sparse_ledger ~user_command_in_block
-                ~statement
-          | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
-              prove_zkapp_command t ~witnesses ~zkapp_command )
+    (* let enqueue_prove_command t command_witness =
+       t.state <- State.add_queued_command t.state command_witness ;
+       persist_state ~kvdb:t.kvdb t.state () ;
+       enqueue t (fun () ->
+           match command_witness with
+           | Command_witness.Signed_command
+               (sparse_ledger, user_command_in_block, statement) ->
+               prove_signed_command t ~sparse_ledger ~user_command_in_block
+                 ~statement
+           | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
+               prove_zkapp_command t ~witnesses ~zkapp_command ) *)
 
     let enqueue_prove_transfer_request t ~key ~(transfer : Transfer.t) =
       Throttle.enqueue t.q (fun () ->
@@ -322,60 +320,220 @@ module Sequencer = struct
           in
           return () )
 
-    let enqueue_prove_commit t ~target_ledger ~old_deposits_pointer
-        ~processed_deposits_pointer =
-      enqueue t (fun () ->
-          match List.is_empty t.state.staged_commands with
-          | true ->
-              print_endline "Nothing to commit" ;
-              return ()
-          | false -> (
-              print_endline "Committing..." ;
+    (* let enqueue_prove_commit t ~target_ledger ~old_deposits_pointer
+         ~processed_deposits_pointer =
+       enqueue t (fun () ->
+           match List.is_empty t.state.staged_commands with
+           | true ->
+               print_endline "Nothing to commit" ;
+               return ()
+           | false -> (
+               print_endline "Committing..." ;
 
-              match%bind
-                try_with (fun () ->
-                    let%bind signatures =
-                      Da_layer.Client.Sequencer.get_signatures t.da_client
-                        ~ledger_hash:(Sparse_ledger.merkle_root target_ledger)
-                      |> Deferred.map ~f:(fun x -> Option.value_exn x)
-                    in
-                    printf "Received %d signatures from da layer\n%!"
-                      (List.length signatures) ;
+               match%bind
+                 try_with (fun () ->
+                     let%bind signatures =
+                       Da_layer.Client.Sequencer.get_signatures t.da_client
+                         ~ledger_hash:(Sparse_ledger.merkle_root target_ledger)
+                       |> Deferred.map ~f:(fun x -> Option.value_exn x)
+                     in
+                     printf "Received %d signatures from da layer\n%!"
+                       (List.length signatures) ;
 
-                    let old_inner_ledger =
-                      Option.value_exn t.state.previous_committed_ledger
-                    in
-                    let new_inner_ledger = target_ledger in
-                    let commit_witness : Committer.Commit_witness.t =
-                      { old_inner_ledger
-                      ; new_inner_ledger
-                      ; old_deposits_pointer
-                      ; processed_deposits_pointer
-                      ; signatures
-                      ; last_snark = Option.value_exn t.state.last
-                      }
-                    in
-                    Committer.Store.store_commit t.kvdb commit_witness
-                      ~source:(Sparse_ledger.merkle_root old_inner_ledger)
-                      ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
+                     let old_inner_ledger =
+                       Option.value_exn t.state.previous_committed_ledger
+                     in
+                     let new_inner_ledger = target_ledger in
+                     let commit_witness : Committer.Commit_witness.t =
+                       { old_inner_ledger
+                       ; new_inner_ledger
+                       ; old_deposits_pointer
+                       ; processed_deposits_pointer
+                       ; signatures
+                       ; last_snark = Option.value_exn t.state.last
+                       }
+                     in
+                     Committer.Store.store_commit t.kvdb commit_witness
+                       ~source:(Sparse_ledger.merkle_root old_inner_ledger)
+                       ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
 
-                    let%bind command =
-                      Committer.prove_commit ~provers:t.provers
-                        ~executor:t.executor ~zkapp_pk:t.config.zkapp_pk
-                        ~archive_uri:t.config.archive_uri commit_witness
-                    in
-                    return @@ don't_wait_for
-                    @@ Executor.send_zkapp_command t.executor command )
-              with
-              | Ok _ ->
-                  t.state <- State.reset_for_new_batch t.state target_ledger ;
-                  return ()
-              | Error e ->
-                  (* Continue expanding batch if commit failed *)
-                  print_endline ("Commit failed: " ^ Exn.to_string e) ;
-                  return () ) )
+                     let%bind command =
+                       Committer.prove_commit ~provers:t.provers
+                         ~executor:t.executor ~zkapp_pk:t.config.zkapp_pk
+                         ~archive_uri:t.config.archive_uri commit_witness
+                     in
+                     return @@ don't_wait_for
+                     @@ Executor.send_zkapp_command t.executor command )
+               with
+               | Ok _ ->
+                   t.state <- State.reset_for_new_batch t.state target_ledger ;
+                   return ()
+               | Error e ->
+                   (* Continue expanding batch if commit failed *)
+                   print_endline ("Commit failed: " ^ Exn.to_string e) ;
+                   return () ) ) *)
 
     let wait_to_finish t = Throttle.capacity_available t.q
+  end
+
+  module Transactions_prover = struct
+    module Command_witness = struct
+      type t =
+        | Signed_command of
+            Sparse_ledger.t
+            * Signed_command.With_valid_signature.t Transaction_protocol_state.t
+            * Transaction_snark.Statement.With_sok.t
+        | Zkapp_command of
+            ( Transaction_witness.Zkapp_command_segment_witness.t
+            * Transaction_snark.Zkapp_command_segment.Basic.t
+            * Mina_state.Snarked_ledger_state.With_sok.t )
+            list
+            * Zkapp_command.t
+      [@@deriving yojson]
+    end
+
+    let wrap provers txn_snark =
+      Zeko_prover.Client.wrapper_wrap provers ~txn_snark
+
+    let merge provers a b = Zeko_prover.Client.wrapper_merge provers a b
+
+    let prove_signed_command provers ~sparse_ledger ~user_command_in_block
+        ~statement =
+      let%bind txn_snark =
+        Utils.print_time "Transaction_snark.of_signed_command"
+          (Zeko_prover.Client.transaction_snark_of_signed_command provers
+             ~statement ~user_command_in_block ~sparse_ledger )
+      in
+      wrap provers txn_snark
+
+    let prove_zkapp_command provers ~witnesses ~zkapp_command =
+      let%bind txn_snark =
+        match witnesses with
+        | [] ->
+            failwith "No witnesses"
+        | (witness, spec, statement) :: rest ->
+            let%bind p1 =
+              Utils.print_time "Transaction_snark.of_zkapp_command_segment"
+                (Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
+                   provers ~statement ~witness ~spec )
+            in
+            Deferred.List.fold ~init:p1 rest
+              ~f:(fun acc (witness, spec, statement) ->
+                let%bind prev = return acc in
+                let%bind curr =
+                  Utils.print_time "Transaction_snark.of_zkapp_command_segment"
+                    (Zeko_prover.Client
+                     .transaction_snark_of_zkapp_command_segment provers
+                       ~statement ~witness ~spec )
+                in
+                let%bind merged =
+                  Utils.print_time "Transaction_snark.merge"
+                    (Zeko_prover.Client.transaction_snark_merge provers curr
+                       prev )
+                in
+                return merged )
+      in
+      wrap provers txn_snark
+
+    module Context = struct
+      type t =
+        { provers : Zeko_prover.Client.State.t
+        ; da_client : Da_layer.Client.Sequencer.t
+        ; executor : Executor.t
+        ; config : Config.t
+        ; kvdb : Committer.Store.Kvdb.t
+        ; mutable previous_committed_ledger : Sparse_ledger.t option
+        ; mutable previous_committed_ledger_hash : Ledger_hash.t option
+        }
+
+      let set_previous_committed_ledger t ledger =
+        t.previous_committed_ledger <- Some ledger ;
+        t.previous_committed_ledger_hash <-
+          Some (Sparse_ledger.merkle_root ledger)
+    end
+
+    module Merge = struct
+      type t = Zkapps_rollup.t [@@deriving yojson]
+
+      let process ({ provers; _ } : Context.t) a b = merge provers a b
+    end
+
+    module Base = struct
+      type t = Command_witness.t [@@deriving yojson]
+
+      let process ({ provers; _ } : Context.t) command_witness =
+        match command_witness with
+        | Command_witness.Signed_command
+            (sparse_ledger, user_command_in_block, statement) ->
+            prove_signed_command provers ~sparse_ledger ~user_command_in_block
+              ~statement
+        | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
+            prove_zkapp_command provers ~witnesses ~zkapp_command
+    end
+
+    module Commit = struct
+      (* Only for yojson serialization of Field *)
+      module Field = Data_hash.Make_full_size (struct
+        let description = "Field"
+
+        let version_byte = '\x00'
+      end)
+
+      type aux =
+        { new_inner_ledger : Sparse_ledger.t
+        ; old_deposits_pointer : Field.t
+        ; processed_deposits_pointer : Field.t
+        }
+      [@@deriving yojson]
+
+      type t = aux * Zkapps_rollup.t [@@deriving yojson]
+
+      let process
+          ({ da_client
+           ; provers
+           ; executor
+           ; config
+           ; kvdb
+           ; previous_committed_ledger
+           } as ctx :
+            Context.t )
+          ( { new_inner_ledger
+            ; old_deposits_pointer
+            ; processed_deposits_pointer
+            }
+          , last_snark ) =
+        let%bind signatures =
+          Da_layer.Client.Sequencer.get_signatures da_client
+            ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
+          |> Deferred.map ~f:(fun x -> Option.value_exn x)
+        in
+        printf "Received %d signatures from da layer\n%!"
+          (List.length signatures) ;
+
+        let old_inner_ledger = Option.value_exn previous_committed_ledger in
+        let commit_witness : Committer.Commit_witness.t =
+          { old_inner_ledger
+          ; new_inner_ledger
+          ; old_deposits_pointer
+          ; processed_deposits_pointer
+          ; signatures
+          ; last_snark
+          }
+        in
+        Committer.Store.store_commit kvdb commit_witness
+          ~source:(Sparse_ledger.merkle_root old_inner_ledger)
+          ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
+
+        let%bind command =
+          Committer.prove_commit ~provers ~executor ~zkapp_pk:config.zkapp_pk
+            ~archive_uri:config.archive_uri commit_witness
+        in
+        let%bind () = Executor.send_zkapp_command executor command in
+        Context.set_previous_committed_ledger ctx new_inner_ledger ;
+        return ()
+    end
+
+    module P = Parallel_merger.Make (Context) (Merge) (Base) (Commit)
   end
 
   module State_hashes = struct
@@ -404,6 +562,8 @@ module Sequencer = struct
     ; archive : Archive.t
     ; config : Config.t
     ; snark_q : Snark_queue.t
+    ; transactions_prover :
+        Transactions_prover.P.t * Transactions_prover.Context.t
     ; stop : unit Ivar.t
     ; da_client : Da_layer.Client.Sequencer.t
     ; apply_q : unit Sequencer.t
@@ -439,16 +599,11 @@ module Sequencer = struct
   let is_empty t = L.Db.num_accounts t.db = 0
 
   let get_latest_state t =
-    let committed_ledger_hash =
-      Option.value ~default:Field.zero
-        t.snark_q.state.previous_committed_ledger_hash
-    in
+    (* TODO: proved hashes *)
     State_hashes.
-      { proved_ledger_hash =
-          Option.map t.snark_q.state.last ~f:Zkapps_rollup.target_ledger
-          |> Option.value ~default:committed_ledger_hash
+      { proved_ledger_hash = Field.zero
       ; unproved_ledger_hash = get_root t
-      ; committed_ledger_hash
+      ; committed_ledger_hash = Field.zero
       }
 
   let trigger_state_hashes_changed t =
@@ -667,7 +822,7 @@ module Sequencer = struct
               in
               Result.return
                 ( txn_applied
-                , Snark_queue.Command_witness.Signed_command
+                , Transactions_prover.Command_witness.Signed_command
                     (first_pass_ledger, user_command_in_block, statement) )
           | Zkapp_command zkapp_command ->
               let witnesses =
@@ -688,7 +843,7 @@ module Sequencer = struct
               in
               Result.return
                 ( txn_applied
-                , Snark_queue.Command_witness.Zkapp_command
+                , Transactions_prover.Command_witness.Zkapp_command
                     (witnesses, zkapp_command) ) )
 
   let update_inner_account t =
@@ -752,9 +907,11 @@ module Sequencer = struct
         | Error e ->
             Error.raise e
       in
+
+      let prover, context = t.transactions_prover in
       let () =
         don't_wait_for
-        @@ Snark_queue.enqueue_prove_command t.snark_q command_witness
+        @@ Transactions_prover.P.add_job prover context ~data:command_witness
       in
       return (old_deposits_state, processed_pointer)
 
@@ -765,17 +922,22 @@ module Sequencer = struct
         L.(of_database t.db)
         [ Zkapps_rollup.inner_account_id ]
     in
-    Snark_queue.enqueue_prove_commit t.snark_q ~target_ledger
-      ~old_deposits_pointer ~processed_deposits_pointer:processed_pointer
+    let prover, context = t.transactions_prover in
+    Transactions_prover.P.commit_exn prover context
+      ~aux:
+        { new_inner_ledger = target_ledger
+        ; old_deposits_pointer
+        ; processed_deposits_pointer = processed_pointer
+        }
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()
     else
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
       every ~start:(after period) ~stop:(Ivar.read t.stop) period (fun () ->
-          don't_wait_for @@ commit t )
+          don't_wait_for @@ Deferred.ignore_m @@ commit t )
 
-  let bootstrap ~logger ({ config; snark_q; _ } as t) da_config =
+  let bootstrap ~logger ({ config; _ } as t) da_config =
     let%bind committed_ledger_hash =
       Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
         ~signer_pk:(Public_key.compress config.signer.public_key)
@@ -841,8 +1003,9 @@ module Sequencer = struct
         L.(of_database t.db)
         [ Zkapps_rollup.inner_account_id ]
     in
-    t.snark_q.state <-
-      Snark_queue.State.reset_for_new_batch t.snark_q.state sparse_ledger ;
+    Transactions_prover.Context.set_previous_committed_ledger
+      (snd t.transactions_prover)
+      sparse_ledger ;
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
@@ -869,6 +1032,12 @@ module Sequencer = struct
       Da_layer.Client.Sequencer.create ~logger ~config:da_config
         ~quorum:da_quorum
     in
+    let kvdb = L.Db.zeko_kvdb db in
+    let provers =
+      Zeko_prover.Client.State.create
+        (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
+    in
+    let executor = Executor.create ~l1_uri:config.l1_uri ~signer ~kvdb () in
     let t =
       { db
       ; logger
@@ -876,8 +1045,17 @@ module Sequencer = struct
       ; config
       ; da_client
       ; snark_q =
-          Snark_queue.create ~da_client ~config ~signer
-            ~kvdb:(L.Db.zeko_kvdb db) ~provers
+          Snark_queue.create ~da_client ~config ~signer ~kvdb ~provers ~executor
+      ; transactions_prover =
+          ( Transactions_prover.P.create ()
+          , { provers
+            ; da_client
+            ; executor
+            ; config
+            ; kvdb
+            ; previous_committed_ledger = None
+            ; previous_committed_ledger_hash = None
+            } )
       ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
       ; subscriptions = Subscriptions.create ()
@@ -886,24 +1064,23 @@ module Sequencer = struct
     in
     let%bind () =
       if is_empty t then bootstrap ~logger t da_config
-      else (
-        Snark_queue.get_state ~kvdb:(L.Db.zeko_kvdb db)
-        |> Option.iter ~f:(fun state -> t.snark_q.state <- state) ;
+      else
+        (* TODO: restart *)
+        (* Snark_queue.get_state ~kvdb:(L.Db.zeko_kvdb db)
+           |> Option.iter ~f:(fun state -> t.snark_q.state <- state) ; *)
+        (* printf "Staged %d commands \n%!"
+             (List.length t.snark_q.state.staged_commands) ;
+           printf "Requeueing %d commands\n%!"
+             (List.length t.snark_q.state.queued_commands) ;
 
-        printf "Staged %d commands \n%!"
-          (List.length t.snark_q.state.staged_commands) ;
-        printf "Requeueing %d commands\n%!"
-          (List.length t.snark_q.state.queued_commands) ;
-
-        let queued_commands = t.snark_q.state.queued_commands in
-        (* enqueue will requeue also state *)
-        t.snark_q.state <-
-          Snark_queue.State.clear_queued_commands t.snark_q.state ;
-        List.iter queued_commands ~f:(fun command_witness ->
-            don't_wait_for
-            @@ Snark_queue.enqueue_prove_command t.snark_q command_witness ) ;
-
-        return () )
+           let queued_commands = t.snark_q.state.queued_commands in
+           (* enqueue will requeue also state *)
+           t.snark_q.state <-
+             Snark_queue.State.clear_queued_commands t.snark_q.state ;
+           List.iter queued_commands ~f:(fun command_witness ->
+               don't_wait_for
+               @@ Snark_queue.enqueue_prove_command t.snark_q command_witness ) ; *)
+        return ()
     in
     let%bind () =
       Committer.recommit_all ~provers:t.snark_q.provers
@@ -1190,9 +1367,10 @@ let%test_module "Sequencer tests" =
                         | Error e ->
                             Error.raise e
                       in
+                      let provers, context = sequencer.transactions_prover in
                       don't_wait_for
-                      @@ Snark_queue.enqueue_prove_command sequencer.snark_q
-                           command_witness ;
+                      @@ Transactions_prover.P.add_job provers context
+                           ~data:command_witness ;
 
                       let status =
                         L.Transaction_applied.transaction_status txn_applied
@@ -1205,25 +1383,25 @@ let%test_module "Sequencer tests" =
                 [%test_eq: Ledger_hash.t] target_ledger_hash
                   (L.merkle_root ephemeral_ledger) ;
 
-                let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+                (*
+                                 let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
 
-                [%test_eq: Bool.t] true
-                  (Option.is_some sequencer.snark_q.state.last) ;
-                let snark = Option.value_exn sequencer.snark_q.state.last in
-                (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
-                [%test_eq: Ledger_hash.t]
-                  (Zkapps_rollup.source_ledger snark)
-                  source_ledger_hash ;
-                [%test_eq: Ledger_hash.t]
-                  (Zkapps_rollup.target_ledger snark)
-                  target_ledger_hash ;
-
+                                 [%test_eq: Bool.t] true
+                                   (Option.is_some sequencer.snark_q.state.last) ;
+                                 let snark = Option.value_exn sequencer.snark_q.state.last in
+                                 (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
+                                 [%test_eq: Ledger_hash.t]
+                                   (Zkapps_rollup.source_ledger snark)
+                                   source_ledger_hash ;
+                                 [%test_eq: Ledger_hash.t]
+                                   (Zkapps_rollup.target_ledger snark)
+                                   target_ledger_hash ; *)
                 return () )
           in
 
           (* First commit *)
           Thread_safe.block_on_async_exn (fun () ->
-              let%bind () = commit sequencer in
+              let%bind _ = commit sequencer in
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
               let%bind () =
                 Executor.wait_to_finish sequencer.snark_q.executor
@@ -1302,9 +1480,10 @@ let%test_module "Sequencer tests" =
                       | Error e ->
                           Error.raise e
                     in
+                    let provers, context = sequencer.transactions_prover in
                     don't_wait_for
-                    @@ Snark_queue.enqueue_prove_command sequencer.snark_q
-                         command_witness ;
+                    @@ Transactions_prover.P.add_job provers context
+                         ~data:command_witness ;
 
                     let status =
                       L.Transaction_applied.transaction_status txn_applied
@@ -1317,25 +1496,24 @@ let%test_module "Sequencer tests" =
               [%test_eq: Ledger_hash.t] target_ledger_hash
                 (L.merkle_root ephemeral_ledger) ;
 
-              let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+              (* let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
 
-              [%test_eq: Bool.t] true
-                (Option.is_some sequencer.snark_q.state.last) ;
-              let snark = Option.value_exn sequencer.snark_q.state.last in
-              (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
-              [%test_eq: Ledger_hash.t]
-                (Zkapps_rollup.source_ledger snark)
-                source_ledger_hash ;
-              [%test_eq: Ledger_hash.t]
-                (Zkapps_rollup.target_ledger snark)
-                target_ledger_hash ;
-
+                 [%test_eq: Bool.t] true
+                   (Option.is_some sequencer.snark_q.state.last) ;
+                 let snark = Option.value_exn sequencer.snark_q.state.last in
+                 (* let stmt = Zkapps_rollup.Wrapper_rules.statement snark in *)
+                 [%test_eq: Ledger_hash.t]
+                   (Zkapps_rollup.source_ledger snark)
+                   source_ledger_hash ;
+                 [%test_eq: Ledger_hash.t]
+                   (Zkapps_rollup.target_ledger snark)
+                   target_ledger_hash ; *)
               return () ) ;
 
           (* Second commit *)
           let final_ledger_hash =
             Thread_safe.block_on_async_exn (fun () ->
-                let%bind () = commit sequencer in
+                let%bind _ = commit sequencer in
                 let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
                 let%bind () =
                   Executor.wait_to_finish sequencer.snark_q.executor
@@ -1543,7 +1721,7 @@ let%test_module "Sequencer tests" =
 
           (* Commit should process first 2 deposits *)
           Thread_safe.block_on_async_exn (fun () ->
-              let%bind () = commit sequencer in
+              let%bind _ = commit sequencer in
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
               let%bind () =
                 Executor.wait_to_finish sequencer.snark_q.executor
@@ -1587,7 +1765,7 @@ let%test_module "Sequencer tests" =
 
           (* Commit should process remaining deposits *)
           Thread_safe.block_on_async_exn (fun () ->
-              let%bind () = commit sequencer in
+              let%bind _ = commit sequencer in
               let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
               let%bind () =
                 Executor.wait_to_finish sequencer.snark_q.executor

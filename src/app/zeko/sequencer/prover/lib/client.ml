@@ -17,28 +17,36 @@ module State = struct
           Deferred.t
           lazy_t
           ref
-        * Tcp.Where_to_connect.inet )
-        array
+        * Tcp.Where_to_connect.inet
+        * [ `In_use | `Free ] ref )
+        list
     ; mutable next : int
     }
 
   let create provers =
     let connections =
-      List.map provers ~f:(fun x -> (ref (lazy (try_connect x)), x))
+      List.map provers ~f:(fun x -> (ref (lazy (try_connect x)), x, ref `Free))
     in
-    { provers = Array.of_list connections; next = 0 }
+    { provers = connections; next = 0 }
 
-  let next_prover t =
-    let n = t.next in
-    t.next <- (n + 1) mod Array.length t.provers ;
-    Array.get t.provers n
+  let rec next_prover t =
+    match
+      List.find t.provers ~f:(fun (_, _, status) ->
+          match !status with `Free -> true | `In_use -> false )
+    with
+    | Some prover ->
+        return prover
+    | None ->
+        let%bind () = Clock.after (Time.Span.of_sec 1.) in
+        next_prover t
 end
 
 (* Get the reference of next prover.
    If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
 let rec send ?(timeout = 10.) ?(attempts = 5) t (input : Prover.Input.t) :
     Prover.Output.t Deferred.t =
-  let connection_ref, where_to_connect = State.next_prover t in
+  let%bind connection_ref, where_to_connect, status = State.next_prover t in
+  status := `In_use ;
   match%bind
     Async.with_timeout (Time.Span.of_sec timeout)
       ( match%bind Lazy.force !connection_ref with
@@ -64,8 +72,10 @@ let rec send ?(timeout = 10.) ?(attempts = 5) t (input : Prover.Input.t) :
               failwith "Timeout while proving" ) )
   with
   | `Result (`Ok r) ->
+      status := `Free ;
       return r
   | `Timeout | `Result `Connection_error ->
+      status := `Free ;
       printf "Timeout while proving %f, retrying attempts remaining: %d\n%!"
         timeout attempts ;
       if attempts > 0 then (

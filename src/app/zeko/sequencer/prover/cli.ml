@@ -9,6 +9,8 @@ let run_server =
       (let%map_open.Command port =
          flag "--port" (required int) ~doc:"int Port to listen on"
        in
+       let logger = Logger.create () in
+       [%log info] "Compiling circuits" ;
        let module T = Transaction_snark.Make (struct
          let constraint_constants = Server.constraint_constants
 
@@ -16,7 +18,6 @@ let run_server =
        end) in
        let module M = Zkapps_rollup.Make (T) in
        let module S = Server.Make (T) (M) in
-       let logger = Logger.create () in
        fun () -> S.run ~logger ~port ) )
 
 let () =
