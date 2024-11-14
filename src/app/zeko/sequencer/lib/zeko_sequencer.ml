@@ -222,17 +222,9 @@ module Sequencer = struct
           ; previous_committed_ledger_hash = None
           ; commands = []
           }
-
-        let reset_context_state t ledger =
-          t.commands <- [] ;
-          t.previous_committed_ledger <- Some ledger ;
-          t.previous_committed_ledger_hash <-
-            Some (Sparse_ledger.merkle_root ledger)
-
-        let add_command t command = t.commands <- t.commands @ [ command ]
       end
 
-      module Kvdb = struct
+      module Db = struct
         module Key_value = struct
           type _ t = Context_state : (unit * State.t) t
 
@@ -272,6 +264,27 @@ module Sequencer = struct
         ; kvdb : Committer.Store.Kvdb.t
         ; state : State.t
         }
+
+      let save_state t =
+        Db.set t.kvdb Db.Key_value.Context_state ~key:() ~data:t.state
+
+      let load_state kvdb =
+        match Db.get kvdb Db.Key_value.Context_state ~key:() with
+        | Some state ->
+            state
+        | None ->
+            State.create ()
+
+      let reset_state t ledger =
+        t.state.commands <- [] ;
+        t.state.previous_committed_ledger <- Some ledger ;
+        t.state.previous_committed_ledger_hash <-
+          Some (Sparse_ledger.merkle_root ledger) ;
+        save_state t
+
+      let add_command t command =
+        t.state.commands <- t.state.commands @ [ command ] ;
+        save_state t
     end
 
     module Merge = struct
@@ -283,14 +296,15 @@ module Sequencer = struct
     module Base = struct
       type t = Command_witness.t [@@deriving yojson]
 
-      let process ({ provers; _ } : Context.t) command_witness =
+      let process (ctx : Context.t) command_witness =
+        Context.add_command ctx command_witness ;
         match command_witness with
         | Command_witness.Signed_command
             (sparse_ledger, user_command_in_block, statement) ->
-            prove_signed_command provers ~sparse_ledger ~user_command_in_block
-              ~statement
+            prove_signed_command ctx.provers ~sparse_ledger
+              ~user_command_in_block ~statement
         | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
-            prove_zkapp_command provers ~witnesses ~zkapp_command
+            prove_zkapp_command ctx.provers ~witnesses ~zkapp_command
     end
 
     module Commit = struct
@@ -311,7 +325,8 @@ module Sequencer = struct
       type t = aux * Zkapps_rollup.t [@@deriving yojson]
 
       let process
-          ({ da_client; provers; executor; config; kvdb; state } : Context.t)
+          ({ da_client; provers; executor; config; kvdb; state } as ctx :
+            Context.t )
           ( { new_inner_ledger
             ; old_deposits_pointer
             ; processed_deposits_pointer
@@ -346,11 +361,19 @@ module Sequencer = struct
             ~archive_uri:config.archive_uri commit_witness
         in
         let%bind () = Executor.send_zkapp_command executor command in
-        Context.State.reset_context_state state new_inner_ledger ;
+        Context.reset_state ctx new_inner_ledger ;
         return ()
     end
 
     module P = Parallel_merger.Make (Context) (Merge) (Base) (Commit)
+
+    let requeue_after_restart t (ctx : Context.t) =
+      let commands_to_requeue = ctx.state.commands in
+      (* Adding jobs will repopulate the list *)
+      ctx.state.commands <- [] ;
+      printf "Requeueing %d commands\n%!" (List.length commands_to_requeue) ;
+      List.iter commands_to_requeue ~f:(fun command ->
+          don't_wait_for @@ P.add_job t ctx ~data:command )
   end
 
   module State_hashes = struct
@@ -513,8 +536,7 @@ module Sequencer = struct
           let%bind.Deferred.Result () =
             return
             @@
-            if
-              Merger.P.get_number_of_wip_jobs t.merger >= t.config.max_pool_size
+            if Merger.P.number_of_wip_jobs t.merger >= t.config.max_pool_size
             then Error (Error.of_string "Maximum pool size reached, try later")
             else Ok ()
           in
@@ -738,12 +760,19 @@ module Sequencer = struct
         L.(of_database t.db)
         [ Zkapps_rollup.inner_account_id ]
     in
-    Merger.P.commit_exn t.merger t.merger_ctx
-      ~aux:
-        { new_inner_ledger = target_ledger
-        ; old_deposits_pointer
-        ; processed_deposits_pointer = processed_pointer
-        }
+    if
+      Merger.P.current_tree t.merger
+      |> Option.map ~f:Merger.P.Tree.is_empty
+      |> Option.value ~default:true
+    then return (print_endline "Nothing to commit")
+    else
+      Merger.P.commit_exn t.merger t.merger_ctx
+        ~aux:
+          { new_inner_ledger = target_ledger
+          ; old_deposits_pointer
+          ; processed_deposits_pointer = processed_pointer
+          }
+      |> Deferred.ignore_m
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()
@@ -818,7 +847,7 @@ module Sequencer = struct
         L.(of_database t.db)
         [ Zkapps_rollup.inner_account_id ]
     in
-    Merger.Context.State.reset_context_state t.merger_ctx.state sparse_ledger ;
+    Merger.Context.reset_state t.merger_ctx sparse_ledger ;
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
@@ -865,7 +894,7 @@ module Sequencer = struct
           ; executor
           ; config
           ; kvdb
-          ; state = Merger.Context.State.create ()
+          ; state = Merger.Context.load_state kvdb
           }
       ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
@@ -875,23 +904,7 @@ module Sequencer = struct
     in
     let%bind () =
       if is_empty t then bootstrap ~logger t da_config
-      else
-        (* TODO: restart *)
-        (* Snark_queue.get_state ~kvdb:(L.Db.zeko_kvdb db)
-           |> Option.iter ~f:(fun state -> t.snark_q.state <- state) ; *)
-        (* printf "Staged %d commands \n%!"
-             (List.length t.snark_q.state.staged_commands) ;
-           printf "Requeueing %d commands\n%!"
-             (List.length t.snark_q.state.queued_commands) ;
-
-           let queued_commands = t.snark_q.state.queued_commands in
-           (* enqueue will requeue also state *)
-           t.snark_q.state <-
-             Snark_queue.State.clear_queued_commands t.snark_q.state ;
-           List.iter queued_commands ~f:(fun command_witness ->
-               don't_wait_for
-               @@ Snark_queue.enqueue_prove_command t.snark_q command_witness ) ; *)
-        return ()
+      else return @@ Merger.requeue_after_restart t.merger t.merger_ctx
     in
     let%bind () =
       Committer.recommit_all ~provers:t.snark_q.provers

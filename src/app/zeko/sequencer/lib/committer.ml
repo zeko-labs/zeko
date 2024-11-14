@@ -128,7 +128,7 @@ let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
     |> Deferred.map ~f:(List.map ~f:fst)
   in
   let%bind account_update =
-    Zeko_prover.Client.outer_step ~timeout:30. provers ~last:last_snark
+    Zeko_prover.Client.outer_step ~proving_timeout:30. provers ~last:last_snark
       ~outer_public_key:zkapp_pk ~new_deposits:(List.rev new_deposits)
       ~unprocessed_deposits:(List.rev unprocessed_deposits)
       ~old_inner_ledger ~new_inner_ledger

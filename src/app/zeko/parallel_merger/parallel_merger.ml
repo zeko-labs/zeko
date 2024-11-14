@@ -147,19 +147,21 @@ struct
       let%bind result = Base.process ctx data in
       finish_job_exn t ctx ~id ~data:result
 
-    let get_result t =
+    let result t =
       match t with
       | [ With_id.{ value = Job_status.Done result; _ } ] ->
           Some result
       | _ ->
           None
 
-    let get_number_of_wip_jobs t =
+    let number_of_wip_jobs t =
       List.count t.jobs ~f:(function
         | { value = Todo _; _ } ->
             true
         | _ ->
             false )
+
+    let is_empty t = List.is_empty t.jobs
   end
 
   type t = { mutable trees : Tree.t list } [@@deriving yojson]
@@ -192,7 +194,7 @@ struct
     | Some last ->
         Tree.add_job_exn last context ~id:(generate_id ()) ~data
 
-  let get_pending_jobs t =
+  let pending_jobs t =
     List.concat t
     |> List.filter_map ~f:(function
          | With_id.{ id; value = Job_status.Todo job } ->
@@ -200,11 +202,10 @@ struct
          | _ ->
              None )
 
-  let get_number_of_wip_jobs t =
-    List.sum
-      (module Int)
-      t.trees
-      ~f:(fun tree -> Tree.get_number_of_wip_jobs tree)
+  let number_of_wip_jobs t =
+    List.sum (module Int) t.trees ~f:(fun tree -> Tree.number_of_wip_jobs tree)
+
+  let current_tree t = List.last t.trees
 end
 
 let%test_module "parallel_merge on (+)" =
