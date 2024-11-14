@@ -209,20 +209,69 @@ module Sequencer = struct
       wrap provers txn_snark
 
     module Context = struct
+      module State = struct
+        type t =
+          { mutable previous_committed_ledger : Sparse_ledger.t option
+          ; mutable previous_committed_ledger_hash : Ledger_hash.t option
+          ; mutable commands : Command_witness.t list
+          }
+        [@@deriving yojson]
+
+        let create () =
+          { previous_committed_ledger = None
+          ; previous_committed_ledger_hash = None
+          ; commands = []
+          }
+
+        let reset_context_state t ledger =
+          t.commands <- [] ;
+          t.previous_committed_ledger <- Some ledger ;
+          t.previous_committed_ledger_hash <-
+            Some (Sparse_ledger.merkle_root ledger)
+
+        let add_command t command = t.commands <- t.commands @ [ command ]
+      end
+
+      module Kvdb = struct
+        module Key_value = struct
+          type _ t = Context_state : (unit * State.t) t
+
+          let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
+           fun pair_type key ->
+            match pair_type with
+            | Context_state ->
+                Bigstring.of_string "context_state"
+
+          let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
+           fun pair_type value ->
+            match pair_type with
+            | Context_state ->
+                Bigstring.of_string @@ Yojson.Safe.to_string
+                @@ State.to_yojson value
+
+          let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
+            let ok_exn x =
+              let open Ppx_deriving_yojson_runtime.Result in
+              match x with Ok x -> x | Error e -> failwith e
+            in
+            fun pair_type data ->
+              match pair_type with
+              | Context_state ->
+                  ok_exn @@ State.of_yojson @@ Yojson.Safe.from_string
+                  @@ Bigstring.to_string data
+        end
+
+        include Kvdb_base.Make (Key_value)
+      end
+
       type t =
         { provers : Zeko_prover.Client.State.t
         ; da_client : Da_layer.Client.Sequencer.t
         ; executor : Executor.t
         ; config : Config.t
         ; kvdb : Committer.Store.Kvdb.t
-        ; mutable previous_committed_ledger : Sparse_ledger.t option
-        ; mutable previous_committed_ledger_hash : Ledger_hash.t option
+        ; state : State.t
         }
-
-      let set_previous_committed_ledger t ledger =
-        t.previous_committed_ledger <- Some ledger ;
-        t.previous_committed_ledger_hash <-
-          Some (Sparse_ledger.merkle_root ledger)
     end
 
     module Merge = struct
@@ -262,14 +311,7 @@ module Sequencer = struct
       type t = aux * Zkapps_rollup.t [@@deriving yojson]
 
       let process
-          ({ da_client
-           ; provers
-           ; executor
-           ; config
-           ; kvdb
-           ; previous_committed_ledger
-           } as ctx :
-            Context.t )
+          ({ da_client; provers; executor; config; kvdb; state } : Context.t)
           ( { new_inner_ledger
             ; old_deposits_pointer
             ; processed_deposits_pointer
@@ -283,7 +325,9 @@ module Sequencer = struct
         printf "Received %d signatures from da layer\n%!"
           (List.length signatures) ;
 
-        let old_inner_ledger = Option.value_exn previous_committed_ledger in
+        let old_inner_ledger =
+          Option.value_exn state.previous_committed_ledger
+        in
         let commit_witness : Committer.Commit_witness.t =
           { old_inner_ledger
           ; new_inner_ledger
@@ -302,7 +346,7 @@ module Sequencer = struct
             ~archive_uri:config.archive_uri commit_witness
         in
         let%bind () = Executor.send_zkapp_command executor command in
-        Context.set_previous_committed_ledger ctx new_inner_ledger ;
+        Context.State.reset_context_state state new_inner_ledger ;
         return ()
     end
 
@@ -774,7 +818,7 @@ module Sequencer = struct
         L.(of_database t.db)
         [ Zkapps_rollup.inner_account_id ]
     in
-    Merger.Context.set_previous_committed_ledger t.merger_ctx sparse_ledger ;
+    Merger.Context.State.reset_context_state t.merger_ctx.state sparse_ledger ;
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
@@ -821,8 +865,7 @@ module Sequencer = struct
           ; executor
           ; config
           ; kvdb
-          ; previous_committed_ledger = None
-          ; previous_committed_ledger_hash = None
+          ; state = Merger.Context.State.create ()
           }
       ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
@@ -871,6 +914,8 @@ end
 
 let%test_module "Sequencer tests" =
   ( module struct
+    let start_time = Time.now ()
+
     let () = Base.Backtrace.elide := false
 
     let logger = Logger.create ()
@@ -1533,4 +1578,8 @@ let%test_module "Sequencer tests" =
                   (Zkapps_rollup.TR.to_actions transfer) )
           in
           [%test_eq: Field.t] deposits_state expected_deposits_state )
+
+    let () =
+      printf "Sequencer tests took %s\n"
+        (Time.Span.to_string (Time.diff (Time.now ()) start_time))
   end )
