@@ -399,9 +399,7 @@ struct
 
     let rule : _ Compile_simple.branch =
       { branch_name = "finalize deposit"
-      ; tags =
-          Two_tags
-            (Tag (force Check_accepted.tag), Tag (force Ase.With_length.tag))
+      ; tags = Two_tags (force Check_accepted.tag, force Ase.With_length.tag)
       ; main
       }
   end
@@ -440,9 +438,7 @@ struct
       let rule : _ Compile_simple.branch =
         { branch_name = "Verify_two_outer_ases"
         ; tags =
-            Two_tags
-              ( Tag (force Ase.Without_length.tag)
-              , Tag (force Ase.With_length.tag) )
+            Two_tags (force Ase.Without_length.tag, force Ase.With_length.tag)
         ; main
         }
 
@@ -485,9 +481,7 @@ struct
 
       let rule : _ Compile_simple.branch =
         { branch_name = "Verify_two_outer_ases"
-        ; tags =
-            Two_tags
-              (Tag (force Check_accepted.tag), Tag (force Ase.With_length.tag))
+        ; tags = Two_tags (force Check_accepted.tag, force Ase.With_length.tag)
         ; main
         }
 
@@ -721,9 +715,7 @@ struct
       in
       { branch_name = "finalize cancelled deposit"
       ; tags =
-          Two_tags
-            ( Tag verify_two_outer_ases_tag
-            , Tag verify_check_accepted_and_ase_tag )
+          Two_tags (verify_two_outer_ases_tag, verify_check_accepted_and_ase_tag)
       ; main
       }
   end
@@ -960,9 +952,7 @@ struct
 
     let rule : _ Compile_simple.branch =
       { branch_name = "finalize withdrawal"
-      ; tags =
-          Two_tags
-            (Tag (force Ase.Without_length.tag), Tag (force Ase.With_length.tag))
+      ; tags = Two_tags (force Ase.Without_length.tag, force Ase.With_length.tag)
       ; main
       }
   end

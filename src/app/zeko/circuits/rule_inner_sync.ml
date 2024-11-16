@@ -67,6 +67,6 @@ let%snarkydef_ main (w : Witness.t V.t) =
 
 let rule : _ Compile_simple.branch =
   { branch_name = "Rollup inner account step"
-  ; tags = One_tag (Tag (force Ase.With_length.tag))
+  ; tags = One_tag (force Ase.With_length.tag)
   ; main
   }

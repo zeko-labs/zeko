@@ -1,5 +1,6 @@
 open Core_kernel
 open Snark_params.Tick
+open Checked.Let_syntax
 include Compile_simple_intf
 
 let ( let* ) = Checked.Let_syntax.( >>= )
@@ -70,17 +71,28 @@ let input_for_main (type input)
   end in
   (exists_input, handler)
 
-let transform_main_one (type out_var prev_var prev_width)
-    (main : (out_var, (prev_var, prev_width) one_prev) main_return Checked.t) :
-    ( prev_var * unit
-    , prev_width * unit
-    , out_var
-    , unit )
-    Pickles.Inductive_rule.main_return
-    Checked.t =
-  let*| ({ out; prevs = One_prev { public_input; proof; proof_must_verify } } :
-          _ main_return ) =
-    main
+(* TODO: Remove, OCaml couldn't refute One_prev_sideloaded case without this. *)
+let transform_main_one' out = function
+  | One_prev { public_input; proof; proof_must_verify } ->
+      Pickles.Inductive_rule.
+        { previous_proof_statements =
+            [ { public_input; proof = V.as_ref proof; proof_must_verify } ]
+        ; public_output = out
+        ; auxiliary_output = ()
+        }
+  | Two_prevs_sideloaded (_left, _right) -> .
+
+let transform_main_one ({ out; prevs } : _ main_return) =
+  transform_main_one' out prevs
+
+let transform_main_one_sideloaded ~sideloaded
+    ({ out
+     ; prevs =
+         One_prev_sideloaded { public_input; proof; proof_must_verify; vk }
+     } :
+      _ main_return ) =
+  let*| () =
+    make_checked (fun () -> Pickles.Side_loaded.in_circuit sideloaded vk)
   in
   Pickles.Inductive_rule.
     { previous_proof_statements =
@@ -89,32 +101,47 @@ let transform_main_one (type out_var prev_var prev_width)
     ; auxiliary_output = ()
     }
 
-let transform_main_two (type out_var left_var left_width right_var right_width)
-    (main :
-      ( out_var
-      , (left_var, left_width, right_var, right_width) two_prevs )
-      main_return
-      Checked.t ) :
-    ( left_var * (right_var * unit)
-    , left_width * (right_width * unit)
-    , out_var
-    , unit )
-    Pickles.Inductive_rule.main_return
-    Checked.t =
-  let*| ({ out
-         ; prevs =
-             Two_prevs
-               ( { public_input = left_public_input
-                 ; proof = left_proof
-                 ; proof_must_verify = left_proof_must_verify
-                 }
-               , { public_input = right_public_input
-                 ; proof = right_proof
-                 ; proof_must_verify = right_proof_must_verify
-                 } )
-         } :
-          _ main_return ) =
-    main
+let transform_main_two' out
+    (Two_prevs
+      ( { public_input = left_public_input
+        ; proof = left_proof
+        ; proof_must_verify = left_proof_must_verify
+        }
+      , { public_input = right_public_input
+        ; proof = right_proof
+        ; proof_must_verify = right_proof_must_verify
+        } ) ) =
+  Pickles.Inductive_rule.
+    { previous_proof_statements =
+        [ { public_input = left_public_input
+          ; proof = V.as_ref left_proof
+          ; proof_must_verify = left_proof_must_verify
+          }
+        ; { public_input = right_public_input
+          ; proof = V.as_ref right_proof
+          ; proof_must_verify = right_proof_must_verify
+          }
+        ]
+    ; public_output = out
+    ; auxiliary_output = ()
+    }
+
+let transform_main_two ({ out; prevs } : _ main_return) =
+  transform_main_two' out prevs
+
+let transform_main_two_one_sideloaded' ~sideloaded out
+    (Two_prevs_one_sideloaded
+      ( { public_input = left_public_input
+        ; proof = left_proof
+        ; proof_must_verify = left_proof_must_verify
+        ; vk
+        }
+      , { public_input = right_public_input
+        ; proof = right_proof
+        ; proof_must_verify = right_proof_must_verify
+        } ) ) =
+  let*| () =
+    make_checked (fun () -> Pickles.Side_loaded.in_circuit sideloaded vk)
   in
   Pickles.Inductive_rule.
     { previous_proof_statements =
@@ -130,6 +157,9 @@ let transform_main_two (type out_var left_var left_width right_var right_width)
     ; public_output = out
     ; auxiliary_output = ()
     }
+
+let transform_main_two_one_sideloaded ({ out; prevs } : _ main_return) =
+  transform_main_two_one_sideloaded' out prevs
 
 type ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return =
   | Choices :
@@ -159,7 +189,8 @@ type ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return =
       -> ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return
 
 let transform_prover :
-       branch_name:string
+       ?pre_prove:('input -> unit)
+    -> branch_name:string
     -> name:string
     -> (   ?handler:
              (   Snarky_backendless.Request.request
@@ -171,10 +202,11 @@ let transform_prover :
         -> Snarky_backendless.Request.response )
     -> 'input
     -> ('out_t * Pickles.Side_loaded.Proof.t) Promise.t =
- fun ~branch_name ~name prover handler input ->
+ fun ?pre_prove ~branch_name ~name prover handler input ->
   let@ () =
     time_promise @@ "(compile_simple) proving " ^ name ^ "." ^ branch_name
   in
+  (match pre_prove with Some f -> f input | None -> ()) ;
   let@ stmt, (), proof =
     prover ~handler:(handler input) () |> Promise.( >>| )
   in
@@ -229,14 +261,12 @@ let rec branches_to_choices :
                       in
                       rule :: f ~self )
                 }
-          | One_tag (Tag tag) ->
+          | One_tag tag ->
               Choices
                 { transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main =
-                        Checked.(input >>= main) |> transform_main_one
-                      in
+                      let main = input >>= main >>| transform_main_one in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -247,14 +277,12 @@ let rec branches_to_choices :
                       in
                       rule :: f ~self )
                 }
-          | One_tag Own_tag ->
+          | One_tag_own ->
               Choices
                 { transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main =
-                        Checked.(input >>= main) |> transform_main_one
-                      in
+                      let main = input >>= main >>| transform_main_one in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -265,14 +293,12 @@ let rec branches_to_choices :
                       in
                       rule :: f ~self )
                 }
-          | Two_tags (Tag left_tag, Tag right_tag) ->
+          | Two_tags (left_tag, right_tag) ->
               Choices
                 { transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main =
-                        Checked.(input >>= main) |> transform_main_two
-                      in
+                      let main = input >>= main >>| transform_main_two in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -283,14 +309,12 @@ let rec branches_to_choices :
                       in
                       rule :: f ~self )
                 }
-          | Two_tags (Own_tag, Tag right_tag) ->
+          | Two_tags_one_own right_tag ->
               Choices
                 { transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main =
-                        Checked.(input >>= main) |> transform_main_two
-                      in
+                      let main = input >>= main >>| transform_main_two in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -301,37 +325,243 @@ let rec branches_to_choices :
                       in
                       rule :: f ~self )
                 }
-          | Two_tags (Tag left_tag, Own_tag) ->
+          | Two_tags_own ->
               Choices
                 { transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main =
-                        Checked.(input >>= main) |> transform_main_two
-                      in
-                      let rule : _ Pickles.Inductive_rule.Promise.t =
-                        { identifier = branch_name
-                        ; main =
-                            (fun _ -> Run.run_checked main |> Promise.return)
-                        ; prevs = [ left_tag; self ]
-                        ; feature_flags
-                        }
-                      in
-                      rule :: f ~self )
-                }
-          | Two_tags (Own_tag, Own_tag) ->
-              Choices
-                { transform_provers
-                ; rules =
-                    (fun ~self ->
-                      let main =
-                        Checked.(input >>= main) |> transform_main_two
-                      in
+                      let main = input >>= main >>| transform_main_two in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
                             (fun _ -> Run.run_checked main |> Promise.return)
                         ; prevs = [ self; self ]
+                        ; feature_flags
+                        }
+                      in
+                      rule :: f ~self )
+                }
+          | One_tag_sideloaded { sideloaded_tag_name; typ; extract_vk } ->
+              let sideloaded =
+                let feature_flags : Pickles_types.Plonk_types.Features.options =
+                  { range_check0 = Maybe
+                  ; range_check1 = Maybe
+                  ; foreign_field_add = Maybe
+                  ; foreign_field_mul = Maybe
+                  ; xor = Maybe
+                  ; rot = Maybe
+                  ; lookup = Maybe
+                  ; runtime_tables = Maybe
+                  }
+                in
+                Pickles.Side_loaded.create ~name:sideloaded_tag_name ~typ
+                  ~feature_flags
+                  ~max_proofs_verified:
+                    (module Pickles.Side_loaded.Verification_key.Max_width)
+              in
+              Choices
+                { transform_provers =
+                    (fun (prover :: provers) ->
+                      let pre_prove input =
+                        Pickles.Side_loaded.in_prover sideloaded
+                          (extract_vk input)
+                      in
+                      transform_prover ~pre_prove ~branch_name ~name prover
+                        handler
+                      :: prev_transform_provers provers )
+                ; rules =
+                    (fun ~self ->
+                      let main =
+                        input >>= main
+                        >>= transform_main_one_sideloaded ~sideloaded
+                      in
+                      let rule : _ Pickles.Inductive_rule.Promise.t =
+                        { identifier = branch_name
+                        ; main =
+                            (fun _ -> Run.run_checked main |> Promise.return)
+                        ; prevs = [ sideloaded ]
+                        ; feature_flags
+                        }
+                      in
+                      rule :: f ~self )
+                }
+          | Two_tags_one_sideloaded
+              ({ sideloaded_tag_name; typ; extract_vk }, right_tag) ->
+              let sideloaded =
+                let feature_flags : Pickles_types.Plonk_types.Features.options =
+                  { range_check0 = Maybe
+                  ; range_check1 = Maybe
+                  ; foreign_field_add = Maybe
+                  ; foreign_field_mul = Maybe
+                  ; xor = Maybe
+                  ; rot = Maybe
+                  ; lookup = Maybe
+                  ; runtime_tables = Maybe
+                  }
+                in
+                Pickles.Side_loaded.create ~name:sideloaded_tag_name ~typ
+                  ~feature_flags
+                  ~max_proofs_verified:
+                    (module Pickles.Side_loaded.Verification_key.Max_width)
+              in
+              Choices
+                { transform_provers =
+                    (fun (prover :: provers) ->
+                      let pre_prove input =
+                        Pickles.Side_loaded.in_prover sideloaded
+                          (extract_vk input)
+                      in
+                      transform_prover ~pre_prove ~branch_name ~name prover
+                        handler
+                      :: prev_transform_provers provers )
+                ; rules =
+                    (fun ~self ->
+                      let main =
+                        input >>= main
+                        >>= transform_main_two_one_sideloaded ~sideloaded
+                      in
+                      let rule : _ Pickles.Inductive_rule.Promise.t =
+                        { identifier = branch_name
+                        ; main =
+                            (fun _ -> Run.run_checked main |> Promise.return)
+                        ; prevs = [ sideloaded; right_tag ]
+                        ; feature_flags
+                        }
+                      in
+                      rule :: f ~self )
+                }
+          | Two_tags_sideloaded_own { sideloaded_tag_name; typ; extract_vk } ->
+              let sideloaded =
+                let feature_flags : Pickles_types.Plonk_types.Features.options =
+                  { range_check0 = Maybe
+                  ; range_check1 = Maybe
+                  ; foreign_field_add = Maybe
+                  ; foreign_field_mul = Maybe
+                  ; xor = Maybe
+                  ; rot = Maybe
+                  ; lookup = Maybe
+                  ; runtime_tables = Maybe
+                  }
+                in
+                Pickles.Side_loaded.create ~name:sideloaded_tag_name ~typ
+                  ~feature_flags
+                  ~max_proofs_verified:
+                    (module Pickles.Side_loaded.Verification_key.Max_width)
+              in
+              Choices
+                { transform_provers =
+                    (fun (prover :: provers) ->
+                      let pre_prove input =
+                        Pickles.Side_loaded.in_prover sideloaded
+                          (extract_vk input)
+                      in
+                      transform_prover ~pre_prove ~branch_name ~name prover
+                        handler
+                      :: prev_transform_provers provers )
+                ; rules =
+                    (fun ~self ->
+                      let main =
+                        input >>= main
+                        >>= transform_main_two_one_sideloaded ~sideloaded
+                      in
+                      let rule : _ Pickles.Inductive_rule.Promise.t =
+                        { identifier = branch_name
+                        ; main =
+                            (fun _ -> Run.run_checked main |> Promise.return)
+                        ; prevs = [ sideloaded; self ]
+                        ; feature_flags
+                        }
+                      in
+                      rule :: f ~self )
+                }
+          | Two_tags_sideloaded
+              ( { sideloaded_tag_name = left_name
+                ; typ = left_typ
+                ; extract_vk = left_extract_vk
+                }
+              , { sideloaded_tag_name = right_name
+                ; typ = right_typ
+                ; extract_vk = right_extract_vk
+                } ) ->
+              let left_sideloaded, right_sideloaded =
+                let feature_flags : Pickles_types.Plonk_types.Features.options =
+                  { range_check0 = Maybe
+                  ; range_check1 = Maybe
+                  ; foreign_field_add = Maybe
+                  ; foreign_field_mul = Maybe
+                  ; xor = Maybe
+                  ; rot = Maybe
+                  ; lookup = Maybe
+                  ; runtime_tables = Maybe
+                  }
+                in
+                ( Pickles.Side_loaded.create ~name:left_name ~typ:left_typ
+                    ~feature_flags
+                    ~max_proofs_verified:
+                      (module Pickles.Side_loaded.Verification_key.Max_width)
+                , Pickles.Side_loaded.create ~name:right_name ~typ:right_typ
+                    ~feature_flags
+                    ~max_proofs_verified:
+                      (module Pickles.Side_loaded.Verification_key.Max_width) )
+              in
+
+              Choices
+                { transform_provers =
+                    (fun (prover :: provers) ->
+                      let pre_prove input =
+                        Pickles.Side_loaded.in_prover left_sideloaded
+                          (left_extract_vk input) ;
+                        Pickles.Side_loaded.in_prover right_sideloaded
+                          (right_extract_vk input)
+                      in
+                      transform_prover ~pre_prove ~branch_name ~name prover
+                        handler
+                      :: prev_transform_provers provers )
+                ; rules =
+                    (fun ~self ->
+                      let main =
+                        let f out
+                            (Two_prevs_sideloaded
+                              ( { public_input = left_public_input
+                                ; proof = left_proof
+                                ; proof_must_verify = left_proof_must_verify
+                                ; vk = left_vk
+                                }
+                              , { public_input = right_public_input
+                                ; proof = right_proof
+                                ; proof_must_verify = right_proof_must_verify
+                                ; vk = right_vk
+                                } ) ) =
+                          let*| () =
+                            make_checked (fun () ->
+                                Pickles.Side_loaded.in_circuit left_sideloaded
+                                  left_vk ;
+                                Pickles.Side_loaded.in_circuit right_sideloaded
+                                  right_vk )
+                          in
+                          Pickles.Inductive_rule.
+                            { previous_proof_statements =
+                                [ { public_input = left_public_input
+                                  ; proof = V.as_ref left_proof
+                                  ; proof_must_verify = left_proof_must_verify
+                                  }
+                                ; { public_input = right_public_input
+                                  ; proof = V.as_ref right_proof
+                                  ; proof_must_verify = right_proof_must_verify
+                                  }
+                                ]
+                            ; public_output = out
+                            ; auxiliary_output = ()
+                            }
+                        in
+                        let* { out; prevs } = input >>= main in
+                        f out prevs
+                      in
+                      let rule : _ Pickles.Inductive_rule.Promise.t =
+                        { identifier = branch_name
+                        ; main =
+                            (fun _ -> Run.run_checked main |> Promise.return)
+                        ; prevs = [ left_sideloaded; right_sideloaded ]
                         ; feature_flags
                         }
                       in

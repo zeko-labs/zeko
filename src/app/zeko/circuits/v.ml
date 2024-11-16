@@ -32,8 +32,10 @@ let create (x : 'a As_prover.t) : 'a t Checked.t =
   Checked.map c ~f:(fun () ->
       match !r with None -> Circuit_mode | Some x -> Proving_mode x )
 
-let as_ref : 'a t -> 'a As_prover.Ref.t = function
+let unsafe_unwrap : 'a t -> 'a option = function
   | Proving_mode proof ->
-      ref (Some proof)
+      Some proof
   | Circuit_mode ->
-      ref None
+      None
+
+let as_ref x = ref (unsafe_unwrap x)

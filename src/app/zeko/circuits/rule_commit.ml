@@ -32,9 +32,7 @@ module Verify_both_ases = struct
 
   let rule : _ Compile_simple.branch =
     { branch_name = "Verify_both_ases"
-    ; tags =
-        Two_tags
-          (Tag (force Ase.Without_length.tag), Tag (force Ase.With_length.tag))
+    ; tags = Two_tags (force Ase.Without_length.tag, force Ase.With_length.tag)
     ; main
     }
 
@@ -473,8 +471,5 @@ struct
   let rule : _ Compile_simple.branch =
     match force Verify_both_ases.compilation_result with
     | Result { tag; provers = _; tag_length = _ } ->
-        { branch_name = "Rollup step"
-        ; tags = Two_tags (Tag T.tag, Tag tag)
-        ; main
-        }
+        { branch_name = "Rollup step"; tags = Two_tags (T.tag, tag); main }
 end

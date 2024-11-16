@@ -4,7 +4,13 @@ type no_prevs = |
 
 type ('var, 'width) one_prev = |
 
+type 'var one_prev_sideloaded = |
+
 type ('left_var, 'left_width, 'right_var, 'right_width) two_prevs = |
+
+type ('left_var, 'right_var, 'right_width) two_prevs_one_sideloaded = |
+
+type ('left_var, 'right_var) two_prevs_sideloaded = |
 
 type ('var, 'max_proofs_verified) prev =
   { public_input : 'var
@@ -12,32 +18,87 @@ type ('var, 'max_proofs_verified) prev =
   ; proof_must_verify : Boolean.var
   }
 
+type sideloaded_width = Pickles_types.Nat.N2.n
+
+type 'var prev_sideloaded =
+  { public_input : 'var
+  ; proof : (sideloaded_width, sideloaded_width) Pickles.Proof.t V.t
+  ; proof_must_verify : Boolean.var
+  ; vk : Pickles.Side_loaded.Verification_key.Checked.t
+  }
+
 type _ prevs =
   | No_prevs : no_prevs prevs
   | One_prev : ('var, 'width) prev -> ('var, 'width) one_prev prevs
+  | One_prev_sideloaded : 'var prev_sideloaded -> 'var one_prev_sideloaded prevs
   | Two_prevs :
       (('left_var, 'left_width) prev * ('right_var, 'right_width) prev)
       -> ('left_var, 'left_width, 'right_var, 'right_width) two_prevs prevs
+  | Two_prevs_sideloaded :
+      ('left_var prev_sideloaded * 'right_var prev_sideloaded)
+      -> ('left_var, 'right_var) two_prevs_sideloaded prevs
+  | Two_prevs_one_sideloaded :
+      ('left_var prev_sideloaded * ('right_var, 'right_width) prev)
+      -> ('left_var, 'right_var, 'right_width) two_prevs_one_sideloaded prevs
 
 type self_width = Pickles_types.Nat.N2.n
 
-type ('self_var, 'var, 'width) pickles_tag_or_self =
-  | Tag :
-      ('var, 't, 'width, 'branches) Pickles.Tag.t
-      -> ('self_var, 'var, 'width) pickles_tag_or_self
-  | Own_tag : ('self_var, 'self_var, self_width) pickles_tag_or_self
+type ('var, 't, 'input) sideloaded_tag =
+  { sideloaded_tag_name : string
+  ; typ : ('var, 't) Typ.t
+  ; extract_vk : 'input -> Pickles.Side_loaded.Verification_key.t
+  }
 
-type ('self_var, 'prevs) tags =
-  | No_tags : ('self_var, no_prevs) tags
+type no_sideloaded = |
+
+type one_sideloaded = |
+
+type two_sideloaded = |
+
+type ('self_var, 'prevs, 'input) tags =
+  | No_tags : ('self_var, no_prevs, 'input) tags
   | One_tag :
-      ('self_var, 'var, 'width) pickles_tag_or_self
-      -> ('self_var, ('var, 'width) one_prev) tags
+      ('var, 't, 'width, 'branches) Pickles.Tag.t
+      -> ('self_var, ('var, 'width) one_prev, 'input) tags
+  | One_tag_own : ('self_var, ('self_var, self_width) one_prev, 'input) tags
+  | One_tag_sideloaded :
+      ('var, 't, 'input) sideloaded_tag
+      -> ('self_var, 'var one_prev_sideloaded, 'input) tags
   | Two_tags :
-      ('self_var, 'left_var, 'left_width) pickles_tag_or_self
-      * ('self_var, 'right_var, 'right_width) pickles_tag_or_self
+      ('left_var, 'left_t, 'left_width, 'left_branches) Pickles.Tag.t
+      * ('right_var, 'right_t, 'right_width, 'right_branches) Pickles.Tag.t
       -> ( 'self_var
-         , ('left_var, 'left_width, 'right_var, 'right_width) two_prevs )
+         , ('left_var, 'left_width, 'right_var, 'right_width) two_prevs
+         , 'input )
          tags
+  | Two_tags_one_sideloaded :
+      ('left_var, 'left_t, 'input) sideloaded_tag
+      * ('right_var, 'right_t, 'right_width, 'right_branches) Pickles.Tag.t
+      -> ( 'self_var
+         , ('left_var, 'right_var, 'right_width) two_prevs_one_sideloaded
+         , 'input )
+         tags
+  | Two_tags_one_own :
+      ('right_var, 'right_t, 'right_width, 'right_branches) Pickles.Tag.t
+      -> ( 'self_var
+         , ('self_var, self_width, 'right_var, 'right_width) two_prevs
+         , 'input )
+         tags
+  | Two_tags_sideloaded :
+      ('left_var, 'left_t, 'input) sideloaded_tag
+      * ('right_var, 'right_t, 'input) sideloaded_tag
+      -> ('self_var, ('left_var, 'right_var) two_prevs_sideloaded, 'input) tags
+  | Two_tags_sideloaded_own :
+      ('left_var, 'left_t, 'input) sideloaded_tag
+      -> ( 'self_var
+         , ('left_var, 'self_var, self_width) two_prevs_one_sideloaded
+         , 'input )
+         tags
+  | Two_tags_own
+      : ( 'self_var
+        , ('self_var, self_width, 'self_var, self_width) two_prevs
+        , 'input )
+        tags
 
 type ('var, 'prevs) main_return = { out : 'var; prevs : 'prevs prevs }
 
@@ -66,7 +127,7 @@ type ('out_t, 'branches) provers =
 
 type ('input, 'out_var, 'prevs) branch =
   { branch_name : string
-  ; tags : ('out_var, 'prevs) tags
+  ; tags : ('out_var, 'prevs, 'input) tags
   ; main : 'input V.t -> ('out_var, 'prevs) main_return Checked.t
   }
 

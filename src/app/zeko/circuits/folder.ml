@@ -83,8 +83,8 @@ struct
 
     val unwrap_source :
       Source.var -> (Stmt.var * prevs Compile_simple.prevs) Checked.t
-
-    val tags : (Trans.var, prevs) Compile_simple.tags
+      
+    val tags : (Trans.var, prevs, 'input) Compile_simple.tags
   end) =
   struct
     open Inputs
@@ -171,7 +171,7 @@ struct
       in
       Checked.return (trans.target, prevs)
 
-    let tags = Compile_simple.One_tag Own_tag
+    let tags = Compile_simple.One_tag_own
   end)
 
   module Rule_extend = Make_rule_extend (struct
@@ -221,7 +221,7 @@ struct
           }
 
     let rule : _ Compile_simple.branch =
-      { branch_name = "Rule_merge"; tags = Two_tags (Own_tag, Own_tag); main }
+      { branch_name = "Rule_merge"; tags = Two_tags_own; main }
   end
 
   let name = "State_machine.Make(" ^ name ^ ")"
