@@ -71,19 +71,15 @@ let input_for_main (type input)
   end in
   (exists_input, handler)
 
-(* TODO: Remove, OCaml couldn't refute One_prev_sideloaded case without this. *)
-let transform_main_one' out = function
-  | One_prev { public_input; proof; proof_must_verify } ->
-      Pickles.Inductive_rule.
-        { previous_proof_statements =
-            [ { public_input; proof = V.as_ref proof; proof_must_verify } ]
-        ; public_output = out
-        ; auxiliary_output = ()
-        }
-  | Two_prevs_sideloaded (_left, _right) -> .
-
-let transform_main_one ({ out; prevs } : _ main_return) =
-  transform_main_one' out prevs
+let transform_main_one
+    ({ out; prevs = One_prev { public_input; proof; proof_must_verify } } :
+      _ main_return ) =
+  Pickles.Inductive_rule.
+    { previous_proof_statements =
+        [ { public_input; proof = V.as_ref proof; proof_must_verify } ]
+    ; public_output = out
+    ; auxiliary_output = ()
+    }
 
 let transform_main_one_sideloaded ~sideloaded
     ({ out
@@ -101,16 +97,20 @@ let transform_main_one_sideloaded ~sideloaded
     ; auxiliary_output = ()
     }
 
-let transform_main_two' out
-    (Two_prevs
-      ( { public_input = left_public_input
-        ; proof = left_proof
-        ; proof_must_verify = left_proof_must_verify
-        }
-      , { public_input = right_public_input
-        ; proof = right_proof
-        ; proof_must_verify = right_proof_must_verify
-        } ) ) =
+let transform_main_two
+    ({ out
+     ; prevs =
+         Two_prevs
+           ( { public_input = left_public_input
+             ; proof = left_proof
+             ; proof_must_verify = left_proof_must_verify
+             }
+           , { public_input = right_public_input
+             ; proof = right_proof
+             ; proof_must_verify = right_proof_must_verify
+             } )
+     } :
+      _ main_return ) =
   Pickles.Inductive_rule.
     { previous_proof_statements =
         [ { public_input = left_public_input
@@ -126,20 +126,21 @@ let transform_main_two' out
     ; auxiliary_output = ()
     }
 
-let transform_main_two ({ out; prevs } : _ main_return) =
-  transform_main_two' out prevs
-
-let transform_main_two_one_sideloaded' ~sideloaded out
-    (Two_prevs_one_sideloaded
-      ( { public_input = left_public_input
-        ; proof = left_proof
-        ; proof_must_verify = left_proof_must_verify
-        ; vk
-        }
-      , { public_input = right_public_input
-        ; proof = right_proof
-        ; proof_must_verify = right_proof_must_verify
-        } ) ) =
+let transform_main_two_one_sideloaded ~sideloaded
+    ({ out
+     ; prevs =
+         Two_prevs_one_sideloaded
+           ( { public_input = left_public_input
+             ; proof = left_proof
+             ; proof_must_verify = left_proof_must_verify
+             ; vk
+             }
+           , { public_input = right_public_input
+             ; proof = right_proof
+             ; proof_must_verify = right_proof_must_verify
+             } )
+     } :
+      _ main_return ) =
   let*| () =
     make_checked (fun () -> Pickles.Side_loaded.in_circuit sideloaded vk)
   in
@@ -157,9 +158,6 @@ let transform_main_two_one_sideloaded' ~sideloaded out
     ; public_output = out
     ; auxiliary_output = ()
     }
-
-let transform_main_two_one_sideloaded ({ out; prevs } : _ main_return) =
-  transform_main_two_one_sideloaded' out prevs
 
 type ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return =
   | Choices :

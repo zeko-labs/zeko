@@ -10,7 +10,9 @@ type ('left_var, 'left_width, 'right_var, 'right_width) two_prevs = |
 
 type ('left_var, 'right_var, 'right_width) two_prevs_one_sideloaded = |
 
-type ('left_var, 'right_var) two_prevs_sideloaded = |
+(* This needs a constructor otherwise warnings appear. *)
+type ('left_var, 'right_var) two_prevs_sideloaded =
+  | Internal_two_prevs_sideloaded
 
 type ('var, 'max_proofs_verified) prev =
   { public_input : 'var
