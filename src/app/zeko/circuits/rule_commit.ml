@@ -51,7 +51,7 @@ module Make (Inputs : sig
   (** The public key of the inner account *)
   val inner_public_key : PC.t
 end)
-(T : Transaction_snark.S) =
+=
 struct
   open Inputs
 
@@ -471,5 +471,5 @@ struct
   let rule : _ Compile_simple.branch =
     match force Verify_both_ases.compilation_result with
     | Result { tag; provers = _; tag_length = _ } ->
-        { branch_name = "Rollup step"; tags = Two_tags (T.tag, tag); main }
+        { branch_name = "Rollup step"; tags = Two_tags (force Zeko_transaction_snark.tag, tag); main }
 end
