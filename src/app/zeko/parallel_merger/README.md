@@ -1,6 +1,6 @@
 # Parallel merger
 
-## Abastraction
+## Abstraction
 
 This is a library used by sequencer to parallelize the merging of transaction snarks.
 It tries to abstract away from the actual logic of sequencer, so it accepts 3 modules as arguments into the functor.
@@ -55,10 +55,10 @@ module Forest = struct
 end
 ```
 
-Proving of transactions is a forest of trees, where each tree consists of one batch of transactions to commit.
-The tree is represented by a list of jobs, we care only about actionable jobs and not the nodes that have already been proven or don't have a witness yet.
+Proving of transactions is done in a forest of trees, where each tree consists of one batch of transactions to commit.
+The tree is represented by a list of jobs. It's list because we care only about actionable jobs and not the nodes that have already been proven or don't have a witness yet.
 
-Job status can be either `Todo` or `Done`.
+### Job
 
 ```ocaml
 module Available_job = struct
@@ -85,10 +85,10 @@ The whole logic implemented revolves around 2 rules:
 let add_job t ctx ~(data : Base.t)
 ```
 
-Adding a job creates a `Todo Base` job at the end of a last tree and calls a process function.
-After completion it is transformed into a `Done Merge` job by `finish_job_exn` function, and checks if it created an opportunity to merge.
-Opportunity to merge are two consecutive `Done Merge` jobs in one tree.
-Finished job can create only one opportunity to merge. If there is one, create new `Todo Merge` job and process it.
+Adding a job creates a `Todo (Base witness)` job at the end of a last tree and calls a process function.
+After completion it is transformed into a `Done (Merge witness)` job by `finish_job_exn` function, and checks if it created an opportunity to merge.
+Opportunity to merge are two consecutive `Done (Merge witness)` jobs in one tree.
+Finished job can create only one opportunity to merge. If there is one, create new `Todo (Merge (fst, snd))` job and process it.
 
 Additionally all the jobs have unique id, so we can track them.
 
@@ -109,6 +109,6 @@ Closing a tree means that there needs to be a new tree created where all the new
 Commit function will:
 
 1. Close the last tree and create a new one.
-2. Wait for the previous jobs to finish (because of the order of commits).
-3. Wait until there is only one `Done Merge` job left in the list.
-4. Calls `Commit.process`
+2. Wait for the previous tree to finish (because of the order of commits).
+3. Wait until there is only one `Done (Merge w)` job left in the list.
+4. Call `Commit.process`
