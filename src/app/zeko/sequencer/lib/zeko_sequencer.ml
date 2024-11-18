@@ -315,23 +315,18 @@ module Sequencer = struct
         let version_byte = '\x00'
       end)
 
-      type aux =
+      type t =
         { new_inner_ledger : Sparse_ledger.t
         ; old_deposits_pointer : Field.t
         ; processed_deposits_pointer : Field.t
         }
       [@@deriving yojson]
 
-      type t = aux * Zkapps_rollup.t [@@deriving yojson]
-
       let process
           ({ da_client; provers; executor; config; kvdb; state } as ctx :
             Context.t )
-          ( { new_inner_ledger
-            ; old_deposits_pointer
-            ; processed_deposits_pointer
-            }
-          , last_snark ) =
+          { new_inner_ledger; old_deposits_pointer; processed_deposits_pointer }
+          last_snark =
         let%bind signatures =
           Da_layer.Client.Sequencer.get_signatures da_client
             ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
@@ -767,7 +762,7 @@ module Sequencer = struct
     then return (print_endline "Nothing to commit")
     else
       Merger.P.commit_exn t.merger t.merger_ctx
-        ~aux:
+        ~commit_witness:
           { new_inner_ledger = target_ledger
           ; old_deposits_pointer
           ; processed_deposits_pointer = processed_pointer

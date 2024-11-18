@@ -14,11 +14,9 @@ end) (Base : sig
 
   val process : Context.t -> t -> Merge.t Deferred.t
 end) (Commit : sig
-  type aux [@@deriving yojson]
+  type t
 
-  type t = aux * Merge.t [@@deriving yojson]
-
-  val process : Context.t -> t -> unit Deferred.t
+  val process : Context.t -> t -> Merge.t -> unit Deferred.t
 end) =
 struct
   module Available_job = struct
@@ -31,10 +29,7 @@ struct
   end
 
   module Job_status = struct
-    type t =
-      | Todo of Available_job.t
-      | Done of Finished_job.t
-      | Commit of Commit.t
+    type t = Todo of Available_job.t | Done of Finished_job.t
     [@@deriving yojson]
   end
 
@@ -55,8 +50,9 @@ struct
     type t =
       { mutable jobs : Job_status.t With_id.t list
       ; mutable closed : bool  (** No new jobs can be added *)
-      ; mutable finished : Finished_job.t Ivar.t  (** All jobs are done *)
-      ; mutable commit_aux : Commit.aux option
+      ; finished : Finished_job.t Ivar.t  (** All jobs are done *)
+      ; ready_to_commit : unit Ivar.t
+            (** All jobs are done and ready to commit *)
       }
     [@@deriving yojson]
 
@@ -64,7 +60,7 @@ struct
       { jobs = []
       ; closed = false
       ; finished = Ivar.create ()
-      ; commit_aux = None
+      ; ready_to_commit = Ivar.create ()
       }
 
     let close t = t.closed <- true
@@ -74,24 +70,30 @@ struct
     let append_base t ~id ~(data : Base.t) =
       t.jobs <- t.jobs @ [ With_id.{ id; value = Job_status.Todo (Base data) } ]
 
-    let check_finished t ctx =
+    let check_if_it's_ready_to_commit t =
       match t with
       | { closed = true
-        ; jobs = [ { value = Done job; _ } ] (* One job with status done *)
-        ; commit_aux = Some aux (* Commit aux is already set *)
+        ; jobs = [ { value = Done _; _ } ] (* One job with status done *)
         ; _
         } ->
-          don't_wait_for
-            (let%bind () = Commit.process ctx (aux, job) in
-             return (Ivar.fill t.finished job) )
+          Ivar.fill_if_empty t.ready_to_commit ()
       | _ ->
           ()
 
-    let commit t ctx ~aux =
+    let commit t ctx ~commit_witness =
       close t ;
-      t.commit_aux <- Some aux ;
-      check_finished t ctx ;
-      wait_till_finished t
+      check_if_it's_ready_to_commit t ;
+      let%bind () = Ivar.read t.ready_to_commit in
+      match t with
+      | { closed = true
+        ; jobs = [ { value = Done job; _ } ] (* One job with status done *)
+        ; _
+        } ->
+          let%bind () = Commit.process ctx commit_witness job in
+          let () = Ivar.fill t.finished job in
+          return job
+      | _ ->
+          failwith "Invalid state"
 
     (* If finishing job created opportunity to merge, start merging *)
     (* If it's already closed and it's last job, mark as finished *)
@@ -134,7 +136,8 @@ struct
       t.jobs <- new_jobs ;
       match merge_job_opt with
       | None ->
-          check_finished t ctx ; return ()
+          check_if_it's_ready_to_commit t ;
+          return ()
       | Some { value = Todo (Merge (fst, snd)); id } ->
           let%bind result = Merge.process ctx fst snd in
           finish_job_exn t ctx ~id ~data:result
@@ -172,7 +175,7 @@ struct
 
   let start_new_tree t = t.trees <- t.trees @ [ Tree.create () ]
 
-  let commit_exn t ctx ~aux =
+  let commit_exn t ctx ~commit_witness =
     (* Create new tree before waiting, so new transactions go there *)
     start_new_tree t ;
     match List.rev t.trees with
@@ -183,7 +186,7 @@ struct
               let%bind _ = Tree.wait_till_finished tree in
               return () )
         in
-        Tree.commit last ctx ~aux
+        Tree.commit last ctx ~commit_witness
     | _ ->
         failwith "No trees to commit"
 
@@ -245,14 +248,13 @@ let%test_module "parallel_merge on (+)" =
     end
 
     module Commit = struct
-      type aux = int [@@deriving yojson]
+      type t = int [@@deriving yojson]
 
-      type t = aux * Merge.t [@@deriving yojson]
-
-      let process ctx (aux_value, _) =
+      let process ctx commit_witness _ =
         let time = Quickcheck.random_value (Float.gen_incl 0.0 0.1) in
         let%bind () = Clock.after (Time.Span.of_sec time) in
-        Context.add ctx aux_value ; return ()
+        Context.add ctx commit_witness ;
+        return ()
     end
 
     module Merger = Make (Context) (Merge) (Base) (Commit)
@@ -275,7 +277,7 @@ let%test_module "parallel_merge on (+)" =
                       Merger.add_job state ctx ~data )
                 in
 
-                Merger.commit_exn state ctx ~aux:42 )
+                Merger.commit_exn state ctx ~commit_witness:42 )
           in
 
           [%test_eq: int64] final_result expected_result )
@@ -302,7 +304,7 @@ let%test_module "parallel_merge on (+)" =
                       List.iter data ~f:(fun data ->
                           don't_wait_for @@ Merger.add_job state ctx ~data )
                     in
-                    Merger.commit_exn state ctx ~aux:i ) )
+                    Merger.commit_exn state ctx ~commit_witness:i ) )
           in
 
           let expected_order = List.mapi data ~f:(fun i _ -> i) in
@@ -323,11 +325,11 @@ let%test_module "parallel_merge on (+)" =
           don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
           don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
           ( don't_wait_for
-          @@ let%map _ = Merger.commit_exn state ctx ~aux:0 in
+          @@ let%map _ = Merger.commit_exn state ctx ~commit_witness:0 in
              () ) ;
 
           don't_wait_for @@ Merger.add_job state ctx ~data:(Int32.of_int_exn 42) ;
-          let%bind _ = Merger.commit_exn state ctx ~aux:1 in
+          let%bind _ = Merger.commit_exn state ctx ~commit_witness:1 in
 
           return () ) ;
 
