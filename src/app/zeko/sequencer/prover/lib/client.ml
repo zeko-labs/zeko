@@ -4,21 +4,23 @@ open Core_kernel
 let try_connect where_to_connect =
   match%bind try_with (fun () -> Tcp.connect where_to_connect) with
   | Ok x ->
-      return (Some x)
+      return (Ok x)
   | Error exn ->
-      printf "Error connecting to prover: %s\n%!" (Exn.to_string exn) ;
-      return None
+      return (Error (Error.of_exn exn))
 
 module State = struct
+  type lazy_connection =
+    ( ([ `Active ], Socket.Address.Inet.t) Socket.t * Reader.t * Writer.t
+    , Error.t )
+    Result.t
+    Deferred.t
+    lazy_t
+
+  type prover_state = [ `In_use | `Available ]
+
   type t =
     { provers :
-        ( (([ `Active ], Socket.Address.Inet.t) Socket.t * Reader.t * Writer.t)
-          option
-          Deferred.t
-          lazy_t
-          ref
-        * Tcp.Where_to_connect.inet
-        * [ `In_use | `Available ] ref )
+        (lazy_connection ref * Tcp.Where_to_connect.inet * prover_state ref)
         list
     ; mutable next : int
     }
@@ -30,7 +32,7 @@ module State = struct
     in
     { provers = connections; next = 0 }
 
-  let rec next_prover t =
+  let rec next_prover (t : t) =
     let rotate l n =
       let left, right = List.split_n l n in
       right @ left
@@ -68,9 +70,10 @@ let rec send ?(proving_timeout = 10.) ?(wait_for_prover_timeout = 600.)
     Async.with_timeout
       (Time.Span.of_sec proving_timeout)
       ( match%bind Lazy.force !connection_ref with
-      | None ->
+      | Error err ->
+          printf "Error connecting to prover: %s\n%!" (Error.to_string_hum err) ;
           return `Connection_error
-      | Some (_, r, w) -> (
+      | Ok (_, r, w) -> (
           match%bind
             let () =
               Prover.Input.to_yojson input
