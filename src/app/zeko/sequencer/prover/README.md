@@ -1,6 +1,6 @@
 # Zeko prover
 
-This is a parallel prover for zeko sequencer.
+This is a provers distribution for zeko sequencer.
 It consists of a server that accepts a witness of some predetermined snark over tcp connection and returns a result.
 Client is a sequencer itself, which picks one of the available provers and sends a request to it.
 
