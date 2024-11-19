@@ -506,10 +506,10 @@ struct
         ; before_commit_ase : Rollup_state.Outer_action_state.t
         ; unverified_commit_ase : Ase_outer_inst.Stmt.t
         ; unverified_sync_ase : Ase_outer_with_length_inst.Stmt.t
-        ; verify_two_outer_ases : ProofV.t
+        ; verify_two_outer_ases : Proof_V.t
         ; unverified_check_accepted : Check_accepted_definition.Stmt.t
         ; unverified_deposit_ase : Ase_outer_with_length_inst.Stmt.t
-        ; verify_check_accepted_and_ase : ProofV.t
+        ; verify_check_accepted_and_ase : Proof_V.t
         ; prev_next_cancelled_deposit : Checked32.t
         }
       [@@deriving snarky]

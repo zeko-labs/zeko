@@ -155,11 +155,11 @@ struct
     let middle_or_end = Inputs.middle_or_end
 
     module Source = struct
-      type t = Trans.t * ProofV.t
+      type t = Trans.t * Proof_V.t
 
-      type var = Trans.var * ProofV.var
+      type var = Trans.var * Proof_V.var
 
-      let typ = Typ.(Trans.typ * ProofV.typ)
+      let typ = Typ.(Trans.typ * Proof_V.typ)
     end
 
     type prevs = (Trans.var, Compile_simple.self_width) Compile_simple.one_prev
@@ -191,9 +191,9 @@ struct
     module Witness = struct
       type t =
         { left : Trans.t
-        ; left_proof : ProofV.t
+        ; left_proof : Proof_V.t
         ; right : Trans.t
-        ; right_proof : ProofV.t
+        ; right_proof : Proof_V.t
         }
       [@@deriving snarky]
     end
@@ -335,7 +335,7 @@ struct
     type t =
       { init_arg : Init.t
       ; proof_target : Stmt.t
-      ; proof : ProofOptionV.t
+      ; proof : Proof_Option_V.t
       ; excess : Elems.t
       }
     [@@deriving snarky]

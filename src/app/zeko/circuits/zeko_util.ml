@@ -112,7 +112,7 @@ module type V_S = sig
 end
 
 (** To be used with deriving snarky, a reference to T with no in-circuit representation *)
-module MkV (T : sig
+module Mk_V (T : sig
   type t
 end) : V_S with type t = T.t = struct
   type t = T.t
@@ -188,14 +188,14 @@ struct
          ~back:(fun (array, length) -> { array; length })
 end
 
-module ProofV = MkV (Proof)
+module Proof_V = Mk_V (Proof)
 
 module ProofOption = struct
   type t = Proof.t option
 end
 
 (** Reference to Proof  *)
-module ProofOptionV = MkV (ProofOption)
+module Proof_Option_V = Mk_V (ProofOption)
 
 (** Boolean but monkey-patched to have `t`*)
 module Boolean = struct
@@ -350,6 +350,10 @@ let assert_equal :
     Array.map2_exn ~f:(Constraint.equal ?label) x_fields y_fields
   in
   Array.to_list constraints |> assert_all ?label
+
+let assert_equal_safer ?label typ x y =
+  let*| () = assert_equal ?label typ x y in
+  x
 
 let var_equal : ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t =
  fun (Typ typ) x y ->

@@ -50,7 +50,7 @@ module F : sig
   val pp : Format.formatter -> Pasta_bindings.Fp.t -> unit
 end
 
-module MkV : functor
+module Mk_V : functor
   (T : sig
      type t
    end)
@@ -107,9 +107,9 @@ module type V_S = sig
   val typ : (var, t) Typ.t
 end
 
-module ProofV : V_S with type t = Mina_base.Proof.t
+module Proof_V : V_S with type t = Mina_base.Proof.t
 
-module ProofOptionV : V_S with type t = Mina_base.Proof.t option
+module Proof_Option_V : V_S with type t = Mina_base.Proof.t option
 
 module Boolean : sig
   include module type of Boolean
@@ -176,6 +176,9 @@ end
 
 val assert_equal :
   ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t
+
+val assert_equal_safer :
+  ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> 'var Checked.t
 
 val var_equal : ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t
 

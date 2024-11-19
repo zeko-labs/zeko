@@ -264,6 +264,11 @@ module type Full = sig
            Account_timing.As_record.t )
          Tick.Checked.t
 
+    val main :
+         constraint_constants:Genesis_constants.Constraint_constants.t
+      -> Statement.With_sok.var
+      -> unit Tick.Checked.t
+
     module Zkapp_command_snark : sig
       val main :
            ?witness:Zkapp_command_segment.Witness.t
@@ -274,6 +279,12 @@ module type Full = sig
         -> Zkapp_statement.Checked.t option
            * [> `Must_verify of Tick.Boolean.var ]
     end
+  end
+
+  module Merge : sig
+    val main :
+         Statement.With_sok.var
+      -> (Statement.With_sok.var * Statement.With_sok.var) Tick.Checked.t
   end
 
   module For_tests : sig
