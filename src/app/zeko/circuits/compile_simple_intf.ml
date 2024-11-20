@@ -150,10 +150,41 @@ type ('branches, 'n_branches) branches_length =
          , 'n_branches Pickles_types.Nat.s )
          branches_length
 
-type ('out_var, 'out_t, 'branches) result =
-  | Result :
-      { tag : ('out_var, 'out_t, self_width, 'n_branches) Pickles.Tag.t
-      ; provers : ('out_t, 'branches) provers
-      ; tag_length : ('branches, 'n_branches) branches_length
-      }
-      -> ('out_var, 'out_t, 'branches) result
+module type Result = sig
+  (* inputs *)
+
+  type out_t
+
+  type out_var
+
+  type branches
+
+  (* outputs *)
+
+  type n_branches
+
+  type tag_var
+
+  type tag_t
+
+  val tag_length : (branches, n_branches) branches_length
+
+  val compile :
+       unit
+    -> ( (tag_var, tag_t, self_width, n_branches) Pickles.Tag.t
+       * (out_t, branches) provers )
+       Promise.t
+
+  type t
+
+  type var
+
+  val typ : (var, t) Typ.t
+
+  val get :
+       ?check:Boolean.var
+    -> var
+    -> (out_var * (tag_var, self_width) prev) Checked.t
+
+  val make_unchecked : proof:Pickles.Side_loaded.Proof.t -> out_t -> t
+end

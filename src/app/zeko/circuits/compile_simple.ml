@@ -566,18 +566,22 @@ let rec branches_to_choices :
                       rule :: f ~self )
                 } ) )
 
-let compile ?(override_wrap_domain : [ `N0 | `N1 | `N2 ] option)
-    ~(name : string)
+let compile (type out_t out_var first_input branches n_available_branches)
+    ?(override_wrap_domain : [ `N0 | `N1 | `N2 ] option) ~(name : string)
     ~(branches :
-       ( 'out_var
-       , ('first_input, 'branches) cons_branch
-       , 'n_available_branches )
-       Branches.t ) ~(out_typ : ('out_var, 'out_t) Typ.t) () :
-    ('out_var, 'out_t, ('first_input, 'branches) cons_branch) result Promise.t =
+       ( out_var
+       , (first_input, branches) cons_branch
+       , n_available_branches )
+       Branches.t ) ~(out_typ : (out_var, out_t) Typ.t) () :
+    (module Result
+       with type out_t = out_t
+        and type out_var = out_var
+        and type branches = ( first_input
+                            , branches )
+                            Compile_simple_intf.cons_branch ) =
   printf "(compile_simple) called for circuit %s\n" name ;
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
-  let@ () = time_promise ("(compile_simple) compiling circuit " ^ name) in
   let (Count_branches_result tag_length) = count_branches branches in
   let (module N_branches) = branches_length_to_module tag_length in
   let override_wrap_domain : Pickles_base.Proofs_verified.t option =
@@ -593,20 +597,84 @@ let compile ?(override_wrap_domain : [ `N0 | `N1 | `N2 ] option)
   in
   match branches_to_choices ~name branches with
   | Choices { rules; transform_provers } ->
-      let tag, _cache, _proof_module, provers =
-        Pickles.compile_promise () ?override_wrap_domain ~cache:Cache_dir.cache
-          ~public_input:(Output out_typ) ~auxiliary_typ:Typ.unit
-          ~branches:(module N_branches)
-          ~choices:rules
-          ~max_proofs_verified:(module Pickles_types.Nat.N2)
-          ~name:("compile_simple of " ^ name)
-          ~constraint_constants:
-            Genesis_constants.Constraint_constants.(
-              to_snark_keys_header compiled)
+      let r :
+          (module Result
+             with type out_t = out_t
+              and type out_var = out_var
+              and type branches = ( first_input
+                                  , branches )
+                                  Compile_simple_intf.cons_branch ) =
+        ( module struct
+          type nonrec out_t = out_t
+
+          type nonrec out_var = out_var
+
+          type nonrec branches = (first_input, branches) cons_branch
+
+          type n_branches = N_branches.n
+
+          type tag_var = out_var
+
+          type tag_t = out_t
+
+          let tag_length = tag_length
+
+          let compile () =
+            let@ () =
+              time_promise ("(compile_simple) compiling circuit " ^ name)
+            in
+            assert (Run.in_checked_computation () |> not) ;
+            assert (Run.in_prover () |> not) ;
+            let tag, _cache, _proof_module, provers =
+              Pickles.compile_promise () ?override_wrap_domain
+                ~cache:Cache_dir.cache ~public_input:(Output out_typ)
+                ~auxiliary_typ:Typ.unit
+                ~branches:(module N_branches)
+                ~choices:rules
+                ~max_proofs_verified:(module Pickles_types.Nat.N2)
+                ~name:("compile_simple of " ^ name)
+                ~constraint_constants:
+                  Genesis_constants.Constraint_constants.(
+                    to_snark_keys_header compiled)
+            in
+            let@ (_ : Pickles.Side_loaded.Verification_key.t) =
+              Pickles.Side_loaded.Verification_key.of_compiled_promise tag
+              |> Promise.( >>| )
+            in
+            let provers = transform_provers provers in
+            (tag, provers)
+
+          open struct
+            module Out = struct
+              type t = out_t
+
+              type var = out_var
+
+              let typ = out_typ
+            end
+
+            module Proof_V = struct
+              type t = (self_width, self_width) Pickles.Proof.t
+
+              type var = (self_width, self_width) Pickles.Proof.t V.t
+
+              let typ = V.typ
+            end
+          end
+
+          type t = { out : Out.t; proof : Proof_V.t } [@@deriving snarky]
+
+          let get ?check { out; proof } =
+            let prev : _ prev =
+              { public_input = out
+              ; proof
+              ; proof_must_verify =
+                  (match check with Some b -> b | None -> Boolean.true_)
+              }
+            in
+            Checked.return (out, prev)
+
+          let make_unchecked ~proof out : t = { out; proof }
+        end )
       in
-      let@ (_ : Pickles.Side_loaded.Verification_key.t) =
-        Pickles.Side_loaded.Verification_key.of_compiled_promise tag
-        |> Promise.( >>| )
-      in
-      let provers = transform_provers provers in
-      Result { tag; provers; tag_length }
+      r
