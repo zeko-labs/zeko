@@ -4,6 +4,7 @@ open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
 open Mina_base
 open Rollup_state
+open Checked.Let_syntax
 
 (** Used to prove that the synchronized outer action state is a predecessor of the current one. *)
 module Ase_outer_inst = Ase.Without_length.Make (struct
@@ -71,7 +72,6 @@ struct
             (** The ledger transition we are performing. *)
       ; public_key : PC.t  (** Our public key on the L2 *)
       ; vk_hash : F.t  (** Our vk hash *)
-      ; slot_range : Slot_range.t  (** slot_range *)
       ; verify_both_ases : Verify_both_ases.t
       ; old_inner_acc : Account.t
       ; old_inner_acc_path : Path.t
@@ -105,7 +105,6 @@ struct
     let* ({ txn_snark
           ; public_key
           ; vk_hash
-          ; slot_range
           ; verify_both_ases
           ; old_inner_acc
           ; old_inner_acc_path
@@ -114,6 +113,22 @@ struct
           } :
            Witness.var ) =
       exists ~compute:(V.get w) Witness.typ
+    in
+
+    (* Calculate the root ledger hashes, to be checked against txn snark. *)
+    let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
+    let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
+
+    let* ( { source_ledger; target_ledger; sequencer; fee_excess; slot_range }
+         , verify_txn_snark ) =
+      Zeko_transaction_snark.get txn_snark
+    in
+
+    (* Sequencer must take fees. *)
+    let* () =
+      Currency.Fee.(
+        Signed.Checked.magnitude fee_excess
+        >>= assert_equal ~label:__LOC__ typ (constant typ zero))
     in
 
     (* We check that the valid while isn't too big. Do note that the slot_range is inclusive surprisingly,
@@ -126,15 +141,6 @@ struct
             diff
             < constant
                 (Global_slot_span (Unsigned.UInt32.of_int max_valid_while_size))) )
-    in
-
-    (* Calculate the root ledger hashes, to be checked against txn snark. *)
-    let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
-    let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
-
-    let* ( { source_ledger; target_ledger; sequencer; fee_excess }
-         , verify_txn_snark ) =
-      Zeko_transaction_snark.get txn_snark
     in
 
     (* We check that the paths provided for the inner account are correct. *)
