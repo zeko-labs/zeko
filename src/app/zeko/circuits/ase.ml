@@ -60,14 +60,12 @@ module M_without_length = struct
   let override_wrap_domain = None
 end
 
-module Made_without_length = Folder.Make (M_without_length)
-module Made_with_length = Folder.Make (M_with_length)
+module Made_without_length = Folder.Make (M_without_length) ()
+module Made_with_length = Folder.Make (M_with_length) ()
 
 module With_length = struct
+  include M_with_length
   include Made_with_length
-
-  type stmt = M_with_length.Stmt.t =
-    { action_state : F.t; length : Checked32.t }
 
   module Make (Inputs : sig
     module Action_state : Rollup_state.Action_state_type
@@ -114,6 +112,7 @@ module With_length = struct
 end
 
 module Without_length = struct
+  include M_without_length
   include Made_without_length
 
   module Make (Inputs : sig

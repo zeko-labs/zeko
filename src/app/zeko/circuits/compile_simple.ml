@@ -582,8 +582,8 @@ let compile (type out_t out_var first_input branches n_available_branches)
   printf "(compile_simple) called for circuit %s\n" name ;
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
-  let (Count_branches_result tag_length) = count_branches branches in
-  let (module N_branches) = branches_length_to_module tag_length in
+  let (Count_branches_result tag_branches) = count_branches branches in
+  let (module N_branches) = branches_length_to_module tag_branches in
   let override_wrap_domain : Pickles_base.Proofs_verified.t option =
     match override_wrap_domain with
     | None ->
@@ -597,6 +597,38 @@ let compile (type out_t out_var first_input branches n_available_branches)
   in
   match branches_to_choices ~name branches with
   | Choices { rules; transform_provers } ->
+      let dummy_proof =
+        lazy
+          Pickles_types.Nat.(
+            Pickles.Proof.dummy N2.n N2.n N_branches.n
+              ~domain_log2:
+                ( match override_wrap_domain with
+                | None ->
+                    14
+                    (* TODO: probably ok, maybe not?
+                       If not ok, need dependency on compilation to
+                       figure out override wrap domain. *)
+                | Some N0 ->
+                    14
+                | Some N1 ->
+                    15
+                | Some N2 ->
+                    16 ))
+      in
+      assert (Run.in_checked_computation () |> not) ;
+      assert (Run.in_prover () |> not) ;
+      let tag, _cache, _proof_module, provers =
+        Pickles.compile_promise () ?override_wrap_domain ~cache:Cache_dir.cache
+          ~public_input:(Output out_typ) ~auxiliary_typ:Typ.unit
+          ~branches:(module N_branches)
+          ~choices:rules
+          ~max_proofs_verified:(module Pickles_types.Nat.N2)
+          ~name:("compile_simple of " ^ name)
+          ~constraint_constants:
+            Genesis_constants.Constraint_constants.(
+              to_snark_keys_header compiled)
+      in
+      let provers = transform_provers provers in
       let r :
           (module Result
              with type out_t = out_t
@@ -617,32 +649,11 @@ let compile (type out_t out_var first_input branches n_available_branches)
 
           type tag_t = out_t
 
-          let tag_length = tag_length
+          let tag_branches = tag_branches
 
-          let compile () =
-            let@ () =
-              time_promise ("(compile_simple) compiling circuit " ^ name)
-            in
-            assert (Run.in_checked_computation () |> not) ;
-            assert (Run.in_prover () |> not) ;
-            let tag, _cache, _proof_module, provers =
-              Pickles.compile_promise () ?override_wrap_domain
-                ~cache:Cache_dir.cache ~public_input:(Output out_typ)
-                ~auxiliary_typ:Typ.unit
-                ~branches:(module N_branches)
-                ~choices:rules
-                ~max_proofs_verified:(module Pickles_types.Nat.N2)
-                ~name:("compile_simple of " ^ name)
-                ~constraint_constants:
-                  Genesis_constants.Constraint_constants.(
-                    to_snark_keys_header compiled)
-            in
-            let@ (_ : Pickles.Side_loaded.Verification_key.t) =
-              Pickles.Side_loaded.Verification_key.of_compiled_promise tag
-              |> Promise.( >>| )
-            in
-            let provers = transform_provers provers in
-            (tag, provers)
+          let tag = tag
+
+          let provers = provers
 
           open struct
             module Out = struct
@@ -674,7 +685,15 @@ let compile (type out_t out_var first_input branches n_available_branches)
             in
             Checked.return (out, prev)
 
-          let make_unchecked ~proof out : t = { out; proof }
+          let make_unchecked ?proof out : t =
+            { out
+            ; proof =
+                ( match proof with
+                | Some proof ->
+                    proof
+                | None ->
+                    force dummy_proof )
+            }
         end )
       in
       r

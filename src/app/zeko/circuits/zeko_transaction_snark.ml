@@ -8,8 +8,8 @@ let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
 module Zeko_stmt = struct
   type t =
-    { source : Ledger_hash.t
-    ; target : Ledger_hash.t
+    { source_ledger : Ledger_hash.t
+    ; target_ledger : Ledger_hash.t
     ; sequencer : Signature_lib.Public_key.Compressed.t
     ; fee_excess : Currency.Fee.Signed.t
     }
@@ -163,219 +163,176 @@ let zeko_stmt_of_mina_stmt =
       with_label __LOC__ (fun () ->
           Boolean.(is_neg || is_zero) >>= Boolean.Assert.is_true )
     in
-    ( { source = stmt.source.first_pass_ledger
-      ; target = stmt.target.second_pass_ledger
+    ( { source_ledger = stmt.source.first_pass_ledger
+      ; target_ledger = stmt.target.second_pass_ledger
       ; sequencer
       ; fee_excess = stmt.fee_excess.fee_excess_l
       }
       : Zeko_stmt.var )
 
-let compilation_result =
-  lazy
-    (let@ () = Promise.block_on_async_exn in
-     Compile_simple.compile ~override_wrap_domain:`N1
-       ~name:"zeko-transaction-snark" ~out_typ:Zeko_stmt.typ
-       ~branches:
-         [ { branch_name = "base (user commands)"
-           ; tags = No_tags
-           ; main =
-               (fun input ->
-                 let* { stmt; handler; sequencer } =
-                   exists Base_input.typ ~compute:(V.get input)
-                 in
-                 let* () =
-                   handle_as_prover
-                     (fun () ->
-                       Transaction_snark.Base.main ~constraint_constants stmt )
-                     (V.get handler)
-                 in
-                 let*| stmt = zeko_stmt_of_mina_stmt ~sequencer stmt in
-                 Compile_simple.{ prevs = No_prevs; out = stmt } )
-           }
-         ; { branch_name = "single-unproved-zkapp"
-           ; tags = No_tags
-           ; main =
-               (fun input ->
-                 let* { stmt; handler; witness; zeko_env; sequencer } =
-                   exists Zkapp_single_unproved_input.typ ~compute:(V.get input)
-                 in
-                 let* must_be_none, _must_verify_zkapp =
-                   handle_as_prover
-                     (fun () ->
-                       let@ () = make_checked in
-                       Transaction_snark.Base.Zkapp_command_snark.main
-                         ?witness:(V.unsafe_unwrap witness)
-                         ?zeko_env:(V.unsafe_unwrap zeko_env)
-                         ~constraint_constants
-                         (Transaction_snark.Zkapp_command_segment.Basic
-                          .to_single_list Opt_signed )
-                         stmt )
-                     (V.get handler)
-                 in
-                 assert (Option.is_none must_be_none) ;
-                 let*| stmt = zeko_stmt_of_mina_stmt ~sequencer stmt in
-                 Compile_simple.{ prevs = No_prevs; out = stmt } )
-           }
-         ; { branch_name = "double-unproved-zkapp"
-           ; tags = No_tags
-           ; main =
-               (fun input ->
-                 let* { stmt; handler; witness; zeko_env; sequencer } =
-                   exists Zkapp_single_unproved_input.typ ~compute:(V.get input)
-                 in
-                 let* must_be_none, _must_verify_zkapp =
-                   handle_as_prover
-                     (fun () ->
-                       let@ () = make_checked in
-                       Transaction_snark.Base.Zkapp_command_snark.main
-                         ?witness:(V.unsafe_unwrap witness)
-                         ?zeko_env:(V.unsafe_unwrap zeko_env)
-                         ~constraint_constants
-                         (Transaction_snark.Zkapp_command_segment.Basic
-                          .to_single_list Opt_signed_opt_signed )
-                         stmt )
-                     (V.get handler)
-                 in
-                 assert (Option.is_none must_be_none) ;
-                 let*| stmt = zeko_stmt_of_mina_stmt ~sequencer stmt in
-                 Compile_simple.{ prevs = No_prevs; out = stmt } )
-           }
-         ; { branch_name = "proved-zkapp"
-           ; tags =
-               One_tag_sideloaded
-                 { sideloaded_tag_name = "proved-zkapp"
-                 ; typ = Zkapp_statement.typ
-                 ; extract_vk =
-                     (fun ({ zkapp_vk; _ } : Zkapp_single_proved_input.t) ->
-                       zkapp_vk )
-                 }
-           ; main =
-               (fun input ->
-                 let* { stmt
-                      ; handler
-                      ; witness
-                      ; zeko_env
-                      ; zkapp_vk
-                      ; zkapp_proof
-                      ; sequencer
-                      } =
-                   exists Zkapp_single_proved_input.typ ~compute:(V.get input)
-                 in
-                 let* zkapp_statement, `Must_verify proof_must_verify =
-                   handle_as_prover
-                     (fun () ->
-                       let@ () = make_checked in
-                       Transaction_snark.Base.Zkapp_command_snark.main
-                         ?witness:(V.unsafe_unwrap witness)
-                         ?zeko_env:(V.unsafe_unwrap zeko_env)
-                         ~constraint_constants
-                         (Transaction_snark.Zkapp_command_segment.Basic
-                          .to_single_list Opt_signed_opt_signed )
-                         stmt )
-                     (V.get handler)
-                 in
-                 let*| stmt = zeko_stmt_of_mina_stmt ~sequencer stmt in
-                 Compile_simple.
-                   { prevs =
-                       One_prev_sideloaded
-                         { public_input = Option.value_exn zkapp_statement
-                         ; proof = zkapp_proof
-                         ; proof_must_verify
-                         ; vk = zkapp_vk
-                         }
-                   ; out = stmt
-                   } )
-           }
-         ; { branch_name = "merge"
-           ; tags = Two_tags_own
-           ; main =
-               (fun input ->
-                 let* { left =
-                          { stmt =
-                              { source
-                              ; target = left_target
-                              ; fee_excess = left_fee_excess
-                              ; sequencer = left_sequencer
-                              } as left_stmt
-                          ; proof = left_proof
-                          }
-                      ; right =
-                          { stmt =
-                              { source = right_source
-                              ; target
-                              ; fee_excess = right_fee_excess
-                              ; sequencer = right_sequencer
-                              } as right_stmt
-                          ; proof = right_proof
-                          }
-                      } =
-                   exists Merge_input.typ ~compute:(V.get input)
-                 in
-                 let* () = Ledger_hash.assert_equal left_target right_source in
-                 let* fee_excess =
-                   Currency.Fee.Signed.Checked.add left_fee_excess
-                     right_fee_excess
-                 in
-                 let*| sequencer =
-                   assert_equal_safer ~label:__LOC__ PC.typ left_sequencer
-                     right_sequencer
-                 in
-                 Compile_simple.
-                   { prevs =
-                       Two_prevs
-                         ( { public_input = left_stmt
-                           ; proof = left_proof
-                           ; proof_must_verify = Boolean.true_
-                           }
-                         , { public_input = right_stmt
-                           ; proof = right_proof
-                           ; proof_must_verify = Boolean.true_
-                           } )
-                   ; out =
-                       ({ source; target; fee_excess; sequencer } : Zeko_stmt
-                                                                    .var)
-                   } )
-           }
-         ]
-       () )
+let system =
+  Compile_simple.compile ~override_wrap_domain:`N1
+    ~name:"zeko-transaction-snark" ~out_typ:Zeko_stmt.typ
+    ~branches:
+      [ { branch_name = "base (user commands)"
+        ; tags = No_tags
+        ; main =
+            (fun input ->
+              let* { stmt; handler; sequencer } =
+                exists Base_input.typ ~compute:(V.get input)
+              in
+              let* () =
+                handle_as_prover
+                  (fun () ->
+                    Transaction_snark.Base.main ~constraint_constants stmt )
+                  (V.get handler)
+              in
+              let*| stmt = zeko_stmt_of_mina_stmt ~sequencer stmt in
+              Compile_simple.{ prevs = No_prevs; out = stmt } )
+        }
+      ; { branch_name = "single-unproved-zkapp"
+        ; tags = No_tags
+        ; main =
+            (fun input ->
+              let* { stmt; handler; witness; zeko_env; sequencer } =
+                exists Zkapp_single_unproved_input.typ ~compute:(V.get input)
+              in
+              let* must_be_none, _must_verify_zkapp =
+                handle_as_prover
+                  (fun () ->
+                    let@ () = make_checked in
+                    Transaction_snark.Base.Zkapp_command_snark.main
+                      ?witness:(V.unsafe_unwrap witness)
+                      ?zeko_env:(V.unsafe_unwrap zeko_env) ~constraint_constants
+                      (Transaction_snark.Zkapp_command_segment.Basic
+                       .to_single_list Opt_signed )
+                      stmt )
+                  (V.get handler)
+              in
+              assert (Option.is_none must_be_none) ;
+              let*| stmt = zeko_stmt_of_mina_stmt ~sequencer stmt in
+              Compile_simple.{ prevs = No_prevs; out = stmt } )
+        }
+      ; { branch_name = "double-unproved-zkapp"
+        ; tags = No_tags
+        ; main =
+            (fun input ->
+              let* { stmt; handler; witness; zeko_env; sequencer } =
+                exists Zkapp_single_unproved_input.typ ~compute:(V.get input)
+              in
+              let* must_be_none, _must_verify_zkapp =
+                handle_as_prover
+                  (fun () ->
+                    let@ () = make_checked in
+                    Transaction_snark.Base.Zkapp_command_snark.main
+                      ?witness:(V.unsafe_unwrap witness)
+                      ?zeko_env:(V.unsafe_unwrap zeko_env) ~constraint_constants
+                      (Transaction_snark.Zkapp_command_segment.Basic
+                       .to_single_list Opt_signed_opt_signed )
+                      stmt )
+                  (V.get handler)
+              in
+              assert (Option.is_none must_be_none) ;
+              let*| stmt = zeko_stmt_of_mina_stmt ~sequencer stmt in
+              Compile_simple.{ prevs = No_prevs; out = stmt } )
+        }
+      ; { branch_name = "proved-zkapp"
+        ; tags =
+            One_tag_sideloaded
+              { sideloaded_tag_name = "proved-zkapp"
+              ; typ = Zkapp_statement.typ
+              ; extract_vk =
+                  (fun ({ zkapp_vk; _ } : Zkapp_single_proved_input.t) ->
+                    zkapp_vk )
+              }
+        ; main =
+            (fun input ->
+              let* { stmt
+                   ; handler
+                   ; witness
+                   ; zeko_env
+                   ; zkapp_vk
+                   ; zkapp_proof
+                   ; sequencer
+                   } =
+                exists Zkapp_single_proved_input.typ ~compute:(V.get input)
+              in
+              let* zkapp_statement, `Must_verify proof_must_verify =
+                handle_as_prover
+                  (fun () ->
+                    let@ () = make_checked in
+                    Transaction_snark.Base.Zkapp_command_snark.main
+                      ?witness:(V.unsafe_unwrap witness)
+                      ?zeko_env:(V.unsafe_unwrap zeko_env) ~constraint_constants
+                      (Transaction_snark.Zkapp_command_segment.Basic
+                       .to_single_list Opt_signed_opt_signed )
+                      stmt )
+                  (V.get handler)
+              in
+              let*| stmt = zeko_stmt_of_mina_stmt ~sequencer stmt in
+              Compile_simple.
+                { prevs =
+                    One_prev_sideloaded
+                      { public_input = Option.value_exn zkapp_statement
+                      ; proof = zkapp_proof
+                      ; proof_must_verify
+                      ; vk = zkapp_vk
+                      }
+                ; out = stmt
+                } )
+        }
+      ; { branch_name = "merge"
+        ; tags = Two_tags_own
+        ; main =
+            (fun input ->
+              let* { left =
+                       { stmt =
+                           { source_ledger
+                           ; target_ledger = left_target_ledger
+                           ; fee_excess = left_fee_excess
+                           ; sequencer = left_sequencer
+                           } as left_stmt
+                       ; proof = left_proof
+                       }
+                   ; right =
+                       { stmt =
+                           { source_ledger = right_source_ledger
+                           ; target_ledger
+                           ; fee_excess = right_fee_excess
+                           ; sequencer = right_sequencer
+                           } as right_stmt
+                       ; proof = right_proof
+                       }
+                   } =
+                exists Merge_input.typ ~compute:(V.get input)
+              in
+              let* () =
+                Ledger_hash.assert_equal left_target_ledger right_source_ledger
+              in
+              let* fee_excess =
+                Currency.Fee.Signed.Checked.add left_fee_excess right_fee_excess
+              in
+              let*| sequencer =
+                assert_equal_safer ~label:__LOC__ PC.typ left_sequencer
+                  right_sequencer
+              in
+              Compile_simple.
+                { prevs =
+                    Two_prevs
+                      ( { public_input = left_stmt
+                        ; proof = left_proof
+                        ; proof_must_verify = Boolean.true_
+                        }
+                      , { public_input = right_stmt
+                        ; proof = right_proof
+                        ; proof_must_verify = Boolean.true_
+                        } )
+                ; out =
+                    ({ source_ledger; target_ledger; fee_excess; sequencer } : Zeko_stmt
+                                                                               .var)
+                } )
+        }
+      ]
+    ()
 
-let tag : (_, _, _, Pickles_types.Nat.N5.n) Pickles.Tag.t lazy_t =
-  lazy
-    (let (Result { tag; provers = _; tag_length = S (S (S (S (S Z)))) }) =
-       force compilation_result
-     in
-     tag )
-
-let prove_base input =
-  let (Result { tag = _; provers = [ base; _; _; _; _ ]; tag_length = _ }) =
-    force compilation_result
-  in
-  base input
-
-let prove_single input =
-  let (Result
-        { tag = _; provers = [ _; prove_single; _; _; _ ]; tag_length = _ } ) =
-    force compilation_result
-  in
-  prove_single input
-
-let prove_double input =
-  let (Result
-        { tag = _; provers = [ _; _; prove_double; _; _ ]; tag_length = _ } ) =
-    force compilation_result
-  in
-  prove_double input
-
-let prove_zkapp input =
-  let (Result { tag = _; provers = [ _; _; _; prove_zkapp; _ ]; tag_length = _ })
-      =
-    force compilation_result
-  in
-  prove_zkapp input
-
-let prove_merge input =
-  let (Result { tag = _; provers = [ _; _; _; _; prove_merge ]; tag_length = _ })
-      =
-    force compilation_result
-  in
-  prove_merge input
+include (val system)

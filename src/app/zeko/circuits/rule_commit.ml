@@ -32,16 +32,14 @@ module Verify_both_ases = struct
 
   let rule : _ Compile_simple.branch =
     { branch_name = "Verify_both_ases"
-    ; tags = Two_tags (force Ase.Without_length.tag, force Ase.With_length.tag)
+    ; tags = Two_tags (Ase.Without_length.tag, Ase.With_length.tag)
     ; main
     }
 
-  let compilation_result =
-    lazy
-      (let@ () = Promise.block_on_async_exn in
-       Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
-         ~out_typ:Typ.(Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
-         () )
+  include
+    ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
+            ~out_typ:Typ.(Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
+            () )
 end
 
 module Make (Inputs : sig
@@ -50,8 +48,7 @@ module Make (Inputs : sig
 
   (** The public key of the inner account *)
   val inner_public_key : PC.t
-end)
-=
+end) =
 struct
   open Inputs
 
@@ -68,19 +65,14 @@ struct
           Genesis_constants.Constraint_constants.compiled.ledger_depth
       end)
 
-  module Transaction_snark_V = MkV (Transaction_snark)
-
   module Witness = struct
     type t =
-      { txn_snark : Transaction_snark_V.t
+      { txn_snark : Zeko_transaction_snark.t
             (** The ledger transition we are performing. *)
       ; public_key : PC.t  (** Our public key on the L2 *)
       ; vk_hash : F.t  (** Our vk hash *)
-      ; sequencer : PC.t  (** Sequencer public key *)
       ; slot_range : Slot_range.t  (** slot_range *)
-      ; unverified_ase_inner : Ase_inner_inst.Stmt.t
-      ; unverified_ase_outer : Ase_outer_inst.Stmt.t
-      ; ases_proof : ProofV.t
+      ; verify_both_ases : Verify_both_ases.t
       ; old_inner_acc : Account.t
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t
@@ -88,108 +80,6 @@ struct
       }
     [@@deriving snarky]
   end
-
-  type extract_txn_snark_result =
-    { source_ledger : Ledger_hash.var; target_ledger : Ledger_hash.var }
-
-  let extract_txn_snark :
-         Transaction_snark.Statement.With_sok.var
-      -> extract_txn_snark_result Checked.t =
-    let open struct
-      let dummy_pc_init = Pending_coinbase.Stack.empty
-
-      let constraint_constants = Genesis_constants.Constraint_constants.compiled
-
-      let genesis_constants = Genesis_constants.compiled
-
-      let consensus_constants =
-        Consensus.Constants.create ~constraint_constants
-          ~protocol_constants:genesis_constants.protocol
-
-      (** Dummy state body, network preconditions are disabled anyway *)
-      let dummy_state_body =
-        let compile_time_genesis =
-          Mina_state.Genesis_protocol_state.t
-            ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-            ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-            ~constraint_constants ~consensus_constants
-            ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-        in
-        Mina_state.Protocol_state.body compile_time_genesis.data
-
-      let dummy_pc =
-        Pending_coinbase.Stack.push_state
-          (Mina_state.Protocol_state.Body.hash dummy_state_body)
-          Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
-    end in
-    let open Checked in
-    fun stmt ->
-      (* Check that pending_coinbase_stack is correctly set. This also constrains
-         protocol state. See check_protocol_state in transaction_snark.ml. *)
-      let dummy_pc = constant Pending_coinbase.Stack.typ dummy_pc in
-      let* () =
-        with_label __LOC__ (fun () ->
-            Pending_coinbase.Stack.equal_var dummy_pc
-              stmt.source.pending_coinbase_stack
-            >>= Boolean.Assert.is_true )
-      in
-      let* () =
-        with_label __LOC__ (fun () ->
-            Pending_coinbase.Stack.equal_var dummy_pc
-              stmt.target.pending_coinbase_stack
-            >>= Boolean.Assert.is_true )
-      in
-      (* Check that transactions have been completely applied *)
-      let empty_state = Mina_state.Local_state.(constant typ @@ empty ()) in
-      let* () =
-        with_label __LOC__ (fun () ->
-            Mina_state.Local_state.Checked.assert_equal empty_state
-              stmt.source.local_state
-            |> Checked.return )
-      in
-      let* () =
-        with_label __LOC__ (fun () ->
-            Mina_state.Local_state.Checked.assert_equal empty_state
-              stmt.target.local_state
-            |> Checked.return )
-      in
-
-      (* Check that first and second passes are connected *)
-      let* () =
-        with_label __LOC__ (fun () ->
-            Ledger_hash.assert_equal stmt.target.first_pass_ledger
-              stmt.source.second_pass_ledger )
-      in
-
-      (* Check that it's a complete transaction (a "block") *)
-      let* () =
-        with_label __LOC__ (fun () ->
-            Ledger_hash.assert_equal stmt.target.first_pass_ledger
-              stmt.connecting_ledger_right )
-      in
-      let* () =
-        with_label __LOC__ (fun () ->
-            Ledger_hash.assert_equal stmt.source.second_pass_ledger
-              stmt.connecting_ledger_left )
-      in
-
-      (* We don't check fee_excess because it's up to the sequencer what they do with it. *)
-      (* The supply however must not increase. *)
-      let* is_neg =
-        Currency.Amount.Signed.Checked.sgn stmt.supply_increase
-        >>| Sgn.Checked.is_neg
-      in
-      let* is_zero =
-        Currency.Amount.Signed.Checked.magnitude stmt.supply_increase
-        >>= Currency.Amount.(Checked.equal (constant typ zero))
-      in
-      let*| () =
-        with_label __LOC__ (fun () ->
-            Boolean.(is_neg || is_zero) >>= Boolean.Assert.is_true )
-      in
-      { source_ledger = stmt.source.first_pass_ledger
-      ; target_ledger = stmt.target.second_pass_ledger
-      }
 
   let implied_root (account : Account.var) (path : Path.var) : F.var Checked.t =
     let* init = Account.Checked.digest account in
@@ -215,11 +105,8 @@ struct
     let* ({ txn_snark
           ; public_key
           ; vk_hash
-          ; sequencer
           ; slot_range
-          ; unverified_ase_inner
-          ; unverified_ase_outer
-          ; ases_proof
+          ; verify_both_ases
           ; old_inner_acc
           ; old_inner_acc_path
           ; new_inner_acc
@@ -245,30 +132,19 @@ struct
     let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
 
-    (* Extract txn snark statement. *)
-    let* txn_snark_stmt =
-      exists Transaction_snark.Statement.With_sok.typ
-        ~compute:
-          As_prover.(V.get txn_snark >>| Transaction_snark.statement_with_sok)
+    let* ( { source_ledger; target_ledger; sequencer; fee_excess }
+         , verify_txn_snark ) =
+      Zeko_transaction_snark.get txn_snark
     in
-
-    (* Extract information from txn snark statement.
-       This function also makes sure it's valid in the context of Zeko.
-    *)
-    let* { source_ledger; target_ledger } = extract_txn_snark txn_snark_stmt in
 
     (* We check that the paths provided for the inner account are correct. *)
-    let* () =
-      with_label __LOC__ (fun () ->
-          Field.Checked.Assert.equal
-            (Ledger_hash.var_to_hash_packed source_ledger)
-            implied_root_old )
+    let* source_ledger =
+      assert_equal_safer ~label:__LOC__ Ledger_hash.typ source_ledger
+        (Ledger_hash.var_of_hash_packed implied_root_old)
     in
-    let* () =
-      with_label __LOC__ (fun () ->
-          Field.Checked.Assert.equal
-            (Ledger_hash.var_to_hash_packed target_ledger)
-            implied_root_new )
+    let* target_ledger =
+      assert_equal_safer ~label:__LOC__ Ledger_hash.typ target_ledger
+        (Ledger_hash.var_of_hash_packed implied_root_new)
     in
 
     (* We check that we're dealing with the correct account. *)
@@ -295,16 +171,8 @@ struct
     in
 
     (* Extract information from Verify_both_ases wrapper proof. *)
-    let ase_outer, ase_inner, verify_ases =
-      let verify_ases : _ Compile_simple.prev =
-        { public_input = (unverified_ase_outer, unverified_ase_inner)
-        ; proof_must_verify = Boolean.true_
-        ; proof = ases_proof
-        }
-      in
-      let ase_outer = unverified_ase_outer in
-      let ase_inner = unverified_ase_inner in
-      (ase_outer, ase_inner, verify_ases)
+    let* (ase_outer, ase_inner), verify_ases =
+      Verify_both_ases.get verify_both_ases
     in
 
     let Ase_outer_inst.Stmt.
@@ -325,12 +193,14 @@ struct
        synchronized outer action state.
        We don't check the lengths here, since it isn't important for this purpose.
     *)
-    let* () =
-      with_label __LOC__ (fun () ->
-          assert_equal Outer_action_state.typ
-            (Outer_action_state.With_length.state_var
-               synchronized_outer_action_state )
-            synchronized_outer_action_state' )
+    let* synchronized_outer_action_state =
+      let*| () =
+        assert_equal ~label:__LOC__ Outer_action_state.typ
+          (Outer_action_state.With_length.state_var
+             synchronized_outer_action_state )
+          synchronized_outer_action_state'
+      in
+      synchronized_outer_action_state
     in
 
     (* Extract the inner action states. *)
@@ -345,15 +215,21 @@ struct
           Inner_action_state.unsafe_var_of_field x
     in
     (* We check that the above values match with what we got from ase_inner. *)
-    let* () =
-      assert_equal Inner_action_state.typ
-        (Inner_action_state.With_length.state_var old_inner_action_state)
-        old_inner_action_state'
+    let* old_inner_action_state =
+      let*| () =
+        assert_equal Inner_action_state.typ
+          (Inner_action_state.With_length.state_var old_inner_action_state)
+          old_inner_action_state'
+      in
+      old_inner_action_state
     in
-    let* () =
-      assert_equal Inner_action_state.typ
-        (Inner_action_state.With_length.state_var new_inner_action_state)
-        new_inner_action_state'
+    let* new_inner_action_state =
+      let*| () =
+        assert_equal Inner_action_state.typ
+          (Inner_action_state.With_length.state_var new_inner_action_state)
+          new_inner_action_state'
+      in
+      new_inner_action_state
     in
 
     (* Finalize update  *)
@@ -453,23 +329,14 @@ struct
     in
 
     (* Assemble some stuff to help the prover and calculate public output *)
-    let* out = make_outputs account_update [ (sequencer_account_update, []) ] in
-    let*| txn_snark_proof =
-      As_prover.(V.get txn_snark >>| Transaction_snark.proof) |> V.create
+    let*| out =
+      make_outputs account_update [ (sequencer_account_update, []) ]
     in
-    Compile_simple.
-      { prevs =
-          Two_prevs
-            ( { public_input = txn_snark_stmt
-              ; proof_must_verify = Boolean.true_
-              ; proof = txn_snark_proof
-              }
-            , verify_ases )
-      ; out
-      }
+    Compile_simple.{ prevs = Two_prevs (verify_txn_snark, verify_ases); out }
 
   let rule : _ Compile_simple.branch =
-    match force Verify_both_ases.compilation_result with
-    | Result { tag; provers = _; tag_length = _ } ->
-        { branch_name = "Rollup step"; tags = Two_tags (force Zeko_transaction_snark.tag, tag); main }
+    { branch_name = "Rollup step"
+    ; tags = Two_tags (Zeko_transaction_snark.tag, Verify_both_ases.tag)
+    ; main
+    }
 end

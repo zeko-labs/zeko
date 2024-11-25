@@ -167,13 +167,11 @@ module type Result = sig
 
   type tag_t
 
-  val tag_length : (branches, n_branches) branches_length
-
-  val compile :
-       unit
-    -> ( (tag_var, tag_t, self_width, n_branches) Pickles.Tag.t
-       * (out_t, branches) provers )
-       Promise.t
+  val tag_branches : (branches, n_branches) branches_length
+  
+  val tag : (tag_var, tag_t, self_width, n_branches) Pickles.Tag.t
+  
+  val provers : (out_t, branches) provers
 
   type t
 
@@ -186,5 +184,5 @@ module type Result = sig
     -> var
     -> (out_var * (tag_var, self_width) prev) Checked.t
 
-  val make_unchecked : proof:Pickles.Side_loaded.Proof.t -> out_t -> t
+  val make_unchecked : ?proof:Pickles.Side_loaded.Proof.t -> out_t -> t
 end

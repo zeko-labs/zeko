@@ -30,7 +30,8 @@ module Make (Inputs : sig
   val name : string
 
   val override_wrap_domain : [ `N0 | `N1 | `N2 ] option
-end) =
+end)
+() =
 struct
   include Inputs
 
@@ -38,7 +39,7 @@ struct
     type t = { source : Stmt.t; target : Stmt.t } [@@deriving snarky]
   end
 
-  type t = { source : Stmt.t; target : Stmt.t; proof : Mina_base.Proof.t }
+  type trans = Trans.t = { source : Stmt.t; target : Stmt.t }
 
   let fold (middle_or_end : [ `Middle | `End ]) (source : Stmt.var)
       (elems : Elem.var array) (length : int V.t) =
@@ -83,7 +84,7 @@ struct
 
     val unwrap_source :
       Source.var -> (Stmt.var * prevs Compile_simple.prevs) Checked.t
-      
+
     val tags : (Trans.var, prevs, 'input) Compile_simple.tags
   end) =
   struct
@@ -97,12 +98,10 @@ struct
       let dummy_filler = dummy_elem
     end)
 
-    module Witness = struct
-      type t = { elems : Elems.t; source : Source.t } [@@deriving snarky]
-    end
-
-    let%snarkydef_ main (w : Witness.t V.t) =
-      let* Witness.{ elems; source } = exists Witness.typ ~compute:(V.get w) in
+    let%snarkydef_ main (w : (Elems.t * Source.t) V.t) =
+      let* elems, source =
+        exists Typ.(Elems.typ * Source.typ) ~compute:(V.get w)
+      in
       let* source, prevs = unwrap_source source in
       let*| target = fold middle_or_end source elems.array elems.length in
       Compile_simple.{ out = ({ source; target } : Trans.var); prevs }
@@ -224,99 +223,38 @@ struct
       { branch_name = "Rule_merge"; tags = Two_tags_own; main }
   end
 
+  type merge_input = Rule_merge.Witness.t =
+    { left : trans
+    ; left_proof : Pickles.Side_loaded.Proof.t
+    ; right : trans
+    ; right_proof : Pickles.Side_loaded.Proof.t
+    }
+
   let name = "State_machine.Make(" ^ name ^ ")"
 
-  let compilation_result =
-    lazy
-      (let@ () = Promise.block_on_async_exn in
-       Compile_simple.compile ?override_wrap_domain
-         ~name:("folder(" ^ name ^ ")")
-         ~branches:
-           [ Rule_leaf.rule
-           ; Rule_leaf_option.rule
-           ; Rule_extend.rule
-           ; Rule_extend_option.rule
-           ; Rule_merge.rule
-           ]
-         ~out_typ:Trans.typ () )
+  module System =
+  ( val Compile_simple.compile ?override_wrap_domain
+          ~name:("folder(" ^ name ^ ")")
+          ~branches:
+            [ Rule_leaf.rule
+            ; Rule_leaf_option.rule
+            ; Rule_extend.rule
+            ; Rule_extend_option.rule
+            ; Rule_merge.rule
+            ]
+          ~out_typ:Trans.typ () )
 
-  type tag_var = Trans.var
+  type tag_var = System.tag_var
 
-  type tag_t = Trans.t
+  type tag_t = System.tag_t
 
   let tag :
-      ( tag_var
-      , tag_t
-      , Compile_simple.self_width
-      , Pickles_types.Nat.N5.n )
-      Pickles.Tag.t
-      lazy_t =
-    lazy
-      ( match force compilation_result with
-      | Result { tag; provers = _; tag_length = S (S (S (S (S Z)))) } ->
-          tag )
+      (tag_var, tag_t, Compile_simple.self_width, tag_branches) Pickles.Tag.t =
+    let (S (S (S (S (S Z))))) = System.tag_branches in
+    System.tag
 
-  let leaf (source : Stmt.t) (elems : Elem.t list) : t Promise.t =
-    match force compilation_result with
-    | Result { tag = _; provers = [ leaf; _; _; _; _ ]; tag_length = _ } ->
-        let@ ({ source; target } : Trans.t), proof =
-          leaf { elems; source } |> Promise.( >>| )
-        in
-        ({ source; target; proof } : t)
-
-  let leaf_option (source : Stmt.t) (elems : Elem.t list) : t Promise.t =
-    match force compilation_result with
-    | Result { tag = _; provers = [ _; leaf_option; _; _; _ ]; tag_length = _ }
-      ->
-        let@ ({ source; target } : Trans.t), proof =
-          leaf_option { elems; source } |> Promise.( >>| )
-        in
-        ({ source; target; proof } : t)
-
-  let extend (prev : t) (elems : Elem.t list) : t Promise.t =
-    match force compilation_result with
-    | Result { tag = _; provers = [ _; _; extend; _; _ ]; tag_length = _ } ->
-        let@ ({ source; target } : Trans.t), proof =
-          extend
-            { elems
-            ; source =
-                ({ source = prev.source; target = prev.target }, prev.proof)
-            }
-          |> Promise.( >>| )
-        in
-        ({ source; target; proof } : t)
-
-  let extend_option (prev : t) (elems : Elem.t list) : t Promise.t =
-    match force compilation_result with
-    | Result
-        { tag = _; provers = [ _; _; _; extend_option; _ ]; tag_length = _ } ->
-        let@ ({ source; target } : Trans.t), proof =
-          extend_option
-            { elems
-            ; source =
-                ({ source = prev.source; target = prev.target }, prev.proof)
-            }
-          |> Promise.( >>| )
-        in
-        ({ source; target; proof } : t)
-
-  let merge (left : t) (right : t) : t Promise.t =
-    match force compilation_result with
-    | Result { tag = _; provers = [ _; _; _; _; merge ]; tag_length = _ } ->
-        let@ ({ source; target } : Trans.t), proof =
-          merge
-            { left = { source = left.source; target = left.target }
-            ; right = { source = right.source; target = right.target }
-            ; left_proof = left.proof
-            ; right_proof = right.proof
-            }
-          |> Promise.( >>| )
-        in
-        ({ source; target; proof } : t)
-
-  let dummy_proof () =
-    let open Pickles_types in
-    Pickles.Proof.dummy Nat.N2.n Nat.N2.n Nat.N2.n ~domain_log2:15
+  let Compile_simple.[ leaf; leaf_option; extend; extend_option; merge ] =
+    System.provers
 
   module Make (Inputs : sig
     val get_iterations : int
@@ -332,58 +270,41 @@ struct
       let dummy_filler = dummy_elem
     end)
 
-    type t =
-      { init_arg : Init.t
-      ; proof_target : Stmt.t
-      ; proof : Proof_Option_V.t
-      ; excess : Elems.t
-      }
+    type t = { init_arg : Init.t; t : System.t; excess : Elems.t }
     [@@deriving snarky]
 
     let%snarkydef_ get_full ?(check : Boolean.var option)
-        ({ init_arg; proof_target; proof; excess } : var) =
-      let* has_proof =
-        exists Boolean.typ ~compute:As_prover.(V.get proof >>| Option.is_some)
-      in
-      (* We verify the proof if check is true or None, and there is a proof *)
-      let* proof_must_verify =
-        match check with
-        | Some check ->
-            Boolean.(check &&& has_proof)
-        | None ->
-            Checked.return has_proof
-      in
+        ({ init_arg; t; excess } : var) =
       (* We get the supposed source from the initialization of the state machine. *)
       let* source = init ~check init_arg in
-      (* We do some wrangling to get either the proof or a dummy proof. *)
-      let* (proof : Proof.t V.t) =
-        As_prover.(V.get proof >>| Option.value ~default:(dummy_proof ()))
-        |> V.create
+      let* { source = proof_source; target = proof_target }, verify_proof =
+        System.get ?check t
+      in
+      let* source =
+        assert_equal_safer ~label:__LOC__ Stmt.typ source proof_source
       in
       let* excess_init =
-        if_ has_proof ~typ:Stmt.typ ~then_:proof_target ~else_:source
+        match check with
+        | Some proof_must_verify ->
+            if_ proof_must_verify ~typ:Stmt.typ ~then_:proof_target
+              ~else_:source
+        | None ->
+            Checked.return proof_target
       in
       let* target = fold `Middle excess_init excess.array excess.length in
-      let stmt : Trans.var = { source; target } in
-      Checked.return
-        ( `Source stmt.source
-        , `Target stmt.target
-        , ( { public_input = ({ source; target = proof_target } : Trans.var)
-            ; proof_must_verify
-            ; proof
-            }
-            : _ Compile_simple.prev ) )
+      Checked.return (`Source source, `Target target, verify_proof)
 
     let%snarkydef_ get ?check t =
       let*| `Source _source, `Target target, verify = get_full ?check t in
       (target, verify)
 
-    let make ~(proof_target : Stmt.t) ~(proof : Proof.t) (init_arg : Init.t)
-        (excess : Elem.t list) : t =
-      ({ init_arg; proof_target; proof = Some proof; excess } : t)
-
-    let make_proofless ~(dummy_proof_target : Stmt.t) (init_arg : Init.t)
-        (excess : Elem.t list) : t =
-      ({ init_arg; proof_target = dummy_proof_target; proof = None; excess } : t)
+    let make ~(proof_source : Stmt.t) ~(proof_target : Stmt.t)
+        ?(proof : Proof.t option) (init_arg : Init.t) (excess : Elem.t list) : t
+        =
+      let t =
+        System.make_unchecked ?proof
+          { source = proof_source; target = proof_target }
+      in
+      ({ init_arg; t; excess } : t)
   end
 end

@@ -4,122 +4,149 @@ open Snark_params.Tick
 open Zeko_util
 
 module With_length : sig
-  type tag_var
+  module Stmt : sig
+    type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
+  end
+
+  type trans = { source : Stmt.t; target : Stmt.t }
+
+  val leaf : field list * Stmt.t -> (trans * Proof.t) Promise.t
+
+  val leaf_iterations : int
+
+  val leaf_option : field list * Stmt.t -> (trans * Proof.t) Promise.t
+
+  val leaf_option_iterations : int
+
+  val extend : field list * (trans * Proof.t) -> (trans * Proof.t) Promise.t
+
+  val extend_iterations : int
+
+  val extend_option :
+    field list * (trans * Proof.t) -> (trans * Proof.t) Promise.t
+
+  val extend_option_iterations : int
+
+  type merge_input =
+    { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
+
+  val merge : merge_input -> (trans * Proof.t) Promise.t
 
   type tag_t
+
+  type tag_var
 
   val tag :
     ( tag_var
     , tag_t
-    , Compile_simple.self_width
+    , Compile_simple.sideloaded_width
     , Folder.tag_branches )
     Pickles.Tag.t
-    lazy_t
 
-  type stmt = { action_state : field; length : Checked32.t }
+  module Make : functor
+    (Inputs : sig
+       module Action_state : Rollup_state.Action_state_type
 
-  type t = { source : stmt; target : stmt; proof : Proof.t }
-
-  val leaf : stmt -> field list -> t Promise.t
-
-  val leaf_iterations : int
-
-  val leaf_option : stmt -> field list -> t Promise.t
-
-  val leaf_option_iterations : int
-
-  val extend : t -> field list -> t Promise.t
-
-  val extend_iterations : int
-
-  val extend_option : t -> field list -> t Promise.t
-
-  val extend_option_iterations : int
-
-  val merge : t -> t -> t Promise.t
-
-  module Make (Inputs : sig
-    module Action_state : Rollup_state.Action_state_type
-
-    (** Set this as high as possible. Makes your circuit bigger. *)
-    val get_iterations : int
-  end) : sig
-    open Inputs
-
+       val get_iterations : int
+     end)
+    -> sig
     module Stmt : sig
       type t =
-        { source : Action_state.With_length.t
-        ; target : Action_state.With_length.t
+        { source : Inputs.Action_state.With_length.t
+        ; target : Inputs.Action_state.With_length.t
         }
-      [@@deriving snarky]
+
+      type var =
+        { source : Inputs.Action_state.With_length.var
+        ; target : Inputs.Action_state.With_length.var
+        }
+
+      val typ : (var, t) Typ.t
     end
 
-    include SnarkType
+    type t
 
-    (** You should pass the second result into previous_proof_statements *)
+    type var
+
+    val typ : (var, t) Typ.t
+
     val get :
-         ?check:Boolean.var
-           (** Set this to false if you don't want to check the proof after all. *)
+         ?check:Zeko_util.Boolean.var
       -> var
-      -> (Stmt.var * (tag_var, Compile_simple.self_width) Compile_simple.prev)
+      -> ( Stmt.var
+         * (tag_var, Compile_simple.sideloaded_width) Compile_simple_intf.prev
+         )
          Checked.t
   end
 end
 
 module Without_length : sig
-  type tag_var
+  module Stmt = F
+
+  type trans = { source : field; target : field }
+
+  val leaf : field list * field -> (trans * Proof.t) Promise.t
+
+  val leaf_iterations : int
+
+  val leaf_option : field list * field -> (trans * Proof.t) Promise.t
+
+  val leaf_option_iterations : int
+
+  val extend : field list * (trans * Proof.t) -> (trans * Proof.t) Promise.t
+
+  val extend_iterations : int
+
+  val extend_option :
+    field list * (trans * Proof.t) -> (trans * Proof.t) Promise.t
+
+  val extend_option_iterations : int
+
+  type merge_input =
+    { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
+
+  val merge : merge_input -> (trans * Proof.t) Promise.t
 
   type tag_t
+
+  type tag_var
 
   val tag :
     ( tag_var
     , tag_t
-    , Compile_simple.self_width
+    , Compile_simple.sideloaded_width
     , Folder.tag_branches )
     Pickles.Tag.t
-    lazy_t
 
-  type t = { source : field; target : field; proof : Proof.t }
+  module Make : functor
+    (Inputs : sig
+       module Action_state : Rollup_state.Action_state_type
 
-  val leaf : field -> field list -> t Promise.t
-
-  val leaf_iterations : int
-
-  val leaf_option : field -> field list -> t Promise.t
-
-  val leaf_option_iterations : int
-
-  val extend : t -> field list -> t Promise.t
-
-  val extend_iterations : int
-
-  val extend_option : t -> field list -> t Promise.t
-
-  val extend_option_iterations : int
-
-  val merge : t -> t -> t Promise.t
-
-  module Make (Inputs : sig
-    module Action_state : Rollup_state.Action_state_type
-
-    (** Set this as high as possible. Makes your circuit bigger. *)
-    val get_iterations : int
-  end) : sig
-    open Inputs
-
+       val get_iterations : int
+     end)
+    -> sig
     module Stmt : sig
-      type t = { source : Action_state.t; target : Action_state.t }
-      [@@deriving snarky]
+      type t =
+        { source : Inputs.Action_state.t; target : Inputs.Action_state.t }
+
+      type var =
+        { source : Inputs.Action_state.var; target : Inputs.Action_state.var }
+
+      val typ : (var, t) Typ.t
     end
 
-    include SnarkType
+    type t
 
-    (** You should pass the second result into previous_proof_statements *)
+    type var
+
+    val typ : (var, t) Typ.t
+
     val get :
-         ?check:Boolean.var
-           (** Set this to false if you don't want to check the proof after all. *)
+         ?check:Zeko_util.Boolean.var
       -> var
-      -> (Stmt.var * (tag_var, Compile_simple.self_width) Compile_simple.prev)
+      -> ( Stmt.var
+         * (tag_var, Compile_simple.sideloaded_width) Compile_simple_intf.prev
+         )
          Checked.t
   end
 end

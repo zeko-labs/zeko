@@ -46,7 +46,8 @@ module Make (Inputs : sig
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
-end) =
+end)
+() =
 struct
   open Inputs
 
@@ -241,7 +242,7 @@ struct
     let override_wrap_domain = None
   end
 
-  module Check_accepted = Folder.Make (Check_accepted_definition)
+  module Check_accepted = Folder.Make (Check_accepted_definition) ()
 
   module Rule_finalize_deposit = struct
     module Check_accepted_params = struct
@@ -399,7 +400,7 @@ struct
 
     let rule : _ Compile_simple.branch =
       { branch_name = "finalize deposit"
-      ; tags = Two_tags (force Check_accepted.tag, force Ase.With_length.tag)
+      ; tags = Two_tags (Check_accepted.tag, Ase.With_length.tag)
       ; main
       }
   end
@@ -437,19 +438,17 @@ struct
 
       let rule : _ Compile_simple.branch =
         { branch_name = "Verify_two_outer_ases"
-        ; tags =
-            Two_tags (force Ase.Without_length.tag, force Ase.With_length.tag)
+        ; tags = Two_tags (Ase.Without_length.tag, Ase.With_length.tag)
         ; main
         }
 
-      let compilation_result =
-        lazy
-          (let@ () = Promise.block_on_async_exn in
-           Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
-             ~out_typ:
-               Typ.(
-                 Ase_outer_inst.Stmt.typ * Ase_outer_with_length_inst.Stmt.typ)
-             () )
+      include
+        ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
+                ~out_typ:
+                  Typ.(
+                    Ase_outer_inst.Stmt.typ
+                    * Ase_outer_with_length_inst.Stmt.typ)
+                () )
     end
 
     module Check_accepted_params = struct
@@ -481,19 +480,17 @@ struct
 
       let rule : _ Compile_simple.branch =
         { branch_name = "Verify_two_outer_ases"
-        ; tags = Two_tags (force Check_accepted.tag, force Ase.With_length.tag)
+        ; tags = Two_tags (Check_accepted.tag, Ase.With_length.tag)
         ; main
         }
 
-      let compilation_result =
-        lazy
-          (let@ () = Promise.block_on_async_exn in
-           Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
-             ~out_typ:
-               Typ.(
-                 Check_accepted_definition.Stmt.typ
-                 * Ase_outer_with_length_inst.Stmt.typ)
-             () )
+      include
+        ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
+                ~out_typ:
+                  Typ.(
+                    Check_accepted_definition.Stmt.typ
+                    * Ase_outer_with_length_inst.Stmt.typ)
+                () )
     end
 
     module Witness = struct
@@ -504,12 +501,8 @@ struct
         ; outer_authorization_kind : A.t
         ; commit : Rollup_state.Outer_action.Commit.t
         ; before_commit_ase : Rollup_state.Outer_action_state.t
-        ; unverified_commit_ase : Ase_outer_inst.Stmt.t
-        ; unverified_sync_ase : Ase_outer_with_length_inst.Stmt.t
-        ; verify_two_outer_ases : Proof_V.t
-        ; unverified_check_accepted : Check_accepted_definition.Stmt.t
-        ; unverified_deposit_ase : Ase_outer_with_length_inst.Stmt.t
-        ; verify_check_accepted_and_ase : Proof_V.t
+        ; verify_two_outer_ases : Verify_two_outer_ases.t
+        ; verify_check_accepted_and_ase : Verify_check_accepted_and_ase.t
         ; prev_next_cancelled_deposit : Checked32.t
         }
       [@@deriving snarky]
@@ -524,48 +517,29 @@ struct
                  ; outer_authorization_kind
                  ; commit
                  ; before_commit_ase
-                 ; unverified_commit_ase
-                 ; unverified_sync_ase
                  ; verify_two_outer_ases
-                 ; unverified_check_accepted
-                 ; unverified_deposit_ase
                  ; verify_check_accepted_and_ase
                  ; prev_next_cancelled_deposit
                  } =
             exists Witness.typ ~compute:(V.get w)
           in
-          let commit_ase, sync_ase, verify_two_outer_ases =
-            let verify_two_outer_ases : _ Compile_simple.prev =
-              { public_input = (unverified_commit_ase, unverified_sync_ase)
-              ; proof_must_verify = Boolean.true_
-              ; proof = verify_two_outer_ases
-              }
-            in
-            (unverified_commit_ase, unverified_sync_ase, verify_two_outer_ases)
+          let* (commit_ase, sync_ase), verify_two_outer_ases =
+            Verify_two_outer_ases.get verify_two_outer_ases
           in
-          let ( ({ params
-                 ; action_state = mid_outer_action_state'
-                 ; deposit_index
-                 ; n_steps
-                 ; is_rejected
-                 ; is_accepted
-                 } :
-                  Check_accepted_definition.Stmt.var )
-              , ({ source = mid_outer_action_state
-                 ; target = outer_action_state
-                 } :
-                  Ase_outer_with_length_inst.Stmt.var )
-              , verify_check_accepted_and_ase ) =
-            let verify_check_accepted_and_ase : _ Compile_simple.prev =
-              { public_input =
-                  (unverified_check_accepted, unverified_deposit_ase)
-              ; proof_must_verify = Boolean.true_
-              ; proof = verify_check_accepted_and_ase
-              }
-            in
-            ( unverified_check_accepted
-            , unverified_deposit_ase
-            , verify_check_accepted_and_ase )
+          let* ( ( ({ params
+                    ; action_state = mid_outer_action_state'
+                    ; deposit_index
+                    ; n_steps
+                    ; is_rejected
+                    ; is_accepted
+                    } :
+                     Check_accepted_definition.Stmt.var )
+                 , ({ source = mid_outer_action_state
+                    ; target = outer_action_state
+                    } :
+                     Ase_outer_with_length_inst.Stmt.var ) )
+               , verify_check_accepted_and_ase ) =
+            Verify_check_accepted_and_ase.get verify_check_accepted_and_ase
           in
           let helper_token_id =
             let account_id =
@@ -702,20 +676,9 @@ struct
             } )
 
     let rule : _ Compile_simple.branch =
-      let (Result
-            { tag = verify_two_outer_ases_tag; provers = _; tag_length = _ } ) =
-        force Verify_two_outer_ases.compilation_result
-      in
-      let (Result
-            { tag = verify_check_accepted_and_ase_tag
-            ; provers = _
-            ; tag_length = _
-            } ) =
-        force Verify_check_accepted_and_ase.compilation_result
-      in
       { branch_name = "finalize cancelled deposit"
       ; tags =
-          Two_tags (verify_two_outer_ases_tag, verify_check_accepted_and_ase_tag)
+          Two_tags (Verify_two_outer_ases.tag, Verify_check_accepted_and_ase.tag)
       ; main
       }
   end
@@ -952,7 +915,7 @@ struct
 
     let rule : _ Compile_simple.branch =
       { branch_name = "finalize withdrawal"
-      ; tags = Two_tags (force Ase.Without_length.tag, force Ase.With_length.tag)
+      ; tags = Two_tags (Ase.Without_length.tag, Ase.With_length.tag)
       ; main
       }
   end
