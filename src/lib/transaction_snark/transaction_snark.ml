@@ -737,9 +737,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               with Failure msg -> raise_failure ~pos msg
           end
 
-          let display _b ~label =
-            (* ZEKO NOTE: just implemented for debugging purposes *)
-            label ^ ": " ^ Bool.to_string (As_prover.read Boolean.typ _b)
+          let display _b ~label:_ = ""
 
           type failure_status = unit
 
@@ -1330,12 +1328,8 @@ module Make_str (A : Wire_types.Concrete) = struct
               run_checked (Amount.Signed.Checked.if_ b ~then_ ~else_)
 
             let is_non_neg (t : t) =
-              Boolean.if_
-                (equal t Amount.Signed.(Checked.constant zero))
-                ~then_:Boolean.true_
-                ~else_:
-                  (Sgn.Checked.is_pos
-                     (run_checked (Currency.Amount.Signed.Checked.sgn t)) )
+              Sgn.Checked.is_pos
+                (run_checked (Currency.Amount.Signed.Checked.sgn t))
 
             let is_neg (t : t) =
               Sgn.Checked.is_neg
@@ -1403,14 +1397,8 @@ module Make_str (A : Wire_types.Concrete) = struct
             , Bool.failure_status_tbl )
             Mina_transaction_logic.Zkapp_command_logic.Local_state.t
 
-          let add_check (t : t) failure b =
-            (* ZEKO NOTE: added to ensure failure doesn't happen for good measure.
-               Quite possibly not needed, but I'm not sure. *)
-            with_label (Mina_base.Transaction_status.Failure.to_string failure)
-              (fun () ->
-                with_label __LOC__ (fun () ->
-                    Boolean.Assert.is_true b ;
-                    { t with success = Bool.(t.success &&& b) } ) )
+          let add_check (t : t) _failure b =
+            { t with success = Bool.(t.success &&& b) }
 
           let update_failure_status_tbl (t : t) _failure_status b =
             add_check
@@ -2130,9 +2118,6 @@ module Make_str (A : Wire_types.Concrete) = struct
       (* Horrible hack :( *)
       let witness : Witness.t option ref = ref None
 
-      (* ZEKO NOTE: We extend this horrible hack for our own zeko_env too, for issue #64 *)
-      let zeko_env : zeko_env option ref = ref None
-
       let rule (type a b c d) ~constraint_constants ~proof_level
           (t : (a, b, c, d) Basic.t_typed) :
           ( a
@@ -2165,8 +2150,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input, `Must_verify must_verify =
-                    main ?witness:!witness ?zeko_env:!zeko_env s
-                      ~constraint_constants stmt
+                    main ?witness:!witness s ~constraint_constants stmt
                   in
                   let proof =
                     Run.exists (Typ.Internal.ref ()) ~request:(fun () ->
@@ -2189,8 +2173,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input_opt, _ =
-                    main ?witness:!witness ?zeko_env:!zeko_env s
-                      ~constraint_constants stmt
+                    main ?witness:!witness s ~constraint_constants stmt
                   in
                   assert (Option.is_none zkapp_input_opt) ;
                   { previous_proof_statements = []
@@ -2205,8 +2188,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input_opt, _ =
-                    main ?witness:!witness ?zeko_env:!zeko_env s
-                      ~constraint_constants stmt
+                    main ?witness:!witness s ~constraint_constants stmt
                   in
                   assert (Option.is_none zkapp_input_opt) ;
                   { previous_proof_statements = []
@@ -2269,11 +2251,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       let is_fee_transfer =
         Transaction_union.Tag.Unpacked.is_fee_transfer tag
       in
-      (* ZEKO NOTE: Disallow fee transfers *)
-      let%bind () = Boolean.Assert.is_true (Boolean.not is_fee_transfer) in
       let is_coinbase = Transaction_union.Tag.Unpacked.is_coinbase tag in
-      (* ZEKO NOTE: Disallow coinbase *)
-      let%bind () = Boolean.Assert.is_true (Boolean.not is_coinbase) in
       let fee_token = payload.common.fee_token in
       let%bind fee_token_default =
         make_checked (fun () ->
@@ -3441,13 +3419,6 @@ module Make_str (A : Wire_types.Concrete) = struct
       -> spec:Zkapp_command_segment.Basic.t
       -> t Async.Deferred.t
 
-    val of_zkapp_command_segment_zeko_exn :
-         statement:Statement.With_sok.t
-      -> witness:Zkapp_command_segment.Witness.t
-      -> zeko_env:zeko_env
-      -> spec:Zkapp_command_segment.Basic.t
-      -> t Async.Deferred.t
-
     val merge :
       t -> t -> sok_digest:Sok_message.Digest.t -> t Async.Deferred.Or_error.t
   end
@@ -4089,11 +4060,9 @@ module Make_str (A : Wire_types.Concrete) = struct
       in
       (pi, vk)
 
-    let of_zkapp_command_segment_zeko_exn ~(statement : Proof.statement)
-        ~witness ~zeko_env ~(spec : Zkapp_command_segment.Basic.t) :
-        t Async.Deferred.t =
+    let of_zkapp_command_segment_exn ~(statement : Proof.statement) ~witness
+        ~(spec : Zkapp_command_segment.Basic.t) : t Async.Deferred.t =
       Base.Zkapp_command_snark.witness := Some witness ;
-      Base.Zkapp_command_snark.zeko_env := Some zeko_env ;
       let res =
         match spec with
         | Opt_signed ->
@@ -4113,13 +4082,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       let open Async in
       let%map (), (), proof = res in
       Base.Zkapp_command_snark.witness := None ;
-      Base.Zkapp_command_snark.zeko_env := None ;
       { proof; statement }
-
-    let of_zkapp_command_segment_exn ~statement ~witness ~spec :
-        t Async.Deferred.t =
-      of_zkapp_command_segment_zeko_exn ~statement ~witness
-        ~zeko_env:zeko_dummy_env ~spec
 
     let of_transaction_union ~statement ~init_stack transaction state_body
         global_slot handler =
