@@ -119,6 +119,7 @@ module type Intf = sig
   (** Transfer request *)
   module TR : sig
     type t = { amount : Currency.Amount.t; recipient : Public_key.Compressed.t }
+    [@@deriving yojson]
 
     val to_actions : t -> Zkapp_account.Actions.t
   end

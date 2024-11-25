@@ -16,11 +16,15 @@ let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
   in
   go 0
 
-let time label (d : 'a Deferred.t) =
+let time (d : 'a Deferred.t) =
   let start = Time.now () in
   let%bind x = d in
   let stop = Time.now () in
-  printf "%s: %s\n%!" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
+  return (x, Time.diff stop start)
+
+let print_time label (d : 'a Deferred.t) =
+  let%bind x, t = time d in
+  printf "%s: %s\n%!" label (Time.Span.to_string_hum t) ;
   return x
 
 (* Finds the account_id's account update and returns the 0th state update *)
@@ -48,9 +52,11 @@ let get_state_transition pk command =
   in
   Some (source, target)
 
-let get_inner_deposits_state_exn (module M : Zkapps_rollup.S) l =
+let get_inner_deposits_state_exn l =
   let (old_deposits_commit :: _) =
-    let idx = Mina_ledger.Ledger.index_of_account_exn l M.Inner.account_id in
+    let idx =
+      Mina_ledger.Ledger.index_of_account_exn l Zkapps_rollup.inner_account_id
+    in
     let inner_acc = Mina_ledger.Ledger.get_at_index_exn l idx in
     (Option.value_exn inner_acc.zkapp).app_state
   in
