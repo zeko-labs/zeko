@@ -185,6 +185,7 @@ module Outer_state = struct
     ; ledger_hash : Ledger_hash.t  (** The ledger hash of the rollup *)
     ; inner_action_state : Inner_action_state.With_length.t
     ; sequencer : PC.t
+    ; da_key : PC.t
     }
   [@@deriving snarky]
 
@@ -194,6 +195,7 @@ module Outer_state = struct
     ; ledger_hash : Ledger_hash.var option
     ; inner_action_state : Inner_action_state.With_length.fine
     ; sequencer : PC.var option
+    ; da_key : PC.var option
     }
 
   (* NB! This will warn you if add a field to `t` without fixing it here.
@@ -205,19 +207,21 @@ module Outer_state = struct
        ; ledger_hash = _
        ; inner_action_state = _
        ; sequencer = _
+       ; da_key = _
        } :
         t ) ->
         ()
   (* Did you read the above? *)
 
   let fine
-      ({ pause_key; paused; ledger_hash; inner_action_state; sequencer } : fine)
-      : Fine.t =
+      ({ pause_key; paused; ledger_hash; inner_action_state; sequencer; da_key } :
+        fine ) : Fine.t =
     [ Whole (PC.typ, pause_key)
     ; Whole (Boolean.typ, paused)
     ; Whole (Ledger_hash.typ, ledger_hash)
     ; Recursive (Inner_action_state.With_length.fine inner_action_state)
     ; Whole (PC.typ, sequencer)
+    ; Whole (PC.typ, da_key)
     ]
 end
 

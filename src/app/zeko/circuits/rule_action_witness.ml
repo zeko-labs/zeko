@@ -34,6 +34,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
                   ; ledger_hash = None
                   ; inner_action_state = { length = None; state = None }
                   ; sequencer = None
+                  ; da_key = None
                   }
                 |> var_to_precondition_fine
             }

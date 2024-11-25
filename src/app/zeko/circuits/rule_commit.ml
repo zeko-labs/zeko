@@ -77,6 +77,8 @@ struct
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t
       ; new_inner_acc_path : Path.t
+      ; da_signature : Signature_lib.Schnorr.Chunked.Signature.t
+      ; da_key : PC.t
       }
     [@@deriving snarky]
   end
@@ -110,11 +112,12 @@ struct
           ; old_inner_acc_path
           ; new_inner_acc
           ; new_inner_acc_path
+          ; da_signature
+          ; da_key
           } :
            Witness.var ) =
       exists ~compute:(V.get w) Witness.typ
     in
-
     (* Calculate the root ledger hashes, to be checked against txn snark. *)
     let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
@@ -122,6 +125,25 @@ struct
     let* ( { source_ledger; target_ledger; sequencer; fee_excess; slot_range }
          , verify_txn_snark ) =
       Zeko_transaction_snark.get txn_snark
+    in
+
+    (* DA check, simply see if public key in question has signed our ledger. *)
+    let* () =
+      (* TODO: Is this correct? *)
+      let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
+      let* da_key_uncompressed =
+        Signature_lib.Public_key.decompress_var da_key
+      in
+      let* payload =
+        make_checked (fun () ->
+            Random_oracle.Checked.hash
+              ~init:(Hash_prefix_create.salt "zeko da layer check")
+              [| Ledger_hash.var_to_field target_ledger |] )
+      in
+      Signature_lib.Schnorr.Chunked.Checked.assert_verifies
+        (module Shifted)
+        da_signature da_key_uncompressed
+        (Random_oracle.Input.Chunked.field payload)
     in
 
     (* Sequencer must take fees. *)
@@ -264,6 +286,7 @@ struct
             ; sequencer = None (* We don't update the sequencer. *)
             ; paused = None (* We don't pause the rollup. *)
             ; pause_key = None (* We don't update the pause key. *)
+            ; da_key = None
             }
           |> var_to_app_state_fine
       }
@@ -295,6 +318,7 @@ struct
                 ; paused = Some Boolean.false_ (* We must not be paused. *)
                 ; pause_key =
                     None (* We don't care about who can pause the rollup. *)
+                ; da_key = None
                 }
               |> var_to_precondition_fine
           ; action_state =

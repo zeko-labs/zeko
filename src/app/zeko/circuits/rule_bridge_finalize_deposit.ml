@@ -641,6 +641,7 @@ struct
                           ; ledger_hash = None
                           ; inner_action_state = { state = None; length = None }
                           ; sequencer = None
+                          ; da_key = None
                           }
                         |> var_to_precondition_fine
                     ; action_state =
@@ -877,6 +878,7 @@ struct
                                   |> Some
                               }
                           ; sequencer = None
+                          ; da_key = None
                           }
                         |> var_to_precondition_fine
                     ; action_state =
