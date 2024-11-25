@@ -253,6 +253,8 @@ module Slot_range = struct
       Or_ignore.Checked.make_unsafe Boolean.true_
         { Zkapp_precondition.Closed_interval.lower = t.lower; upper = t.upper }
   end
+
+  let infinite : t = { lower = Slot.zero; upper = Slot.max_value }
 end
 
 let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) :

@@ -168,9 +168,9 @@ module type Result = sig
   type tag_t
 
   val tag_branches : (branches, n_branches) branches_length
-  
+
   val tag : (tag_var, tag_t, self_width, n_branches) Pickles.Tag.t
-  
+
   val provers : (out_t, branches) provers
 
   type t

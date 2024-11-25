@@ -77,9 +77,6 @@ struct
     type var = Checked.t
   end
 
-  let infinite_slot_range : Slot_range.t =
-    { lower = Slot.zero; upper = Slot.max_value }
-
   let deposit_action (params : Deposit_params.var) :
       Rollup_state.Outer_action.Witness.var Checked.t =
     (* The chosen account must be one of the valid holder accounts.
@@ -135,7 +132,7 @@ struct
     Checked.return
       ( { aux
         ; children = children'
-        ; slot_range = constant Slot_range.typ infinite_slot_range
+        ; slot_range = constant Slot_range.typ Slot_range.infinite
         }
         : Rollup_state.Outer_action.Witness.var )
 
@@ -156,7 +153,7 @@ struct
 
     let dummy_elem =
       Rollup_state.Outer_action.Witness
-        { aux = Field.zero; children = []; slot_range = infinite_slot_range }
+        { aux = Field.zero; children = []; slot_range = Slot_range.infinite }
 
     module Init = struct
       type t =

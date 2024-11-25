@@ -172,6 +172,8 @@ module Slot_range : sig
     val to_valid_while :
       var -> Mina_base.Zkapp_precondition.Valid_while.Checked.t
   end
+
+  val infinite : t
 end
 
 val assert_equal :
