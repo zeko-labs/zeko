@@ -27,8 +27,8 @@ module Handler_V = Mk_V (Handler)
 module Base_input = struct
   type t =
     { stmt : Transaction_snark.Statement.With_sok.t
-    ; handler : Handler_V.t
     ; sequencer : PC.t
+    ; transaction : Mina_transaction.Transaction_union.t
     }
   [@@deriving snarky]
 end
@@ -42,7 +42,6 @@ module Witness_V = Mk_V (Transaction_snark.Zkapp_command_segment.Witness)
 module Zkapp_single_unproved_input = struct
   type t =
     { stmt : Transaction_snark.Statement.With_sok.t
-    ; handler : Handler_V.t
     ; witness : Witness_V.t
     ; sequencer : PC.t
     ; shift_action_state : Boolean.t
@@ -53,7 +52,6 @@ end
 module Zkapp_double_unproved_input = struct
   type t =
     { stmt : Transaction_snark.Statement.With_sok.t
-    ; handler : Handler_V.t
     ; witness : Witness_V.t
     ; sequencer : PC.t
     ; shift_action_state_first : Boolean.t
@@ -71,7 +69,6 @@ end
 module Zkapp_single_proved_input = struct
   type t =
     { stmt : Transaction_snark.Statement.With_sok.t
-    ; handler : Handler_V.t
     ; witness : Witness_V.t
     ; zkapp_vk : Verification_key.t
     ; zkapp_proof : Proof_V.t
@@ -81,32 +78,31 @@ module Zkapp_single_proved_input = struct
   [@@deriving snarky]
 end
 
+let dummy_pc_init = Pending_coinbase.Stack.empty
+
+let genesis_constants = Genesis_constants.compiled
+
+let consensus_constants =
+  Consensus.Constants.create ~constraint_constants
+    ~protocol_constants:genesis_constants.protocol
+
+(** Dummy state body, network preconditions are disabled anyway *)
+let dummy_state_body =
+  let compile_time_genesis =
+    Mina_state.Genesis_protocol_state.t
+      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+      ~constraint_constants ~consensus_constants
+      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+  in
+  Mina_state.Protocol_state.body compile_time_genesis.data
+
+let dummy_pc =
+  Pending_coinbase.Stack.push_state
+    (Mina_state.Protocol_state.Body.hash dummy_state_body)
+    Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
+
 let zeko_stmt_of_mina_stmt =
-  let open struct
-    let dummy_pc_init = Pending_coinbase.Stack.empty
-
-    let genesis_constants = Genesis_constants.compiled
-
-    let consensus_constants =
-      Consensus.Constants.create ~constraint_constants
-        ~protocol_constants:genesis_constants.protocol
-
-    (** Dummy state body, network preconditions are disabled anyway *)
-    let dummy_state_body =
-      let compile_time_genesis =
-        Mina_state.Genesis_protocol_state.t
-          ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-          ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-          ~constraint_constants ~consensus_constants
-          ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-      in
-      Mina_state.Protocol_state.body compile_time_genesis.data
-
-    let dummy_pc =
-      Pending_coinbase.Stack.push_state
-        (Mina_state.Protocol_state.Body.hash dummy_state_body)
-        Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
-  end in
   let open Checked in
   fun ~(sequencer : PC.var) ~slot_range
       (stmt : Transaction_snark.Statement.With_sok.var) ->
@@ -278,15 +274,38 @@ include
               ; tags = No_tags
               ; main =
                   (fun input ->
-                    let* { stmt; handler; sequencer } =
+                    let* { stmt; transaction = _; sequencer } =
                       exists Base_input.typ ~compute:(V.get input)
+                    in
+                    let handler =
+                      let+| { stmt = _; transaction; sequencer = _ } =
+                        V.get input
+                      in
+                      let handler
+                          (Snarky_backendless.Request.With { request; respond })
+                          =
+                        match request with
+                        | Transaction_snark.Base.Transaction ->
+                            respond (Provide transaction)
+                        | Transaction_snark.Base.State_body ->
+                            respond (Provide dummy_state_body)
+                        | Transaction_snark.Base.Init_stack ->
+                            respond (Provide dummy_pc_init)
+                        | Transaction_snark.Base.Global_slot ->
+                            respond
+                              (Provide
+                                 Mina_numbers.Global_slot_since_genesis.zero )
+                        | _ ->
+                            respond Unhandled
+                      in
+                      handler
                     in
                     let* () =
                       handle_as_prover
                         (fun () ->
                           Transaction_snark.Base.main ~constraint_constants stmt
                           )
-                        (V.get handler)
+                        handler
                     in
                     let*| stmt =
                       zeko_stmt_of_mina_stmt ~sequencer
@@ -299,37 +318,27 @@ include
               ; tags = No_tags
               ; main =
                   (fun input ->
-                    let* { stmt
-                         ; handler
-                         ; witness
-                         ; sequencer
-                         ; shift_action_state
-                         } =
+                    let* { stmt; witness; sequencer; shift_action_state } =
                       exists Zkapp_single_unproved_input.typ
                         ~compute:(V.get input)
                     in
                     let slot_range = ref Slot_range.(constant typ infinite) in
                     let set_slot_range s = slot_range := s in
                     let* must_be_none, _must_verify_zkapp =
-                      handle_as_prover
-                        (fun () ->
-                          let@ () = make_checked in
-                          Transaction_snark.Base.Zkapp_command_snark.main
-                            ~witness:
-                              (V.unsafe_unwrap witness |> Option.value_exn)
-                            ~zeko_handler:
-                              { perform =
-                                  (fun eff ->
-                                    perform
-                                      ~shift_action_states:
-                                        [ shift_action_state ] ~set_slot_range
-                                      eff )
-                              }
-                            ~constraint_constants
-                            (Transaction_snark.Zkapp_command_segment.Basic
-                             .to_single_list Opt_signed )
-                            stmt )
-                        (V.get handler)
+                      let@ () = make_checked in
+                      Transaction_snark.Base.Zkapp_command_snark.main
+                        ~witness:(V.unsafe_unwrap witness |> Option.value_exn)
+                        ~zeko_handler:
+                          { perform =
+                              (fun eff ->
+                                perform
+                                  ~shift_action_states:[ shift_action_state ]
+                                  ~set_slot_range eff )
+                          }
+                        ~constraint_constants
+                        (Transaction_snark.Zkapp_command_segment.Basic
+                         .to_single_list Opt_signed )
+                        stmt
                     in
                     assert (Option.is_none must_be_none) ;
                     let*| stmt =
@@ -343,7 +352,6 @@ include
               ; main =
                   (fun input ->
                     let* { stmt
-                         ; handler
                          ; witness
                          ; sequencer
                          ; shift_action_state_first
@@ -355,26 +363,23 @@ include
                     let slot_range = ref Slot_range.(constant typ infinite) in
                     let set_slot_range s = slot_range := s in
                     let* must_be_none, _must_verify_zkapp =
-                      handle_as_prover
-                        (fun () ->
-                          let@ () = make_checked in
-                          Transaction_snark.Base.Zkapp_command_snark.main
-                            ?witness:(V.unsafe_unwrap witness)
-                            ~zeko_handler:
-                              { perform =
-                                  (fun eff ->
-                                    perform
-                                      ~shift_action_states:
-                                        [ shift_action_state_first
-                                        ; shift_action_state_second
-                                        ]
-                                      ~set_slot_range eff )
-                              }
-                            ~constraint_constants
-                            (Transaction_snark.Zkapp_command_segment.Basic
-                             .to_single_list Opt_signed_opt_signed )
-                            stmt )
-                        (V.get handler)
+                      let@ () = make_checked in
+                      Transaction_snark.Base.Zkapp_command_snark.main
+                        ?witness:(V.unsafe_unwrap witness)
+                        ~zeko_handler:
+                          { perform =
+                              (fun eff ->
+                                perform
+                                  ~shift_action_states:
+                                    [ shift_action_state_first
+                                    ; shift_action_state_second
+                                    ]
+                                  ~set_slot_range eff )
+                          }
+                        ~constraint_constants
+                        (Transaction_snark.Zkapp_command_segment.Basic
+                         .to_single_list Opt_signed_opt_signed )
+                        stmt
                     in
                     assert (Option.is_none must_be_none) ;
                     let*| stmt =
@@ -395,7 +400,6 @@ include
               ; main =
                   (fun input ->
                     let* { stmt
-                         ; handler
                          ; witness
                          ; zkapp_vk
                          ; zkapp_proof
@@ -408,24 +412,20 @@ include
                     let slot_range = ref Slot_range.(constant typ infinite) in
                     let set_slot_range s = slot_range := s in
                     let* zkapp_statement, `Must_verify proof_must_verify =
-                      handle_as_prover
-                        (fun () ->
-                          let@ () = make_checked in
-                          Transaction_snark.Base.Zkapp_command_snark.main
-                            ?witness:(V.unsafe_unwrap witness)
-                            ~zeko_handler:
-                              { perform =
-                                  (fun eff ->
-                                    perform
-                                      ~shift_action_states:
-                                        [ shift_action_state ] ~set_slot_range
-                                      eff )
-                              }
-                            ~constraint_constants
-                            (Transaction_snark.Zkapp_command_segment.Basic
-                             .to_single_list Opt_signed_opt_signed )
-                            stmt )
-                        (V.get handler)
+                      let@ () = make_checked in
+                      Transaction_snark.Base.Zkapp_command_snark.main
+                        ?witness:(V.unsafe_unwrap witness)
+                        ~zeko_handler:
+                          { perform =
+                              (fun eff ->
+                                perform
+                                  ~shift_action_states:[ shift_action_state ]
+                                  ~set_slot_range eff )
+                          }
+                        ~constraint_constants
+                        (Transaction_snark.Zkapp_command_segment.Basic
+                         .to_single_list Opt_signed_opt_signed )
+                        stmt
                     in
                     let*| stmt =
                       zeko_stmt_of_mina_stmt ~sequencer ~slot_range:!slot_range

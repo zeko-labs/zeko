@@ -251,6 +251,14 @@ module type Full = sig
            Account_timing.As_record.t )
          Tick.Checked.t
 
+    type _ Snarky_backendless.Request.t +=
+      | Transaction : Transaction_union.t Snarky_backendless.Request.t
+      | State_body :
+          Mina_state.Protocol_state.Body.Value.t Snarky_backendless.Request.t
+      | Init_stack : Pending_coinbase.Stack.t Snarky_backendless.Request.t
+      | Global_slot :
+          Mina_numbers.Global_slot_since_genesis.t Snarky_backendless.Request.t
+
     val main :
          constraint_constants:Genesis_constants.Constraint_constants.t
       -> Statement.With_sok.var
