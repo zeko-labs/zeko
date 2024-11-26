@@ -196,3 +196,5 @@ end
 
 val push_actions_var :
   actions:Field.Var.t -> Field.Var.t -> Field.Var.t Checked.t
+
+val token_owner_id : Account_id.t option -> Token_id.t

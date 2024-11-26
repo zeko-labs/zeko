@@ -13,5 +13,5 @@
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules rule_bridge_finalize_cancelled_deposit rule_bridge_finalize_deposit bridge_state outer_rules inner_rules rule_pause rule_commit rule_inner_action_witness rule_action_witness rule_inner_sync ase rollup_state zeko_transaction_snark folder zeko_util compile_simple compile_simple_intf v)
+ (modules bridge_rules rule_bridge_enable rule_bridge_disable rule_bridge_finalize_withdrawal rule_bridge_finalize_cancelled_deposit rule_bridge_finalize_deposit check_accepted_make bridge_state outer_rules inner_rules rule_pause rule_commit rule_inner_action_witness rule_action_witness rule_inner_sync ase rollup_state zeko_transaction_snark folder zeko_util compile_simple compile_simple_intf v)
  )

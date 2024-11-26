@@ -384,3 +384,9 @@ let push_actions_var ~actions state =
   let@ () = make_checked in
   Random_oracle.Checked.hash ~init:Hash_prefix_states.zkapp_actions
     [| state; actions |]
+
+let token_owner_id : Account_id.t option -> Token_id.t = function  | None ->
+      Token_id.default
+  | Some owner ->
+      Account_id.derive_token_id ~owner
+
