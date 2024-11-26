@@ -1,0 +1,12 @@
+(library
+ (name zeko_prover)
+ (libraries
+  zkapps_rollup
+  mina_lib
+  mina_ledger
+  yojson
+  cohttp
+  cohttp-async
+  async_kernel)
+ (preprocess
+  (pps ppx_jane ppx_mina ppx_version)))

@@ -22,7 +22,7 @@ module Db = struct
 
   module Key_value = struct
     type _ t =
-      | Diff : (Ledger_hash.t * Diff.With_timestamp.t) t
+      | Diff : (Ledger_hash.t * Diff.t) t
       | Diff_index : (unit * Index.t) t
 
     let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
@@ -40,7 +40,7 @@ module Db = struct
      fun pair_type value ->
       match pair_type with
       | Diff ->
-          Diff.With_timestamp.to_bigstring value
+          Diff.to_bigstring value
       | Diff_index ->
           Index.to_bigstring value
 
@@ -48,7 +48,7 @@ module Db = struct
      fun pair_type data ->
       match pair_type with
       | Diff ->
-          Diff.With_timestamp.of_bigstring data
+          Diff.of_bigstring data
       | Diff_index ->
           Index.of_bigstring data
   end
@@ -124,7 +124,9 @@ let post_diff t ~ledger_openings ~diff =
     | false ->
         Ok ()
     | true ->
-        Error (Error.create "Duplicate indices" diff [%sexp_of: Diff.t])
+        Error
+          (Error.create "Duplicate indices" diff
+             [%sexp_of: Diff.Without_timestamp.t] )
   in
 
   (* 4 *)
@@ -249,9 +251,7 @@ let post_diff t ~ledger_openings ~diff =
   in
 
   (* 7 *)
-  let diff =
-    (diff, Block_time.now (Block_time.Controller.basic ~logger:t.logger))
-  in
+  let diff = Diff.add_time ~logger diff in
 
   (* 8 *)
   (* We don't care if the diff already existed *)
@@ -327,7 +327,7 @@ let get_signature t ~ledger_hash =
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
-      [ Async.Rpc.Rpc.implement Rpc.Post_diff.v1
+      [ Async.Rpc.Rpc.implement Rpc.Post_diff.v2
           (fun () { ledger_openings; diff } ->
             match post_diff t ~ledger_openings ~diff with
             | Ok signature ->

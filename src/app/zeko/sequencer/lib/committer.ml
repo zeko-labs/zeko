@@ -105,8 +105,7 @@ module Store = struct
     commits
 end
 
-let prove_commit (module M : Zkapps_rollup.S) ~(executor : Executor.t) ~zkapp_pk
-    ~archive_uri
+let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
     ({ old_inner_ledger
      ; new_inner_ledger
      ; old_deposits_pointer
@@ -129,8 +128,8 @@ let prove_commit (module M : Zkapps_rollup.S) ~(executor : Executor.t) ~zkapp_pk
     |> Deferred.map ~f:(List.map ~f:fst)
   in
   let%bind account_update =
-    M.Outer.step last_snark ~outer_public_key:zkapp_pk
-      ~new_deposits:(List.rev new_deposits)
+    Zeko_prover.Client.outer_step ~proving_timeout:30. provers ~last:last_snark
+      ~outer_public_key:zkapp_pk ~new_deposits:(List.rev new_deposits)
       ~unprocessed_deposits:(List.rev unprocessed_deposits)
       ~old_inner_ledger ~new_inner_ledger
   in
@@ -150,8 +149,7 @@ let prove_commit (module M : Zkapps_rollup.S) ~(executor : Executor.t) ~zkapp_pk
   in
   return command
 
-let recommit_all (module M : Zkapps_rollup.S) ~(executor : Executor.t) ~db
-    ~zkapp_pk ~archive_uri =
+let recommit_all ~provers ~(executor : Executor.t) ~db ~zkapp_pk ~archive_uri =
   let kvdb = Ledger.Db.zeko_kvdb db in
   let%bind current_state =
     Gql_client.infer_committed_state executor.l1_uri ~zkapp_pk
@@ -171,7 +169,7 @@ let recommit_all (module M : Zkapps_rollup.S) ~(executor : Executor.t) ~db
           (Frozen_ledger_hash.to_base58_check target) ;
         let witness = Store.load_commit_exn kvdb (source, target) in
         let%bind command =
-          prove_commit (module M) ~executor ~zkapp_pk ~archive_uri witness
+          prove_commit ~provers ~executor ~zkapp_pk ~archive_uri witness
         in
         let%bind () = Executor.send_zkapp_command executor command in
         recommit_next target
