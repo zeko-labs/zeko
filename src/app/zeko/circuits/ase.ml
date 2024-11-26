@@ -61,6 +61,7 @@ module M_without_length = struct
 end
 
 module Made_without_length = Folder.Make (M_without_length) ()
+
 module Made_with_length = Folder.Make (M_with_length) ()
 
 module With_length = struct

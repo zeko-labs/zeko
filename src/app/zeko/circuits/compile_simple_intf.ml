@@ -151,7 +151,6 @@ struct
 
     (* outputs *)
 
-
     type tag_var
 
     type tag_t

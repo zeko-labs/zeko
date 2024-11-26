@@ -437,7 +437,9 @@ include
                             { public_input = Option.value_exn zkapp_statement
                             ; proof = zkapp_proof
                             ; proof_must_verify
-                            ; vk = Compile_simple.Verification_key.var_of_pickles zkapp_vk
+                            ; vk =
+                                Compile_simple.Verification_key.var_of_pickles
+                                  zkapp_vk
                             }
                       ; out = stmt
                       } )
