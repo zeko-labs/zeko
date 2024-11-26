@@ -1,7 +1,35 @@
 open Core_kernel
 open Snark_params.Tick
 open Checked.Let_syntax
-include Compile_simple_intf
+
+type self_width = Pickles_types.Nat.N2.n
+
+type proof = Pickles.Side_loaded.Proof.t
+
+let proof_of_pickles x = x
+
+type 'var tag =
+  | Tag : ('var, 'value, self_width, 'height) Pickles.Tag.t -> 'var tag
+
+module Verification_key = struct
+  include Pickles.Side_loaded.Verification_key
+
+  type var = Checked.t
+
+  let of_pickles x = x
+
+  let var_of_pickles x = x
+end
+
+include Compile_simple_intf.Make (struct
+  type nonrec proof = proof
+
+  type nonrec 'var tag = 'var tag
+
+  type vk_t = Verification_key.t
+
+  type vk_var = Verification_key.var
+end)
 
 let ( let* ) = Checked.Let_syntax.( >>= )
 
@@ -17,6 +45,14 @@ let time_promise : string -> (unit -> 'a Promise.t) -> 'a Promise.t =
   printf "(time_async) %s: %s\n%!" label
     (Time.Span.to_string_hum (Time.diff stop start)) ;
   x
+
+type ('branches, 'n_branches) branches_length =
+  | Z : (nil_branch, Pickles_types.Nat.z) branches_length
+  | S :
+      ('branches, 'n_branches) branches_length
+      -> ( ('input, 'branches) cons_branch
+         , 'n_branches Pickles_types.Nat.s )
+         branches_length
 
 type 'branches count_branches_result =
   | Count_branches_result :
@@ -259,7 +295,7 @@ let rec branches_to_choices :
                       in
                       rule :: f ~self )
                 }
-          | One_tag tag ->
+          | One_tag (Tag tag) ->
               Choices
                 { transform_provers
                 ; rules =
@@ -291,7 +327,7 @@ let rec branches_to_choices :
                       in
                       rule :: f ~self )
                 }
-          | Two_tags (left_tag, right_tag) ->
+          | Two_tags (Tag left_tag, Tag right_tag) ->
               Choices
                 { transform_provers
                 ; rules =
@@ -307,7 +343,7 @@ let rec branches_to_choices :
                       in
                       rule :: f ~self )
                 }
-          | Two_tags_one_own right_tag ->
+          | Two_tags_one_own (Tag right_tag) ->
               Choices
                 { transform_provers
                 ; rules =
@@ -384,7 +420,7 @@ let rec branches_to_choices :
                       rule :: f ~self )
                 }
           | Two_tags_one_sideloaded
-              ({ sideloaded_tag_name; typ; extract_vk }, right_tag) ->
+              ({ sideloaded_tag_name; typ; extract_vk }, Tag right_tag) ->
               let sideloaded =
                 let feature_flags : Pickles_types.Plonk_types.Features.options =
                   { range_check0 = Maybe
@@ -576,9 +612,7 @@ let compile (type out_t out_var first_input branches n_available_branches)
     (module Result
        with type out_t = out_t
         and type out_var = out_var
-        and type branches = ( first_input
-                            , branches )
-                            Compile_simple_intf.cons_branch ) =
+        and type branches = (first_input, branches) cons_branch ) =
   printf "(compile_simple) called for circuit %s\n" name ;
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
@@ -633,9 +667,7 @@ let compile (type out_t out_var first_input branches n_available_branches)
           (module Result
              with type out_t = out_t
               and type out_var = out_var
-              and type branches = ( first_input
-                                  , branches )
-                                  Compile_simple_intf.cons_branch ) =
+              and type branches = (first_input, branches) cons_branch ) =
         ( module struct
           type nonrec out_t = out_t
 
@@ -643,15 +675,11 @@ let compile (type out_t out_var first_input branches n_available_branches)
 
           type nonrec branches = (first_input, branches) cons_branch
 
-          type n_branches = N_branches.n
-
           type tag_var = out_var
 
           type tag_t = out_t
 
-          let tag_branches = tag_branches
-
-          let tag = tag
+          let tag = Tag tag
 
           let provers = provers
 

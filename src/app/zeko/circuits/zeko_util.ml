@@ -14,6 +14,10 @@ let ( let+| ) = As_prover.Let_syntax.( >>| )
 
 let ( let@ ) : (('a -> 'b) -> 'c) -> ('a -> 'b) -> 'c = ( @@ )
 
+module Proof = struct
+  type t = Compile_simple.proof
+end
+
 (** Converts a variable to its constituent fields *)
 let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :
     Field.Var.t array =
@@ -375,8 +379,6 @@ module Checked32 = struct
 
   type var = Checked.t
 end
-
-module Proof = Pickles.Side_loaded.Proof
 
 let push_actions_var ~actions state =
   let@ () = make_checked in

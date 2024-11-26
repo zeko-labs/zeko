@@ -36,12 +36,7 @@ module With_length : sig
 
   type tag_var
 
-  val tag :
-    ( tag_var
-    , tag_t
-    , Compile_simple.sideloaded_width
-    , Folder.tag_branches )
-    Pickles.Tag.t
+  val tag : tag_var Compile_simple.tag
 
   module Make : functor
     (Inputs : sig
@@ -73,10 +68,7 @@ module With_length : sig
     val get :
          ?check:Zeko_util.Boolean.var
       -> var
-      -> ( Stmt.var
-         * (tag_var, Compile_simple.sideloaded_width) Compile_simple_intf.prev
-         )
-         Checked.t
+      -> (Stmt.var * tag_var Compile_simple.prev) Checked.t
   end
 end
 
@@ -111,12 +103,7 @@ module Without_length : sig
 
   type tag_var
 
-  val tag :
-    ( tag_var
-    , tag_t
-    , Compile_simple.sideloaded_width
-    , Folder.tag_branches )
-    Pickles.Tag.t
+  val tag : tag_var Compile_simple.tag
 
   module Make : functor
     (Inputs : sig
@@ -144,9 +131,6 @@ module Without_length : sig
     val get :
          ?check:Zeko_util.Boolean.var
       -> var
-      -> ( Stmt.var
-         * (tag_var, Compile_simple.sideloaded_width) Compile_simple_intf.prev
-         )
-         Checked.t
+      -> (Stmt.var * tag_var Compile_simple.prev) Checked.t
   end
 end

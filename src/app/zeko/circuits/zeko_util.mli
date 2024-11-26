@@ -3,6 +3,10 @@
 open Mina_base
 open Snark_params.Tick
 
+module Proof : sig
+  type t = Compile_simple.proof
+end
+
 module Calls : sig
   type t =
     | []
@@ -107,9 +111,9 @@ module type V_S = sig
   val typ : (var, t) Typ.t
 end
 
-module Proof_V : V_S with type t = Mina_base.Proof.t
+module Proof_V : V_S with type t = Proof.t
 
-module Proof_Option_V : V_S with type t = Mina_base.Proof.t option
+module Proof_Option_V : V_S with type t = Proof.t option
 
 module Boolean : sig
   include module type of Boolean
@@ -189,8 +193,6 @@ module Checked32 : sig
 
   type var = Checked.t
 end
-
-module Proof = Pickles.Side_loaded.Proof
 
 val push_actions_var :
   actions:Field.Var.t -> Field.Var.t -> Field.Var.t Checked.t

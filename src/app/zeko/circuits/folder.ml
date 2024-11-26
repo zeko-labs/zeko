@@ -1,7 +1,6 @@
 open Core_kernel
 open Snark_params.Tick
 open Zeko_util
-open Mina_base
 module Branches = Pickles_types.Nat.N5
 
 type tag_branches = Branches.n
@@ -161,7 +160,7 @@ struct
       let typ = Typ.(Trans.typ * Proof_V.typ)
     end
 
-    type prevs = (Trans.var, Compile_simple.self_width) Compile_simple.one_prev
+    type prevs = Trans.var Compile_simple.one_prev
 
     let unwrap_source ((trans, proof) : Source.var) =
       let prevs =
@@ -224,11 +223,7 @@ struct
   end
 
   type merge_input = Rule_merge.Witness.t =
-    { left : trans
-    ; left_proof : Pickles.Side_loaded.Proof.t
-    ; right : trans
-    ; right_proof : Pickles.Side_loaded.Proof.t
-    }
+    { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
 
   let name = "State_machine.Make(" ^ name ^ ")"
 
@@ -248,10 +243,7 @@ struct
 
   type tag_t = System.tag_t
 
-  let tag :
-      (tag_var, tag_t, Compile_simple.self_width, tag_branches) Pickles.Tag.t =
-    let (S (S (S (S (S Z))))) = System.tag_branches in
-    System.tag
+  let tag = System.tag
 
   let Compile_simple.[ leaf; leaf_option; extend; extend_option; merge ] =
     System.provers

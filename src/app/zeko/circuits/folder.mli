@@ -72,11 +72,7 @@ end)
   val extend_option_iterations : int
 
   type merge_input =
-    { left : trans
-    ; left_proof : Proof.t
-    ; right : trans
-    ; right_proof : Proof.t
-    }
+    { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
 
   val merge : merge_input -> t Promise.t
 
@@ -85,8 +81,7 @@ end)
   type tag_var
 
   (** The tag for the Pickles rule. You need to specify this in your rule. *)
-  val tag :
-    (tag_var, tag_t, Compile_simple.self_width, tag_branches) Pickles.Tag.t
+  val tag : tag_var Compile_simple.tag
 
   module Make : functor
     (Inputs : sig
@@ -101,8 +96,7 @@ end)
          ?check:Boolean.var
            (** Set this to false if you don't want to check the proof after all. *)
       -> var (** What you're trying to verify *)
-      -> (Stmt.var * (tag_var, Compile_simple.self_width) Compile_simple.prev)
-         Checked.t
+      -> (Stmt.var * tag_var Compile_simple.prev) Checked.t
 
     val get_full :
          ?check:Boolean.var
@@ -110,7 +104,7 @@ end)
       -> var (** What you're trying to verify *)
       -> ( [ `Source of Stmt.var ]
          * [ `Target of Stmt.var ]
-         * (tag_var, Compile_simple.self_width) Compile_simple.prev )
+         * tag_var Compile_simple.prev )
          Checked.t
 
     val make :

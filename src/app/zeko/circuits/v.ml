@@ -39,3 +39,9 @@ let unsafe_unwrap : 'a t -> 'a option = function
       None
 
 let as_ref x = ref (unsafe_unwrap x)
+
+let map ~f = function
+  | Circuit_mode ->
+      Circuit_mode
+  | Proving_mode x ->
+      Proving_mode (f x)

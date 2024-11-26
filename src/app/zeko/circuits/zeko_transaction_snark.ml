@@ -395,7 +395,7 @@ include
                     ; typ = Zkapp_statement.typ
                     ; extract_vk =
                         (fun ({ zkapp_vk; _ } : Zkapp_single_proved_input.t) ->
-                          zkapp_vk )
+                          Compile_simple.Verification_key.of_pickles zkapp_vk )
                     }
               ; main =
                   (fun input ->
@@ -437,7 +437,7 @@ include
                             { public_input = Option.value_exn zkapp_statement
                             ; proof = zkapp_proof
                             ; proof_must_verify
-                            ; vk = zkapp_vk
+                            ; vk = Compile_simple.Verification_key.var_of_pickles zkapp_vk
                             }
                       ; out = stmt
                       } )
