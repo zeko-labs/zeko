@@ -125,8 +125,7 @@ let post_diff t ~ledger_openings ~diff =
         Ok ()
     | true ->
         Error
-          (Error.create "Duplicate indices" diff
-             [%sexp_of: Diff.Without_timestamp.t] )
+          (Error.create "Duplicate indices" diff [%sexp_of: Diff.Stable.V1.t])
   in
 
   (* 4 *)
@@ -251,7 +250,8 @@ let post_diff t ~ledger_openings ~diff =
   in
 
   (* 7 *)
-  let diff = Diff.add_time ~logger diff in
+  (* V2 was added time *)
+  let diff : Diff.Stable.V2.t = Diff.add_time ~logger diff in
 
   (* 8 *)
   (* We don't care if the diff already existed *)
@@ -327,7 +327,8 @@ let get_signature t ~ledger_hash =
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
-      [ Async.Rpc.Rpc.implement Rpc.Post_diff.v2
+      (* Post_diff *)
+      [ Async.Rpc.Rpc.implement Rpc.Post_diff.V1.t
           (fun () { ledger_openings; diff } ->
             match post_diff t ~ledger_openings ~diff with
             | Ok signature ->
@@ -337,12 +338,19 @@ let implementations t =
                 [%log warn] "Error posting diff: $error"
                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff.v2 (fun () query ->
+        (* Get_diff *)
+      ; Async.Rpc.Rpc.implement Rpc.Get_diff.V1.t (fun () query ->
+            let v2_diff = Db.get_diff t.db ~ledger_hash:query in
+            let v1_diff = Option.map v2_diff ~f:Diff.drop_time in
+            Async.return @@ v1_diff )
+      ; Async.Rpc.Rpc.implement Rpc.Get_diff.V2.t (fun () query ->
             Async.return @@ Db.get_diff t.db ~ledger_hash:query )
-      ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.v1 (fun () () ->
+        (* Get_all_keys *)
+      ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.V1.t (fun () () ->
             Async.return @@ Db.get_index t.db )
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff_source.v1 (fun () query ->
-            Async.return @@ Diff.source_ledger_hash @@ fst
+        (* Get_diff_source *)
+      ; Async.Rpc.Rpc.implement Rpc.Get_diff_source.V1.t (fun () query ->
+            Async.return @@ Diff.Stable.Latest.source_ledger_hash
             @@ Option.value_exn
                  ~error:
                    ( Error.of_string
@@ -351,9 +359,11 @@ let implementations t =
                          hash %s"
                         (Ledger_hash.to_decimal_string query) )
             @@ Db.get_diff t.db ~ledger_hash:query )
-      ; Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.v1 (fun () () ->
+        (* Get_signed_public_key *)
+      ; Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.V1.t (fun () () ->
             Async.return @@ Public_key.compress @@ t.signer.public_key )
-      ; Async.Rpc.Rpc.implement Rpc.Get_signature.v1 (fun () query ->
+        (* Get_signature *)
+      ; Async.Rpc.Rpc.implement Rpc.Get_signature.V1.t (fun () query ->
             Async.return @@ get_signature t ~ledger_hash:query )
       ]
 

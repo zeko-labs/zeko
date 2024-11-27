@@ -36,23 +36,37 @@ module Rpc = struct
     go max_tries []
 
   let post_diff ~logger ~node_location ~ledger_openings ~diff =
-    dispatch ~logger node_location Rpc.Post_diff.v2 { ledger_openings; diff }
+    dispatch ~logger node_location Rpc.Post_diff.V1.t { ledger_openings; diff }
 
   let get_diff ~logger ~node_location ~ledger_hash =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.v2 ledger_hash
+    match%bind
+      dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V2.t ledger_hash
+    with
+    | Ok diff ->
+        return (Ok diff)
+    | Error _ ->
+        (* TODO: do this only if the error is that the rpc method doesn't exist *)
+        (* Fallback to older version *)
+        let%bind.Deferred.Result result =
+          dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V1.t
+            ledger_hash
+        in
+        return (Ok (Option.map result ~f:(fun x -> Diff.Stable.V1.to_latest x)))
 
   let get_all_keys ~logger ~node_location () =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.v1 ()
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.V1.t ()
 
   let get_diff_source ~logger ~node_location ~ledger_hash =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.v1
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.V1.t
       ledger_hash
 
   let get_node_public_key ~logger ~node_location () =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signer_public_key.v1 ()
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signer_public_key.V1.t
+      ()
 
   let get_signature ~logger ~node_location ~ledger_hash =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.v1 ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.V1.t
+      ledger_hash
 end
 
 module Config = struct
@@ -198,7 +212,7 @@ let distribute_genesis_diff ~logger ~config ~ledger =
       ~f:(fun acc (index, _) -> Sparse_ledger.set_exn acc index Account.empty)
   in
   let diff =
-    Diff.Without_timestamp.create
+    Diff.create
       ~source_ledger_hash:(Diff.empty_ledger_hash ~depth:(Ledger.depth ledger))
       ~changed_accounts ~command_with_action_step_flags:None
   in
@@ -233,7 +247,7 @@ let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
        return
          (Ok
             (attach_openings
-               ~diffs:(List.map diffs_with_timestamps ~f:fst)
+               ~diffs:(List.map diffs_with_timestamps ~f:Diff.drop_time)
                ~depth ) ) )
   in
   Deferred.List.map config.nodes ~f:(fun node ->
