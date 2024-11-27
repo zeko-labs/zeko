@@ -70,7 +70,10 @@ module Rpc = struct
 end
 
 module Config = struct
-  type t = { nodes : Host_and_port.t Cli_lib.Flag.Types.with_name list }
+  type t =
+    { mutable nodes : Host_and_port.t Cli_lib.Flag.Types.with_name list
+          (** Mutable in case we want to throw out some node *)
+    }
   [@@deriving fields]
 
   let of_string_list uris =
@@ -81,6 +84,11 @@ module Config = struct
               ; name = sprintf "da-node-%d" i
               } )
     }
+
+  let throw_out_node t ~(node : Host_and_port.t Cli_lib.Flag.Types.with_name) =
+    let open Cli_lib.Flag.Types in
+    t.nodes <-
+      List.filter t.nodes ~f:(fun n -> not (String.equal n.name node.name))
 end
 
 (** Send the diff to all the nodes in the [~config] *)
@@ -258,14 +266,24 @@ let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
           printf "Node %s is already synced\n%!"
             (Host_and_port.to_string node.value) ;
           return (Ok ())
-      | Ok None | Error _ ->
+      | Ok None | Error _ -> (
           printf "Syncing node %s\n%!" (Host_and_port.to_string node.value) ;
           let%bind.Deferred.Result diffs_with_openings =
             Lazy.force diffs_with_openings
           in
-          Deferred.List.map diffs_with_openings ~f:(fun (diff, openings) ->
-              Rpc.post_diff ~logger ~node_location:node
-                ~ledger_openings:openings ~diff
-              >>| Result.ignore_m )
-          >>| Result.all_unit )
+          match%bind
+            Deferred.List.map diffs_with_openings ~f:(fun (diff, openings) ->
+                Rpc.post_diff ~logger ~node_location:node
+                  ~ledger_openings:openings ~diff
+                >>| Result.ignore_m )
+            >>| Result.all_unit
+          with
+          | Ok () ->
+              return (Ok ())
+          | Error e ->
+              printf "Error syncing node %s: %s\n%!"
+                (Host_and_port.to_string node.value)
+                (Error.to_string_hum e) ;
+              Config.throw_out_node config ~node ;
+              return (Ok ()) ) )
   >>| Result.all_unit
