@@ -127,11 +127,10 @@ end
 
 let sync_archive ~(state : State.t) ~hash =
   let logger = state.logger in
-  let%bind.Deferred.Result chain =
-    Da_layer.Client.get_ledger_hashes_chain ~logger ~config:state.da_config
-      ~source_ledger_hash:None ~target_ledger_hash:hash
+  let%bind.Deferred.Result diffs =
+    Da_layer.Client.get_diffs_chain ~logger ~config:state.da_config
+      ~source_ledger_hash:`Genesis ~target_ledger_hash:hash
   in
-  let%bind diffs = Deferred.List.map chain ~f:(fetch_diff ~state) in
   Ledger.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
       let protocol_state = ref compile_time_genesis_state in
       Deferred.List.iter diffs ~f:(fun diff ->

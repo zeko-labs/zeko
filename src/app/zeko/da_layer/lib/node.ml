@@ -329,8 +329,8 @@ let get_signature t ~ledger_hash =
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
-      (* Post_diff *)
-      [ Async.Rpc.Rpc.implement Rpc.Post_diff.V1.t
+      [ (* Post_diff *)
+        Async.Rpc.Rpc.implement Rpc.Post_diff.V1.t
           (fun () { ledger_openings; diff } ->
             match post_diff t ~ledger_openings ~diff with
             | Ok signature ->
@@ -340,18 +340,18 @@ let implementations t =
                 [%log warn] "Error posting diff: $error"
                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
-        (* Get_diff *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff.V1.t (fun () query ->
+      ; (* Get_diff *)
+        Async.Rpc.Rpc.implement Rpc.Get_diff.V1.t (fun () query ->
             let v2_diff = Db.get_diff t.db ~ledger_hash:query in
             let v1_diff = Option.map v2_diff ~f:Diff.drop_time in
             Async.return @@ v1_diff )
       ; Async.Rpc.Rpc.implement Rpc.Get_diff.V2.t (fun () query ->
             Async.return @@ Db.get_diff t.db ~ledger_hash:query )
-        (* Get_all_keys *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.V1.t (fun () () ->
+      ; (* Get_all_keys *)
+        Async.Rpc.Rpc.implement Rpc.Get_all_keys.V1.t (fun () () ->
             Async.return @@ Db.get_index t.db )
-        (* Get_diff_source *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff_source.V1.t (fun () query ->
+      ; (* Get_diff_source *)
+        Async.Rpc.Rpc.implement Rpc.Get_diff_source.V1.t (fun () query ->
             Async.return @@ Diff.Stable.Latest.source_ledger_hash
             @@ Option.value_exn
                  ~error:
@@ -361,14 +361,14 @@ let implementations t =
                          hash %s"
                         (Ledger_hash.to_decimal_string query) )
             @@ Db.get_diff t.db ~ledger_hash:query )
-        (* Get_signed_public_key *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.V1.t (fun () () ->
+      ; (* Get_signed_public_key *)
+        Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.V1.t (fun () () ->
             Async.return @@ Public_key.compress @@ t.signer.public_key )
-        (* Get_signature *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_signature.V1.t (fun () query ->
+      ; (* Get_signature *)
+        Async.Rpc.Rpc.implement Rpc.Get_signature.V1.t (fun () query ->
             Async.return @@ get_signature t ~ledger_hash:query )
-        (* Get_ledger_hashes_chain *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_ledger_hashes_chain.V1.t
+      ; (* Get_ledger_hashes_chain *)
+        Async.Rpc.Rpc.implement Rpc.Get_ledger_hashes_chain.V1.t
           (fun () { source; target } ->
             let source =
               Option.value
@@ -387,33 +387,40 @@ let implementations t =
                 in
                 current :: go source
             in
-            let from_target_to_genesis = go target in
-            Async.return (List.rev from_target_to_genesis) )
-        (* Get_diffs_chain *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_diffs_chain.V1.t
-          (fun () { source; target } ->
+            Async.return @@ List.rev (go target) )
+      ; (* Get_diffs_chain *)
+        Async.Rpc.Rpc.implement Rpc.Get_diffs_chain.V1.t
+          (fun () { source = source_opt; target } ->
             let source =
-              Option.value
-                ~default:
-                  (Diff.empty_ledger_hash
-                     ~depth:constraint_constants.ledger_depth )
-                source
+              match source_opt with
+              | `Genesis ->
+                  Diff.empty_ledger_hash
+                    ~depth:constraint_constants.ledger_depth
+              | `Specific source ->
+                  source
             in
-            let get_diff ledger_hash =
-              Db.get_diff ~ledger_hash t.db
-              |> Option.value_exn ~here:[%here] ~message:"Diff not found"
-            in
-            let rec go current =
-              let current_ledger_hash =
-                Diff.Stable.V2.source_ledger_hash current
-              in
+            let rec go current_ledger_hash =
               if Ledger_hash.equal current_ledger_hash source then []
               else
-                let source = get_diff current_ledger_hash in
-                current :: go source
+                let current =
+                  Db.get_diff ~ledger_hash:current_ledger_hash t.db
+                  |> Option.value_exn ~here:[%here] ~message:"Diff not found"
+                in
+                current :: go (Diff.Stable.V2.source_ledger_hash current)
             in
-            let from_target_to_genesis = go (get_diff target) in
-            Async.return (List.rev from_target_to_genesis) )
+            let chain = List.rev (go target) in
+            match (source_opt, chain) with
+            | _, [] ->
+                failwith "No diffs found"
+            | ( `Specific wanted_source
+              , { source_ledger_hash = first_source; _ } :: _ )
+              when not (Ledger_hash.equal wanted_source first_source) ->
+                failwithf
+                  "Get_diffs_chain: source ledger hash %s is not in the chain"
+                  (Ledger_hash.to_decimal_string source)
+                  ()
+            | _ ->
+                Async.return chain )
       ]
 
 let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =

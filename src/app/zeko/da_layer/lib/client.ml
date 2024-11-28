@@ -197,6 +197,12 @@ let get_ledger_hashes_chain ~logger ~config ~source_ledger_hash
       Rpc.get_ledger_hashes_chain ~logger ~node_location
         ~source:source_ledger_hash ~target:target_ledger_hash )
 
+(** Get the chain of diffs from [source_ledger_hash] hash to [target_ledger_hash] *)
+let get_diffs_chain ~logger ~config ~source_ledger_hash ~target_ledger_hash =
+  try_all_nodes ~config ~f:(fun ~node_location () ->
+      Rpc.get_diffs_chain ~logger ~node_location ~source:source_ledger_hash
+        ~target:target_ledger_hash )
+
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
 let get_diff ~logger ~config ~ledger_hash =
   try_all_nodes ~config ~f:(fun ~node_location () ->
@@ -248,22 +254,16 @@ let attach_openings ~diffs ~depth =
       (diff, openings) )
 
 let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
-  let%bind.Deferred.Result ledger_hashes_chain =
-    get_ledger_hashes_chain ~logger ~config ~source_ledger_hash:None
-      ~target_ledger_hash
-  in
   let diffs_with_openings =
     lazy
-      (let%bind.Deferred.Result diffs_with_timestamps =
-         Deferred.List.map ledger_hashes_chain ~how:(`Max_concurrent_jobs 5)
-           ~f:(fun ledger_hash -> get_diff ~logger ~config ~ledger_hash)
-         >>| Result.all
+      (* TODO: don't fetch all the diffs from genesis, using binary search determine which diffs is the node missing *)
+      (let%bind.Deferred.Result diffs =
+         get_diffs_chain ~logger ~config ~source_ledger_hash:`Genesis
+           ~target_ledger_hash
        in
        return
-         (Ok
-            (attach_openings
-               ~diffs:(List.map diffs_with_timestamps ~f:Diff.drop_time)
-               ~depth ) ) )
+         (Ok (attach_openings ~diffs:(List.map diffs ~f:Diff.drop_time) ~depth))
+      )
   in
   Deferred.List.map config.nodes ~f:(fun node ->
       match%bind

@@ -117,7 +117,7 @@ module Get_diffs_chain = struct
   module V1 = struct
     module Query = struct
       type t =
-        { source : Ledger_hash.Stable.V1.t option
+        { source : [ `Genesis | `Specific of Ledger_hash.Stable.V1.t ]
         ; target : Ledger_hash.Stable.V1.t
         }
       [@@deriving bin_io_unversioned]
