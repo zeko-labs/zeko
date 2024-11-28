@@ -326,6 +326,44 @@ let get_signature t ~ledger_hash =
   let message = Random_oracle.Input.Chunked.field_elements [| ledger_hash |] in
   Some (Schnorr.Chunked.sign t.signer.private_key message)
 
+let get_ledger_hashes_chain t
+    ({ source = source_opt; target } : Rpc.Get_ledger_hashes_chain.V1.Query.t) =
+  let source =
+    match source_opt with
+    | `Genesis ->
+        Diff.empty_ledger_hash ~depth:constraint_constants.ledger_depth
+    | `Specific source ->
+        source
+  in
+  let rec go current =
+    if Ledger_hash.equal current source then []
+    else
+      let source =
+        Db.get_diff ~ledger_hash:current t.db
+        |> Option.value_exn ~here:[%here]
+             ~message:"Get_ledger_hashes_chain: diff not found"
+        |> Diff.Stable.V2.source_ledger_hash
+      in
+      current :: go source
+  in
+  let chain = List.rev (go target) in
+  match (source_opt, chain) with
+  | _, [] ->
+      failwithf
+        "Get_ledger_hashes_chain: no diffs found for source ledger hash %s and \
+         target ledger hash %s"
+        (Ledger_hash.to_decimal_string source)
+        (Ledger_hash.to_decimal_string target)
+        ()
+  | `Specific wanted_source, first_source :: _
+    when not (Ledger_hash.equal wanted_source first_source) ->
+      failwithf
+        "Get_ledger_hashes_chain: source ledger hash %s is not in the chain"
+        (Ledger_hash.to_decimal_string source)
+        ()
+  | _ ->
+      chain
+
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
@@ -369,58 +407,15 @@ let implementations t =
             Async.return @@ get_signature t ~ledger_hash:query )
       ; (* Get_ledger_hashes_chain *)
         Async.Rpc.Rpc.implement Rpc.Get_ledger_hashes_chain.V1.t
-          (fun () { source; target } ->
-            let source =
-              Option.value
-                ~default:
-                  (Diff.empty_ledger_hash
-                     ~depth:constraint_constants.ledger_depth )
-                source
-            in
-            let rec go current =
-              if Ledger_hash.equal current source then []
-              else
-                let source =
-                  Db.get_diff ~ledger_hash:current t.db
-                  |> Option.value_exn ~here:[%here] ~message:"Diff not found"
-                  |> Diff.Stable.V2.source_ledger_hash
-                in
-                current :: go source
-            in
-            Async.return @@ List.rev (go target) )
+          (fun () query -> Async.return @@ get_ledger_hashes_chain t query)
       ; (* Get_diffs_chain *)
         Async.Rpc.Rpc.implement Rpc.Get_diffs_chain.V1.t
-          (fun () { source = source_opt; target } ->
-            let source =
-              match source_opt with
-              | `Genesis ->
-                  Diff.empty_ledger_hash
-                    ~depth:constraint_constants.ledger_depth
-              | `Specific source ->
-                  source
-            in
-            let rec go current_ledger_hash =
-              if Ledger_hash.equal current_ledger_hash source then []
-              else
-                let current =
-                  Db.get_diff ~ledger_hash:current_ledger_hash t.db
-                  |> Option.value_exn ~here:[%here] ~message:"Diff not found"
-                in
-                current :: go (Diff.Stable.V2.source_ledger_hash current)
-            in
-            let chain = List.rev (go target) in
-            match (source_opt, chain) with
-            | _, [] ->
-                failwith "No diffs found"
-            | ( `Specific wanted_source
-              , { source_ledger_hash = first_source; _ } :: _ )
-              when not (Ledger_hash.equal wanted_source first_source) ->
-                failwithf
-                  "Get_diffs_chain: source ledger hash %s is not in the chain"
-                  (Ledger_hash.to_decimal_string source)
-                  ()
-            | _ ->
-                Async.return chain )
+          (fun () { source; target } ->
+            let chain = get_ledger_hashes_chain t { source; target } in
+            Async.return
+            @@ List.map chain ~f:(fun ledger_hash ->
+                   Db.get_diff ~ledger_hash t.db
+                   |> Option.value_exn ~here:[%here] ~message:"Diff not found" ) )
       ]
 
 let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
