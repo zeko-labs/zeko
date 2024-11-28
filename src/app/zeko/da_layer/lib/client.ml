@@ -44,14 +44,21 @@ module Rpc = struct
     with
     | Ok diff ->
         return (Ok diff)
-    | Error _ ->
-        (* TODO: do this only if the error is that the rpc method doesn't exist *)
-        (* Fallback to older version *)
-        let%bind.Deferred.Result result =
-          dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V1.t
-            ledger_hash
+    | Error e ->
+        let v2_unimplemented =
+          Error.to_string_mach e
+          |> String.is_substring
+               ~substring:"Unimplemented_rpc Get_diff (Version 2)"
         in
-        return (Ok (Option.map result ~f:(fun x -> Diff.Stable.V1.to_latest x)))
+        if v2_unimplemented then
+          (* Fallback to older version *)
+          let%bind.Deferred.Result result =
+            dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V1.t
+              ledger_hash
+          in
+          return
+            (Ok (Option.map result ~f:(fun x -> Diff.Stable.V1.to_latest x)))
+        else return (Error e)
 
   let get_all_keys ~logger ~node_location () =
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.V1.t ()
