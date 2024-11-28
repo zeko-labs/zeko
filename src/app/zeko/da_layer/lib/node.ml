@@ -3,6 +3,8 @@ open Mina_base
 open Mina_ledger
 open Signature_lib
 
+let constraint_constants = Genesis_constants.Constraint_constants.compiled
+
 module Db = struct
   (** Holds keys to all the diffes *)
   module Index = struct
@@ -365,6 +367,53 @@ let implementations t =
         (* Get_signature *)
       ; Async.Rpc.Rpc.implement Rpc.Get_signature.V1.t (fun () query ->
             Async.return @@ get_signature t ~ledger_hash:query )
+        (* Get_ledger_hashes_chain *)
+      ; Async.Rpc.Rpc.implement Rpc.Get_ledger_hashes_chain.V1.t
+          (fun () { source; target } ->
+            let source =
+              Option.value
+                ~default:
+                  (Diff.empty_ledger_hash
+                     ~depth:constraint_constants.ledger_depth )
+                source
+            in
+            let rec go current =
+              if Ledger_hash.equal current source then []
+              else
+                let source =
+                  Db.get_diff ~ledger_hash:current t.db
+                  |> Option.value_exn ~here:[%here] ~message:"Diff not found"
+                  |> Diff.Stable.V2.source_ledger_hash
+                in
+                current :: go source
+            in
+            let from_target_to_genesis = go target in
+            Async.return (List.rev from_target_to_genesis) )
+        (* Get_diffs_chain *)
+      ; Async.Rpc.Rpc.implement Rpc.Get_diffs_chain.V1.t
+          (fun () { source; target } ->
+            let source =
+              Option.value
+                ~default:
+                  (Diff.empty_ledger_hash
+                     ~depth:constraint_constants.ledger_depth )
+                source
+            in
+            let get_diff ledger_hash =
+              Db.get_diff ~ledger_hash t.db
+              |> Option.value_exn ~here:[%here] ~message:"Diff not found"
+            in
+            let rec go current =
+              let current_ledger_hash =
+                Diff.Stable.V2.source_ledger_hash current
+              in
+              if Ledger_hash.equal current_ledger_hash source then []
+              else
+                let source = get_diff current_ledger_hash in
+                current :: go source
+            in
+            let from_target_to_genesis = go (get_diff target) in
+            Async.return (List.rev from_target_to_genesis) )
       ]
 
 let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =

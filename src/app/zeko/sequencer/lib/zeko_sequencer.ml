@@ -789,8 +789,7 @@ module Sequencer = struct
     (* apply diffs from DA layer *)
     let%bind ledger_hashes_chain =
       Da_layer.Client.get_ledger_hashes_chain ~logger ~config:da_config
-        ~depth:constraint_constants.ledger_depth
-        ~target_ledger_hash:committed_ledger_hash
+        ~source_ledger_hash:None ~target_ledger_hash:committed_ledger_hash
       |> Deferred.map ~f:Or_error.ok_exn
     in
     let%bind () =

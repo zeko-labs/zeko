@@ -67,6 +67,14 @@ module Rpc = struct
   let get_signature ~logger ~node_location ~ledger_hash =
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.V1.t
       ledger_hash
+
+  let get_ledger_hashes_chain ~logger ~node_location ~source ~target =
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_ledger_hashes_chain.V1.t
+      { source; target }
+
+  let get_diffs_chain ~logger ~node_location ~source ~target =
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diffs_chain.V1.t
+      { source; target }
 end
 
 module Config = struct
@@ -175,21 +183,12 @@ let try_all_nodes ~config ~f =
   in
   try_first ~accum_errors:[] (Config.nodes config)
 
-(** Get the chain of ledger hashes from empty ledger hash to [target_ledger_hash]  *)
-let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
-  let rec go current =
-    if Ledger_hash.equal current (Diff.empty_ledger_hash ~depth) then
-      return (Ok [])
-    else
-      let%bind.Deferred.Result source =
-        try_all_nodes ~config ~f:(fun ~node_location () ->
-            Rpc.get_diff_source ~logger ~node_location ~ledger_hash:current )
-      in
-      let%bind.Deferred.Result next = go source in
-      return (Ok (current :: next))
-  in
-  let%bind.Deferred.Result from_target_to_genesis = go target_ledger_hash in
-  return (Ok (List.rev from_target_to_genesis))
+(** Get the chain of ledger hashes from [source_ledger_hash] hash to [target_ledger_hash] *)
+let get_ledger_hashes_chain ~logger ~config ~source_ledger_hash
+    ~target_ledger_hash =
+  try_all_nodes ~config ~f:(fun ~node_location () ->
+      Rpc.get_ledger_hashes_chain ~logger ~node_location
+        ~source:source_ledger_hash ~target:target_ledger_hash )
 
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
 let get_diff ~logger ~config ~ledger_hash =
@@ -243,7 +242,8 @@ let attach_openings ~diffs ~depth =
 
 let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
   let%bind.Deferred.Result ledger_hashes_chain =
-    get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash
+    get_ledger_hashes_chain ~logger ~config ~source_ledger_hash:None
+      ~target_ledger_hash
   in
   let diffs_with_openings =
     lazy

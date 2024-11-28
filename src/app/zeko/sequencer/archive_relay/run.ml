@@ -129,7 +129,7 @@ let sync_archive ~(state : State.t) ~hash =
   let logger = state.logger in
   let%bind.Deferred.Result chain =
     Da_layer.Client.get_ledger_hashes_chain ~logger ~config:state.da_config
-      ~depth:constraint_constants.ledger_depth ~target_ledger_hash:hash
+      ~source_ledger_hash:None ~target_ledger_hash:hash
   in
   let%bind diffs = Deferred.List.map chain ~f:(fetch_diff ~state) in
   Ledger.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
