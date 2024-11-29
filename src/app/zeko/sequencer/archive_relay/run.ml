@@ -134,11 +134,15 @@ let sync_archive ~(state : State.t) ~hash =
   let%bind diffs = Deferred.List.map chain ~f:(fetch_diff ~state) in
   Ledger.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
       let protocol_state = ref compile_time_genesis_state in
-      Deferred.List.iter diffs ~f:(fun (diff, diff_timestamp) ->
-          match Da_layer.Diff.command_with_action_step_flags diff with
+      Deferred.List.iter diffs ~f:(fun diff ->
+          match
+            Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
+          with
           | None ->
               (* Apply accounts diff *)
-              let changed_accounts = Da_layer.Diff.changed_accounts diff in
+              let changed_accounts =
+                Da_layer.Diff.Stable.Latest.changed_accounts diff
+              in
               List.iter changed_accounts ~f:(fun (index, account) ->
                   Ledger.set_at_index_exn ledger index account ) ;
               Ledger.commit ledger ;
@@ -165,7 +169,7 @@ let sync_archive ~(state : State.t) ~hash =
                   ~protocol_state:!protocol_state ~ledger
                   ~txn:(Ledger.Transaction_applied.transaction txn_applied)
                   ~dummy_fee_payer:Zkapps_rollup.inner_public_key
-                  ~timestamp:diff_timestamp
+                  ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
               in
               protocol_state := new_protocol_state ;
               if State.has_been_relayed state (Ledger.merkle_root ledger) then

@@ -594,7 +594,7 @@ module Sequencer = struct
                 (index, L.get_at_index_exn l index) )
           in
           let diff =
-            Da_layer.Diff.Without_timestamp.create
+            Da_layer.Diff.create
               ~source_ledger_hash:(Sparse_ledger.merkle_root first_pass_ledger)
               ~changed_accounts
               ~command_with_action_step_flags:
@@ -796,19 +796,23 @@ module Sequencer = struct
     let%bind () =
       Deferred.List.iter ~how:`Sequential ledger_hashes_chain
         ~f:(fun ledger_hash ->
-          let%bind diff : Da_layer.Diff.Without_timestamp.t Deferred.t =
+          let%bind diff : Da_layer.Diff.t Deferred.t =
             Da_layer.Client.get_diff ~logger ~config:da_config ~ledger_hash
-            >>| Or_error.ok_exn >>| fst
+            >>| Or_error.ok_exn
           in
           assert (
             Ledger_hash.equal
-              (Da_layer.Diff.source_ledger_hash diff)
+              (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
               (get_root t) ) ;
-          match Da_layer.Diff.command_with_action_step_flags diff with
+          match
+            Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
+          with
           | None ->
               (* Apply accounts diff *)
               let mask = L.of_database t.db in
-              let changed_accounts = Da_layer.Diff.changed_accounts diff in
+              let changed_accounts =
+                Da_layer.Diff.Stable.Latest.changed_accounts diff
+              in
               printf "Setting %d accounts\n%!" (List.length changed_accounts) ;
               List.iter changed_accounts ~f:(fun (index, account) ->
                   L.set_at_index_exn mask index account ) ;
