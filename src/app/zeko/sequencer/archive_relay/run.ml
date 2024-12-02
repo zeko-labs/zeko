@@ -3,7 +3,6 @@ open Core_kernel
 open Mina_base
 open Mina_lib
 open Mina_ledger
-module Ws = Websocket.Make (Cohttp_async.Io)
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
@@ -77,52 +76,6 @@ module State = struct
         ()
 end
 
-module Graphql_ws = struct
-  type client_message =
-    | Gql_connection_init
-    | Gql_start of
-        { id : int
-        ; query : string
-        ; variables : Yojson.Safe.t
-        ; operation_name : string option
-        }
-
-  type server_message =
-    | Gql_connection_ack
-    | Gql_data of { data : Yojson.Safe.t }
-    | Gql_unknown of string
-
-  let client_message_to_string =
-    Fn.compose Yojson.Safe.to_string (function
-      | Gql_connection_init ->
-          `Assoc [ ("type", `String "connection_init"); ("payload", `Assoc []) ]
-      | Gql_start { id; query; variables; operation_name } ->
-          `Assoc
-            [ ("type", `String "start")
-            ; ("id", `String (Int.to_string id))
-            ; ( "payload"
-              , `Assoc
-                  [ ("query", `String query)
-                  ; ("variables", variables)
-                  ; ( "operationName"
-                    , Option.value ~default:`Null
-                      @@ Option.map ~f:(fun s -> `String s) operation_name )
-                  ] )
-            ] )
-
-  let server_message_of_string s =
-    let open Yojson.Safe.Util in
-    let json = Yojson.Safe.from_string s in
-    let type_ = json |> member "type" |> to_string in
-    match type_ with
-    | "connection_ack" ->
-        Gql_connection_ack
-    | "data" ->
-        Gql_data { data = json |> member "payload" |> member "data" }
-    | _ ->
-        Gql_unknown s
-end
-
 let sync_archive ~(state : State.t) ~hash =
   let logger = state.logger in
   let%bind.Deferred.Result diffs =
@@ -190,12 +143,12 @@ let sync_archive ~(state : State.t) ~hash =
 let fetch_current_ledger_hash ~zeko_uri () =
   let query =
     {|
-           query {
-             stateHashes {
-               unprovedLedgerHash
-             }
-           }
-         |}
+      query {
+        stateHashes {
+          unprovedLedgerHash
+        }
+      }
+    |}
   in
   let body =
     Yojson.Safe.to_string
