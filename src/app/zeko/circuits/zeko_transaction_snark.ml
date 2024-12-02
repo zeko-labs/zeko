@@ -418,6 +418,77 @@ let rule_zkapp ~shift_action_states ~spec
   in
   (zkapp_statement, out)
 
+let rule_merge input =
+  let* { left =
+           { stmt =
+               { source_ledger
+               ; target_ledger = left_target_ledger
+               ; source_local_state
+               ; target_local_state = left_target_local_state
+               ; fee_excess = left_fee_excess
+               ; sequencer = left_sequencer
+               ; slot_range = left_slot_range
+               } as left_stmt
+           ; proof = left_proof
+           }
+       ; right =
+           { stmt =
+               { source_ledger = right_source_ledger
+               ; target_ledger
+               ; source_local_state = right_source_local_state
+               ; target_local_state
+               ; fee_excess = right_fee_excess
+               ; sequencer = right_sequencer
+               ; slot_range = right_slot_range
+               } as right_stmt
+           ; proof = right_proof
+           }
+       } =
+    exists Merge_input.typ ~compute:(V.get input)
+  in
+  let* () = Ledger_hash.assert_equal left_target_ledger right_source_ledger in
+  let* () =
+    assert_equal ~label:__LOC__ Local_state.typ left_target_local_state
+      right_source_local_state
+  in
+  let* fee_excess =
+    Currency.Fee.Signed.Checked.add left_fee_excess right_fee_excess
+  in
+  let* sequencer =
+    assert_equal_safer ~label:__LOC__ PC.typ left_sequencer right_sequencer
+  in
+  let* slot_range_lower =
+    Slot.Checked.(left_slot_range.lower < right_slot_range.lower)
+    >>= if_ ~typ:Slot.typ ~then_:right_slot_range.lower
+          ~else_:left_slot_range.lower
+  in
+  let*| slot_range_upper =
+    Slot.Checked.(left_slot_range.upper < right_slot_range.upper)
+    >>= if_ ~typ:Slot.typ ~then_:left_slot_range.lower
+          ~else_:right_slot_range.lower
+  in
+  Compile_simple.
+    { prevs =
+        Two_prevs
+          ( { public_input = left_stmt
+            ; proof = left_proof
+            ; proof_must_verify = Boolean.true_
+            }
+          , { public_input = right_stmt
+            ; proof = right_proof
+            ; proof_must_verify = Boolean.true_
+            } )
+    ; out =
+        ({ source_ledger
+         ; target_ledger
+         ; source_local_state
+         ; target_local_state
+         ; fee_excess
+         ; sequencer
+         ; slot_range = { lower = slot_range_lower; upper = slot_range_upper }
+         } : Zeko_stmt.var)
+    }
+
 include
   ( val Compile_simple.compile ~override_wrap_domain:`N1
           ~name:"zeko-transaction-snark" ~out_typ:Zeko_stmt.typ
@@ -495,89 +566,6 @@ include
                       ; out
                       } )
               }
-            ; { branch_name = "merge"
-              ; tags = Two_tags_own
-              ; main =
-                  (fun input ->
-                    let* { left =
-                             { stmt =
-                                 { source_ledger
-                                 ; target_ledger = left_target_ledger
-                                 ; source_local_state
-                                 ; target_local_state = left_target_local_state
-                                 ; fee_excess = left_fee_excess
-                                 ; sequencer = left_sequencer
-                                 ; slot_range = left_slot_range
-                                 } as left_stmt
-                             ; proof = left_proof
-                             }
-                         ; right =
-                             { stmt =
-                                 { source_ledger = right_source_ledger
-                                 ; target_ledger
-                                 ; source_local_state = right_source_local_state
-                                 ; target_local_state
-                                 ; fee_excess = right_fee_excess
-                                 ; sequencer = right_sequencer
-                                 ; slot_range = right_slot_range
-                                 } as right_stmt
-                             ; proof = right_proof
-                             }
-                         } =
-                      exists Merge_input.typ ~compute:(V.get input)
-                    in
-                    let* () =
-                      Ledger_hash.assert_equal left_target_ledger
-                        right_source_ledger
-                    in
-                    let* () =
-                      assert_equal ~label:__LOC__ Local_state.typ
-                        left_target_local_state right_source_local_state
-                    in
-                    let* fee_excess =
-                      Currency.Fee.Signed.Checked.add left_fee_excess
-                        right_fee_excess
-                    in
-                    let* sequencer =
-                      assert_equal_safer ~label:__LOC__ PC.typ left_sequencer
-                        right_sequencer
-                    in
-                    let* slot_range_lower =
-                      Slot.Checked.(
-                        left_slot_range.lower < right_slot_range.lower)
-                      >>= if_ ~typ:Slot.typ ~then_:right_slot_range.lower
-                            ~else_:left_slot_range.lower
-                    in
-                    let*| slot_range_upper =
-                      Slot.Checked.(
-                        left_slot_range.upper < right_slot_range.upper)
-                      >>= if_ ~typ:Slot.typ ~then_:left_slot_range.lower
-                            ~else_:right_slot_range.lower
-                    in
-                    Compile_simple.
-                      { prevs =
-                          Two_prevs
-                            ( { public_input = left_stmt
-                              ; proof = left_proof
-                              ; proof_must_verify = Boolean.true_
-                              }
-                            , { public_input = right_stmt
-                              ; proof = right_proof
-                              ; proof_must_verify = Boolean.true_
-                              } )
-                      ; out =
-                          ({ source_ledger
-                           ; target_ledger
-                           ; source_local_state
-                           ; target_local_state
-                           ; fee_excess
-                           ; sequencer
-                           ; slot_range =
-                               { lower = slot_range_lower
-                               ; upper = slot_range_upper
-                               }
-                           } : Zeko_stmt.var)
-                      } )
-              }
+            ; { branch_name = "merge"; tags = Two_tags_own; main = rule_merge }
             ]
           () )
