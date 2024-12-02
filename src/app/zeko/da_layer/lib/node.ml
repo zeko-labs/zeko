@@ -351,11 +351,13 @@ let implementations t =
                    |> Option.value_exn ~here:[%here] ~message:"Diff not found" ) )
       ]
 
-let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
+let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk ~no_migrations
+    () =
   let open Async in
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
   in
+  let%bind db_existed = Sys.file_exists_exn db_dir in
   let t =
     { db = Db.create db_dir
     ; signer =
@@ -363,6 +365,12 @@ let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
     ; logger
     }
   in
+
+  (* Set the migration to the latest migration if the database didn't exist *)
+  if not db_existed then
+    Db.set_migration t.db ~migration:Migrations.latest_migration ;
+
+  if not no_migrations then Migrations.run_migrations t.db ;
 
   let%bind () =
     Deferred.List.iter ~how:`Sequential nodes_to_sync ~f:(fun n ->

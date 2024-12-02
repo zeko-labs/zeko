@@ -19,6 +19,8 @@ let run_node =
        and testing_mode =
          flag "--random-sk" no_arg
            ~doc:"Run in testing mode, the signer key will be generated randomly"
+       and no_migrations =
+         flag "--no-migrations" no_arg ~doc:"Do not run migrations"
        in
        fun () ->
          let signer =
@@ -36,7 +38,7 @@ let run_node =
          let%bind () =
            Deferred.ignore_m
            @@ Da_layer.Node.create_server ~nodes_to_sync ~logger ~port ~db_dir
-                ~signer_sk:signer ()
+                ~signer_sk:signer ~no_migrations ()
          in
          [%log info] "Server started on port $port"
            ~metadata:[ ("port", `Int port) ] ;
