@@ -7,6 +7,73 @@ open Checked.Let_syntax
 
 let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
+module Stack_frame = struct
+  include Mina_base.Stack_frame.Digest
+
+  type var = Checked.t
+end
+
+module Call_stack = struct
+  include Mina_base.Call_stack_digest
+
+  type var = Checked.t
+end
+
+module Account_update_index = struct
+  include Mina_numbers.Index
+
+  type var = Checked.t
+end
+
+module Local_state = struct
+  type t =
+    { ledger : Ledger_hash.t
+    ; stack_frame : Stack_frame.t
+    ; call_stack : Call_stack.t
+    ; transaction_commitment : F.t
+    ; full_transaction_commitment : F.t
+    ; excess : Currency.Amount.Signed.t
+    ; account_update_index : Account_update_index.t
+    }
+  [@@deriving snarky]
+
+  let to_mina_var ~supply_increase
+      { ledger
+      ; stack_frame
+      ; call_stack
+      ; transaction_commitment
+      ; full_transaction_commitment
+      ; excess
+      ; account_update_index
+      } : Mina_state.Local_state.Checked.t =
+    { stack_frame
+    ; call_stack
+    ; transaction_commitment
+    ; full_transaction_commitment
+    ; excess
+    ; account_update_index
+    ; ledger
+    ; supply_increase
+    ; failure_status_tbl = ()
+    ; will_succeed = Boolean.true_
+    ; success = Boolean.true_
+    }
+
+  let dummy : var =
+    { ledger = Ledger_hash.(constant typ empty_hash)
+    ; stack_frame =
+        Stack_frame.create Mina_base.Stack_frame.empty
+        |> constant Stack_frame.typ
+    ; call_stack = Call_stack.(constant empty)
+    ; transaction_commitment =
+        constant F.typ Zkapp_command.Transaction_commitment.empty
+    ; full_transaction_commitment =
+        constant F.typ Zkapp_command.Transaction_commitment.empty
+    ; excess = Currency.Amount.Signed.(constant typ zero)
+    ; account_update_index = Account_update_index.(constant typ zero)
+    }
+end
+
 module Zeko_stmt = struct
   type t =
     { source_ledger : Ledger_hash.t
@@ -14,6 +81,8 @@ module Zeko_stmt = struct
     ; sequencer : Signature_lib.Public_key.Compressed.t
     ; fee_excess : Currency.Fee.Signed.t
     ; slot_range : Slot_range.t
+    ; source_local_state : Local_state.t
+    ; target_local_state : Local_state.t
     }
   [@@deriving snarky]
 end
@@ -26,9 +95,12 @@ module Handler_V = Mk_V (Handler)
 
 module Base_input = struct
   type t =
-    { stmt : Transaction_snark.Statement.With_sok.t
+    { source_ledger : Ledger_hash.t
+    ; target_ledger : Ledger_hash.t
+    ; fee_excess : Currency.Fee.Signed.t
     ; sequencer : PC.t
     ; transaction : Mina_transaction.Transaction_union.t
+    ; handler : Handler_V.t
     }
   [@@deriving snarky]
 end
@@ -39,21 +111,29 @@ end
 
 module Witness_V = Mk_V (Transaction_snark.Zkapp_command_segment.Witness)
 
-module Zkapp_single_unproved_input = struct
+module Zkapp_rule_input = struct
   type t =
-    { stmt : Transaction_snark.Statement.With_sok.t
+    { source_ledger : Ledger_hash.t
+    ; target_ledger : Ledger_hash.t
+    ; connecting_ledger : Ledger_hash.t
+    ; source_local_state : Local_state.t
+    ; target_local_state : Local_state.t
+    ; fee_excess : Currency.Fee.Signed.t
+    ; supply_decrease : Currency.Amount.t
     ; witness : Witness_V.t
     ; sequencer : PC.t
-    ; shift_action_state : Boolean.t
     }
+  [@@deriving snarky]
+end
+
+module Zkapp_single_unproved_input = struct
+  type t = { base : Zkapp_rule_input.t; shift_action_state : Boolean.t }
   [@@deriving snarky]
 end
 
 module Zkapp_double_unproved_input = struct
   type t =
-    { stmt : Transaction_snark.Statement.With_sok.t
-    ; witness : Witness_V.t
-    ; sequencer : PC.t
+    { base : Zkapp_rule_input.t
     ; shift_action_state_first : Boolean.t
     ; shift_action_state_second : Boolean.t
     }
@@ -68,11 +148,9 @@ end
 
 module Zkapp_single_proved_input = struct
   type t =
-    { stmt : Transaction_snark.Statement.With_sok.t
-    ; witness : Witness_V.t
+    { base : Zkapp_rule_input.t
     ; zkapp_vk : Verification_key.t
     ; zkapp_proof : Proof_V.t
-    ; sequencer : PC.t
     ; shift_action_state : Boolean.t
     }
   [@@deriving snarky]
@@ -101,85 +179,6 @@ let dummy_pc =
   Pending_coinbase.Stack.push_state
     (Mina_state.Protocol_state.Body.hash dummy_state_body)
     Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
-
-let zeko_stmt_of_mina_stmt =
-  let open Checked in
-  fun ~(sequencer : PC.var) ~slot_range
-      (stmt : Transaction_snark.Statement.With_sok.var) ->
-    (* Check that pending_coinbase_stack is correctly set. This also constrains
-       protocol state. See check_protocol_state in transaction_snark.ml. *)
-    let dummy_pc = constant Pending_coinbase.Stack.typ dummy_pc in
-    let* () =
-      with_label __LOC__ (fun () ->
-          Pending_coinbase.Stack.equal_var dummy_pc
-            stmt.source.pending_coinbase_stack
-          >>= Boolean.Assert.is_true )
-    in
-    let* () =
-      with_label __LOC__ (fun () ->
-          Pending_coinbase.Stack.equal_var dummy_pc
-            stmt.target.pending_coinbase_stack
-          >>= Boolean.Assert.is_true )
-    in
-    (* Check that transactions have been completely applied *)
-    let empty_state = Mina_state.Local_state.(constant typ @@ empty ()) in
-    let* () =
-      with_label __LOC__ (fun () ->
-          Mina_state.Local_state.Checked.assert_equal empty_state
-            stmt.source.local_state
-          |> Checked.return )
-    in
-    let* () =
-      with_label __LOC__ (fun () ->
-          Mina_state.Local_state.Checked.assert_equal empty_state
-            stmt.target.local_state
-          |> Checked.return )
-    in
-
-    (* Check that first and second passes are connected *)
-    let* () =
-      with_label __LOC__ (fun () ->
-          Ledger_hash.assert_equal stmt.target.first_pass_ledger
-            stmt.source.second_pass_ledger )
-    in
-
-    (* Check that it's a complete transaction (a "block") *)
-    let* () =
-      with_label __LOC__ (fun () ->
-          Ledger_hash.assert_equal stmt.target.first_pass_ledger
-            stmt.connecting_ledger_right )
-    in
-    let* () =
-      with_label __LOC__ (fun () ->
-          Ledger_hash.assert_equal stmt.source.second_pass_ledger
-            stmt.connecting_ledger_left )
-    in
-
-    (*  No MINA must be minted *)
-    let* is_neg =
-      Currency.Amount.Signed.Checked.sgn stmt.supply_increase
-      >>| Sgn.Checked.is_neg
-    in
-    let* is_zero =
-      Currency.Amount.Signed.Checked.magnitude stmt.supply_increase
-      >>= Currency.Amount.(Checked.equal (constant typ zero))
-    in
-    let* () =
-      with_label __LOC__ (fun () ->
-          Boolean.(is_neg || is_zero) >>= Boolean.Assert.is_true )
-    in
-    let*| () =
-      Currency.Fee.(
-        Signed.Checked.magnitude stmt.fee_excess.fee_excess_r
-        >>= assert_equal ~label:__LOC__ typ (constant typ zero))
-    in
-    ( { source_ledger = stmt.source.first_pass_ledger
-      ; target_ledger = stmt.target.second_pass_ledger
-      ; sequencer
-      ; fee_excess = stmt.fee_excess.fee_excess_l
-      ; slot_range
-      }
-      : Zeko_stmt.var )
 
 let account_with_hash (account : Account.Checked.Unhashed.t) :
     (Account.Checked.Unhashed.t, Field.Var.t lazy_t) With_hash.t =
@@ -266,132 +265,208 @@ let perform ~(shift_action_states : Boolean.var list)
             shift_action_states := xs ;
             x )
 
+let rule_signed_command input =
+  let* { source_ledger
+       ; target_ledger
+       ; fee_excess
+       ; transaction = _
+       ; sequencer
+       ; handler = _
+       } =
+    exists Base_input.typ ~compute:(V.get input)
+  in
+  let handler =
+    let+| { source_ledger = _
+          ; target_ledger = _
+          ; fee_excess = _
+          ; transaction
+          ; sequencer = _
+          ; handler
+          } =
+      V.get input
+    in
+    let handler (Snarky_backendless.Request.With { request; respond } as r) =
+      match request with
+      | Transaction_snark.Base.Transaction ->
+          respond (Provide transaction)
+      | Transaction_snark.Base.State_body ->
+          respond (Provide dummy_state_body)
+      | Transaction_snark.Base.Init_stack ->
+          respond (Provide dummy_pc_init)
+      | Transaction_snark.Base.Global_slot ->
+          respond (Provide Mina_numbers.Global_slot_since_genesis.zero)
+      | _ ->
+          handler r
+    in
+    handler
+  in
+  let source : _ Mina_state.Registers.t =
+    { first_pass_ledger = source_ledger
+    ; second_pass_ledger = target_ledger
+    ; pending_coinbase_stack = constant Pending_coinbase.Stack.typ dummy_pc
+    ; local_state = Mina_state.Local_state.(constant typ (dummy ()))
+    }
+  in
+  let target : _ Mina_state.Registers.t =
+    { first_pass_ledger = target_ledger
+    ; second_pass_ledger = target_ledger
+    ; pending_coinbase_stack = constant Pending_coinbase.Stack.typ dummy_pc
+    ; local_state = Mina_state.Local_state.(constant typ (dummy ()))
+    }
+  in
+  let stmt : Transaction_snark.Statement.With_sok.var =
+    { source
+    ; target
+    ; connecting_ledger_left = target_ledger
+    ; connecting_ledger_right = target_ledger
+    ; supply_increase = Currency.Amount.Signed.(constant typ zero)
+    ; fee_excess =
+        { fee_token_l = Token_id.(Checked.constant default)
+        ; fee_excess_l = fee_excess
+        ; fee_token_r = Token_id.(Checked.constant default)
+        ; fee_excess_r = Currency.Fee.Signed.(Checked.constant zero)
+        }
+    ; sok_digest = Mina_base.Sok_message.Digest.(constant typ default)
+    }
+  in
+  let*| () =
+    handle_as_prover
+      (fun () -> Transaction_snark.Base.main ~constraint_constants stmt)
+      handler
+  in
+  let out : Zeko_stmt.var =
+    { source_ledger
+    ; target_ledger
+    ; sequencer
+    ; fee_excess
+    ; slot_range = Slot_range.(constant typ infinite)
+    ; source_local_state = Local_state.dummy
+    ; target_local_state = Local_state.dummy
+    }
+  in
+  Compile_simple.{ prevs = No_prevs; out }
+
+let rule_zkapp ~shift_action_states ~spec
+    Zkapp_rule_input.
+      { source_ledger
+      ; target_ledger
+      ; connecting_ledger
+      ; fee_excess
+      ; supply_decrease
+      ; source_local_state
+      ; target_local_state
+      ; witness
+      ; sequencer
+      } =
+  let slot_range = ref Slot_range.(constant typ infinite) in
+  let set_slot_range s = slot_range := s in
+  let source : _ Mina_state.Registers.t =
+    { first_pass_ledger = source_ledger
+    ; second_pass_ledger = connecting_ledger
+    ; pending_coinbase_stack = constant Pending_coinbase.Stack.typ dummy_pc
+    ; local_state =
+        Local_state.to_mina_var
+          ~supply_increase:Currency.Amount.Signed.(constant typ zero)
+          source_local_state
+    }
+  in
+  let supply_increase =
+    Currency.Amount.Signed.Checked.(of_unsigned supply_decrease |> negate)
+  in
+  let target : _ Mina_state.Registers.t =
+    { first_pass_ledger = connecting_ledger
+    ; second_pass_ledger = target_ledger
+    ; pending_coinbase_stack = constant Pending_coinbase.Stack.typ dummy_pc
+    ; local_state = Local_state.to_mina_var ~supply_increase target_local_state
+    }
+  in
+  let stmt : Transaction_snark.Statement.With_sok.var =
+    { source
+    ; target
+    ; connecting_ledger_left = connecting_ledger
+    ; connecting_ledger_right = connecting_ledger
+    ; supply_increase = Currency.Amount.Signed.(constant typ zero)
+    ; fee_excess =
+        { fee_token_l = Token_id.(Checked.constant default)
+        ; fee_excess_l = fee_excess
+        ; fee_token_r = Token_id.(Checked.constant default)
+        ; fee_excess_r = Currency.Fee.Signed.(Checked.constant zero)
+        }
+    ; sok_digest = Mina_base.Sok_message.Digest.(constant typ default)
+    }
+  in
+  let*| zkapp_statement, _must_verify_zkapp =
+    let@ () = make_checked in
+    Transaction_snark.Base.Zkapp_command_snark.main
+      ~witness:(V.unsafe_unwrap witness |> Option.value_exn)
+      ~zeko_handler:
+        { perform = (fun eff -> perform ~shift_action_states ~set_slot_range eff)
+        }
+      ~constraint_constants
+      (Transaction_snark.Zkapp_command_segment.Basic.to_single_list spec)
+      stmt
+  in
+  let out : Zeko_stmt.var =
+    { source_ledger
+    ; target_ledger
+    ; sequencer
+    ; fee_excess
+    ; slot_range = !slot_range
+    ; source_local_state
+    ; target_local_state
+    }
+  in
+  (zkapp_statement, out)
+
 include
   ( val Compile_simple.compile ~override_wrap_domain:`N1
           ~name:"zeko-transaction-snark" ~out_typ:Zeko_stmt.typ
           ~branches:
-            [ { branch_name = "base (user commands)"
+            [ { branch_name = "single-signed-command"
               ; tags = No_tags
-              ; main =
-                  (fun input ->
-                    let* { stmt; transaction = _; sequencer } =
-                      exists Base_input.typ ~compute:(V.get input)
-                    in
-                    let handler =
-                      let+| { stmt = _; transaction; sequencer = _ } =
-                        V.get input
-                      in
-                      let handler
-                          (Snarky_backendless.Request.With { request; respond })
-                          =
-                        match request with
-                        | Transaction_snark.Base.Transaction ->
-                            respond (Provide transaction)
-                        | Transaction_snark.Base.State_body ->
-                            respond (Provide dummy_state_body)
-                        | Transaction_snark.Base.Init_stack ->
-                            respond (Provide dummy_pc_init)
-                        | Transaction_snark.Base.Global_slot ->
-                            respond
-                              (Provide
-                                 Mina_numbers.Global_slot_since_genesis.zero )
-                        | _ ->
-                            respond Unhandled
-                      in
-                      handler
-                    in
-                    let* () =
-                      handle_as_prover
-                        (fun () ->
-                          Transaction_snark.Base.main ~constraint_constants stmt
-                          )
-                        handler
-                    in
-                    let*| stmt =
-                      zeko_stmt_of_mina_stmt ~sequencer
-                        ~slot_range:Slot_range.(constant typ infinite)
-                        stmt
-                    in
-                    Compile_simple.{ prevs = No_prevs; out = stmt } )
+              ; main = rule_signed_command
               }
-            ; { branch_name = "single-unproved-zkapp"
+            ; { branch_name = "single-unproved-zkapp-command"
               ; tags = No_tags
               ; main =
                   (fun input ->
-                    let* { stmt; witness; sequencer; shift_action_state } =
+                    let* { base; shift_action_state } =
                       exists Zkapp_single_unproved_input.typ
                         ~compute:(V.get input)
                     in
-                    let slot_range = ref Slot_range.(constant typ infinite) in
-                    let set_slot_range s = slot_range := s in
-                    let* must_be_none, _must_verify_zkapp =
-                      let@ () = make_checked in
-                      Transaction_snark.Base.Zkapp_command_snark.main
-                        ~witness:(V.unsafe_unwrap witness |> Option.value_exn)
-                        ~zeko_handler:
-                          { perform =
-                              (fun eff ->
-                                perform
-                                  ~shift_action_states:[ shift_action_state ]
-                                  ~set_slot_range eff )
-                          }
-                        ~constraint_constants
-                        (Transaction_snark.Zkapp_command_segment.Basic
-                         .to_single_list Opt_signed )
-                        stmt
+                    let*| _, out =
+                      rule_zkapp base
+                        ~shift_action_states:[ shift_action_state ]
+                        ~spec:Opt_signed
                     in
-                    assert (Option.is_none must_be_none) ;
-                    let*| stmt =
-                      zeko_stmt_of_mina_stmt ~sequencer ~slot_range:!slot_range
-                        stmt
-                    in
-                    Compile_simple.{ prevs = No_prevs; out = stmt } )
+                    Compile_simple.{ prevs = No_prevs; out } )
               }
-            ; { branch_name = "double-unproved-zkapp"
+            ; { branch_name = "double-unproved-zkapp-command"
               ; tags = No_tags
               ; main =
                   (fun input ->
-                    let* { stmt
-                         ; witness
-                         ; sequencer
+                    let* { base
                          ; shift_action_state_first
                          ; shift_action_state_second
                          } =
                       exists Zkapp_double_unproved_input.typ
                         ~compute:(V.get input)
                     in
-                    let slot_range = ref Slot_range.(constant typ infinite) in
-                    let set_slot_range s = slot_range := s in
-                    let* must_be_none, _must_verify_zkapp =
-                      let@ () = make_checked in
-                      Transaction_snark.Base.Zkapp_command_snark.main
-                        ?witness:(V.unsafe_unwrap witness)
-                        ~zeko_handler:
-                          { perform =
-                              (fun eff ->
-                                perform
-                                  ~shift_action_states:
-                                    [ shift_action_state_first
-                                    ; shift_action_state_second
-                                    ]
-                                  ~set_slot_range eff )
-                          }
-                        ~constraint_constants
-                        (Transaction_snark.Zkapp_command_segment.Basic
-                         .to_single_list Opt_signed_opt_signed )
-                        stmt
+                    let*| _, out =
+                      rule_zkapp base
+                        ~shift_action_states:
+                          [ shift_action_state_first
+                          ; shift_action_state_second
+                          ]
+                        ~spec:Opt_signed_opt_signed
                     in
-                    assert (Option.is_none must_be_none) ;
-                    let*| stmt =
-                      zeko_stmt_of_mina_stmt ~sequencer ~slot_range:!slot_range
-                        stmt
-                    in
-                    Compile_simple.{ prevs = No_prevs; out = stmt } )
+                    Compile_simple.{ prevs = No_prevs; out } )
               }
-            ; { branch_name = "proved-zkapp"
+            ; { branch_name = "single-proved-zkapp-command"
               ; tags =
                   One_tag_sideloaded
-                    { sideloaded_tag_name = "proved-zkapp"
+                    { sideloaded_tag_name =
+                        "single-proved-zkapp-command-sideloaded-vk"
                     ; typ = Zkapp_statement.typ
                     ; extract_vk =
                         (fun ({ zkapp_vk; _ } : Zkapp_single_proved_input.t) ->
@@ -399,49 +474,25 @@ include
                     }
               ; main =
                   (fun input ->
-                    let* { stmt
-                         ; witness
-                         ; zkapp_vk
-                         ; zkapp_proof
-                         ; sequencer
-                         ; shift_action_state
-                         } =
+                    let* { base; zkapp_vk; zkapp_proof; shift_action_state } =
                       exists Zkapp_single_proved_input.typ
                         ~compute:(V.get input)
                     in
-                    let slot_range = ref Slot_range.(constant typ infinite) in
-                    let set_slot_range s = slot_range := s in
-                    let* zkapp_statement, `Must_verify proof_must_verify =
-                      let@ () = make_checked in
-                      Transaction_snark.Base.Zkapp_command_snark.main
-                        ?witness:(V.unsafe_unwrap witness)
-                        ~zeko_handler:
-                          { perform =
-                              (fun eff ->
-                                perform
-                                  ~shift_action_states:[ shift_action_state ]
-                                  ~set_slot_range eff )
-                          }
-                        ~constraint_constants
-                        (Transaction_snark.Zkapp_command_segment.Basic
-                         .to_single_list Opt_signed_opt_signed )
-                        stmt
-                    in
-                    let*| stmt =
-                      zeko_stmt_of_mina_stmt ~sequencer ~slot_range:!slot_range
-                        stmt
+                    let*| zkapp_statement, out =
+                      rule_zkapp base
+                        ~shift_action_states:[ shift_action_state ] ~spec:Proved
                     in
                     Compile_simple.
                       { prevs =
                           One_prev_sideloaded
                             { public_input = Option.value_exn zkapp_statement
                             ; proof = zkapp_proof
-                            ; proof_must_verify
+                            ; proof_must_verify = Boolean.true_
                             ; vk =
                                 Compile_simple.Verification_key.var_of_pickles
                                   zkapp_vk
                             }
-                      ; out = stmt
+                      ; out
                       } )
               }
             ; { branch_name = "merge"
@@ -452,6 +503,8 @@ include
                              { stmt =
                                  { source_ledger
                                  ; target_ledger = left_target_ledger
+                                 ; source_local_state
+                                 ; target_local_state = left_target_local_state
                                  ; fee_excess = left_fee_excess
                                  ; sequencer = left_sequencer
                                  ; slot_range = left_slot_range
@@ -462,6 +515,8 @@ include
                              { stmt =
                                  { source_ledger = right_source_ledger
                                  ; target_ledger
+                                 ; source_local_state = right_source_local_state
+                                 ; target_local_state
                                  ; fee_excess = right_fee_excess
                                  ; sequencer = right_sequencer
                                  ; slot_range = right_slot_range
@@ -474,6 +529,10 @@ include
                     let* () =
                       Ledger_hash.assert_equal left_target_ledger
                         right_source_ledger
+                    in
+                    let* () =
+                      assert_equal ~label:__LOC__ Local_state.typ
+                        left_target_local_state right_source_local_state
                     in
                     let* fee_excess =
                       Currency.Fee.Signed.Checked.add left_fee_excess
@@ -509,6 +568,8 @@ include
                       ; out =
                           ({ source_ledger
                            ; target_ledger
+                           ; source_local_state
+                           ; target_local_state
                            ; fee_excess
                            ; sequencer
                            ; slot_range =

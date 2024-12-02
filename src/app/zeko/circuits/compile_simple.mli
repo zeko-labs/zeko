@@ -1,6 +1,8 @@
-type proof
+module Proof : sig
+  type t [@@deriving yojson]
 
-val proof_of_pickles : Pickles.Side_loaded.Proof.t -> proof
+  val of_pickles : Pickles.Side_loaded.Proof.t -> t
+end
 
 module Verification_key : sig
   type t
@@ -17,7 +19,7 @@ end
 type 'tag_var tag
 
 include module type of Compile_simple_intf.Make (struct
-  type nonrec proof = proof
+  type nonrec proof = Proof.t
 
   type nonrec vk_t = Verification_key.t
 

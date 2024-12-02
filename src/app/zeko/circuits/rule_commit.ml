@@ -122,9 +122,26 @@ struct
     let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
 
-    let* ( { source_ledger; target_ledger; sequencer; fee_excess; slot_range }
+    let* ( { source_ledger
+           ; target_ledger
+           ; source_local_state
+           ; target_local_state
+           ; sequencer
+           ; fee_excess
+           ; slot_range
+           }
          , verify_txn_snark ) =
       Zeko_transaction_snark.get txn_snark
+    in
+
+    (* The local states must be empty, ensuring that there is no incomplete zkapp transaction being committed. *)
+    let* () =
+      Zeko_transaction_snark.Local_state.(
+        assert_equal ~label:__LOC__ typ source_local_state dummy)
+    in
+    let* () =
+      Zeko_transaction_snark.Local_state.(
+        assert_equal ~label:__LOC__ typ target_local_state dummy)
     in
 
     (* DA check, simply see if public key in question has signed our ledger. *)

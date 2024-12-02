@@ -14,9 +14,7 @@ let ( let+| ) = As_prover.Let_syntax.( >>| )
 
 let ( let@ ) : (('a -> 'b) -> 'c) -> ('a -> 'b) -> 'c = ( @@ )
 
-module Proof = struct
-  type t = Compile_simple.proof
-end
+module Proof = Compile_simple.Proof
 
 (** Converts a variable to its constituent fields *)
 let var_to_fields (type var value) (typ : (var, value) Typ.t) (x : var) :

@@ -3,9 +3,7 @@
 open Mina_base
 open Snark_params.Tick
 
-module Proof : sig
-  type t = Compile_simple.proof
-end
+module Proof = Compile_simple.Proof
 
 module Calls : sig
   type t =

@@ -4,9 +4,11 @@ open Checked.Let_syntax
 
 type self_width = Pickles_types.Nat.N2.n
 
-type proof = Pickles.Side_loaded.Proof.t
+module Proof = struct
+  include Pickles.Side_loaded.Proof
 
-let proof_of_pickles x = x
+  let of_pickles x = x
+end
 
 type 'var tag =
   | Tag : ('var, 'value, self_width, 'height) Pickles.Tag.t -> 'var tag
@@ -22,7 +24,7 @@ module Verification_key = struct
 end
 
 include Compile_simple_intf.Make (struct
-  type nonrec proof = proof
+  type nonrec proof = Proof.t
 
   type nonrec 'var tag = 'var tag
 
