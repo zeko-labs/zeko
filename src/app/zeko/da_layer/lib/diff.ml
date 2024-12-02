@@ -77,9 +77,9 @@ let drop_time
 let to_bigstring =
   Binable.to_bigstring (module Stable.Latest.With_top_version_tag)
 
-let of_bigstring =
+let of_bigstring bigstring =
   let pos_ref = ref 0 in
-  Stable.bin_read_top_tagged_to_latest ~pos_ref
+  Stable.bin_read_top_tagged_to_latest ~pos_ref bigstring
 
 (** [Ledger_hash.empty_hash] is [zero], so we need this for the genesis state of the rollup *)
 let empty_ledger_hash ~depth =

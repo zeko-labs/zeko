@@ -207,52 +207,28 @@ let post_diff t ~ledger_openings ~diff =
   in
   Ok signature
 
-(** Find missing keys and fetch corresponding diffes *)
-let sync ~logger ~node_location t =
+let sync t ~node_location ~ledger_hash =
+  let logger = t.logger in
   let open Async in
-  let%bind.Deferred.Result remote_keys =
-    Client.Rpc.get_all_keys ~logger ~node_location ()
-    |> Deferred.map
-         ~f:(Result.map ~f:(List.dedup_and_sort ~compare:Ledger_hash.compare))
+  let%bind.Deferred.Result diffs =
+    Client.Rpc.get_diffs_chain ~logger ~node_location ~source:`Genesis
+      ~target:ledger_hash
   in
-  let my_keys = Db.get_index t.db in
-  let missing_keys =
-    let set1 = Set.of_list (module Ledger_hash) remote_keys in
-    let set2 = Set.of_list (module Ledger_hash) my_keys in
-    Set.diff set1 set2 |> Set.to_list
+  let diffs =
+    Client.attach_openings
+      ~diffs:(List.map diffs ~f:Diff.drop_time)
+      ~depth:constraint_constants.ledger_depth
   in
-  let%bind () =
-    Deferred.List.iter ~how:`Parallel missing_keys ~f:(fun ledger_hash ->
-        let%bind diff =
-          match%bind
-            Client.Rpc.get_diff ~logger ~node_location ~ledger_hash
-          with
-          | Ok (Some diff) ->
-              return diff
-          | Ok None ->
-              failwithf "Syncing node claimed to have diff %s but it doesn't"
-                (Ledger_hash.to_decimal_string ledger_hash)
-                ()
-          | Error err ->
-              failwithf "Failed syncing the diff %s, error: %s"
-                (Ledger_hash.to_decimal_string ledger_hash)
-                (Error.to_string_hum err) ()
-        in
-        match Db.add_diff t.db ~ledger_hash ~diff with
-        | `Added ->
-            return
-            @@ [%log info] "Diff with target ledger hash $hash added"
-                 ~metadata:
-                   [ ( "hash"
-                     , `String (Ledger_hash.to_decimal_string ledger_hash) )
-                   ]
-        | `Already_existed ->
-            failwithf
-              "Diff with target ledger hash %s already existed during syncing"
-              (Ledger_hash.to_decimal_string ledger_hash)
-              () )
-  in
-  return (Ok ())
+  List.map diffs ~f:(fun (diff, ledger_openings) ->
+      match post_diff t ~diff ~ledger_openings with
+      | Ok _signature ->
+          Ok ()
+      | Error e ->
+          let logger = t.logger in
+          [%log warn] "Error posting diff: $error"
+            ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+          Error e )
+  |> Result.all_unit |> return
 
 let get_signature t ~ledger_hash =
   let%bind.Option _diff = Db.get_diff t.db ~ledger_hash in
@@ -351,8 +327,7 @@ let implementations t =
                    |> Option.value_exn ~here:[%here] ~message:"Diff not found" ) )
       ]
 
-let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk ~no_migrations
-    () =
+let create_server ~sync_arg ~port ~logger ~db_dir ~signer_sk ~no_migrations () =
   let open Async in
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
@@ -370,19 +345,17 @@ let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk ~no_migrations
   if not db_existed then
     Db.set_migration t.db ~migration:Migrations.latest_migration ;
 
-  if not no_migrations then Migrations.run_migrations t.db ;
+  if not no_migrations then Migrations.run_migrations ~logger t.db ;
 
   let%bind () =
-    Deferred.List.iter ~how:`Sequential nodes_to_sync ~f:(fun n ->
-        match%bind sync ~logger ~node_location:n t with
+    match sync_arg with
+    | None ->
+        return ()
+    | Some (node_location, ledger_hash) -> (
+        match%bind sync t ~node_location ~ledger_hash with
         | Ok () ->
             return ()
         | Error e ->
-            [%log error] "Exception while syncing the node $node: $error"
-              ~metadata:
-                [ ("error", `String (Error.to_string_hum e))
-                ; ("node", `String n.name)
-                ] ;
             failwith (Error.to_string_hum e) )
   in
 
