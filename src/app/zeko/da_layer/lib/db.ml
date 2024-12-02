@@ -50,7 +50,7 @@ module Key_value = struct
    fun pair_type data ->
     match pair_type with
     | Diff ->
-        Diff.of_bigstring data
+        Diff.of_bigstring data |> Or_error.ok_exn
     | Diff_index ->
         Index.of_bigstring data
     | Migration ->
