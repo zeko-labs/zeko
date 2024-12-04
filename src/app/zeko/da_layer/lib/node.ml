@@ -3,72 +3,7 @@ open Mina_base
 open Mina_ledger
 open Signature_lib
 
-module Db = struct
-  (** Holds keys to all the diffes *)
-  module Index = struct
-    [%%versioned
-    module Stable = struct
-      module V1 = struct
-        type t = Ledger_hash.Stable.V1.t list
-
-        let to_latest = Fn.id
-      end
-    end]
-
-    let to_bigstring = Binable.to_bigstring (module Stable.Latest)
-
-    let of_bigstring = Binable.of_bigstring (module Stable.Latest)
-  end
-
-  module Key_value = struct
-    type _ t =
-      | Diff : (Ledger_hash.t * Diff.t) t
-      | Diff_index : (unit * Index.t) t
-
-    let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
-     fun pair_type key ->
-      match pair_type with
-      | Diff ->
-          Bigstring.concat
-            [ Bigstring.of_string "diff"
-            ; Bigstring.of_string @@ Ledger_hash.to_decimal_string key
-            ]
-      | Diff_index ->
-          Bigstring.of_string "diff_index"
-
-    let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
-     fun pair_type value ->
-      match pair_type with
-      | Diff ->
-          Diff.to_bigstring value
-      | Diff_index ->
-          Index.to_bigstring value
-
-    let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
-     fun pair_type data ->
-      match pair_type with
-      | Diff ->
-          Diff.of_bigstring data
-      | Diff_index ->
-          Index.of_bigstring data
-  end
-
-  include Kvdb_base.Make (Key_value)
-
-  let set_index t ~index = set t Diff_index ~key:() ~data:index
-
-  let get_index t = get t Diff_index ~key:() |> Option.value ~default:[]
-
-  let add_diff t ~ledger_hash ~diff =
-    let index = get_index t in
-    if List.mem index ledger_hash ~equal:Ledger_hash.equal then `Already_existed
-    else (
-      set t Diff ~key:ledger_hash ~data:diff ;
-      set_index t ~index:(ledger_hash :: index) ;
-      `Added )
-
-  let get_diff t ~ledger_hash = get t Diff ~key:ledger_hash
-end
+let constraint_constants = Genesis_constants.Constraint_constants.compiled
 
 type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
 
@@ -272,63 +207,77 @@ let post_diff t ~ledger_openings ~diff =
   in
   Ok signature
 
-(** Find missing keys and fetch corresponding diffes *)
-let sync ~logger ~node_location t =
+let sync t ~node_location ~ledger_hash =
+  let logger = t.logger in
   let open Async in
-  let%bind.Deferred.Result remote_keys =
-    Client.Rpc.get_all_keys ~logger ~node_location ()
-    |> Deferred.map
-         ~f:(Result.map ~f:(List.dedup_and_sort ~compare:Ledger_hash.compare))
+  let%bind.Deferred.Result diffs =
+    Client.Rpc.get_diffs_chain ~logger ~node_location ~source:`Genesis
+      ~target:ledger_hash
   in
-  let my_keys = Db.get_index t.db in
-  let missing_keys =
-    let set1 = Set.of_list (module Ledger_hash) remote_keys in
-    let set2 = Set.of_list (module Ledger_hash) my_keys in
-    Set.diff set1 set2 |> Set.to_list
+  let diffs =
+    Client.attach_openings
+      ~diffs:(List.map diffs ~f:Diff.drop_time)
+      ~depth:constraint_constants.ledger_depth
   in
-  let%bind () =
-    Deferred.List.iter ~how:`Parallel missing_keys ~f:(fun ledger_hash ->
-        let%bind diff =
-          match%bind
-            Client.Rpc.get_diff ~logger ~node_location ~ledger_hash
-          with
-          | Ok (Some diff) ->
-              return diff
-          | Ok None ->
-              failwithf "Syncing node claimed to have diff %s but it doesn't"
-                (Ledger_hash.to_decimal_string ledger_hash)
-                ()
-          | Error err ->
-              failwithf "Failed syncing the diff %s, error: %s"
-                (Ledger_hash.to_decimal_string ledger_hash)
-                (Error.to_string_hum err) ()
-        in
-        match Db.add_diff t.db ~ledger_hash ~diff with
-        | `Added ->
-            return
-            @@ [%log info] "Diff with target ledger hash $hash added"
-                 ~metadata:
-                   [ ( "hash"
-                     , `String (Ledger_hash.to_decimal_string ledger_hash) )
-                   ]
-        | `Already_existed ->
-            failwithf
-              "Diff with target ledger hash %s already existed during syncing"
-              (Ledger_hash.to_decimal_string ledger_hash)
-              () )
-  in
-  return (Ok ())
+  List.map diffs ~f:(fun (diff, ledger_openings) ->
+      match post_diff t ~diff ~ledger_openings with
+      | Ok _signature ->
+          Ok ()
+      | Error e ->
+          let logger = t.logger in
+          [%log warn] "Error posting diff: $error"
+            ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+          Error e )
+  |> Result.all_unit |> return
 
 let get_signature t ~ledger_hash =
   let%bind.Option _diff = Db.get_diff t.db ~ledger_hash in
   let message = Random_oracle.Input.Chunked.field_elements [| ledger_hash |] in
   Some (Schnorr.Chunked.sign t.signer.private_key message)
 
+let get_ledger_hashes_chain t
+    ({ source = source_opt; target } : Rpc.Get_ledger_hashes_chain.V1.Query.t) =
+  let source =
+    match source_opt with
+    | `Genesis ->
+        Diff.empty_ledger_hash ~depth:constraint_constants.ledger_depth
+    | `Specific source ->
+        source
+  in
+  let rec go current =
+    if Ledger_hash.equal current source then []
+    else
+      let source =
+        Db.get_diff ~ledger_hash:current t.db
+        |> Option.value_exn ~here:[%here]
+             ~message:"Get_ledger_hashes_chain: diff not found"
+        |> Diff.Stable.V2.source_ledger_hash
+      in
+      current :: go source
+  in
+  let chain = List.rev (go target) in
+  match (source_opt, chain) with
+  | _, [] ->
+      failwithf
+        "Get_ledger_hashes_chain: no diffs found for source ledger hash %s and \
+         target ledger hash %s"
+        (Ledger_hash.to_decimal_string source)
+        (Ledger_hash.to_decimal_string target)
+        ()
+  | `Specific wanted_source, first_source :: _
+    when not (Ledger_hash.equal wanted_source first_source) ->
+      failwithf
+        "Get_ledger_hashes_chain: source ledger hash %s is not in the chain"
+        (Ledger_hash.to_decimal_string source)
+        ()
+  | _ ->
+      chain
+
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
-      (* Post_diff *)
-      [ Async.Rpc.Rpc.implement Rpc.Post_diff.V1.t
+      [ (* Post_diff *)
+        Async.Rpc.Rpc.implement Rpc.Post_diff.V1.t
           (fun () { ledger_openings; diff } ->
             match post_diff t ~ledger_openings ~diff with
             | Ok signature ->
@@ -338,18 +287,18 @@ let implementations t =
                 [%log warn] "Error posting diff: $error"
                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
-        (* Get_diff *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff.V1.t (fun () query ->
+      ; (* Get_diff *)
+        Async.Rpc.Rpc.implement Rpc.Get_diff.V1.t (fun () query ->
             let v2_diff = Db.get_diff t.db ~ledger_hash:query in
             let v1_diff = Option.map v2_diff ~f:Diff.drop_time in
             Async.return @@ v1_diff )
       ; Async.Rpc.Rpc.implement Rpc.Get_diff.V2.t (fun () query ->
             Async.return @@ Db.get_diff t.db ~ledger_hash:query )
-        (* Get_all_keys *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_all_keys.V1.t (fun () () ->
+      ; (* Get_all_keys *)
+        Async.Rpc.Rpc.implement Rpc.Get_all_keys.V1.t (fun () () ->
             Async.return @@ Db.get_index t.db )
-        (* Get_diff_source *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff_source.V1.t (fun () query ->
+      ; (* Get_diff_source *)
+        Async.Rpc.Rpc.implement Rpc.Get_diff_source.V1.t (fun () query ->
             Async.return @@ Diff.Stable.Latest.source_ledger_hash
             @@ Option.value_exn
                  ~error:
@@ -359,19 +308,31 @@ let implementations t =
                          hash %s"
                         (Ledger_hash.to_decimal_string query) )
             @@ Db.get_diff t.db ~ledger_hash:query )
-        (* Get_signed_public_key *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.V1.t (fun () () ->
+      ; (* Get_signed_public_key *)
+        Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.V1.t (fun () () ->
             Async.return @@ Public_key.compress @@ t.signer.public_key )
-        (* Get_signature *)
-      ; Async.Rpc.Rpc.implement Rpc.Get_signature.V1.t (fun () query ->
+      ; (* Get_signature *)
+        Async.Rpc.Rpc.implement Rpc.Get_signature.V1.t (fun () query ->
             Async.return @@ get_signature t ~ledger_hash:query )
+      ; (* Get_ledger_hashes_chain *)
+        Async.Rpc.Rpc.implement Rpc.Get_ledger_hashes_chain.V1.t
+          (fun () query -> Async.return @@ get_ledger_hashes_chain t query)
+      ; (* Get_diffs_chain *)
+        Async.Rpc.Rpc.implement Rpc.Get_diffs_chain.V1.t
+          (fun () { source; target } ->
+            let chain = get_ledger_hashes_chain t { source; target } in
+            Async.return
+            @@ List.map chain ~f:(fun ledger_hash ->
+                   Db.get_diff ~ledger_hash t.db
+                   |> Option.value_exn ~here:[%here] ~message:"Diff not found" ) )
       ]
 
-let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
+let create_server ~sync_arg ~port ~logger ~db_dir ~signer_sk ~no_migrations () =
   let open Async in
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
   in
+  let%bind db_existed = Sys.file_exists_exn db_dir in
   let t =
     { db = Db.create db_dir
     ; signer =
@@ -380,17 +341,21 @@ let create_server ~nodes_to_sync ~port ~logger ~db_dir ~signer_sk () =
     }
   in
 
+  (* Set the migration to the latest migration if the database didn't exist *)
+  if not db_existed then
+    Db.set_migration t.db ~migration:Migrations.latest_migration ;
+
+  if not no_migrations then Migrations.run_migrations ~logger t.db ;
+
   let%bind () =
-    Deferred.List.iter ~how:`Sequential nodes_to_sync ~f:(fun n ->
-        match%bind sync ~logger ~node_location:n t with
+    match sync_arg with
+    | None ->
+        return ()
+    | Some (node_location, ledger_hash) -> (
+        match%bind sync t ~node_location ~ledger_hash with
         | Ok () ->
             return ()
         | Error e ->
-            [%log error] "Exception while syncing the node $node: $error"
-              ~metadata:
-                [ ("error", `String (Error.to_string_hum e))
-                ; ("node", `String n.name)
-                ] ;
             failwith (Error.to_string_hum e) )
   in
 

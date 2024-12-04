@@ -787,19 +787,13 @@ module Sequencer = struct
     printf "Init root: %s\n%!" Ledger_hash.(to_decimal_string (get_root t)) ;
 
     (* apply diffs from DA layer *)
-    let%bind ledger_hashes_chain =
-      Da_layer.Client.get_ledger_hashes_chain ~logger ~config:da_config
-        ~depth:constraint_constants.ledger_depth
-        ~target_ledger_hash:committed_ledger_hash
+    let%bind diffs =
+      Da_layer.Client.get_diffs_chain ~logger ~config:da_config
+        ~source_ledger_hash:`Genesis ~target_ledger_hash:committed_ledger_hash
       |> Deferred.map ~f:Or_error.ok_exn
     in
     let%bind () =
-      Deferred.List.iter ~how:`Sequential ledger_hashes_chain
-        ~f:(fun ledger_hash ->
-          let%bind diff : Da_layer.Diff.t Deferred.t =
-            Da_layer.Client.get_diff ~logger ~config:da_config ~ledger_hash
-            >>| Or_error.ok_exn
-          in
+      Deferred.List.iter ~how:`Sequential diffs ~f:(fun diff ->
           assert (
             Ledger_hash.equal
               (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
@@ -1122,6 +1116,7 @@ let%test_module "Sequencer tests" =
       }
 
     let%test_unit "apply commands and commit" =
+      print_endline "Started test 'apply commands and commit'" ;
       Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ())
         ~f:(fun { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer } ->
           let batch1, batch2 = List.split_n specs 3 in
@@ -1345,6 +1340,7 @@ let%test_module "Sequencer tests" =
                    final_ledger_hash ) )
 
     let%test_unit "dummy signature should fail" =
+      print_endline "Started test 'dummy signature should fail'" ;
       Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ())
         ~f:(fun { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer } ->
           let dummy_signature_command : Zkapp_command.t =
@@ -1381,6 +1377,7 @@ let%test_module "Sequencer tests" =
               Error.raise unexpected_error )
 
     let%test_unit "deposits" =
+      print_endline "Started test 'deposits'" ;
       Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~delay_deposit:2 ())
         ~f:(fun { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer } ->
           (* Create l1 accounts *)

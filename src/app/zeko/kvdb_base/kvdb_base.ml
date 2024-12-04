@@ -14,12 +14,16 @@ end) =
 struct
   include Mina_ledger.Ledger.Kvdb
 
+  let set_raw = set
+
   let set t pair_type ~key ~data =
-    set t
+    set_raw t
       ~key:(Key_value.serialize_key pair_type key)
       ~data:(Key_value.serialize_value pair_type data)
 
+  let get_raw = get
+
   let get t pair_type ~key =
-    get t ~key:(Key_value.serialize_key pair_type key)
+    get_raw t ~key:(Key_value.serialize_key pair_type key)
     |> Option.map ~f:(Key_value.deserialize_value pair_type)
 end

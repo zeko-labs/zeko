@@ -66,6 +66,8 @@ module Get_diff_source = struct
   end
 end
 
+(* val get_staged_ledger_aux_and_pending_coinbases_at_hash : Ledger_hash.t -> Staged_ledger.Staged_ledger_aux_and_pending_coinbases.t option *)
+
 (* val get_signer_public_key : unit -> Public_key.Compressed.t *)
 module Get_signer_public_key = struct
   module V1 = struct
@@ -86,5 +88,47 @@ module Get_signature = struct
     let t : (Ledger_hash.t, Signature.t option) Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Get_signature" ~version:1
         ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
+  end
+end
+
+(* val get_ledger_hashes_chain : source:Ledger_hash.t option -> target:Ledger_hash.t -> Ledger_hash.t list *)
+module Get_ledger_hashes_chain = struct
+  module V1 = struct
+    module Query = struct
+      type t =
+        { source : [ `Genesis | `Specific of Ledger_hash.Stable.V1.t ]
+        ; target : Ledger_hash.Stable.V1.t
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    module Response = struct
+      type t = Ledger_hash.Stable.V1.t list [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Query.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_ledger_hashes_chain" ~version:1
+        ~bin_query:Query.bin_t ~bin_response:Response.bin_t
+  end
+end
+
+(* val get_diffs_chain : source:Ledger_hash.t option -> target:Ledger_hash.t -> Diff.t *)
+module Get_diffs_chain = struct
+  module V1 = struct
+    module Query = struct
+      type t =
+        { source : [ `Genesis | `Specific of Ledger_hash.Stable.V1.t ]
+        ; target : Ledger_hash.Stable.V1.t
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    module Response = struct
+      type t = Diff.Stable.V2.t list [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Query.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_diffs_chain" ~version:1 ~bin_query:Query.bin_t
+        ~bin_response:Response.bin_t
   end
 end
