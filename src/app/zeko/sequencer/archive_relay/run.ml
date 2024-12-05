@@ -78,76 +78,64 @@ end
 
 let sync_archive ~(state : State.t) ~hash =
   let logger = state.logger in
-  let%bind.Deferred.Result lazy_chunks =
-    Da_layer.Client.get_lazy_diffs_chunks ~logger ~config:state.da_config
-      ~depth:constraint_constants.ledger_depth
-      ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root state.ledger_cache))
-      ~target_ledger_hash:hash ()
-  in
   let ledger = Ledger.of_database state.ledger_cache in
   let protocol_state = ref compile_time_genesis_state in
-  Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
-      let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in
-      Deferred.List.iter ~how:`Sequential diffs ~f:(fun diff ->
-          match
-            Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
-          with
-          | None ->
-              (* Apply accounts diff *)
-              let changed_accounts =
-                Da_layer.Diff.Stable.Latest.changed_accounts diff
-              in
-              List.iter changed_accounts ~f:(fun (index, account) ->
-                  Ledger.set_at_index_exn ledger index account ) ;
-              Ledger.commit ledger ;
-              return ()
-          | Some (command, _) -> (
-              let txn_applied =
-                Or_error.ok_exn
-                @@ Result.( >>= )
-                     (Ledger.apply_transaction_first_pass ~constraint_constants
-                        ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-                        ~txn_state_view:
-                          Mina_state.Protocol_state.(
-                            Body.view @@ body compile_time_genesis_state)
-                        ledger (Command command) )
-                     (Ledger.apply_transaction_second_pass ledger)
-              in
-              Ledger.commit ledger ;
-              let new_protocol_state, diff =
-                Archive_lib.Diff.Builder.zeko_transaction_added
-                  ~constraint_constants
-                  ~accounts_created:
-                    (Mina_transaction_logic.Transaction_applied.new_accounts
-                       txn_applied )
-                  ~new_state_hash:(Ledger.merkle_root ledger)
-                  ~protocol_state:!protocol_state ~ledger
-                  ~txn:
-                    (Mina_transaction_logic.Transaction_applied
-                     .transaction_with_status txn_applied )
-                  ~dummy_fee_payer:Zkapps_rollup.inner_public_key
-                  ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
-              in
-              protocol_state := new_protocol_state ;
-              if State.has_been_relayed state (Ledger.merkle_root ledger) then
-                return ()
-              else
-                (* FIXME: Don't use Mina_compile_config.For_tests.t *)
-                let compile_config = Mina_compile_config.For_unit_tests.t in
-                match%bind
-                  Archive_client.dispatch ~compile_config ~logger
-                    state.archive_uri (Archive_lib.Diff.Transition_frontier diff)
-                with
-                | Ok () ->
-                    State.add_hash state (Ledger.merkle_root ledger) ;
-                    return
-                    @@ [%log info] "Synced diff to archive with hash: %s\n%!"
-                         ( Ledger_hash.to_decimal_string
-                         @@ Ledger.merkle_root ledger )
-                | Error e ->
-                    raise (Error.to_exn e) ) )
-      >>| Result.return )
-  >>| Result.all_unit
+  Da_layer.Client.map_diffs ~logger ~config:state.da_config
+    ~depth:constraint_constants.ledger_depth
+    ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root state.ledger_cache))
+    ~target_ledger_hash:hash
+    ~f:(fun progress diff ->
+      Zeko_util.progress_bar progress ;
+      match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
+      | None ->
+          (* Apply accounts diff *)
+          let changed_accounts =
+            Da_layer.Diff.Stable.Latest.changed_accounts diff
+          in
+          List.iter changed_accounts ~f:(fun (index, account) ->
+              Ledger.set_at_index_exn ledger index account ) ;
+          Ledger.commit ledger ;
+          return ()
+      | Some (command, _) -> (
+          let txn_applied =
+            Or_error.ok_exn
+            @@ Result.( >>= )
+                 (Ledger.apply_transaction_first_pass ~constraint_constants
+                    ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
+                    ~txn_state_view:
+                      Mina_state.Protocol_state.(
+                        Body.view @@ body compile_time_genesis_state)
+                    ledger (Command command) )
+                 (Ledger.apply_transaction_second_pass ledger)
+          in
+          Ledger.commit ledger ;
+          let new_protocol_state, diff =
+            Archive_lib.Diff.Builder.zeko_transaction_added
+              ~constraint_constants
+              ~accounts_created:
+                (Ledger.Transaction_applied.new_accounts txn_applied)
+              ~new_state_hash:(Ledger.merkle_root ledger)
+              ~protocol_state:!protocol_state ~ledger
+              ~txn:(Ledger.Transaction_applied.transaction txn_applied)
+              ~dummy_fee_payer:Zkapps_rollup.inner_public_key
+              ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
+          in
+          protocol_state := new_protocol_state ;
+          if State.has_been_relayed state (Ledger.merkle_root ledger) then
+            return ()
+          else
+            match%bind
+              Archive_client.dispatch ~logger state.archive_uri
+                (Archive_lib.Diff.Transition_frontier diff)
+            with
+            | Ok () ->
+                State.add_hash state (Ledger.merkle_root ledger) ;
+                return
+                @@ [%log info] "Synced diff to archive with hash: %s\n%!"
+                     (Ledger_hash.to_decimal_string @@ Ledger.merkle_root ledger)
+            | Error e ->
+                raise (Error.to_exn e) ) )
+  >>| Result.map ~f:ignore
 
 let fetch_current_ledger_hash ~zeko_uri () =
   let query =

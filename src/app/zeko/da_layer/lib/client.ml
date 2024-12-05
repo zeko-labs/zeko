@@ -256,6 +256,19 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
                  ~source_ledger_hash:(`Specific source)
                  ~target_ledger_hash:target () ) ) )
 
+let map_diffs ~logger ~depth ~config ~source_ledger_hash ~target_ledger_hash ~f
+    =
+  let%bind.Deferred.Result lazy_chunks =
+    get_lazy_diffs_chunks ~logger ~depth ~config ~source_ledger_hash
+      ~target_ledger_hash ()
+  in
+  let l = List.length lazy_chunks in
+  Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
+      let progress = Float.of_int i /. Float.of_int l in
+      let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in
+      Deferred.List.map ~how:`Sequential diffs ~f:(f progress) >>| Result.return )
+  >>| Result.all >>| Result.map ~f:List.join
+
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
 let get_diff ~logger ~config ~ledger_hash =
   try_all_nodes ~config ~f:(fun ~node_location () ->
@@ -291,19 +304,21 @@ let distribute_genesis_diff ~logger ~config ~ledger =
   in
   distribute_diff ~logger ~config ~ledger_openings ~diff ~quorum:0
 
+let get_openings ~diff ~ledger =
+  let changed_accounts =
+    Diff.changed_accounts diff
+    |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+  in
+  let account_ids =
+    List.map changed_accounts ~f:snd |> List.map ~f:Account.identifier
+  in
+  let openings = Sparse_ledger.of_ledger_subset_exn ledger account_ids in
+  List.iter changed_accounts ~f:(fun (index, account) ->
+      Ledger.set_at_index_exn ledger index account ) ;
+  openings
+
 let attach_openings ~diffs ~ledger =
-  List.map diffs ~f:(fun diff ->
-      let changed_accounts =
-        Diff.changed_accounts diff
-        |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-      in
-      let account_ids =
-        List.map changed_accounts ~f:snd |> List.map ~f:Account.identifier
-      in
-      let openings = Sparse_ledger.of_ledger_subset_exn ledger account_ids in
-      List.iter changed_accounts ~f:(fun (index, account) ->
-          Ledger.set_at_index_exn ledger index account ) ;
-      (diff, openings) )
+  List.map diffs ~f:(fun diff -> (diff, get_openings ~diff ~ledger))
 
 let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
   let diffs_with_openings =

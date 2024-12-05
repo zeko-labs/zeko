@@ -794,57 +794,45 @@ module Sequencer = struct
     printf "Init root: %s\n%!" Ledger_hash.(to_decimal_string (get_root t)) ;
 
     (* apply diffs from DA layer *)
-    let%bind lazy_chunks =
-      Da_layer.Client.get_lazy_diffs_chunks ~logger ~config:da_config
-        ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
-        ~target_ledger_hash:committed_ledger_hash ()
-      |> Deferred.map ~f:Or_error.ok_exn
-    in
-    let l = List.length lazy_chunks in
     let%bind () =
-      Deferred.List.iteri ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
-          Zeko_util.progress_bar (Float.of_int i /. Float.of_int l) ;
-          let%bind diffs =
-            Lazy.force lazy_chunk |> Deferred.map ~f:Or_error.ok_exn
-          in
-          return
-          @@ List.iter diffs ~f:(fun diff ->
-                 assert (
-                   Ledger_hash.equal
-                     (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
-                     (get_root t) ) ;
-                 match
-                   Da_layer.Diff.Stable.Latest.command_with_action_step_flags
-                     diff
-                 with
-                 | None ->
-                     (* Apply accounts diff *)
-                     let mask = L.of_database t.db in
-                     let changed_accounts =
-                       Da_layer.Diff.Stable.Latest.changed_accounts diff
-                     in
-                     printf "Setting %d accounts\n%!"
-                       (List.length changed_accounts) ;
-                     List.iter changed_accounts ~f:(fun (index, account) ->
-                         L.set_at_index_exn mask index account ) ;
-                     L.Mask.Attached.commit mask
-                 | Some (command, _) ->
-                     (* Apply command *)
-                     let mask = L.of_database t.db in
-                     let global_slot =
-                       Mina_numbers.Global_slot_since_genesis.zero
-                     in
-                     let state_body =
-                       Mina_state.Protocol_state.body compile_time_genesis_state
-                     in
-                     let _, _, _, _, analytics_state =
-                       apply_user_command_without_check mask t.archive command
-                         ~global_slot ~state_body
-                         ~analytics_state:t.analytics_state
-                       |> Or_error.ok_exn
-                     in
-                     t.analytics_state <- analytics_state ;
-                     L.Mask.Attached.commit mask ) )
+      Da_layer.Client.map_diffs ~logger ~config:da_config
+        ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
+        ~target_ledger_hash:committed_ledger_hash ~f:(fun progress diff ->
+          Zeko_util.progress_bar progress ;
+          assert (
+            Ledger_hash.equal
+              (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
+              (get_root t) ) ;
+          match
+            Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
+          with
+          | None ->
+              (* Apply accounts diff *)
+              let mask = L.of_database t.db in
+              let changed_accounts =
+                Da_layer.Diff.Stable.Latest.changed_accounts diff
+              in
+              printf "Setting %d accounts\n%!" (List.length changed_accounts) ;
+              List.iter changed_accounts ~f:(fun (index, account) ->
+                  L.set_at_index_exn mask index account ) ;
+              L.Mask.Attached.commit mask ;
+              return ()
+          | Some (command, _) ->
+              (* Apply command *)
+              let mask = L.of_database t.db in
+              let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+              let state_body =
+                Mina_state.Protocol_state.body compile_time_genesis_state
+              in
+              let _, _, _, _, analytics_state =
+                apply_user_command_without_check mask t.archive command
+                  ~global_slot ~state_body ~analytics_state:t.analytics_state
+                |> Or_error.ok_exn
+              in
+              t.analytics_state <- analytics_state ;
+              L.Mask.Attached.commit mask ;
+              return () )
+      >>| Or_error.ok_exn >>| ignore
     in
 
     let current_root = get_root t in
