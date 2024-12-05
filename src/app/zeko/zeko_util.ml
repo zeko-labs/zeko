@@ -330,3 +330,11 @@ let compile_sync ?self ?cache ?storables ?proof_cache ?disk_keys
         Pickles.Side_loaded.Verification_key.of_compiled tag )
   in
   result
+
+let progress_bar ?(width = 30) progress =
+  let filled_length = int_of_float (float_of_int width *. progress) in
+  let bar =
+    String.make filled_length '#' ^ String.make (width - filled_length) '-'
+  in
+  Printf.printf "\r[%s] %.0f%%%!" bar (progress *. 100.0) ;
+  if Float.(progress >= 1.0) then Printf.printf "\n%!"

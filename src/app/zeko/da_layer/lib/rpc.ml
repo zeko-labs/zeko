@@ -98,6 +98,7 @@ module Get_ledger_hashes_chain = struct
       type t =
         { source : [ `Genesis | `Specific of Ledger_hash.Stable.V1.t ]
         ; target : Ledger_hash.Stable.V1.t
+        ; max_length : int option
         }
       [@@deriving bin_io_unversioned]
     end
@@ -119,6 +120,7 @@ module Get_diffs_chain = struct
       type t =
         { source : [ `Genesis | `Specific of Ledger_hash.Stable.V1.t ]
         ; target : Ledger_hash.Stable.V1.t
+        ; max_length : int option
         }
       [@@deriving bin_io_unversioned]
     end
