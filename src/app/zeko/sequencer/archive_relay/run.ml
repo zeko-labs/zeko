@@ -78,14 +78,17 @@ end
 
 let sync_archive ~(state : State.t) ~hash =
   let logger = state.logger in
-  let%bind.Deferred.Result diffs =
-    Da_layer.Client.get_diffs_chain ~logger ~config:state.da_config
+  let%bind.Deferred.Result lazy_chunks =
+    Da_layer.Client.get_lazy_diffs_chunks ~logger ~config:state.da_config
+      ~depth:constraint_constants.ledger_depth
       ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root state.ledger_cache))
-      ~target_ledger_hash:hash
+      ~target_ledger_hash:hash ()
   in
-  Ledger.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
-      let protocol_state = ref compile_time_genesis_state in
-      Deferred.List.iter diffs ~f:(fun diff ->
+  let ledger = Ledger.of_database state.ledger_cache in
+  let protocol_state = ref compile_time_genesis_state in
+  Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
+      let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in
+      Deferred.List.iter ~how:`Sequential diffs ~f:(fun diff ->
           match
             Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
           with
@@ -142,8 +145,9 @@ let sync_archive ~(state : State.t) ~hash =
                          ( Ledger_hash.to_decimal_string
                          @@ Ledger.merkle_root ledger )
                 | Error e ->
-                    raise (Error.to_exn e) ) ) )
-  |> Deferred.map ~f:Result.return
+                    raise (Error.to_exn e) ) )
+      >>| Result.return )
+  >>| Result.all_unit
 
 let fetch_current_ledger_hash ~zeko_uri () =
   let query =

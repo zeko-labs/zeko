@@ -210,25 +210,33 @@ let post_diff t ~ledger_openings ~diff =
 let sync t ~node_location ~ledger_hash =
   let logger = t.logger in
   let open Async in
-  let%bind.Deferred.Result diffs =
-    Client.Rpc.get_diffs_chain ~logger ~node_location ~source:`Genesis
-      ~target:ledger_hash
-  in
-  let diffs =
-    Client.attach_openings
-      ~diffs:(List.map diffs ~f:Diff.drop_time)
+  let%bind.Deferred.Result lazy_chunks =
+    Client.get_lazy_diffs_chunks ~logger
       ~depth:constraint_constants.ledger_depth
+      ~config:(Client.Config.of_node_locations [ node_location ])
+      ~source_ledger_hash:`Genesis ~target_ledger_hash:ledger_hash ()
   in
-  List.map diffs ~f:(fun (diff, ledger_openings) ->
-      match post_diff t ~diff ~ledger_openings with
-      | Ok _signature ->
-          Ok ()
-      | Error e ->
-          let logger = t.logger in
-          [%log warn] "Error posting diff: $error"
-            ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
-          Error e )
-  |> Result.all_unit |> return
+  let ledger =
+    Ledger.create_ephemeral ~depth:constraint_constants.ledger_depth ()
+  in
+  let l = List.length lazy_chunks in
+  Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
+      Zeko_util.progress_bar (Float.of_int i /. Float.of_int l) ;
+      let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in
+      let diffs =
+        Client.attach_openings ~diffs:(List.map diffs ~f:Diff.drop_time) ~ledger
+      in
+      List.map diffs ~f:(fun (diff, ledger_openings) ->
+          match post_diff t ~diff ~ledger_openings with
+          | Ok _signature ->
+              Ok ()
+          | Error e ->
+              let logger = t.logger in
+              [%log warn] "Error posting diff: $error"
+                ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+              Error e )
+      |> Result.all_unit |> return )
+  >>| Result.all_unit
 
 let get_signature t ~ledger_hash =
   let%bind.Option _diff = Db.get_diff t.db ~ledger_hash in
@@ -236,7 +244,11 @@ let get_signature t ~ledger_hash =
   Some (Schnorr.Chunked.sign t.signer.private_key message)
 
 let get_ledger_hashes_chain t
-    ({ source = source_opt; target } : Rpc.Get_ledger_hashes_chain.V1.Query.t) =
+    ({ source = source_opt; target; max_length = max_length_opt } :
+      Rpc.Get_ledger_hashes_chain.V1.Query.t ) =
+  let max_length =
+    match max_length_opt with Some n -> n | None -> Int.max_value
+  in
   let source =
     match source_opt with
     | `Genesis ->
@@ -244,8 +256,8 @@ let get_ledger_hashes_chain t
     | `Specific source ->
         source
   in
-  let rec go current =
-    if Ledger_hash.equal current source then []
+  let rec go n current =
+    if Ledger_hash.equal current source || n <= 0 then []
     else
       let source =
         Db.get_diff ~ledger_hash:current t.db
@@ -253,25 +265,9 @@ let get_ledger_hashes_chain t
              ~message:"Get_ledger_hashes_chain: diff not found"
         |> Diff.Stable.V2.source_ledger_hash
       in
-      current :: go source
+      current :: go (n - 1) source
   in
-  let chain = List.rev (go target) in
-  match (source_opt, chain) with
-  | _, [] ->
-      failwithf
-        "Get_ledger_hashes_chain: no diffs found for source ledger hash %s and \
-         target ledger hash %s"
-        (Ledger_hash.to_decimal_string source)
-        (Ledger_hash.to_decimal_string target)
-        ()
-  | `Specific wanted_source, first_source :: _
-    when not (Ledger_hash.equal wanted_source first_source) ->
-      failwithf
-        "Get_ledger_hashes_chain: source ledger hash %s is not in the chain"
-        (Ledger_hash.to_decimal_string source)
-        ()
-  | _ ->
-      chain
+  List.rev (go max_length target)
 
 let implementations t =
   Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
@@ -319,8 +315,10 @@ let implementations t =
           (fun () query -> Async.return @@ get_ledger_hashes_chain t query)
       ; (* Get_diffs_chain *)
         Async.Rpc.Rpc.implement Rpc.Get_diffs_chain.V1.t
-          (fun () { source; target } ->
-            let chain = get_ledger_hashes_chain t { source; target } in
+          (fun () { source; target; max_length } ->
+            let chain =
+              get_ledger_hashes_chain t { source; target; max_length }
+            in
             Async.return
             @@ List.map chain ~f:(fun ledger_hash ->
                    Db.get_diff ~ledger_hash t.db
