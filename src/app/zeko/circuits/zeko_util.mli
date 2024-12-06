@@ -2,7 +2,6 @@
 
 open Mina_base
 open Snark_params.Tick
-
 module Proof = Compile_simple.Proof
 
 module Calls : sig
@@ -37,10 +36,7 @@ val var_to_actions :
   ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t
 
 val var_to_hash :
-     init:string
-  -> ('var, 'value) Typ.t
-  -> 'var
-  -> Field.Var.t Checked.t
+  init:string -> ('var, 'value) Typ.t -> 'var -> Field.Var.t Checked.t
 
 module F : sig
   type t = Pasta_bindings.Fp.t
