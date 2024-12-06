@@ -320,46 +320,12 @@ let get_openings ~diff ~ledger =
 let attach_openings ~diffs ~ledger =
   List.map diffs ~f:(fun diff -> (diff, get_openings ~diff ~ledger))
 
-let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
-  let diffs_with_openings =
-    lazy
-      (* TODO: don't fetch all the diffs from genesis, using binary search determine which diffs is the node missing *)
-      (let%bind.Deferred.Result diffs =
-         get_diffs_chain ~logger ~config ~source_ledger_hash:`Genesis
-           ~target_ledger_hash ()
-       in
-       return
-         (Ok
-            (attach_openings
-               ~diffs:(List.map diffs ~f:Diff.drop_time)
-               ~ledger:(Ledger.create_ephemeral ~depth ()) ) ) )
-  in
-  Deferred.List.map config.nodes ~f:(fun node ->
+let check_synced_nodes ~logger ~(config : Config.t) ~target_ledger_hash =
+  Deferred.List.iter config.nodes ~f:(fun node ->
       match%bind
         Rpc.get_diff ~logger ~node_location:node ~ledger_hash:target_ledger_hash
       with
       | Ok (Some _) ->
-          printf "Node %s is already synced\n%!"
-            (Host_and_port.to_string node.value) ;
-          return (Ok ())
-      | Ok None | Error _ -> (
-          printf "Syncing node %s\n%!" (Host_and_port.to_string node.value) ;
-          let%bind.Deferred.Result diffs_with_openings =
-            Lazy.force diffs_with_openings
-          in
-          match%bind
-            Deferred.List.map diffs_with_openings ~f:(fun (diff, openings) ->
-                Rpc.post_diff ~logger ~node_location:node
-                  ~ledger_openings:openings ~diff
-                >>| Result.ignore_m )
-            >>| Result.all_unit
-          with
-          | Ok () ->
-              return (Ok ())
-          | Error e ->
-              printf "Error syncing node %s: %s\n%!"
-                (Host_and_port.to_string node.value)
-                (Error.to_string_hum e) ;
-              Config.throw_out_node config ~node ;
-              return (Ok ()) ) )
-  >>| Result.all_unit
+          return ( (* synced node *) )
+      | Ok None | Error _ ->
+          return (Config.throw_out_node config ~node) )

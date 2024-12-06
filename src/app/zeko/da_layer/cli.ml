@@ -1,6 +1,8 @@
 open Core
 open Async
 open Signature_lib
+open Mina_base
+open Mina_ledger
 
 let run_node =
   ( "run-node"
@@ -54,4 +56,59 @@ let run_node =
            ~metadata:[ ("port", `Int port) ] ;
          Async.never () ) )
 
-let () = Command.group ~summary:"DA layer CLI" [ run_node ] |> Command_unix.run
+let sync_node =
+  ( "sync-node"
+  , Command.async ~summary:"Sync node"
+      (let%map_open.Command synced_node =
+         flag "--synced-node" (required string)
+           ~doc:"string Node that is providing data"
+       and unsynced_node =
+         flag "--unsynced-node" (required string)
+           ~doc:"string Node that needs to be synced"
+       and hash_to_sync =
+         flag "--hash-to-sync" (required string)
+           ~doc:"string Hash to sync with in decimal string form"
+       in
+       fun () ->
+         let logger = Logger.create () in
+         [%log info] "Fetching intervals" ;
+         let ledger =
+           Ledger.create_ephemeral
+             ~depth:Da_layer.Node.constraint_constants.ledger_depth ()
+         in
+         let synced_node =
+           Cli_lib.Flag.Types.
+             { value = Host_and_port.of_string synced_node
+             ; name = sprintf "synced_node"
+             }
+         in
+         let unsynced_node =
+           Cli_lib.Flag.Types.
+             { value = Host_and_port.of_string unsynced_node
+             ; name = sprintf "unsynced_node"
+             }
+         in
+         Da_layer.Client.map_diffs ~logger
+           ~depth:Da_layer.Node.constraint_constants.ledger_depth
+           ~config:(Da_layer.Client.Config.of_node_locations [ synced_node ])
+           ~source_ledger_hash:`Genesis
+           ~target_ledger_hash:(Ledger_hash.of_decimal_string hash_to_sync)
+           ~f:(fun progress diff ->
+             Zeko_util.progress_bar progress ;
+             let diff = Da_layer.Diff.drop_time diff in
+             let ledger_openings = Da_layer.Client.get_openings ~diff ~ledger in
+             match%bind
+               Da_layer.Client.Rpc.post_diff ~logger
+                 ~node_location:unsynced_node ~diff ~ledger_openings
+             with
+             | Ok _signature ->
+                 return ()
+             | Error e ->
+                 [%log warn] "Error posting diff: $error"
+                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+                 Error.raise e )
+         >>| Or_error.ok_exn >>| ignore ) )
+
+let () =
+  Command.group ~summary:"DA layer CLI" [ run_node; sync_node ]
+  |> Command_unix.run

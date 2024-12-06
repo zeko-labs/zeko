@@ -911,15 +911,8 @@ module Sequencer = struct
         ~archive_uri:config.archive_uri
     in
     let%bind () =
-      match%bind
-        Da_layer.Client.sync_nodes ~logger ~config:da_config
-          ~depth:constraint_constants.ledger_depth
-          ~target_ledger_hash:(get_root t)
-      with
-      | Ok _ ->
-          return ()
-      | Error e ->
-          Error.raise e
+      Da_layer.Client.check_synced_nodes ~logger ~config:da_config
+        ~target_ledger_hash:(get_root t)
     in
     return t
 end
