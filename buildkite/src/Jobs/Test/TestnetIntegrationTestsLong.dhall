@@ -14,12 +14,21 @@ let Profiles = ../../Constants/Profiles.dhall
 
 let Dockers = ../../Constants/DockerVersions.dhall
 
+let Network = ../../Constants/Network.dhall
+
+let Artifacts = ../../Constants/Artifacts.dhall
+
 let dependsOn =
         Dockers.dependsOn
           Dockers.Type.Bullseye
+          (Some Network.Type.Berkeley)
           Profiles.Type.Standard
-          "daemon-berkeley"
-      # Dockers.dependsOn Dockers.Type.Bullseye Profiles.Type.Standard "archive"
+          Artifacts.Type.Daemon
+      # Dockers.dependsOn
+          Dockers.Type.Bullseye
+          (None Network.Type)
+          Profiles.Type.Standard
+          Artifacts.Type.Archive
 
 in  Pipeline.build
       Pipeline.Config::{
@@ -29,17 +38,16 @@ in  Pipeline.build
           , S.strictlyStart (S.contains "dockerfiles")
           , S.strictlyStart
               (S.contains "buildkite/src/Jobs/Test/TestnetIntegrationTest")
-          , S.strictlyStart
-              (S.contains "buildkite/src/Jobs/Command/TestExecutive")
-          , S.strictlyStart
-              (S.contains "automation/terraform/modules/o1-integration")
-          , S.strictlyStart
-              (S.contains "automation/terraform/modules/kubernetes/testnet")
+          , S.strictlyStart (S.contains "buildkite/src/Command/TestExecutive")
           ]
         , path = "Test"
         , name = "TestnetIntegrationTestsLong"
         , mode = PipelineMode.Type.Stable
-        , tags = [ PipelineTag.Type.Long, PipelineTag.Type.Test ]
+        , tags =
+          [ PipelineTag.Type.Long
+          , PipelineTag.Type.Test
+          , PipelineTag.Type.Stable
+          ]
         }
-      , steps = [ TestExecutive.executeCloud "hard-fork" dependsOn ]
+      , steps = [ TestExecutive.executeLocal "hard-fork" dependsOn ]
       }

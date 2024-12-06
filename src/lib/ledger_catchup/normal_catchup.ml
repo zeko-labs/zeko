@@ -1,5 +1,4 @@
 (* Only show stdout for failed inline tests. *)
-open Inline_test_quiet_logs
 open Core
 open Async
 open Cache_lib
@@ -55,6 +54,25 @@ end
     After building the breadcrumb path, [Ledger_catchup] will then send it to
     the [Processor] via writing them to catchup_breadcrumbs_writer. *)
 
+let validate_block ~genesis_state_hash (b, v) =
+  let open Mina_block.Validation in
+  let open Result.Let_syntax in
+  let h = (With_hash.map ~f:Mina_block.header b, v) in
+  validate_genesis_protocol_state ~genesis_state_hash h
+  >>= validate_protocol_versions >>= validate_delta_block_chain
+  >>| Fn.flip with_body (Mina_block.body @@ With_hash.data b)
+
+let validate_proofs_block ~verifier ~genesis_state_hash blocks =
+  let open Mina_block.Validation in
+  let open Deferred.Result.Let_syntax in
+  let f ((b, _), h) = with_body h (Mina_block.body @@ With_hash.data b) in
+  let hs =
+    List.map blocks ~f:(fun (b, v) ->
+        (With_hash.map ~f:Mina_block.header b, v) )
+  in
+  validate_proofs ~verifier ~genesis_state_hash hs
+  >>| List.zip_exn blocks >>| List.map ~f
+
 let verify_transition ~context:(module Context : CONTEXT) ~trust_system
     ~frontier ~unprocessed_transition_cache ~slot_tx_end ~slot_chain_end
     enveloped_transition =
@@ -68,16 +86,13 @@ let verify_transition ~context:(module Context : CONTEXT) ~trust_system
       transition_with_hash
       |> Mina_block.Validation.skip_time_received_validation
            `This_block_was_not_received_via_gossip
-      |> Mina_block.Validation.validate_genesis_protocol_state
-           ~genesis_state_hash
-      >>= Mina_block.Validation.validate_protocol_versions
-      >>= Mina_block.Validation.validate_delta_block_chain
+      |> validate_block ~genesis_state_hash
     in
     let enveloped_initially_validated_transition =
       Envelope.Incoming.map enveloped_transition
         ~f:(Fn.const initially_validated_transition)
     in
-    Transition_handler.Validator.validate_transition
+    Transition_handler.Validator.validate_transition_is_relevant
       ~context:(module Context)
       ~frontier ~unprocessed_transition_cache ~slot_tx_end ~slot_chain_end
       enveloped_initially_validated_transition
@@ -493,7 +508,7 @@ let verify_transitions_and_build_breadcrumbs ~context:(module Context : CONTEXT)
         |> State_hash.With_state_hashes.state_hash
       in
       match%bind
-        Mina_block.Validation.validate_proofs ~verifier ~genesis_state_hash
+        validate_proofs_block ~verifier ~genesis_state_hash
           (List.map transitions ~f:(fun t ->
                Mina_block.Validation.wrap (Envelope.Incoming.data t) ) )
       with
@@ -529,10 +544,10 @@ let verify_transitions_and_build_breadcrumbs ~context:(module Context : CONTEXT)
         ]
       "verification of proofs complete" ;
     let slot_tx_end =
-      Runtime_config.slot_tx_end_or_default precomputed_values.runtime_config
+      Runtime_config.slot_tx_end precomputed_values.runtime_config
     in
     let slot_chain_end =
-      Runtime_config.slot_chain_end_or_default precomputed_values.runtime_config
+      Runtime_config.slot_chain_end precomputed_values.runtime_config
     in
     fold_until (List.rev tvs) ~init:[]
       ~f:(fun acc transition ->
@@ -647,7 +662,7 @@ let run ~context:(module Context : CONTEXT) ~trust_system ~verifier ~network
     ~unprocessed_transition_cache : unit =
   let open Context in
   let hash_tree =
-    match Transition_frontier.catchup_tree frontier with
+    match Transition_frontier.catchup_state frontier with
     | Hash t ->
         t
     | Full _ ->
@@ -874,6 +889,20 @@ let%test_module "Ledger_catchup tests" =
 
     let logger = Logger.null ()
 
+    let () =
+      (* Disable log messages from best_tip_diff logger. *)
+      Logger.Consumer_registry.register ~commit_id:Mina_version.commit_id
+        ~id:Logger.Logger_id.best_tip_diff ~processor:(Logger.Processor.raw ())
+        ~transport:
+          (Logger.Transport.create
+             ( module struct
+               type t = unit
+
+               let transport () _ = ()
+             end )
+             () )
+        ()
+
     let precomputed_values = Lazy.force Precomputed_values.for_unit_tests
 
     let proof_level = precomputed_values.proof_level
@@ -888,9 +917,7 @@ let%test_module "Ledger_catchup tests" =
 
     let verifier =
       Async.Thread_safe.block_on_async_exn (fun () ->
-          Verifier.create ~logger ~proof_level ~constraint_constants
-            ~conf_dir:None
-            ~pids:(Child_processes.Termination.create_pid_table ())
+          Verifier.For_tests.default ~constraint_constants ~logger ~proof_level
             () )
 
     module Context = struct
@@ -949,6 +976,7 @@ let%test_module "Ledger_catchup tests" =
       in
       let unprocessed_transition_cache =
         Transition_handler.Unprocessed_transition_cache.create ~logger
+          ~cache_exceptions:true
       in
       run
         ~context:(module Context)

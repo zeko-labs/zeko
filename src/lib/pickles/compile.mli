@@ -181,14 +181,14 @@ type ('max_proofs_verified, 'branches, 'prev_varss) wrap_main_generic =
                    Opt.t
                  , ( Impls.Wrap.Impl.Field.t Composition_types.Scalar_challenge.t
                    , Impls.Wrap.Boolean.var )
-                   Pickles_types__Opt.t
+                   Plonkish_prelude.Opt.t
                  , Impls.Wrap.Boolean.var )
                  Composition_types.Wrap.Proof_state.Deferred_values.Plonk
                  .In_circuit
                  .t
                , Wrap_verifier.Challenge.t Kimchi_types.scalar_challenge
                , Wrap_verifier.Other_field.Packed.t
-                 Pickles_types__Shifted_value.Type1.t
+                 Plonkish_prelude.Shifted_value.Type1.t
                , Impls.Wrap.Field.t
                , Impls.Wrap.Field.t
                , Impls.Wrap.Field.t
@@ -218,7 +218,7 @@ type ('max_proofs_verified, 'branches, 'prev_varss) wrap_main_generic =
          , bool
          , 'max_proofs_verified
            Proof.Base.Messages_for_next_proof_over_same_field.Wrap.t
-         , (int64, Composition_types.Digest.Limbs.n) Pickles_types.Vector.vec
+         , Import.Types.Digest.Constant.t
          , ( 'b
            , ( Kimchi_pasta.Pallas_based_plonk.Proof.G.Affine.t
              , 'actual_proofs_verified )
@@ -247,9 +247,7 @@ type ('max_proofs_verified, 'branches, 'prev_varss) wrap_main_generic =
          , bool
          , 'max_proofs_verified
            Proof.Base.Messages_for_next_proof_over_same_field.Wrap.t
-         , ( Limb_vector.Constant.Hex64.t
-           , Composition_types.Digest.Limbs.n )
-           Pickles_types.Vector.vec
+         , Import.Types.Digest.Constant.t
          , ( 'b
            , ( Kimchi_pasta.Pallas_based_plonk.Proof.G.Affine.t
              , 'actual_proofs_verified )
@@ -314,7 +312,6 @@ val compile_with_wrap_main_override_promise :
   -> max_proofs_verified:(module Nat.Add.Intf with type n = 'max_proofs_verified)
   -> name:string
   -> ?constraint_constants:Snark_keys_header.Constraint_constants.t
-  -> ?commit:string
   -> choices:
        (   self:('var, 'value, 'max_proofs_verified, 'branches) Tag.t
         -> ( 'prev_varss
@@ -370,13 +367,13 @@ val wrap_main_dummy_override :
                Opt.t
              , ( Impls.Wrap.Impl.Field.t Composition_types.Scalar_challenge.t
                , Impls.Wrap.Boolean.var )
-               Pickles_types__Opt.t
+               Plonkish_prelude.Opt.t
              , Impls.Wrap.Boolean.var )
              Composition_types.Wrap.Proof_state.Deferred_values.Plonk.In_circuit
              .t
            , Wrap_verifier.Challenge.t Kimchi_types.scalar_challenge
            , Wrap_verifier.Other_field.Packed.t
-             Pickles_types__Shifted_value.Type1.t
+             Plonkish_prelude.Shifted_value.Type1.t
            , Impls.Wrap.Field.t
            , Impls.Wrap.Field.t
            , Impls.Wrap.Field.t
@@ -405,7 +402,7 @@ module Make_adversarial_test : functor
           , bool
           , 'max_proofs_verified
             Proof.Base.Messages_for_next_proof_over_same_field.Wrap.t
-          , (int64, Composition_types.Digest.Limbs.n) Pickles_types.Vector.vec
+          , Import.Types.Digest.Constant.t
           , ( 'b
             , ( Kimchi_pasta.Pallas_based_plonk.Proof.G.Affine.t
               , 'actual_proofs_verified )
@@ -434,9 +431,7 @@ module Make_adversarial_test : functor
           , bool
           , 'max_proofs_verified
             Proof.Base.Messages_for_next_proof_over_same_field.Wrap.t
-          , ( Limb_vector.Constant.Hex64.t
-            , Composition_types.Digest.Limbs.n )
-            Pickles_types.Vector.vec
+          , Import.Types.Digest.Constant.t
           , ( 'b
             , ( Kimchi_pasta.Pallas_based_plonk.Proof.G.Affine.t
               , 'actual_proofs_verified )

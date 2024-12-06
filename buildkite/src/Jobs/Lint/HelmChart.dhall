@@ -26,7 +26,11 @@ in  Pipeline.build
           ]
         , path = "Lint"
         , name = "HelmChart"
-        , tags = [ PipelineTag.Type.Fast, PipelineTag.Type.Lint ]
+        , tags =
+          [ PipelineTag.Type.Fast
+          , PipelineTag.Type.Lint
+          , PipelineTag.Type.Stable
+          ]
         }
       , steps =
         [ Command.build
@@ -35,7 +39,7 @@ in  Pipeline.build
               [ Cmd.run "HELM_LINT=true buildkite/scripts/helm-ci.sh" ]
             , label = "Helm chart lint steps"
             , key = "lint-helm-chart"
-            , target = Size.Small
+            , target = Size.Multi
             , docker = None Docker.Type
             }
         ]

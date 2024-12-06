@@ -14,6 +14,15 @@ let Docker = ../../Command/Docker/Type.dhall
 
 let Size = ../../Command/Size.dhall
 
+let RunInToolchain = ../../Command/RunInToolchain.dhall
+
+let dump_pipelines_cmd =
+      Cmd.runInDocker
+        Cmd.Docker::{
+        , image = (../../Constants/ContainerImages.dhall).toolchainBase
+        }
+        "buildkite/scripts/dhall/dump_dhall_to_pipelines.sh buildkite/src/Jobs _pipelines"
+
 in  Pipeline.build
       Pipeline.Config::{
       , spec = JobSpec::{
@@ -21,7 +30,11 @@ in  Pipeline.build
           [ S.contains "buildkite/src", S.exactly "buildkite/Makefile" "" ]
         , path = "Lint"
         , name = "Dhall"
-        , tags = [ PipelineTag.Type.Fast, PipelineTag.Type.Lint ]
+        , tags =
+          [ PipelineTag.Type.Fast
+          , PipelineTag.Type.Lint
+          , PipelineTag.Type.Stable
+          ]
         }
       , steps =
         [ Command.build
@@ -29,7 +42,7 @@ in  Pipeline.build
             , commands = [ Cmd.run "cd buildkite && make check_syntax" ]
             , label = "Dhall: syntax"
             , key = "check-dhall-syntax"
-            , target = Size.Small
+            , target = Size.Multi
             , docker = Some Docker::{
               , image = (../../Constants/ContainerImages.dhall).toolchainBase
               }
@@ -39,7 +52,7 @@ in  Pipeline.build
             , commands = [ Cmd.run "cd buildkite && make check_lint" ]
             , label = "Dhall: lint"
             , key = "check-dhall-lint"
-            , target = Size.Small
+            , target = Size.Multi
             , docker = Some Docker::{
               , image = (../../Constants/ContainerImages.dhall).toolchainBase
               }
@@ -49,10 +62,58 @@ in  Pipeline.build
             , commands = [ Cmd.run "cd buildkite && make check_format" ]
             , label = "Dhall: format"
             , key = "check-dhall-format"
-            , target = Size.Small
+            , target = Size.Multi
             , docker = Some Docker::{
               , image = (../../Constants/ContainerImages.dhall).toolchainBase
               }
+            }
+        , Command.build
+            Command.Config::{
+            , commands =
+                  [ dump_pipelines_cmd ]
+                # RunInToolchain.runInToolchainBullseye
+                    ([] : List Text)
+                    "python3 ./buildkite/scripts/dhall/checker.py --root _pipelines deps"
+            , label = "Dhall: deps"
+            , key = "check-dhall-deps"
+            , target = Size.Multi
+            , docker = None Docker.Type
+            }
+        , Command.build
+            Command.Config::{
+            , commands =
+                  [ dump_pipelines_cmd ]
+                # RunInToolchain.runInToolchainBullseye
+                    ([] : List Text)
+                    "python3 ./buildkite/scripts/dhall/checker.py --root _pipelines dirty-when  --repo ."
+            , label = "Dhall: dirtyWhen"
+            , key = "check-dhall-dirty"
+            , target = Size.Multi
+            , docker = None Docker.Type
+            }
+        , Command.build
+            Command.Config::{
+            , commands =
+                  [ dump_pipelines_cmd ]
+                # RunInToolchain.runInToolchainBullseye
+                    ([] : List Text)
+                    "python3 ./buildkite/scripts/dhall/checker.py --root _pipelines dups"
+            , label = "Dhall: duplicates"
+            , key = "check-dhall-dups"
+            , target = Size.Multi
+            , docker = None Docker.Type
+            }
+        , Command.build
+            Command.Config::{
+            , commands =
+                  [ dump_pipelines_cmd ]
+                # RunInToolchain.runInToolchainBullseye
+                    ([] : List Text)
+                    "python3 ./buildkite/scripts/dhall/checker.py --root _pipelines names"
+            , label = "Dhall: job names"
+            , key = "check-dhall-jobs"
+            , target = Size.Multi
+            , docker = None Docker.Type
             }
         ]
       }

@@ -23,6 +23,7 @@ module type S = sig
     -> conf_dir:string
     -> proof_level:Genesis_constants.Proof_level.t
     -> constraint_constants:Genesis_constants.Constraint_constants.t
+    -> commit_id:string
     -> unit
     -> t Deferred.t
 
@@ -56,4 +57,10 @@ module type S = sig
      sets the process kind for the Itn logger to "prover"
   *)
   val set_itn_logger_data : t -> daemon_port:int -> unit Deferred.Or_error.t
+
+  val get_blockchain_verification_key :
+    t -> Pickles.Verification_key.t Deferred.Or_error.t
+
+  val get_transaction_verification_key :
+    t -> Pickles.Verification_key.t Deferred.Or_error.t
 end

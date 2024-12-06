@@ -259,8 +259,7 @@ let step_main :
       local_signature_length local_branches_length feature_flags_and_num_chunks
   in
   let module Prev_typ =
-    H4.Typ (Impls.Step) (Typ_with_max_proofs_verified)
-      (Per_proof_witness.No_app_state)
+    H4.Typ (Typ_with_max_proofs_verified) (Per_proof_witness.No_app_state)
       (Per_proof_witness.Constant.No_app_state)
       (struct
         let f = Fn.id
@@ -278,7 +277,7 @@ let step_main :
   in
   let main () : _ Types.Step.Statement.t Promise.t =
     let open Impls.Step in
-    let logger = Internal_tracing_context_logger.get () in
+    let logger = Context_logger.get () in
     let module Max_proofs_verified = ( val max_proofs_verified : Nat.Add.Intf
                                          with type n = max_proofs_verified )
     in
@@ -351,7 +350,7 @@ let step_main :
               Req.Compute_prev_proof_parts previous_proof_statements )
         in
         let dlog_plonk_index =
-          let num_chunks = (* TODO *) 1 in
+          let num_chunks = (* TODO *) Plonk_checks.num_chunks_by_default in
           exists
             ~request:(fun () -> Req.Wrap_index)
             (Plonk_verification_key_evals.typ

@@ -23,7 +23,11 @@ in  Pipeline.build
           ]
         , path = "Lint"
         , name = "Rust"
-        , tags = [ PipelineTag.Type.Fast, PipelineTag.Type.Lint ]
+        , tags =
+          [ PipelineTag.Type.Fast
+          , PipelineTag.Type.Lint
+          , PipelineTag.Type.Stable
+          ]
         }
       , steps =
         [ Command.build
@@ -34,7 +38,7 @@ in  Pipeline.build
                   "cd src/app/trace-tool ; PATH=/home/opam/.cargo/bin:\$PATH cargo check"
             , label = "Rust lint steps; trace-tool"
             , key = "lint-trace-tool"
-            , target = Size.Small
+            , target = Size.Multi
             , docker = None Docker.Type
             }
         ]

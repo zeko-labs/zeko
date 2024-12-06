@@ -53,9 +53,6 @@ module Worker_state = struct
     val verify_transaction_snarks :
       (Transaction_snark.t * Sok_message.t) list -> unit Or_error.t Deferred.t
 
-    val get_blockchain_verification_key :
-      unit -> Pickles.Verification_key.t Deferred.t
-
     val toggle_internal_tracing : bool -> unit
 
     val set_itn_logger_data : daemon_port:int -> unit
@@ -66,34 +63,29 @@ module Worker_state = struct
     { conf_dir : string option
     ; enable_internal_tracing : bool
     ; internal_trace_filename : string option
-    ; logger : Logger.Stable.Latest.t
+    ; logger : Logger.t
     ; proof_level : Genesis_constants.Proof_level.t
-    ; constraint_constants : Genesis_constants.Constraint_constants.t
+    ; commit_id : string
+    ; blockchain_verification_key : Pickles.Verification_key.Stable.Latest.t
+    ; transaction_verification_key : Pickles.Verification_key.Stable.Latest.t
     }
   [@@deriving bin_io_unversioned]
 
   type t = (module S)
 
-  let create { logger; proof_level; constraint_constants; _ } : t Deferred.t =
+  let create
+      { logger
+      ; proof_level
+      ; commit_id
+      ; blockchain_verification_key
+      ; transaction_verification_key
+      ; _
+      } : t Deferred.t =
     match proof_level with
     | Full ->
         Pickles.Side_loaded.srs_precomputation () ;
         Deferred.return
           (let module M = struct
-             module T = Transaction_snark.Make (struct
-               let constraint_constants = constraint_constants
-
-               let proof_level = proof_level
-             end)
-
-             module B = Blockchain_snark_state.Make (struct
-               let tag = T.tag
-
-               let constraint_constants = constraint_constants
-
-               let proof_level = proof_level
-             end)
-
              let verify_commands
                  (cs :
                    User_command.Verifiable.t With_status.t With_id_tag.t list )
@@ -146,7 +138,7 @@ module Worker_state = struct
                    (id, result) )
 
              let verify_commands cs =
-               Internal_tracing.Context_logger.with_logger (Some logger)
+               Context_logger.with_logger (Some logger)
                @@ fun () ->
                Internal_tracing.Context_call.with_call_id
                @@ fun () ->
@@ -155,20 +147,25 @@ module Worker_state = struct
                [%log internal] "Verifier_verify_commands_done" ;
                result
 
-             let verify_blockchain_snarks = B.Proof.verify
-
              let verify_blockchain_snarks bs =
-               Internal_tracing.Context_logger.with_logger (Some logger)
+               Context_logger.with_logger (Some logger)
                @@ fun () ->
                Internal_tracing.Context_call.with_call_id
                @@ fun () ->
                [%log internal] "Verifier_verify_blockchain_snarks" ;
-               let%map result = verify_blockchain_snarks bs in
+               let%map result =
+                 Blockchain_snark_state.verify ~key:blockchain_verification_key
+                   bs
+               in
                [%log internal] "Verifier_verify_blockchain_snarks_done" ;
                result
 
              let verify_transaction_snarks ts =
-               match Or_error.try_with (fun () -> T.verify ts) with
+               match
+                 Or_error.try_with (fun () ->
+                     Transaction_snark.verify ts
+                       ~key:transaction_verification_key )
+               with
                | Ok result ->
                    result
                | Error e ->
@@ -179,7 +176,7 @@ module Worker_state = struct
                    failwith "Verifier crashed"
 
              let verify_transaction_snarks ts =
-               Internal_tracing.Context_logger.with_logger (Some logger)
+               Context_logger.with_logger (Some logger)
                @@ fun () ->
                Internal_tracing.Context_call.with_call_id
                @@ fun () ->
@@ -188,19 +185,16 @@ module Worker_state = struct
                [%log internal] "Verifier_verify_transaction_snarks_done" ;
                result
 
-             let get_blockchain_verification_key () =
-               Lazy.force B.Proof.verification_key
-
              let toggle_internal_tracing enabled =
                don't_wait_for
-               @@ Internal_tracing.toggle ~logger
+               @@ Internal_tracing.toggle ~commit_id ~logger
                     (if enabled then `Enabled else `Disabled)
 
              let set_itn_logger_data ~daemon_port =
                Itn_logger.set_data ~process_kind:"verifier" ~daemon_port
            end in
           (module M : S) )
-    | Check | None ->
+    | Check | No_check ->
         Deferred.return
         @@ ( module struct
              let verify_commands tagged_commands =
@@ -231,24 +225,6 @@ module Worker_state = struct
 
              let verify_transaction_snarks _ = Deferred.return (Ok ())
 
-             let vk =
-               lazy
-                 (let module T = Transaction_snark.Make (struct
-                    let constraint_constants = constraint_constants
-
-                    let proof_level = proof_level
-                  end) in
-                 let module B = Blockchain_snark_state.Make (struct
-                   let tag = T.tag
-
-                   let constraint_constants = constraint_constants
-
-                   let proof_level = proof_level
-                 end) in
-                 Lazy.force B.Proof.verification_key )
-
-             let get_blockchain_verification_key () = Lazy.force vk
-
              let toggle_internal_tracing _ = ()
 
              let set_itn_logger_data ~daemon_port:_ = ()
@@ -278,8 +254,6 @@ module Worker = struct
             With_id_tag.t
             list )
           F.t
-      ; get_blockchain_verification_key :
-          ('w, unit, Pickles.Verification_key.t) F.t
       ; toggle_internal_tracing : ('w, bool, unit) F.t
       ; set_itn_logger_data : ('w, int, unit) F.t
       }
@@ -312,10 +286,6 @@ module Worker = struct
       let verify_commands (w : Worker_state.t) ts =
         let (module M) = Worker_state.get w in
         M.verify_commands ts
-
-      let get_blockchain_verification_key (w : Worker_state.t) () =
-        let (module M) = Worker_state.get w in
-        M.get_blockchain_verification_key ()
 
       let toggle_internal_tracing (w : Worker_state.t) enabled =
         let (module M) = Worker_state.get w in
@@ -364,11 +334,6 @@ module Worker = struct
                   With_id_tag.t
                   list]
               , verify_commands )
-        ; get_blockchain_verification_key =
-            f
-              ( [%bin_type_class: unit]
-              , [%bin_type_class: Pickles.Verification_key.Stable.Latest.t]
-              , get_blockchain_verification_key )
         ; toggle_internal_tracing =
             f
               ( [%bin_type_class: bool]
@@ -388,30 +353,34 @@ module Worker = struct
             ; internal_trace_filename
             ; logger
             ; proof_level
-            ; constraint_constants
+            ; commit_id
+            ; blockchain_verification_key
+            ; transaction_verification_key
             } =
         if Option.is_some conf_dir then (
           let max_size = 256 * 1024 * 512 in
           let num_rotate = 1 in
-          Logger.Consumer_registry.register ~id:"default"
+          Logger.Consumer_registry.register ~id:"default" ~commit_id
             ~processor:(Logger.Processor.raw ())
             ~transport:
               (Logger_file_system.dumb_logrotate
                  ~directory:(Option.value_exn conf_dir)
-                 ~log_filename:"mina-verifier.log" ~max_size ~num_rotate ) ;
+                 ~log_filename:"mina-verifier.log" ~max_size ~num_rotate )
+            () ;
           Option.iter internal_trace_filename ~f:(fun log_filename ->
               Itn_logger.set_message_postprocessor
                 Internal_tracing.For_itn_logger.post_process_message ;
               Logger.Consumer_registry.register ~id:Logger.Logger_id.mina
-                ~processor:Internal_tracing.For_logger.processor
+                ~commit_id ~processor:Internal_tracing.For_logger.processor
                 ~transport:
                   (Logger_file_system.dumb_logrotate
                      ~directory:(Option.value_exn conf_dir ^ "/internal-tracing")
                      ~log_filename
                      ~max_size:(1024 * 1024 * 10)
-                     ~num_rotate:50 ) ) ) ;
+                     ~num_rotate:50 )
+                () ) ) ;
         if enable_internal_tracing then
-          don't_wait_for @@ Internal_tracing.toggle ~logger `Enabled ;
+          don't_wait_for @@ Internal_tracing.toggle ~commit_id ~logger `Enabled ;
         [%log info] "Verifier started" ;
         Worker_state.create
           { conf_dir
@@ -419,7 +388,9 @@ module Worker = struct
           ; internal_trace_filename
           ; logger
           ; proof_level
-          ; constraint_constants
+          ; commit_id
+          ; blockchain_verification_key
+          ; transaction_verification_key
           }
 
       let init_connection_state ~connection:_ ~worker_state:_ () = Deferred.unit
@@ -435,11 +406,12 @@ type worker =
   ; exit_or_signal : Unix.Exit_or_signal.t Deferred.Or_error.t
   }
 
-type t = { worker : worker Ivar.t ref; logger : Logger.Stable.Latest.t }
+type t = { worker : worker Ivar.t ref; logger : Logger.t }
 
 (* TODO: investigate why conf_dir wasn't being used *)
 let create ~logger ?(enable_internal_tracing = false) ?internal_trace_filename
-    ~proof_level ~constraint_constants ~pids ~conf_dir () : t Deferred.t =
+    ~proof_level ~pids ~conf_dir ~commit_id ~blockchain_verification_key
+    ~transaction_verification_key () : t Deferred.t =
   let on_failure err =
     [%log error] "Verifier process failed with error $err"
       ~metadata:[ ("err", Error_json.error_to_yojson err) ] ;
@@ -476,7 +448,9 @@ let create ~logger ?(enable_internal_tracing = false) ?internal_trace_filename
             ; internal_trace_filename
             ; logger
             ; proof_level
-            ; constraint_constants
+            ; commit_id
+            ; blockchain_verification_key
+            ; transaction_verification_key
             } )
       |> Deferred.Result.map_error ~f:Error.of_exn
     in
@@ -740,14 +714,6 @@ let verify_commands t ts =
   let%map result = verify_commands t ts in
   [%log internal] "Verify_commands_done" ;
   result
-
-let get_blockchain_verification_key { worker; logger } =
-  O1trace.thread "dispatch_blockchain_verification_key" (fun () ->
-      with_retry ~logger (fun () ->
-          let%bind { connection; _ } = Ivar.read !worker in
-          Worker.Connection.run connection
-            ~f:Worker.functions.get_blockchain_verification_key ~arg:()
-          |> Deferred.Or_error.map ~f:(fun x -> `Continue x) ) )
 
 let toggle_internal_tracing { worker; logger } enabled =
   with_retry ~logger (fun () ->

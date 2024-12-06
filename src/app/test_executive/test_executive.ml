@@ -47,9 +47,7 @@ let validate_inputs ~logger inputs (test_config : Test_config.t) :
   else Deferred.return ()
 
 let engines : engine list =
-  [ ("cloud", (module Integration_test_cloud_engine : Intf.Engine.S))
-  ; ("local", (module Integration_test_local_engine : Intf.Engine.S))
-  ]
+  [ ("local", (module Integration_test_local_engine : Intf.Engine.S)) ]
 
 let tests : test list =
   [ ( "peers-reliability"
@@ -267,6 +265,25 @@ let main inputs =
    *   Exec.execute ~logger ~engine_cli_inputs ~images (module Test (Engine))
    *)
   let logger = Logger.create () in
+  let constants : Test_config.constants =
+    let protocol =
+      { Genesis_constants.Compiled.genesis_constants.protocol with
+        k = 20
+      ; delta = 0
+      ; slots_per_epoch = 3 * 8 * 20
+      ; slots_per_sub_window = 2
+      ; grace_period_slots = 140
+      }
+    in
+    { genesis_constants =
+        { Genesis_constants.Compiled.genesis_constants with
+          protocol
+        ; txpool_max_size = 3000
+        }
+    ; constraint_constants = Genesis_constants.Compiled.constraint_constants
+    ; compile_config = Mina_compile_config.Compiled.t
+    }
+  in
   let images =
     { Test_config.Container_images.mina = inputs.mina_image
     ; archive_node =
@@ -276,11 +293,12 @@ let main inputs =
     ; points = "codaprotocol/coda-points-hack:32b.4"
     }
   in
-  let%bind () = validate_inputs ~logger inputs T.config in
+  let test_config = T.config ~constants in
+  let%bind () = validate_inputs ~logger inputs test_config in
   [%log trace] "expanding network config" ;
   let network_config =
     Engine.Network_config.expand ~logger ~test_name ~cli_inputs
-      ~debug:inputs.debug ~test_config:T.config ~images
+      ~debug:inputs.debug ~constants ~images ~test_config
   in
   (* resources which require additional cleanup at end of test *)
   let net_manager_ref : Engine.Network_manager.t option ref = ref None in
@@ -457,7 +475,7 @@ let help_term = Term.(ret @@ const (`Help (`Plain, None)))
 
 let engine_cmd ((engine_name, (module Engine)) : engine) =
   let info =
-    let doc = "Run mina integration test(s) on remote cloud provider." in
+    let doc = "Run mina integration test(s) on engine." in
     Term.info engine_name ~doc ~exits:Term.default_exits
   in
   let test_inputs_with_cli_inputs_arg =

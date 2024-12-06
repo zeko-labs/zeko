@@ -46,9 +46,9 @@ module Network_config = struct
     }
   [@@deriving to_yojson]
 
-  let expand ~logger ~test_name ~(cli_inputs : Cli_inputs.t) ~(debug : bool)
-      ~(test_config : Test_config.t) ~(images : Test_config.Container_images.t)
-      =
+  let expand ~logger:_ ~test_name ~(cli_inputs : Cli_inputs.t) ~(debug : bool)
+      ~(images : Test_config.Container_images.t) ~(test_config : Test_config.t)
+      ~(constants : Test_config.constants) =
     let _ = cli_inputs in
     let ({ genesis_ledger
          ; epoch_data
@@ -142,10 +142,6 @@ module Network_config = struct
     in
     let genesis_accounts_and_keys = List.zip_exn genesis_ledger keypairs in
     let genesis_ledger_accounts = add_accounts genesis_accounts_and_keys in
-    let constraint_constants =
-      Genesis_ledger_helper.make_constraint_constants
-        ~default:Genesis_constants.Constraint_constants.compiled proof_config
-    in
     let ledger_is_prefix ledger1 ledger2 =
       List.is_prefix ledger2 ~prefix:ledger1
         ~equal:(fun
@@ -156,15 +152,8 @@ module Network_config = struct
     let runtime_config =
       { Runtime_config.daemon =
           Some
-            { txpool_max_size = Some txpool_max_size
-            ; peer_list_url = None
-            ; zkapp_proof_update_cost = None
-            ; zkapp_signed_single_update_cost = None
-            ; zkapp_signed_pair_update_cost = None
-            ; zkapp_transaction_cost_limit = None
-            ; max_event_elements = None
-            ; max_action_elements = None
-            ; zkapp_cmd_limit_hardcap = None
+            { Runtime_config.Daemon.default with
+              txpool_max_size = Some txpool_max_size
             ; slot_tx_end
             ; slot_chain_end
             ; network_id
@@ -177,7 +166,7 @@ module Network_config = struct
             ; slots_per_sub_window = Some slots_per_sub_window
             ; grace_period_slots = Some grace_period_slots
             ; genesis_state_timestamp =
-                Some Core.Time.(to_string_abs ~zone:Zone.utc (now ()))
+                Some (Core.Time.(now ()) |> Genesis_constants.of_time)
             }
       ; proof = Some proof_config (* TODO: prebake ledger and only set hash *)
       ; ledger =
@@ -277,13 +266,16 @@ module Network_config = struct
               ({ staking; next } : Runtime_config.Epoch_data.t) )
       }
     in
+    let constraint_constants =
+      Runtime_config.make_constraint_constants constants.constraint_constants
+        runtime_config
+    in
     let genesis_constants =
-      Or_error.ok_exn
-        (Genesis_ledger_helper.make_genesis_constants ~logger
-           ~default:Genesis_constants.compiled runtime_config )
+      Runtime_config.make_genesis_constants constants.genesis_constants
+        runtime_config
     in
     let constants : Test_config.constants =
-      { constraints = constraint_constants; genesis = genesis_constants }
+      { constants with genesis_constants; constraint_constants }
     in
     let mk_net_keypair keypair_name (pk, sk) =
       let keypair =

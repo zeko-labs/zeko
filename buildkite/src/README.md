@@ -134,7 +134,7 @@ steps:
           - "NETWORK=Devnet"
           - "FROM_VERSION=3.0.0devnet-tooling-dkijania-hardfork-package-gen-in-nightly-b37f50e"
           - "NEW_VERSION=3.0.0fake-ddb6fc4"
-          - "CODENAMES=Focal,Buster,Bullseye"
+          - "CODENAMES=Focal,Bullseye"
           - "FROM_CHANNEL=Unstable"
           - "TO_CHANNEL=Experimental"
         image: codaprotocol/ci-toolchain-base:v3
@@ -146,11 +146,11 @@ Above definition one need to paste into steps edit box for given pipeline and th
 
 All list of available parameters: 
 
-- DEBIANS - The comma delimitered debian names. For example: `Daemon,Archive`. All available names are located in `buildkite/src/Constans/DebianPackage.dhall` files. Only CamelCase format is supported
+- DEBIANS - The comma delimited debian names. For example: `Daemon,Archive`. All available names are located in `buildkite/src/Constans/DebianPackage.dhall` files. Only CamelCase format is supported
 
-- DOCKERS - The comma delimitered docker names. For example: `Daemon,Archive`. All available names are located in `buildkite/src/Constans/Artifacts.dhall` files. Only CamelCase format is supported 
+- DOCKERS - The comma delimited docker names. For example: `Daemon,Archive`. All available names are located in `buildkite/src/Constans/Artifacts.dhall` files. Only CamelCase format is supported 
 
-- CODENAMES - The Debian codenames `Bullseye,Buster,Focal`. All available names are located in `buildkite/src/Constans/DebianVersions.dhall`. Only CamelCase format is supported
+- CODENAMES - The Debian codenames `Bullseye,Focal`. All available names are located in `buildkite/src/Constans/DebianVersions.dhall`. Only CamelCase format is supported
 
 - FROM_VERSION - The Source Docker or Debian version
 
@@ -160,7 +160,7 @@ All list of available parameters:
 
 - PROFILE                     The Docker and Debian profile (Standard, Lightnet)". All available profiles are located in `buildkite/src/Constants/Profiles.dhall` file. Only CamelCase format is supported
 
-- NETWORK                     The Docker and Debian network (Devnet, Mainnet, Berkeley). All available profiles are located in `buildkite/src/Constants/Network.dhall` file. Only CamelCase format is supported
+- NETWORK                     The Docker and Debian network (Devnet, Mainnet). All available profiles are located in `buildkite/src/Constants/Network.dhall` file. Only CamelCase format is supported
 
 - FROM_CHANNEL                Source debian channel. By default: Unstable. All available channels  are located in `buildkite/src/Constants/DebianChannel.dhall` file. Only CamelCase format is supported
 
@@ -187,7 +187,7 @@ Pipeline with create 6 jobs for each Docker and Debian component separately.
   - "FROM_VERSION=3.0.0devnet-tooling-dkijania-hardfork-package-gen-in-nightly-b37f50e"
   - "NEW_VERSION=3.0.0-ddb6fc4"
   - "PUBLISH"=1
-  - "CODENAMES=Focal,Buster,Bullseye"
+  - "CODENAMES=Focal,Bullseye"
   - "FROM_CHANNEL=Unstable"
   - "TO_CHANNEL=Devnet"
     
@@ -202,6 +202,6 @@ We want only to move dockers from gcr to dockerhub without changing version. Cur
   - "NETWORK=Devnet"
   - "FROM_VERSION=3.0.0-dc6bf78"
   - "NEW_VERSION=3.0.0-dc6bf78"
-  - "CODENAMES=Focal,Buster,Bullseye"
+  - "CODENAMES=Focal,Bullseye"
   - "PUBLISH=1"
 ```

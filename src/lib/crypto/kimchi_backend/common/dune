@@ -29,27 +29,18 @@
   base.base_internalhash_types
   ;; local libraries
   tuple_lib
-  snarky.backendless
   key_cache
-  pickles_types
   hex
   kimchi_bindings
+  kimchi_pasta_snarky_backend
   kimchi_types
   pasta_bindings
+  plonkish_prelude
   sponge
   allocation_functor
   snarky.intf
   promise
   logger
-  internal_tracing.context_logger
+  logger.context_logger
   ppx_version.runtime
   bounded_types))
-
-(rule
- (targets version.ml)
- (deps
-  (:< gen_version.sh)
-  (source_tree ../../proof-systems)
-  (sandbox none))
- (action
-  (run %{<} %{targets})))

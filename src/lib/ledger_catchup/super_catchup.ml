@@ -1,12 +1,10 @@
 (* Only show stdout for failed inline tests. *)
-open Inline_test_quiet_logs
 open Core
 open Async
 open Cache_lib
 open Pipe_lib
 open Mina_numbers
 open Mina_base
-open Mina_block
 open Network_peer
 
 module type CONTEXT = sig
@@ -129,6 +127,25 @@ let write_graph (_ : t) =
   let _ = G.output_graph in
   ()
 
+let validate_block ~genesis_state_hash (b, v) =
+  let open Mina_block.Validation in
+  let open Result.Let_syntax in
+  let h = (With_hash.map ~f:Mina_block.header b, v) in
+  validate_genesis_protocol_state ~genesis_state_hash h
+  >>= validate_protocol_versions >>= validate_delta_block_chain
+  >>| Fn.flip with_body (Mina_block.body @@ With_hash.data b)
+
+let validate_proofs_block ~verifier ~genesis_state_hash blocks =
+  let open Mina_block.Validation in
+  let open Deferred.Result.Let_syntax in
+  let f ((b, _), h) = with_body h (Mina_block.body @@ With_hash.data b) in
+  let hs =
+    List.map blocks ~f:(fun (b, v) ->
+        (With_hash.map ~f:Mina_block.header b, v) )
+  in
+  validate_proofs ~verifier ~genesis_state_hash hs
+  >>| List.zip_exn blocks >>| List.map ~f
+
 let verify_transition ~context:(module Context : CONTEXT) ~trust_system
     ~frontier ~unprocessed_transition_cache ~slot_tx_end ~slot_chain_end
     enveloped_transition =
@@ -137,33 +154,29 @@ let verify_transition ~context:(module Context : CONTEXT) ~trust_system
   let genesis_state_hash = Transition_frontier.genesis_state_hash frontier in
   let transition_with_hash = Envelope.Incoming.data enveloped_transition in
   let cached_initially_validated_transition_result =
-    let open Result.Let_syntax in
-    let%bind initially_validated_transition =
-      transition_with_hash
-      |> Validation.skip_time_received_validation
-           `This_block_was_not_received_via_gossip
-      |> Validation.validate_genesis_protocol_state ~genesis_state_hash
-      >>= Validation.validate_protocol_versions
-      >>= Validation.validate_delta_block_chain
+    let%bind.Result initially_validated_transition =
+      Mina_block.Validation.skip_time_received_validation
+        `This_block_was_not_received_via_gossip transition_with_hash
+      |> validate_block ~genesis_state_hash
     in
     let enveloped_initially_validated_transition =
       Envelope.Incoming.map enveloped_transition
         ~f:(Fn.const initially_validated_transition)
     in
-    Transition_handler.Validator.validate_transition
+    Transition_handler.Validator.validate_transition_is_relevant
       ~context:(module Context)
       ~frontier ~unprocessed_transition_cache ~slot_tx_end ~slot_chain_end
       enveloped_initially_validated_transition
   in
   let state_hash =
-    Validation.block_with_hash transition_with_hash
+    Mina_block.Validation.block_with_hash transition_with_hash
     |> State_hash.With_state_hashes.state_hash |> State_hash.to_yojson
   in
   let open Deferred.Let_syntax in
   match cached_initially_validated_transition_result with
   | Ok x ->
       Internal_tracing.with_state_hash
-        ( Validation.block_with_hash transition_with_hash
+        ( Mina_block.Validation.block_with_hash transition_with_hash
         |> State_hash.With_state_hashes.state_hash )
       @@ fun () ->
       [%log internal] "Validate_transition_done" ;
@@ -237,7 +250,7 @@ let verify_transition ~context:(module Context : CONTEXT) ~trust_system
       [%log warn]
         ~metadata:[ ("state_hash", state_hash) ]
         "initial_validate: invalid protocol version" ;
-      let transition = Validation.block transition_with_hash in
+      let transition = Mina_block.Validation.block transition_with_hash in
       let%map () =
         Trust_system.record_envelope_sender trust_system logger sender
           ( Trust_system.Actions.Sent_invalid_protocol_version
@@ -245,12 +258,12 @@ let verify_transition ~context:(module Context : CONTEXT) ~trust_system
               ( "Invalid current or proposed protocol version in catchup block"
               , [ ( "current_protocol_version"
                   , `String
-                      ( Header.current_protocol_version
+                      ( Mina_block.Header.current_protocol_version
                           (Mina_block.header transition)
                       |> Protocol_version.to_string ) )
                 ; ( "proposed_protocol_version"
                   , `String
-                      ( Header.proposed_protocol_version_opt
+                      ( Mina_block.Header.proposed_protocol_version_opt
                           (Mina_block.header transition)
                       |> Option.value_map ~default:"<None>"
                            ~f:Protocol_version.to_string ) )
@@ -261,7 +274,7 @@ let verify_transition ~context:(module Context : CONTEXT) ~trust_system
       [%log warn]
         ~metadata:[ ("state_hash", state_hash) ]
         "initial_validate: mismatch protocol version" ;
-      let transition = Validation.block transition_with_hash in
+      let transition = Mina_block.Validation.block transition_with_hash in
       let%map () =
         Trust_system.record_envelope_sender trust_system logger sender
           ( Trust_system.Actions.Sent_mismatched_protocol_version
@@ -270,7 +283,7 @@ let verify_transition ~context:(module Context : CONTEXT) ~trust_system
                  daemon protocol version"
               , [ ( "block_current_protocol_version"
                   , `String
-                      ( Header.current_protocol_version
+                      ( Mina_block.Header.current_protocol_version
                           (Mina_block.header transition)
                       |> Protocol_version.to_string ) )
                 ; ( "daemon_current_protocol_version"
@@ -407,7 +420,7 @@ module Downloader = struct
         type t = Mina_block.t
 
         let key (t : t) =
-          ( ( Mina_block.header t |> Header.protocol_state
+          ( ( Mina_block.header t |> Mina_block.Header.protocol_state
             |> Mina_state.Protocol_state.hashes )
               .state_hash
           , Mina_block.blockchain_length t )
@@ -493,12 +506,10 @@ module Initial_validate_batcher = struct
 
   type nonrec 'a t = (input, input, 'a) t
 
-  let create ~verifier ~precomputed_values : _ t =
+  let create ~logger ~verifier ~precomputed_values : _ t =
     create
       ~logger:
-        (Logger.create
-           ~metadata:[ ("name", `String "initial_validate_batcher") ]
-           () )
+        (Logger.extend logger [ ("name", `String "initial_validate_batcher") ])
       ~how_to_add:`Insert ~max_weight_per_call:1000
       ~weight:(fun _ -> 1)
       ~compare_init:(fun e1 e2 ->
@@ -520,8 +531,8 @@ module Initial_validate_batcher = struct
                    { State_hash.State_hashes.state_hash
                    ; state_body_hash = None
                    } )
-            |> Validation.wrap )
-        |> Validation.validate_proofs ~verifier ~genesis_state_hash
+            |> Mina_block.Validation.wrap )
+        |> validate_proofs_block ~verifier ~genesis_state_hash
         >>| function
         | Ok tvs ->
             Ok (List.map tvs ~f:(fun x -> `Valid x))
@@ -540,22 +551,21 @@ module Verify_work_batcher = struct
 
   type nonrec 'a t = (input, input, 'a) t
 
-  let create ~verifier : _ t =
+  let create ~logger ~verifier : _ t =
     let works (x : input) =
       let wh, _ = x.data in
-      Body.staged_ledger_diff (Mina_block.body wh.data)
+      Mina_block.Body.staged_ledger_diff (Mina_block.body wh.data)
       |> Staged_ledger_diff.completed_works
     in
     create
-      ~logger:
-        (Logger.create ~metadata:[ ("name", `String "verify_work_batcher") ] ())
+      ~logger:(Logger.extend logger [ ("name", `String "verify_work_batcher") ])
       ~weight:(fun (x : input) ->
         List.fold ~init:0 (works x) ~f:(fun acc { proofs; _ } ->
             acc + One_or_two.length proofs ) )
       ~max_weight_per_call:1000 ~how_to_add:`Insert
       ~compare_init:(fun e1 e2 ->
         let len (x : input) =
-          Validation.block x.data |> Mina_block.blockchain_length
+          Mina_block.Validation.block x.data |> Mina_block.blockchain_length
         in
         match Length.compare (len e1) (len e2) with
         | 0 ->
@@ -646,10 +656,10 @@ let initial_validate ~context:(module Context : CONTEXT) ~trust_system
       ]
     "initial_validate: verification of proofs complete" ;
   let slot_tx_end =
-    Runtime_config.slot_tx_end_or_default precomputed_values.runtime_config
+    Runtime_config.slot_tx_end precomputed_values.runtime_config
   in
   let slot_chain_end =
-    Runtime_config.slot_chain_end_or_default precomputed_values.runtime_config
+    Runtime_config.slot_chain_end precomputed_values.runtime_config
   in
   verify_transition
     ~context:(module Context)
@@ -667,8 +677,7 @@ let check_invariant ~downloader t =
          Node.State.Enum.equal (Node.State.enum node.state) To_download ) )
 
 let download s d ~key ~attempts =
-  let logger = Logger.create () in
-  [%log debug]
+  [%log' debug (Downloader.logger d)]
     ~metadata:[ ("key", Downloader.Key.to_yojson key); ("caller", `String s) ]
     "Download download $key" ;
   Downloader.download d ~key ~attempts
@@ -710,11 +719,11 @@ let create_node ~logger ~downloader t x =
     | `Initial_validated (b, valid_cb) ->
         let t = (Cached.peek b).Envelope.Incoming.data in
         let state_hash =
-          Validation.block_with_hash t
+          Mina_block.Validation.block_with_hash t
           |> State_hash.With_state_hashes.state_hash
         in
         let blockchain_length =
-          Validation.block t |> Mina_block.blockchain_length
+          Mina_block.Validation.block t |> Mina_block.blockchain_length
         in
         Internal_tracing.with_state_hash state_hash
         @@ fun () ->
@@ -726,9 +735,9 @@ let create_node ~logger ~downloader t x =
         [%log internal] "To_verify" ;
         ( Node.State.To_verify (b, valid_cb)
         , state_hash
-        , Validation.block t |> Mina_block.blockchain_length
-        , Validation.block t |> Mina_block.header
-          |> Mina_block.Header.protocol_state
+        , Mina_block.Validation.block t |> Mina_block.blockchain_length
+        , Mina_block.Validation.block t
+          |> Mina_block.header |> Mina_block.Header.protocol_state
           |> Mina_state.Protocol_state.previous_state_hash
         , Ivar.create () )
   in
@@ -752,6 +761,11 @@ let pick ~context:(module Context : CONTEXT)
     (x : Mina_state.Protocol_state.Value.t State_hash.With_state_hashes.t)
     (y : Mina_state.Protocol_state.Value.t State_hash.With_state_hashes.t) =
   let f = With_hash.map ~f:Mina_state.Protocol_state.consensus_state in
+  let module Context = struct
+    include Context
+
+    let compile_config = precomputed_values.compile_config
+  end in
   match
     Consensus.Hooks.select
       ~context:(module Context)
@@ -790,9 +804,9 @@ let setup_state_machine_runner ~context:(module Context : CONTEXT) ~t ~verifier
   let open Context in
   (* setup_state_machine_runner returns a fully configured lambda function, which is the state machine runner *)
   let initial_validation_batcher =
-    Initial_validate_batcher.create ~verifier ~precomputed_values
+    Initial_validate_batcher.create ~logger ~verifier ~precomputed_values
   in
-  let verify_work_batcher = Verify_work_batcher.create ~verifier in
+  let verify_work_batcher = Verify_work_batcher.create ~logger ~verifier in
   let set_state t node s =
     set_state t node s ;
     try check_invariant ~downloader t
@@ -954,7 +968,8 @@ let setup_state_machine_runner ~context:(module Context : CONTEXT) ~t ~verifier
                 let av =
                   { av with
                     data =
-                      Validation.skip_frontier_dependencies_validation
+                      Mina_block.Validation
+                      .skip_frontier_dependencies_validation
                         `This_block_belongs_to_a_detached_subtree av.data
                   }
                 in
@@ -1081,13 +1096,13 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
        Strict_pipe.Writer.t ) =
   let open Context in
   let t =
-    match Transition_frontier.catchup_tree frontier with
+    match Transition_frontier.catchup_state frontier with
     | Full t ->
         t
     | Hash _ ->
         failwith
           "If super catchup is running, the frontier should have a full \
-           catchup tree"
+           catchup state"
   in
   let stop = Transition_frontier.closed frontier in
   upon stop (fun () -> tear_down t) ;
@@ -1105,7 +1120,9 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
             combine !best
               (Some
                  (With_hash.map
-                    ~f:(Fn.compose Header.protocol_state Mina_block.header)
+                    ~f:
+                      (Fn.compose Mina_block.Header.protocol_state
+                         Mina_block.header )
                     x ) ) ) ;
       !best
     in
@@ -1136,7 +1153,8 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
               | None ->
                   `Some [] ) )
     in
-    Downloader.create ~stop ~trust_system ~preferred:[] ~max_batch_size:5
+    Downloader.create ~stop ~trust_system ~logger ~preferred:[]
+      ~max_batch_size:5
       ~get:(fun peer hs ->
         let sec =
           let sec_per_block =
@@ -1203,7 +1221,7 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
                 let target_length =
                   let len =
                     forest_pick forest |> Tuple2.get1 |> Cached.peek
-                    |> Envelope.Incoming.data |> Validation.block
+                    |> Envelope.Incoming.data |> Mina_block.Validation.block
                     |> Mina_block.blockchain_length
                   in
                   Option.value_exn (Length.sub len (Length.of_int 1))
@@ -1211,7 +1229,8 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
                 let blockchain_length_of_target_hash =
                   let blockchain_length_of_dangling_block =
                     List.hd_exn forest |> Rose_tree.root |> Tuple2.get1
-                    |> Cached.peek |> Envelope.Incoming.data |> Validation.block
+                    |> Cached.peek |> Envelope.Incoming.data
+                    |> Mina_block.Validation.block
                     |> Mina_block.blockchain_length
                   in
                   Unsigned.UInt32.pred blockchain_length_of_dangling_block
@@ -1222,7 +1241,8 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
                     ~f:(fun (c, _vc) ->
                       let h =
                         State_hash.With_state_hashes.state_hash
-                          (Validation.block_with_hash (Cached.peek c).data)
+                          (Mina_block.Validation.block_with_hash
+                             (Cached.peek c).data )
                       in
                       ( match (Cached.peek c).sender with
                       | Local ->
@@ -1236,7 +1256,8 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
                       let%bind.Option p =
                         Transition_chain_verifier.verify ~target_hash:h
                           ~transition_chain_proof:
-                            ( ( Mina_block.header root |> Header.protocol_state
+                            ( ( Mina_block.header root
+                              |> Mina_block.Header.protocol_state
                               |> Mina_state.Protocol_state.hashes )
                                 .state_hash
                             , path )
@@ -1288,7 +1309,7 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
                             ~f:(fun (cached_transition, _vc) ->
                               Cached.peek cached_transition
                               |> Envelope.Incoming.data
-                              |> Validation.block_with_hash
+                              |> Mina_block.Validation.block_with_hash
                               |> State_hash.With_state_hashes.state_hash )
                         in
                         [%log error]
@@ -1299,7 +1320,8 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
                                      ~f:State_hash.to_yojson ) )
                             ; ( "state_hash"
                               , State_hash.to_yojson
-                                  ( Validation.block_with_hash transition
+                                  ( Mina_block.Validation.block_with_hash
+                                      transition
                                   |> State_hash.With_state_hashes.state_hash )
                               )
                             ; ( "reason"
@@ -1307,8 +1329,9 @@ let run_catchup ~context:(module Context : CONTEXT) ~trust_system ~verifier
                                   "no common ancestor with our transition \
                                    frontier" )
                             ; ( "protocol_state"
-                              , Validation.block transition
-                                |> Mina_block.header |> Header.protocol_state
+                              , Mina_block.Validation.block transition
+                                |> Mina_block.header
+                                |> Mina_block.Header.protocol_state
                                 |> Mina_state.Protocol_state.value_to_yojson )
                             ]
                           "Validation error: external transition with state \
@@ -1411,7 +1434,21 @@ let%test_module "Ledger_catchup tests" =
 
     let max_frontier_length = 10
 
-    let logger = Logger.create ()
+    let logger = Logger.null ()
+
+    let () =
+      (* Disable log messages from best_tip_diff logger. *)
+      Logger.Consumer_registry.register ~commit_id:Mina_version.commit_id
+        ~id:Logger.Logger_id.best_tip_diff ~processor:(Logger.Processor.raw ())
+        ~transport:
+          (Logger.Transport.create
+             ( module struct
+               type t = unit
+
+               let transport () _ = ()
+             end )
+             () )
+        ()
 
     let precomputed_values = Lazy.force Precomputed_values.for_unit_tests
 
@@ -1427,9 +1464,7 @@ let%test_module "Ledger_catchup tests" =
 
     let verifier =
       Async.Thread_safe.block_on_async_exn (fun () ->
-          Verifier.create ~logger ~proof_level ~constraint_constants
-            ~conf_dir:None
-            ~pids:(Child_processes.Termination.create_pid_table ())
+          Verifier.For_tests.default ~constraint_constants ~logger ~proof_level
             () )
 
     module Context = struct
@@ -1449,9 +1484,10 @@ let%test_module "Ledger_catchup tests" =
              ~pids:(Child_processes.Termination.create_pid_table ())) *)
 
     let downcast_transition transition =
+      let open Mina_block.Validation in
       let transition =
-        transition |> Validation.reset_frontier_dependencies_validation
-        |> Validation.reset_staged_ledger_diff_validation
+        transition |> reset_frontier_dependencies_validation
+        |> reset_staged_ledger_diff_validation
       in
       Envelope.Incoming.wrap ~data:transition ~sender:Envelope.Sender.Local
 
@@ -1493,6 +1529,7 @@ let%test_module "Ledger_catchup tests" =
       in
       let unprocessed_transition_cache =
         Transition_handler.Unprocessed_transition_cache.create ~logger
+          ~cache_exceptions:true
       in
       run
         ~context:(module Context)
@@ -1754,21 +1791,21 @@ let%test_module "Ledger_catchup tests" =
                 ~frontier_branch_size:(max_frontier_length / 2)
                 ?get_staged_ledger_aux_and_pending_coinbases_at_hash:None
                 ?get_some_initial_peers:None ?answer_sync_ledger_query:None
-                ?get_ancestry:None ?get_best_tip:None ?get_node_status:None
+                ?get_ancestry:None ?get_best_tip:None ?get_completed_snarks:None
                 ?get_transition_knowledge:None ?get_transition_chain_proof:None
                 ?get_transition_chain:(Some impl_rpc)
             ; peer_with_branch_custom_rpc
                 ~frontier_branch_size:(max_frontier_length / 2)
                 ?get_staged_ledger_aux_and_pending_coinbases_at_hash:None
                 ?get_some_initial_peers:None ?answer_sync_ledger_query:None
-                ?get_ancestry:None ?get_best_tip:None ?get_node_status:None
+                ?get_ancestry:None ?get_best_tip:None ?get_completed_snarks:None
                 ?get_transition_knowledge:None ?get_transition_chain_proof:None
                 ?get_transition_chain:(Some impl_rpc)
             ; peer_with_branch_custom_rpc
                 ~frontier_branch_size:(max_frontier_length / 2)
                 ?get_staged_ledger_aux_and_pending_coinbases_at_hash:None
                 ?get_some_initial_peers:None ?answer_sync_ledger_query:None
-                ?get_ancestry:None ?get_best_tip:None ?get_node_status:None
+                ?get_ancestry:None ?get_best_tip:None ?get_completed_snarks:None
                 ?get_transition_knowledge:None ?get_transition_chain_proof:None
                 ?get_transition_chain:(Some impl_rpc)
             ])
@@ -1815,26 +1852,27 @@ let%test_module "Ledger_catchup tests" =
                   | `Success _ ->
                       failwith "final state should be at `Failed"
                   | `Failed ->
-                      let catchup_tree =
+                      let catchup_state =
                         match
-                          Transition_frontier.catchup_tree my_net.state.frontier
+                          Transition_frontier.catchup_state
+                            my_net.state.frontier
                         with
                         | Full tr ->
                             tr
                         | Hash _ ->
                             failwith
-                              "in super catchup unit tests, the catchup tree \
+                              "in super catchup unit tests, the catchup state \
                                should always be Full_catchup_tree, but it is \
                                Catchup_hash_tree for some reason"
                       in
-                      let catchup_tree_node_list =
-                        State_hash.Table.data catchup_tree.nodes
+                      let catchup_state_node_list =
+                        State_hash.Table.data catchup_state.nodes
                       in
-                      let catchup_tree_node =
-                        List.hd_exn catchup_tree_node_list
+                      let catchup_state_node =
+                        List.hd_exn catchup_state_node_list
                       in
                       let num_attempts =
-                        Peer.Map.length catchup_tree_node.attempts
+                        Peer.Map.length catchup_state_node.attempts
                       in
                       if num_attempts < 2 then
                         let failstring =
@@ -1844,317 +1882,8 @@ let%test_module "Ledger_catchup tests" =
                              attempts= %d.  length of catchup_tree_node_list= \
                              %d"
                             num_attempts
-                            (List.length catchup_tree_node_list)
+                            (List.length catchup_state_node_list)
                         in
                         failwith failstring
                       else () ) ) )
-
-    (* let%test_unit "when initial validation of a blocks fails (except for the \
-                    verifier_unreachable case), then catchup will cancel the \
-                    block's children's catchup job" =
-       Quickcheck.test ~trials:1
-         Fake_network.Generator.(
-           gen ~precomputed_values ~verifier ~max_frontier_length
-             ~use_super_catchup
-             [ fresh_peer
-             ; broken_rpc_peer_branch
-                 ~frontier_branch_size:(max_frontier_length / 2)
-                 ~get_transition_chain_impl_option:None
-               (* TODO: write some kind of mock that makes validation fail, and thus make the test pass *)
-             ])
-         ~f:(fun network ->
-           let open Fake_network in
-           let [ my_net; peer_net ] = network.peer_networks in
-           let target_best_tip_path =
-             Transition_frontier.best_tip_path peer_net.state.frontier
-           in
-           let open Fake_network in
-           let target_breadcrumb_child = List.last_exn target_best_tip_path in
-           let target_breadcrumb_child_hash =
-             Transition_frontier.Breadcrumb.state_hash target_breadcrumb_child
-           in
-           let target_breadcrumb_parent =
-             List.nth_exn target_best_tip_path
-               (List.length target_best_tip_path - 2)
-           in
-           let test =
-             setup_catchup_pipes ~network:my_net.network
-               ~frontier:my_net.state.frontier
-           in
-           let parent_hash =
-             Transition_frontier.Breadcrumb.parent_hash target_breadcrumb_parent
-           in
-           let target_transition_parent =
-             Transition_handler.Unprocessed_transition_cache.register_exn
-               test.cache
-               (downcast_breadcrumb target_breadcrumb_parent)
-           in
-           let target_transition_child =
-             Transition_handler.Unprocessed_transition_cache.register_exn
-               test.cache
-               (downcast_breadcrumb target_breadcrumb_child)
-           in
-           [%log info] "validation fails unit test" ;
-           Strict_pipe.Writer.write test.job_writer
-             ( parent_hash
-             , [ Rose_tree.T
-                   ( target_transition_parent
-                   , [ Rose_tree.T (target_transition_child, []) ] )
-               ] ) ;
-           Thread_safe.block_on_async_exn (fun () ->
-               let final =
-                 Cache_lib.Cached.final_state target_transition_parent
-               in
-               match%map
-                 Deferred.any
-                   [ (Ivar.read final >>| fun x -> `Catchup_failed x)
-                   ; Strict_pipe.Reader.read test.breadcrumbs_reader
-                     >>| const `Catchup_success
-                   ]
-               with
-               | `Catchup_success ->
-                   [%log info]
-                     "validation fails unit test: somehow incorrectly succeeded" ;
-
-                   failwith
-                     "target transition should've been invalidated with a \
-                      failure"
-               | `Catchup_failed fnl -> (
-                   match fnl with
-                   | `Success _ ->
-                       [%log info]
-                         "validation fails unit test: somehow incorrectly \
-                          succeeded" ;
-                       failwith "final state should be at `Failed"
-                   | `Failed ->
-                       [%log info]
-                         "validation fails unit test: correctly failed, running \
-                          checks" ;
-
-                       let catchup_tree =
-                         match
-                           Transition_frontier.catchup_tree my_net.state.frontier
-                         with
-                         | Full tr ->
-                             tr
-                         | Hash _ ->
-                             failwith
-                               "in super catchup unit tests, the catchup tree \
-                                should always be Full_catchup_tree, but it is \
-                                Catchup_hash_tree for some reason"
-                       in
-                       let catchup_tree_node_list =
-                         State_hash.Table.data catchup_tree.nodes
-                       in
-                       List.iter catchup_tree_node_list ~f:(fun catchup_node ->
-                           let hash = catchup_node.state_hash in
-                           if
-                             Marlin_plonk_bindings_pasta_fp.equal hash
-                               target_breadcrumb_child_hash
-                           then
-                             failwith
-                               "the catchup job associated with \
-                                target_breadcrumb_child_hash should have been \
-                                cancelled and thus removed from the catchup \
-                                tree, but it is still here"
-                           else ()) ))) *)
-
-    (* let%test_unit "when verification of a blocks fails, catchup will cancel \
-                    its children's catchup job and remove the failed-to-verify \
-                    block from the cache" =
-       Quickcheck.test ~trials:1
-         Fake_network.Generator.(
-           gen ~precomputed_values ~verifier ~max_frontier_length
-             ~use_super_catchup
-             [ fresh_peer
-             ; broken_rpc_peer_branch
-                 ~frontier_branch_size:(max_frontier_length / 2)
-                 ~get_transition_chain_impl_option:None
-               (* TODO: write some kind of mock that makes verification fail, and thus make the test pass *)
-             ])
-         ~f:(fun network ->
-           let open Fake_network in
-           let [ my_net; peer_net ] = network.peer_networks in
-           let target_best_tip_path =
-             Transition_frontier.best_tip_path peer_net.state.frontier
-           in
-           let open Fake_network in
-           let target_breadcrumb_child = List.last_exn target_best_tip_path in
-           let target_breadcrumb_child_hash =
-             Transition_frontier.Breadcrumb.state_hash target_breadcrumb_child
-           in
-           let target_breadcrumb_parent =
-             List.nth_exn target_best_tip_path
-               (List.length target_best_tip_path - 2)
-           in
-           let test =
-             setup_catchup_pipes ~network:my_net.network
-               ~frontier:my_net.state.frontier
-           in
-           let parent_hash =
-             Transition_frontier.Breadcrumb.parent_hash target_breadcrumb_parent
-           in
-           let target_transition_parent =
-             Transition_handler.Unprocessed_transition_cache.register_exn
-               test.cache
-               (downcast_breadcrumb target_breadcrumb_parent)
-           in
-           let target_transition_child =
-             Transition_handler.Unprocessed_transition_cache.register_exn
-               test.cache
-               (downcast_breadcrumb target_breadcrumb_child)
-           in
-           Strict_pipe.Writer.write test.job_writer
-             ( parent_hash
-             , [ Rose_tree.T
-                   ( target_transition_parent
-                   , [ Rose_tree.T (target_transition_child, []) ] )
-               ] ) ;
-           Thread_safe.block_on_async_exn (fun () ->
-               let final =
-                 Cache_lib.Cached.final_state target_transition_parent
-               in
-               match%map
-                 Deferred.any
-                   [ (Ivar.read final >>| fun x -> `Catchup_failed x)
-                   ; Strict_pipe.Reader.read test.breadcrumbs_reader
-                     >>| const `Catchup_success
-                   ]
-               with
-               | `Catchup_success ->
-                   failwith
-                     "target transition should've been invalidated with a \
-                      failure"
-               | `Catchup_failed fnl -> (
-                   match fnl with
-                   | `Success _ ->
-                       failwith "final state should be at `Failed"
-                   | `Failed ->
-                       let catchup_tree =
-                         match
-                           Transition_frontier.catchup_tree my_net.state.frontier
-                         with
-                         | Full tr ->
-                             tr
-                         | Hash _ ->
-                             failwith
-                               "in super catchup unit tests, the catchup tree \
-                                should always be Full_catchup_tree, but it is \
-                                Catchup_hash_tree for some reason"
-                       in
-                       let catchup_tree_node_list =
-                         State_hash.Table.data catchup_tree.nodes
-                       in
-                       List.iter catchup_tree_node_list ~f:(fun catchup_node ->
-                           let hash = catchup_node.state_hash in
-                           if
-                             Marlin_plonk_bindings_pasta_fp.equal hash
-                               target_breadcrumb_child_hash
-                           then
-                             failwith
-                               "the catchup job associated with \
-                                target_breadcrumb_child_hash should have been \
-                                cancelled and thus removed from the catchup \
-                                tree, but it is still here"
-                           else ()) ))) *)
-
-    (* let%test_unit "when building a breadcrumb fails, catchup will cancel its \
-                    children's catchup job and remove the failed-to-build block \
-                    from the cache" =
-       Quickcheck.test ~trials:1
-         Fake_network.Generator.(
-           gen ~precomputed_values ~verifier ~max_frontier_length
-             ~use_super_catchup
-             [ fresh_peer
-             ; broken_rpc_peer_branch
-                 ~frontier_branch_size:(max_frontier_length / 2)
-                 ~get_transition_chain_impl_option:None
-             ])
-         ~f:(fun network ->
-           let open Fake_network in
-           let [ my_net; peer_net ] = network.peer_networks in
-           let target_best_tip_path =
-             Transition_frontier.best_tip_path peer_net.state.frontier
-           in
-           let open Fake_network in
-           let target_breadcrumb_child = List.last_exn target_best_tip_path in
-           let target_breadcrumb_child_hash =
-             Transition_frontier.Breadcrumb.state_hash target_breadcrumb_child
-           in
-           let target_breadcrumb_parent =
-             List.nth_exn target_best_tip_path
-               (List.length target_best_tip_path - 2)
-           in
-           let test =
-             setup_catchup_pipes ~network:my_net.network
-               ~frontier:my_net.state.frontier
-             (* setup_catchup_pipes_fail_build_breadcrumb ~network:my_net.network
-               ~frontier:my_net.state.frontier *)
-           in
-           let parent_hash =
-             Transition_frontier.Breadcrumb.parent_hash target_breadcrumb_parent
-           in
-           let target_transition_parent =
-             Transition_handler.Unprocessed_transition_cache.register_exn
-               test.cache
-               (downcast_breadcrumb target_breadcrumb_parent)
-           in
-           let target_transition_child =
-             Transition_handler.Unprocessed_transition_cache.register_exn
-               test.cache
-               (downcast_breadcrumb target_breadcrumb_child)
-           in
-           Strict_pipe.Writer.write test.job_writer
-             ( parent_hash
-             , [ Rose_tree.T
-                   ( target_transition_parent
-                   , [ Rose_tree.T (target_transition_child, []) ] )
-               ] ) ;
-           Thread_safe.block_on_async_exn (fun () ->
-               let final =
-                 Cache_lib.Cached.final_state target_transition_parent
-               in
-               match%map
-                 Deferred.any
-                   [ (Ivar.read final >>| fun x -> `Catchup_failed x)
-                   ; Strict_pipe.Reader.read test.breadcrumbs_reader
-                     >>| const `Catchup_success
-                   ]
-               with
-               | `Catchup_success ->
-                   failwith
-                     "target transition should've been invalidated with a \
-                      failure"
-               | `Catchup_failed fnl -> (
-                   match fnl with
-                   | `Success _ ->
-                       failwith "final state should be at `Failed"
-                   | `Failed ->
-                       let catchup_tree =
-                         match
-                           Transition_frontier.catchup_tree my_net.state.frontier
-                         with
-                         | Full tr ->
-                             tr
-                         | Hash _ ->
-                             failwith
-                               "in super catchup unit tests, the catchup tree \
-                                should always be Full_catchup_tree, but it is \
-                                Catchup_hash_tree for some reason"
-                       in
-                       let catchup_tree_node_list =
-                         State_hash.Table.data catchup_tree.nodes
-                       in
-                       List.iter catchup_tree_node_list ~f:(fun catchup_node ->
-                           let hash = catchup_node.state_hash in
-                           if
-                             Marlin_plonk_bindings_pasta_fp.equal hash
-                               target_breadcrumb_child_hash
-                           then
-                             failwith
-                               "the catchup job associated with \
-                                target_breadcrumb_child_hash should have been \
-                                cancelled and thus removed from the catchup \
-                                tree, but it is still here"
-                           else ()) ))) *)
   end )

@@ -1,24 +1,48 @@
 {
   "nodes": {
-    "dream2nix": {
+    "describe-dune": {
       "inputs": {
+        "flake-utils": [
+          "utils"
+        ],
         "nixpkgs": [
           "nixpkgs"
-        ],
-        "purescript-overlay": "purescript-overlay",
-        "pyproject-nix": "pyproject-nix"
+        ]
       },
       "locked": {
-        "lastModified": 1711684574,
-        "narHash": "sha256-/7clw2bkbDLzqrToVNPDaqHuijni5VRoB6yqdZdBmhw=",
-        "owner": "nix-community",
-        "repo": "dream2nix",
-        "rev": "26a6c3a3405cdb2c2218cdc4e1e2bcf7a07af7ba",
+        "lastModified": 1724407960,
+        "narHash": "sha256-pUKTVMYEtsD1AGlHFTdPourowt+tJ3htKhRu7VALFzc=",
+        "owner": "o1-labs",
+        "repo": "describe-dune",
+        "rev": "be828239c05671209e979f9d5c2e3094e3be7a46",
         "type": "github"
       },
       "original": {
-        "owner": "nix-community",
-        "repo": "dream2nix",
+        "owner": "o1-labs",
+        "repo": "describe-dune",
+        "type": "github"
+      }
+    },
+    "dune-nix": {
+      "inputs": {
+        "flake-utils": [
+          "utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1724418497,
+        "narHash": "sha256-HjTh7o02QhGXmbxmpE5HRWei3H/pyh/NKCMCnucDaYs=",
+        "owner": "o1-labs",
+        "repo": "dune-nix",
+        "rev": "26dc164a4c3976888e13eabd73a210b78505820f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "o1-labs",
+        "repo": "dune-nix",
         "type": "github"
       }
     },
@@ -299,6 +323,22 @@
         "type": "github"
       }
     },
+    "o1-opam-repository": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1715294616,
+        "narHash": "sha256-W2p9Vs8PqpKGvMByxVqpxAljjpEMqNcuNnjMBAAKicI=",
+        "owner": "o1-labs",
+        "repo": "opam-repository",
+        "rev": "38d6995e307c82b3c0b3bc86a867213db724d1c5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "o1-labs",
+        "repo": "opam-repository",
+        "type": "github"
+      }
+    },
     "opam-nix": {
       "inputs": {
         "flake-compat": "flake-compat_2",
@@ -380,48 +420,10 @@
         "type": "github"
       }
     },
-    "purescript-overlay": {
-      "inputs": {
-        "nixpkgs": [
-          "dream2nix",
-          "nixpkgs"
-        ],
-        "slimlock": "slimlock"
-      },
-      "locked": {
-        "lastModified": 1696022621,
-        "narHash": "sha256-eMjFmsj2G1E0Q5XiibUNgFjTiSz0GxIeSSzzVdoN730=",
-        "owner": "thomashoneyman",
-        "repo": "purescript-overlay",
-        "rev": "047c7933abd6da8aa239904422e22d190ce55ead",
-        "type": "github"
-      },
-      "original": {
-        "owner": "thomashoneyman",
-        "repo": "purescript-overlay",
-        "type": "github"
-      }
-    },
-    "pyproject-nix": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1702448246,
-        "narHash": "sha256-hFg5s/hoJFv7tDpiGvEvXP0UfFvFEDgTdyHIjDVHu1I=",
-        "owner": "davhau",
-        "repo": "pyproject.nix",
-        "rev": "5a06a2697b228c04dd2f35659b4b659ca74f7aeb",
-        "type": "github"
-      },
-      "original": {
-        "owner": "davhau",
-        "ref": "dream2nix",
-        "repo": "pyproject.nix",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
-        "dream2nix": "dream2nix",
+        "describe-dune": "describe-dune",
+        "dune-nix": "dune-nix",
         "flake-buildkite-pipeline": "flake-buildkite-pipeline",
         "flake-compat": "flake-compat",
         "flockenzeit": "flockenzeit",
@@ -432,31 +434,10 @@
         "nix-utils": "nix-utils",
         "nixpkgs": "nixpkgs_2",
         "nixpkgs-mozilla": "nixpkgs-mozilla",
+        "o1-opam-repository": "o1-opam-repository",
         "opam-nix": "opam-nix",
         "opam-repository": "opam-repository",
         "utils": "utils"
-      }
-    },
-    "slimlock": {
-      "inputs": {
-        "nixpkgs": [
-          "dream2nix",
-          "purescript-overlay",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1688610262,
-        "narHash": "sha256-Wg0ViDotFWGWqKIQzyYCgayeH8s4U1OZcTiWTQYdAp4=",
-        "owner": "thomashoneyman",
-        "repo": "slimlock",
-        "rev": "b5c6cdcaf636ebbebd0a1f32520929394493f1a6",
-        "type": "github"
-      },
-      "original": {
-        "owner": "thomashoneyman",
-        "repo": "slimlock",
-        "type": "github"
       }
     },
     "utils": {

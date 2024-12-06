@@ -42,7 +42,6 @@
    mina_ledger
    transaction_snark_work
    error_json
-   mina_compile_config
    mina_state
    transaction_protocol_state
    ppx_version.runtime

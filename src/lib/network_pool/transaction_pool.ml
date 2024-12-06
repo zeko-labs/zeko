@@ -3,8 +3,6 @@
     transactions (user commands) and providing them to the block producer code.
 *)
 
-(* Only show stdout for failed inline tests.*)
-open Inline_test_quiet_logs
 open Core
 open Async
 open Mina_base
@@ -289,18 +287,20 @@ struct
         ; verifier : (Verifier.t[@sexp.opaque])
         ; genesis_constants : Genesis_constants.t
         ; slot_tx_end : Mina_numbers.Global_slot_since_hard_fork.t option
+        ; compile_config : Mina_compile_config.t
         }
       [@@deriving sexp_of]
 
       (* remove next line if there's a way to force [@@deriving make] write a
          named parameter instead of an optional parameter *)
       let make ~trust_system ~pool_max_size ~verifier ~genesis_constants
-          ~slot_tx_end =
+          ~slot_tx_end ~compile_config =
         { trust_system
         ; pool_max_size
         ; verifier
         ; genesis_constants
         ; slot_tx_end
+        ; compile_config
         }
     end
 
@@ -831,7 +831,7 @@ struct
         ; remaining_in_batch = max_per_15_seconds
         ; config
         ; logger
-        ; batcher = Batcher.create config.verifier
+        ; batcher = Batcher.create ~logger config.verifier
         ; best_tip_diff_relay = None
         ; best_tip_ledger = None
         ; verification_key_table = Vk_refcount_table.create ()
@@ -1090,7 +1090,8 @@ struct
               ~f:(fun acc user_cmd ->
                 match
                   User_command.check_well_formedness
-                    ~genesis_constants:t.config.genesis_constants user_cmd
+                    ~genesis_constants:t.config.genesis_constants
+                    ~compile_config:t.config.compile_config user_cmd
                 with
                 | Ok () ->
                     acc
@@ -1641,6 +1642,12 @@ let%test_module _ =
 
     let num_extra_keys = 30
 
+    let block_window_duration =
+      Float.of_int
+        Genesis_constants.For_unit_tests.Constraint_constants.t
+          .block_window_duration_ms
+      |> Time.Span.of_ms
+
     (* keys that can be used when generating new accounts *)
     let extra_keys =
       Array.init num_extra_keys ~f:(fun _ -> Signature_lib.Keypair.create ())
@@ -1653,18 +1660,20 @@ let%test_module _ =
 
     let proof_level = precomputed_values.proof_level
 
-    let minimum_fee =
-      Currency.Fee.to_nanomina_int Currency.Fee.minimum_user_command_fee
+    let genesis_constants = precomputed_values.genesis_constants
 
-    let logger = Logger.create ()
+    let compile_config = precomputed_values.compile_config
+
+    let minimum_fee =
+      Currency.Fee.to_nanomina_int genesis_constants.minimum_user_command_fee
+
+    let logger = Logger.null ()
 
     let time_controller = Block_time.Controller.basic ~logger
 
     let verifier =
       Async.Thread_safe.block_on_async_exn (fun () ->
-          Verifier.create ~logger ~proof_level ~constraint_constants
-            ~conf_dir:None
-            ~pids:(Child_processes.Termination.create_pid_table ())
+          Verifier.For_tests.default ~constraint_constants ~logger ~proof_level
             () )
 
     let `VK vk, `Prover prover =
@@ -1675,7 +1684,6 @@ let%test_module _ =
     let dummy_state_view =
       let state_body =
         let consensus_constants =
-          let genesis_constants = Genesis_constants.for_unit_tests in
           Consensus.Constants.create ~constraint_constants
             ~protocol_constants:genesis_constants.protocol
         in
@@ -1915,12 +1923,13 @@ let%test_module _ =
       let trust_system = Trust_system.null () in
       let config =
         Test.Resource_pool.make_config ~trust_system ~pool_max_size ~verifier
-          ~genesis_constants:Genesis_constants.compiled ~slot_tx_end
+          ~genesis_constants ~slot_tx_end ~compile_config
       in
       let pool_, _, _ =
         Test.create ~config ~logger ~constraint_constants ~consensus_constants
           ~time_controller ~frontier_broadcast_pipe:frontier_pipe_r
           ~log_gossip_heard:false ~on_remote_push:(Fn.const Deferred.unit)
+          ~block_window_duration
       in
       let txn_pool = Test.resource_pool pool_ in
       let%map () = Async.Scheduler.yield_until_no_jobs_remain () in
@@ -2044,7 +2053,8 @@ let%test_module _ =
         }
       in
       let zkapp_command =
-        Transaction_snark.For_tests.multiple_transfers test_spec
+        Transaction_snark.For_tests.multiple_transfers ~constraint_constants
+          test_spec
       in
       let zkapp_command =
         Or_error.ok_exn
@@ -2102,33 +2112,27 @@ let%test_module _ =
             let%map (zkapp_command : Zkapp_command.t) =
               Mina_generators.Zkapp_command_generators.gen_zkapp_command_from
                 ~max_token_updates:1 ~keymap ~account_state_tbl
-                ~fee_payer_keypair ~ledger:best_tip_ledger ()
-            in
-            let zkapp_command =
-              { zkapp_command with
-                account_updates =
-                  Zkapp_command.Call_forest.map zkapp_command.account_updates
-                    ~f:(fun (p : Account_update.t) ->
-                      { p with
-                        body =
-                          { p.body with
-                            preconditions =
-                              { p.body.preconditions with
-                                account =
-                                  ( match p.body.preconditions.account.nonce with
-                                  | Zkapp_basic.Or_ignore.Check n as c
-                                    when Zkapp_precondition.Numeric.(
-                                           is_constant Tc.nonce c) ->
-                                      Zkapp_precondition.Account.nonce n.lower
-                                  | _ ->
-                                      Zkapp_precondition.Account.accept )
-                              }
-                          }
-                      } )
-              }
-            in
-            let zkapp_command_valid_vk_hashes =
-              Zkapp_command.For_tests.replace_vks zkapp_command vk
+                ~fee_payer_keypair ~ledger:best_tip_ledger ~constraint_constants
+                ~genesis_constants
+                ~map_account_update:(fun (p : Account_update.t) ->
+                  Zkapp_command.For_tests.replace_vk vk
+                    { p with
+                      body =
+                        { p.body with
+                          preconditions =
+                            { p.body.preconditions with
+                              account =
+                                ( match p.body.preconditions.account.nonce with
+                                | Zkapp_basic.Or_ignore.Check n as c
+                                  when Zkapp_precondition.Numeric.(
+                                         is_constant Tc.nonce c) ->
+                                    Zkapp_precondition.Account.nonce n.lower
+                                | _ ->
+                                    Zkapp_precondition.Account.accept )
+                            }
+                        }
+                    } )
+                ()
             in
             let valid_zkapp_command =
               Or_error.ok_exn
@@ -2139,7 +2143,7 @@ let%test_module _ =
                         ~location_of_account:
                           (Mina_ledger.Ledger.location_of_account
                              best_tip_ledger ) )
-                   zkapp_command_valid_vk_hashes )
+                   zkapp_command )
             in
             User_command.Zkapp_command valid_zkapp_command
           in
@@ -2196,19 +2200,22 @@ let%test_module _ =
       let tm1 = Time.now () in
       [%log' info test.txn_pool.logger] "Time for add_commands: %0.04f sec"
         (Time.diff tm1 tm0 |> Time.Span.to_sec) ;
+      let debug = false in
       ( match result with
       | Ok (`Accept, _, rejects) ->
-          List.iter rejects ~f:(fun (cmd, err) ->
-              Core.Printf.printf
-                !"command was rejected because %s: %{Yojson.Safe}\n%!"
-                (Diff_versioned.Diff_error.to_string_name err)
-                (User_command.to_yojson cmd) )
+          if debug then
+            List.iter rejects ~f:(fun (cmd, err) ->
+                Core.Printf.printf
+                  !"command was rejected because %s: %{Yojson.Safe}\n%!"
+                  (Diff_versioned.Diff_error.to_string_name err)
+                  (User_command.to_yojson cmd) )
       | Ok (`Reject, _, _) ->
           failwith "diff was rejected during application"
       | Error (`Other err) ->
-          Core.Printf.printf
-            !"failed to apply diff to pool: %s\n%!"
-            (Error.to_string_hum err) ) ;
+          if debug then
+            Core.Printf.printf
+              !"failed to apply diff to pool: %s\n%!"
+              (Error.to_string_hum err) ) ;
       result
 
     let add_commands' ?local test cs =
@@ -3078,10 +3085,8 @@ let%test_module _ =
               authorization would be rejected" =
       Thread_safe.block_on_async_exn (fun () ->
           let%bind verifier_full =
-            Verifier.create ~logger ~proof_level:Full ~constraint_constants
-              ~conf_dir:None
-              ~pids:(Child_processes.Termination.create_pid_table ())
-              ()
+            Verifier.For_tests.default ~constraint_constants ~logger
+              ~proof_level:Full ()
           in
           let%bind test =
             setup_test ~verifier:verifier_full

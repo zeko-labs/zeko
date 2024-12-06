@@ -11,6 +11,15 @@ module Make
     (Inputs : Intf.Step_main_inputs.S
                 with type Impl.field = Backend.Tick.Field.t
                  and type Impl.Bigint.t = Backend.Tick.Bigint.t
+                 and type ('var, 'value, 'aux, 'field, 'checked) Impl.Typ.typ' =
+                  ( 'var
+                  , 'value
+                  , 'aux
+                  , 'field
+                  , 'checked )
+                  Step_main_inputs.Impl.Typ.typ'
+                 and type ('var, 'value, 'field, 'checked) Impl.Typ.typ =
+                  ('var, 'value, 'field, 'checked) Step_main_inputs.Impl.Typ.typ
                  and type Inner_curve.Constant.Scalar.t = Backend.Tock.Field.t) =
 struct
   open Inputs
@@ -1159,14 +1168,7 @@ struct
   let verify ~proofs_verified ~is_base_case ~sg_old ~sponge_after_index
       ~lookup_parameters ~feature_flags ~(proof : Wrap_proof.Checked.t) ~srs
       ~wrap_domain ~wrap_verification_key statement
-      (unfinalized :
-        ( _
-        , _
-        , _ Shifted_value.Type2.t
-        , _
-        , _
-        , _ )
-        Types.Step.Proof_state.Per_proof.In_circuit.t ) =
+      (unfinalized : Impls.Step.unfinalized_proof_var) =
     let public_input :
         [ `Field of Field.t | `Packed_bits of Field.t * int ] array =
       with_label "pack_statement" (fun () ->

@@ -66,6 +66,7 @@ val gen_zkapp_command_from :
   -> ?failure:failure
   -> ?max_account_updates:int
   -> ?max_token_updates:int
+  -> ?map_account_update:(Account_update.t -> Account_update.t)
   -> fee_payer_keypair:Signature_lib.Keypair.t
   -> keymap:
        Signature_lib.Private_key.t Signature_lib.Public_key.Compressed.Map.t
@@ -74,6 +75,8 @@ val gen_zkapp_command_from :
   -> ?protocol_state_view:Zkapp_precondition.Protocol_state.View.t
   -> ?vk:(Side_loaded_verification_key.t, State_hash.t) With_hash.Stable.V1.t
   -> ?available_public_keys:Signature_lib.Public_key.Compressed.Hash_set.t
+  -> genesis_constants:Genesis_constants.t
+  -> constraint_constants:Genesis_constants.Constraint_constants.t
   -> unit
   -> Zkapp_command.t Quickcheck.Generator.t
 
@@ -92,6 +95,8 @@ val gen_list_of_zkapp_command_from :
   -> ?protocol_state_view:Zkapp_precondition.Protocol_state.View.t
   -> ?vk:(Side_loaded_verification_key.t, State_hash.t) With_hash.Stable.V1.t
   -> ?length:int
+  -> genesis_constants:Genesis_constants.t
+  -> constraint_constants:Genesis_constants.Constraint_constants.t
   -> unit
   -> Zkapp_command.t list Quickcheck.Generator.t
 

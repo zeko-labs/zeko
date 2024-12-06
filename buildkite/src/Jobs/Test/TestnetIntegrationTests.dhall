@@ -14,12 +14,21 @@ let Profiles = ../../Constants/Profiles.dhall
 
 let Dockers = ../../Constants/DockerVersions.dhall
 
+let Network = ../../Constants/Network.dhall
+
+let Artifacts = ../../Constants/Artifacts.dhall
+
 let dependsOn =
         Dockers.dependsOn
           Dockers.Type.Bullseye
+          (Some Network.Type.Berkeley)
           Profiles.Type.Standard
-          "daemon-berkeley"
-      # Dockers.dependsOn Dockers.Type.Bullseye Profiles.Type.Standard "archive"
+          Artifacts.Type.Daemon
+      # Dockers.dependsOn
+          Dockers.Type.Bullseye
+          (None Network.Type)
+          Profiles.Type.Standard
+          Artifacts.Type.Archive
 
 in  Pipeline.build
       Pipeline.Config::{
@@ -29,39 +38,34 @@ in  Pipeline.build
           , S.strictlyStart (S.contains "dockerfiles")
           , S.strictlyStart
               (S.contains "buildkite/src/Jobs/Test/TestnetIntegrationTest")
+          , S.strictlyStart (S.contains "buildkite/src/Command/TestExecutive")
           , S.strictlyStart
-              (S.contains "buildkite/src/Jobs/Command/TestExecutive")
+              (S.contains "buildkite/scripts/run-test-executive-cloud")
           , S.strictlyStart
-              (S.contains "automation/terraform/modules/o1-integration")
-          , S.strictlyStart
-              (S.contains "automation/terraform/modules/kubernetes/testnet")
-          , S.strictlyStart
-              ( S.contains
-                  "automation/buildkite/script/run-test-executive-cloud"
-              )
-          , S.strictlyStart
-              ( S.contains
-                  "automation/buildkite/script/run-test-executive-local"
-              )
+              (S.contains "buildkite/scripts/run-test-executive-local")
           ]
         , path = "Test"
         , name = "TestnetIntegrationTests"
-        , tags = [ PipelineTag.Type.Long, PipelineTag.Type.Test ]
+        , tags =
+          [ PipelineTag.Type.Long
+          , PipelineTag.Type.Test
+          , PipelineTag.Type.Stable
+          ]
         , mode = PipelineMode.Type.Stable
         }
       , steps =
-        [ TestExecutive.executeCloud "peers-reliability" dependsOn
-        , TestExecutive.executeCloud "chain-reliability" dependsOn
+        [ TestExecutive.executeLocal "peers-reliability" dependsOn
+        , TestExecutive.executeLocal "chain-reliability" dependsOn
         , TestExecutive.executeLocal "payment" dependsOn
-        , TestExecutive.executeCloud "gossip-consis" dependsOn
-        , TestExecutive.executeCloud "block-prod-prio" dependsOn
-        , TestExecutive.executeCloud "medium-bootstrap" dependsOn
-        , TestExecutive.executeCloud "block-reward" dependsOn
-        , TestExecutive.executeCloud "zkapps" dependsOn
-        , TestExecutive.executeCloud "zkapps-timing" dependsOn
-        , TestExecutive.executeCloud "zkapps-nonce" dependsOn
-        , TestExecutive.executeCloud "verification-key" dependsOn
-        , TestExecutive.executeCloud "slot-end" dependsOn
-        , TestExecutive.executeCloud "epoch-ledger" dependsOn
+        , TestExecutive.executeLocal "gossip-consis" dependsOn
+        , TestExecutive.executeLocal "block-prod-prio" dependsOn
+        , TestExecutive.executeLocal "medium-bootstrap" dependsOn
+        , TestExecutive.executeLocal "block-reward" dependsOn
+        , TestExecutive.executeLocal "zkapps" dependsOn
+        , TestExecutive.executeLocal "zkapps-timing" dependsOn
+        , TestExecutive.executeLocal "zkapps-nonce" dependsOn
+        , TestExecutive.executeLocal "verification-key" dependsOn
+        , TestExecutive.executeLocal "slot-end" dependsOn
+        , TestExecutive.executeLocal "epoch-ledger" dependsOn
         ]
       }

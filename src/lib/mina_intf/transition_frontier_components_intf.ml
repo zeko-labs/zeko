@@ -205,7 +205,6 @@ module type Consensus_best_tip_prover_intf = sig
   val verify :
        context:(module CONTEXT)
     -> verifier:Verifier.t
-    -> genesis_constants:Genesis_constants.t
     -> Consensus.Data.Consensus_state.Value.t State_hash.With_state_hashes.t
     -> ( Mina_block.t
        , State_body_hash.t list * Mina_block.t )
@@ -222,9 +221,9 @@ module type Sync_handler_intf = sig
        frontier:transition_frontier
     -> Ledger_hash.t
     -> Mina_ledger.Sync_ledger.Query.t Envelope.Incoming.t
-    -> logger:Logger.t
+    -> context:(module CONTEXT)
     -> trust_system:Trust_system.t
-    -> Mina_ledger.Sync_ledger.Answer.t option Deferred.t
+    -> Mina_ledger.Sync_ledger.Answer.t Or_error.t Deferred.t
 
   val get_staged_ledger_aux_and_pending_coinbases_at_hash :
        frontier:transition_frontier
@@ -304,7 +303,11 @@ module type Transition_frontier_controller_intf = sig
          Mina_block.initial_valid_block Envelope.Incoming.t list
     -> frontier:transition_frontier
     -> network_transition_reader:
-         Mina_block.initial_valid_block Envelope.Incoming.t Strict_pipe.Reader.t
+         ( [ `Block of Mina_block.t Envelope.Incoming.t
+           | `Header of Mina_block.Header.t Envelope.Incoming.t ]
+         * [ `Time_received of Block_time.t ]
+         * [ `Valid_cb of Mina_net2.Validation_callback.t ] )
+         Strict_pipe.Reader.t
     -> producer_transition_reader:breadcrumb Strict_pipe.Reader.t
     -> clear_reader:[ `Clear ] Strict_pipe.Reader.t
     -> unit
@@ -325,6 +328,7 @@ module type Transition_router_intf = sig
   (** [sync_local_state] is `true` by default, may be set to `false` for tests *)
   val run :
        ?sync_local_state:bool
+    -> ?cache_exceptions:bool
     -> context:(module CONTEXT)
     -> trust_system:Trust_system.t
     -> verifier:Verifier.t
@@ -335,18 +339,19 @@ module type Transition_router_intf = sig
     -> consensus_local_state:Consensus.Data.Local_state.t
     -> persistent_root_location:string
     -> persistent_frontier_location:string
-    -> frontier_broadcast_pipe:
-         transition_frontier option Pipe_lib.Broadcast_pipe.Reader.t
-         * transition_frontier option Pipe_lib.Broadcast_pipe.Writer.t
+    -> get_current_frontier:(unit -> transition_frontier option)
+    -> frontier_broadcast_writer:
+         transition_frontier option Pipe_lib.Broadcast_pipe.Writer.t
     -> network_transition_reader:
-         ( [ `Transition of Mina_block.t Envelope.Incoming.t ]
+         ( [ `Block of Mina_block.t Envelope.Incoming.t
+           | `Header of Mina_block.Header.t Envelope.Incoming.t ]
          * [ `Time_received of Block_time.t ]
          * [ `Valid_cb of Mina_net2.Validation_callback.t ] )
          Strict_pipe.Reader.t
     -> producer_transition_reader:breadcrumb Strict_pipe.Reader.t
-    -> most_recent_valid_block:
-         Mina_block.initial_valid_block Broadcast_pipe.Reader.t
-         * Mina_block.initial_valid_block Broadcast_pipe.Writer.t
+    -> get_most_recent_valid_block:(unit -> Mina_block.initial_valid_header)
+    -> most_recent_valid_block_writer:
+         Mina_block.initial_valid_header Broadcast_pipe.Writer.t
     -> get_completed_work:
          (   Transaction_snark_work.Statement.t
           -> Transaction_snark_work.Checked.t option )
