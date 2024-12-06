@@ -4,7 +4,7 @@ open Async
 open Mina_ledger
 module L = Ledger
 
-let constraint_constants = Genesis_constants.Constraint_constants.compiled
+let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 module Test_accounts = struct
   type t = { pk : string; balance : int64 } [@@deriving yojson]

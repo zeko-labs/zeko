@@ -11,7 +11,7 @@ module Field = Data_hash.Make_full_size (struct
   let version_byte = '\x00'
 end)
 
-let constraint_constants = Genesis_constants.Constraint_constants.compiled
+let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 let time ~logger label (d : 'a Deferred.t) =
   [%log info] "Starting %s\n%!" label ;

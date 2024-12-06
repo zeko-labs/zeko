@@ -3,7 +3,7 @@ open Mina_base
 open Mina_ledger
 open Signature_lib
 
-let constraint_constants = Genesis_constants.Constraint_constants.compiled
+let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
 

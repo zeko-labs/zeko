@@ -255,18 +255,19 @@ module Types = struct
         }
 
       let of_full_account
-          { Account.Poly.public_key
-          ; token_id
-          ; token_symbol
-          ; nonce
-          ; balance
-          ; receipt_chain_hash
-          ; delegate
-          ; voting_for
-          ; timing
-          ; permissions
-          ; zkapp
-          } =
+          ({ public_key
+           ; token_id
+           ; token_symbol
+           ; nonce
+           ; balance
+           ; receipt_chain_hash
+           ; delegate
+           ; voting_for
+           ; timing
+           ; permissions
+           ; zkapp
+           } :
+            Account.value ) =
         { Account.Poly.public_key
         ; token_id
         ; token_symbol = Some token_symbol
@@ -642,7 +643,8 @@ module Types = struct
                  ~resolve:(fun _ { account; _ } ->
                    let open Option.Let_syntax in
                    let%map account = Partial_account.to_full_account account in
-                   Ledger_hash.of_digest (Account.digest account) )
+                   Ledger_hash.of_digest
+                     (Account.of_poly account |> Account.digest) )
              ; field "merklePath"
                  ~doc:
                    "Merkle path is a list of path elements that are either the \
