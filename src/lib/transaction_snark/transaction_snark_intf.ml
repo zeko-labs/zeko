@@ -1,13 +1,9 @@
-open Core
-open Mina_base
-open Mina_transaction
-open Snark_params
-open Currency
-
-(* ZEKO NOTE: issue #64 *)
-type env = < mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
-
 module type Full = sig
+  open Core
+  open Mina_base
+  open Mina_transaction
+  open Snark_params
+  open Currency
   module Transaction_validator = Transaction_validator
 
   (** For debugging. Logs to stderr the inputs to the top hash. *)
@@ -162,14 +158,6 @@ module type Full = sig
       -> spec:Zkapp_command_segment.Basic.t
       -> t Async.Deferred.t
 
-    (* ZEKO NOTE: issue #64, allows passing in env *)
-    val of_zkapp_command_segment_zeko_exn :
-         statement:Statement.With_sok.t
-      -> witness:Zkapp_command_segment.Witness.t
-      -> env:env
-      -> spec:Zkapp_command_segment.Basic.t
-      -> t Async.Deferred.t
-
     val merge :
       t -> t -> sok_digest:Sok_message.Digest.t -> t Async.Deferred.Or_error.t
   end
@@ -263,16 +251,88 @@ module type Full = sig
            Account_timing.As_record.t )
          Tick.Checked.t
 
+    type _ Snarky_backendless.Request.t +=
+      | Transaction : Transaction_union.t Snarky_backendless.Request.t
+      | State_body :
+          Mina_state.Protocol_state.Body.Value.t Snarky_backendless.Request.t
+      | Init_stack : Pending_coinbase.Stack.t Snarky_backendless.Request.t
+      | Global_slot :
+          Mina_numbers.Global_slot_since_genesis.t Snarky_backendless.Request.t
+
+    val main :
+         constraint_constants:Genesis_constants.Constraint_constants.t
+      -> Statement.With_sok.var
+      -> unit Tick.Checked.t
+
     module Zkapp_command_snark : sig
+      module Global_state : sig
+        type t =
+          { first_pass_ledger :
+              Ledger_hash.var * Mina_ledger.Sparse_ledger.t Prover_value.t
+          ; second_pass_ledger :
+              Ledger_hash.var * Mina_ledger.Sparse_ledger.t Prover_value.t
+          ; fee_excess : Amount.Signed.var
+          ; supply_increase : Amount.Signed.var
+          ; protocol_state : Zkapp_precondition.Protocol_state.View.Checked.t
+          ; block_global_slot :
+              Mina_numbers.Global_slot_since_genesis.Checked.var
+          }
+      end
+
+      type stack_frame
+
+      type call_stack
+
+      type length
+
       val main :
            ?witness:Zkapp_command_segment.Witness.t
-        -> ?env:env
+        -> ?zeko_handler:
+             < account :
+                 ( Account.Checked.Unhashed.t
+                 , Tick.Field.Var.t lazy_t )
+                 With_hash.t
+             ; account_update : Zkapp_call_forest.Checked.account_update
+             ; amount : Amount.var
+             ; bool : Tick.Boolean.var
+             ; failure : unit
+             ; field : Tick.Field.Var.t
+             ; full_transaction_commitment : Tick.Field.Var.t
+             ; global_state : Global_state.t
+             ; inclusion_proof : (Tick.Boolean.var * Tick.Field.Var.t) list
+             ; ledger :
+                 Ledger_hash.var * Mina_ledger.Sparse_ledger.t Prover_value.t
+             ; local_state :
+                 ( stack_frame
+                 , call_stack
+                 , Amount.Signed.var
+                 , Ledger_hash.var * Mina_ledger.Sparse_ledger.t Prover_value.t
+                 , Tick.Boolean.var
+                 , Tick.Field.Var.t
+                 , length
+                 , unit )
+                 Mina_transaction_logic.Zkapp_command_logic.Local_state.t
+             ; protocol_state_precondition :
+                 Zkapp_precondition.Protocol_state.Checked.t
+             ; signed_amount : Amount.Signed.var
+             ; token_id : Token_id.Checked.t
+             ; transaction_commitment : Tick.Field.Var.t
+             ; valid_while_precondition :
+                 Zkapp_precondition.Valid_while.Checked.t
+             ; zkapp_command : Zkapp_command.t >
+             Mina_transaction_logic.Zkapp_command_logic.handler
         -> Zkapp_command_segment.Spec.t
         -> constraint_constants:Genesis_constants.Constraint_constants.t
         -> Statement.With_sok.var
         -> Zkapp_statement.Checked.t option
            * [> `Must_verify of Tick.Boolean.var ]
     end
+  end
+
+  module Merge : sig
+    val main :
+         Statement.With_sok.var
+      -> (Statement.With_sok.var * Statement.With_sok.var) Tick.Checked.t
   end
 
   module For_tests : sig

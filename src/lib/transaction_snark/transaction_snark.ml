@@ -11,14 +11,6 @@ module Wire_types = Mina_wire_types.Transaction_snark
 
 let proof_cache = ref None
 
-(* ZEKO NOTE: issue #64 *)
-type env = < mark_shifted_and_get_previous_shiftedness : Account_id.t -> bool >
-
-let dummy_env : env =
-  object
-    method mark_shifted_and_get_previous_shiftedness _ = true
-  end
-
 module Make_sig (A : Wire_types.Types.S) = struct
   module type S = Transaction_snark_intf.Full with type Stable.V2.t = A.V2.t
 end
@@ -679,8 +671,6 @@ module Make_str (A : Wire_types.Concrete) = struct
         val set_zkapp_input : Zkapp_statement.Checked.t -> unit
 
         val set_must_verify : Boolean.var -> unit
-
-        val env : env
       end
 
       type account_update = Zkapp_call_forest.Checked.account_update =
@@ -736,9 +726,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               with Failure msg -> raise_failure ~pos msg
           end
 
-          let display _b ~label =
-            (* ZEKO NOTE: just implemented for debugging purposes *)
-            label ^ ": " ^ Bool.to_string (As_prover.read Boolean.typ _b)
+          let display _b ~label:_ = ""
 
           type failure_status = unit
 
@@ -1329,12 +1317,8 @@ module Make_str (A : Wire_types.Concrete) = struct
               run_checked (Amount.Signed.Checked.if_ b ~then_ ~else_)
 
             let is_non_neg (t : t) =
-              Boolean.if_
-                (equal t Amount.Signed.(Checked.constant zero))
-                ~then_:Boolean.true_
-                ~else_:
-                  (Sgn.Checked.is_pos
-                     (run_checked (Currency.Amount.Signed.Checked.sgn t)) )
+              Sgn.Checked.is_pos
+                (run_checked (Currency.Amount.Signed.Checked.sgn t))
 
             let is_neg (t : t) =
               Sgn.Checked.is_neg
@@ -1402,14 +1386,8 @@ module Make_str (A : Wire_types.Concrete) = struct
             , Bool.failure_status_tbl )
             Mina_transaction_logic.Zkapp_command_logic.Local_state.t
 
-          let add_check (t : t) failure b =
-            (* ZEKO NOTE: added to ensure failure doesn't happen for good measure.
-               Quite possibly not needed, but I'm not sure. *)
-            with_label (Mina_base.Transaction_status.Failure.to_string failure)
-              (fun () ->
-                with_label __LOC__ (fun () ->
-                    Boolean.Assert.is_true b ;
-                    { t with success = Bool.(t.success &&& b) } ) )
+          let add_check (t : t) _failure b =
+            { t with success = Bool.(t.success &&& b) }
 
           let update_failure_status_tbl (t : t) _failure_status b =
             add_check
@@ -1811,27 +1789,13 @@ module Make_str (A : Wire_types.Concrete) = struct
             (eff : (r, Env.t) Mina_transaction_logic.Zkapp_command_logic.Eff.t)
             : r =
           match eff with
-          (* ZEKO NOTE: We don't allow time/network preconditions because we haven't defined
-             what they should mean yet. What is a slot on the rollup? What about the epoch data?
-             (issue #63) *)
-          | Check_valid_while_precondition (valid_while, _global_state) ->
-              Boolean.not (Zkapp_basic.Or_ignore.Checked.is_check valid_while)
-          | Check_protocol_state_precondition (protocol_state, _global_state)
-            -> (
-              let open Zkapp_precondition.Protocol_state in
-              let accept = constant typ accept in
-              let (Typ typ) = typ in
-              let fields, _ = typ.var_to_fields protocol_state in
-              let fields', _ = typ.var_to_fields accept in
-              let zipped =
-                List.zip (Array.to_list fields) (Array.to_list fields')
-              in
-              match zipped with
-              | Ok zipped ->
-                  List.fold zipped ~init:Boolean.true_ ~f:(fun acc (x, y) ->
-                      Boolean.(acc || Field.equal x y) )
-              | Unequal_lengths ->
-                  failwith "failed to compare protocol state precondition" )
+          | Check_valid_while_precondition (valid_while, global_state) ->
+              Zkapp_precondition.Valid_while.Checked.check valid_while
+                global_state.block_global_slot
+          | Check_protocol_state_precondition
+              (protocol_state_predicate, global_state) ->
+              Zkapp_precondition.Protocol_state.Checked.check
+                protocol_state_predicate global_state.protocol_state
           | Check_account_precondition
               ({ account_update; _ }, account, new_account, local_state) ->
               let local_state = ref local_state in
@@ -1850,14 +1814,8 @@ module Make_str (A : Wire_types.Concrete) = struct
                 }
               in
               Inputs.Account.account_with_hash account'
-          | Get_shift_action_state a ->
-              (* ZEKO NOTE: issue #64 *)
-              let compute () =
-                let a = As_prover.read Account.Checked.Unhashed.typ a.data in
-                env#mark_shifted_and_get_previous_shiftedness
-                  (Account_id.create a.public_key a.token_id)
-              in
-              exists Boolean.typ ~compute
+          | Get_shift_action_state _ ->
+              Boolean.true_
       end
 
       let check_protocol_state ~pending_coinbase_stack_init
@@ -1897,7 +1855,23 @@ module Make_str (A : Wire_types.Concrete) = struct
                 Boolean.Assert.all
                   [ correct_coinbase_target_stack; valid_init_state ] ) )
 
-      let main ?(witness : Witness.t option) ?(env = dummy_env) (spec : Spec.t)
+      type stack_frame =
+        ( (Token_id.Checked.t, Zkapp_call_forest.Checked.t) Stack_frame.t
+        , Stack_frame.Digest.Checked.t lazy_t )
+        With_hash.t
+
+      type call_stack =
+        ( ( (Inputs.Call_stack.Value.frame, Stack_frame.Digest.t) With_hash.t
+          , Call_stack_digest.t )
+          With_stack_hash.t
+          list
+          Prover_value.t
+        , Call_stack_digest.Checked.t )
+        With_hash.t
+
+      type length = Inputs.Index.t
+
+      let main ?(witness : Witness.t option) ?zeko_handler (spec : Spec.t)
           ~constraint_constants (statement : Statement.With_sok.Checked.t) =
         let open Impl in
         run_checked (dummy_constraints ()) ;
@@ -1983,9 +1957,16 @@ module Make_str (A : Wire_types.Concrete) = struct
                 let set_zkapp_input x = zkapp_input := Some x
 
                 let set_must_verify x = must_verify := x
-
-                let env = env
               end) in
+              let handler : _ Mina_transaction_logic.Zkapp_command_logic.handler
+                  =
+                match zeko_handler with
+                | Some handler ->
+                    handler
+                | None ->
+                    { perform = S.perform }
+              in
+
               let finish v =
                 let open Mina_transaction_logic.Zkapp_command_logic.Start_data in
                 let ps =
@@ -2029,8 +2010,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                               `Yes start_data
                           | `Compute_in_circuit ->
                               `Compute start_data )
-                        S.{ perform }
-                        acc )
+                        handler acc )
                 in
                 (global_state, local_state)
               in
@@ -2038,9 +2018,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                 match account_update_spec.is_start with
                 | `No ->
                     let global_state, local_state =
-                      S.apply ~constraint_constants ~is_start:`No
-                        S.{ perform }
-                        acc
+                      S.apply ~constraint_constants ~is_start:`No handler acc
                     in
                     (global_state, local_state)
                 | `Compute_in_circuit ->
@@ -2129,9 +2107,6 @@ module Make_str (A : Wire_types.Concrete) = struct
       (* Horrible hack :( *)
       let witness : Witness.t option ref = ref None
 
-      (* ZEKO NOTE: We extend this horrible hack for our own env too, for issue #64 *)
-      let env : env option ref = ref None
-
       let rule (type a b c d) ~constraint_constants ~proof_level
           (t : (a, b, c, d) Basic.t_typed) :
           ( a
@@ -2164,8 +2139,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input, `Must_verify must_verify =
-                    main ?witness:!witness ?env:!env s ~constraint_constants
-                      stmt
+                    main ?witness:!witness s ~constraint_constants stmt
                   in
                   let proof =
                     Run.exists (Typ.Internal.ref ()) ~request:(fun () ->
@@ -2188,8 +2162,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input_opt, _ =
-                    main ?witness:!witness ?env:!env s ~constraint_constants
-                      stmt
+                    main ?witness:!witness s ~constraint_constants stmt
                   in
                   assert (Option.is_none zkapp_input_opt) ;
                   { previous_proof_statements = []
@@ -2204,8 +2177,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             ; main =
                 (fun { public_input = stmt } ->
                   let zkapp_input_opt, _ =
-                    main ?witness:!witness ?env:!env s ~constraint_constants
-                      stmt
+                    main ?witness:!witness s ~constraint_constants stmt
                   in
                   assert (Option.is_none zkapp_input_opt) ;
                   { previous_proof_statements = []
@@ -2268,11 +2240,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       let is_fee_transfer =
         Transaction_union.Tag.Unpacked.is_fee_transfer tag
       in
-      (* ZEKO NOTE: Disallow fee transfers *)
-      let%bind () = Boolean.Assert.is_true (Boolean.not is_fee_transfer) in
       let is_coinbase = Transaction_union.Tag.Unpacked.is_coinbase tag in
-      (* ZEKO NOTE: Disallow coinbase *)
-      let%bind () = Boolean.Assert.is_true (Boolean.not is_coinbase) in
       let fee_token = payload.common.fee_token in
       let%bind fee_token_default =
         make_checked (fun () ->
@@ -2320,6 +2288,11 @@ module Make_str (A : Wire_types.Concrete) = struct
       in
       let%bind user_command_fails =
         User_command_failure.any user_command_failure
+      in
+      (* ZEKO NOTE: Do not accept failing user commands *)
+      let%bind () =
+        with_label __LOC__ (fun () ->
+            Boolean.Assert.is_true @@ Boolean.not user_command_fails )
       in
       let fee = payload.common.fee in
       let receiver = Account_id.Checked.create payload.body.receiver_pk token in
@@ -2815,6 +2788,11 @@ module Make_str (A : Wire_types.Concrete) = struct
                 let%bind user_command_fails =
                   Boolean.(!receiver_overflow ||| user_command_fails)
                 in
+                (* ZEKO NOTE: Do not accept failing user commands *)
+                let%bind () =
+                  with_label __LOC__ (fun () ->
+                      Boolean.Assert.is_true @@ Boolean.not user_command_fails )
+                in
                 let%bind is_empty_and_writeable =
                   (* Do not create a new account if the user command will fail or if receiving is not permitted *)
                   Boolean.all
@@ -2861,7 +2839,10 @@ module Make_str (A : Wire_types.Concrete) = struct
         Boolean.(!receiver_overflow ||| user_command_fails)
       in
       (* ZEKO NOTE: Do not accept failing user commands *)
-      let%bind () = Boolean.Assert.is_true @@ Boolean.not user_command_fails in
+      let%bind () =
+        with_label __LOC__ (fun () ->
+            Boolean.Assert.is_true @@ Boolean.not user_command_fails )
+      in
       let%bind fee_payer_is_source =
         Account_id.Checked.equal fee_payer source
       in
@@ -3437,13 +3418,6 @@ module Make_str (A : Wire_types.Concrete) = struct
     val of_zkapp_command_segment_exn :
          statement:Statement.With_sok.t
       -> witness:Zkapp_command_segment.Witness.t
-      -> spec:Zkapp_command_segment.Basic.t
-      -> t Async.Deferred.t
-
-    val of_zkapp_command_segment_zeko_exn :
-         statement:Statement.With_sok.t
-      -> witness:Zkapp_command_segment.Witness.t
-      -> env:env
       -> spec:Zkapp_command_segment.Basic.t
       -> t Async.Deferred.t
 
@@ -4088,11 +4062,9 @@ module Make_str (A : Wire_types.Concrete) = struct
       in
       (pi, vk)
 
-    let of_zkapp_command_segment_zeko_exn ~(statement : Proof.statement)
-        ~witness ~env ~(spec : Zkapp_command_segment.Basic.t) :
-        t Async.Deferred.t =
+    let of_zkapp_command_segment_exn ~(statement : Proof.statement) ~witness
+        ~(spec : Zkapp_command_segment.Basic.t) : t Async.Deferred.t =
       Base.Zkapp_command_snark.witness := Some witness ;
-      Base.Zkapp_command_snark.env := Some env ;
       let res =
         match spec with
         | Opt_signed ->
@@ -4112,12 +4084,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       let open Async in
       let%map (), (), proof = res in
       Base.Zkapp_command_snark.witness := None ;
-      Base.Zkapp_command_snark.env := None ;
       { proof; statement }
-
-    let of_zkapp_command_segment_exn ~statement ~witness ~spec :
-        t Async.Deferred.t =
-      of_zkapp_command_segment_zeko_exn ~statement ~witness ~env:dummy_env ~spec
 
     let of_transaction_union ~statement ~init_stack transaction state_body
         global_slot handler =

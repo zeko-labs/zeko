@@ -1797,7 +1797,10 @@ module Make (Inputs : Inputs_intf) = struct
         assert_ ~pos:__POS__
           ( (not is_start')
           ||| ( account_update_token_is_default
-              (* ZEKO NOTE: We might have a zero fee. `is_non_neg` in fact means `is_pos`... What naming. *)
+              (* ZEKO NOTE: Mina doesn't support zero fees because is_non_neg
+                 is buggy and actually means is_pos. We fix this by adding an explicit
+                 check here. We could fix the function but it could be that
+                 something relies on the buggy behavior unfortunately. *)
               &&& Amount.Signed.(
                     is_non_neg local_delta
                     ||| equal (of_unsigned Amount.zero) local_delta) ) )) ;
