@@ -190,7 +190,7 @@ let account_with_hash (account : Account.Checked.Unhashed.t) :
            }
          in
          Run.run_checked (Account.Checked.digest a) ) )
-
+ 
 let perform ~(shift_action_states : Boolean.var list)
     ~(set_slot_range : Slot_range.var -> unit) =
   let shift_action_states = ref shift_action_states in

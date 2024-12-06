@@ -1,0 +1,62 @@
+open Snark_params.Tick
+open Zeko_util
+
+module Make (Inputs : sig
+  module Key : SnarkType
+
+  val assert_x_less_than_y_less_than_z :
+    x:Key.var -> y:Key.var -> z:Key.var -> unit Checked.t
+
+  val height : int
+end) =
+struct
+  open Inputs
+
+  module Entry = struct
+    type t = { key : Key.t; next_key : Key.t } [@@deriving snarky]
+  end
+
+  type t = F.t
+
+  type var = F.var
+
+  let typ = F.typ
+
+  module PathStep = struct
+    type t = { hash : F.t; is_left : Boolean.t } [@@deriving snarky]
+  end
+
+  module Path =
+    SnarkList
+      (PathStep)
+      (struct
+        let length = height
+      end)
+
+  let hash_entry = var_to_hash ~init:"indexed merkle tree entry hash" Entry.typ
+
+  let implied_root_raw (init : F.var) (path : Path.var) : F.var Checked.t =
+    Checked.List.fold path ~init ~f:(fun acc { hash; is_left } ->
+        let* left = if_ is_left ~typ:F.typ ~then_:hash ~else_:acc in
+        let* right = if_ is_left ~typ:F.typ ~then_:acc ~else_:hash in
+        var_to_hash ~init:"indexed merkle tree" Typ.(F.typ * F.typ) (left, right) )
+
+  let implied_root (entry : Entry.var) (path : Path.var) : F.var Checked.t =
+    let* init = hash_entry entry in
+    implied_root_raw init path
+
+  let add_key_var ~x ~path_x ~y ~path_y ~z =
+    let* () =
+      with_label __LOC__ (fun () -> assert_x_less_than_y_less_than_z ~x ~y ~z)
+    in
+    let* root = implied_root { key = x; next_key = z } path_x in
+    let* root_intermediate = implied_root { key = x; next_key = y } path_x in
+    let* root_intermediate' =
+      implied_root_raw Field.(constant typ zero) path_y
+    in
+    let* () =
+      assert_equal ~label:__LOC__ F.typ root_intermediate root_intermediate'
+    in
+    let* root_new = implied_root { key = y; next_key = z } path_y in
+    Checked.return (`Old root, `New root_new)
+end

@@ -37,7 +37,7 @@ val var_to_actions :
   ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t
 
 val var_to_hash :
-     init:field Random_oracle.State.t
+     init:string
   -> ('var, 'value) Typ.t
   -> 'var
   -> Field.Var.t Checked.t

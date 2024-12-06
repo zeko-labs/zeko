@@ -269,12 +269,12 @@ let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) :
   in
   actions
 
-let var_to_hash ~(init : F.t Random_oracle.State.t) (typ : ('var, 'value) Typ.t)
-    (x : 'var) : F.var Checked.t =
+let var_to_hash ~(init : string) (typ : ('var, 'value) Typ.t) (x : 'var) :
+    F.var Checked.t =
   let@ () = make_checked in
   let (Typ typ) = typ in
   let fields, _aux = typ.var_to_fields x in
-  Random_oracle.Checked.hash ~init fields
+  Random_oracle.Checked.hash ~init:(Hash_prefix_create.salt init) fields
 
 module Calls = struct
   type t =
@@ -383,8 +383,8 @@ let push_actions_var ~actions state =
   Random_oracle.Checked.hash ~init:Hash_prefix_states.zkapp_actions
     [| state; actions |]
 
-let token_owner_id : Account_id.t option -> Token_id.t = function  | None ->
+let token_owner_id : Account_id.t option -> Token_id.t = function
+  | None ->
       Token_id.default
   | Some owner ->
       Account_id.derive_token_id ~owner
-
