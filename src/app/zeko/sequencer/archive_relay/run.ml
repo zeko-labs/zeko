@@ -4,7 +4,7 @@ open Mina_base
 open Mina_lib
 open Mina_ledger
 
-let constraint_constants = Genesis_constants.Constraint_constants.compiled
+let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 let rec rmrf path =
   match Sys.is_directory path with
@@ -16,7 +16,7 @@ let rec rmrf path =
       Sys.remove path
 
 let compile_time_genesis_state =
-  let genesis_constants = Genesis_constants.compiled in
+  let genesis_constants = Genesis_constants.Compiled.genesis_constants in
   let consensus_constants =
     Consensus.Constants.create ~constraint_constants
       ~protocol_constants:genesis_constants.protocol
@@ -115,10 +115,13 @@ let sync_archive ~(state : State.t) ~hash =
                 Archive_lib.Diff.Builder.zeko_transaction_added
                   ~constraint_constants
                   ~accounts_created:
-                    (Ledger.Transaction_applied.new_accounts txn_applied)
+                    (Mina_transaction_logic.Transaction_applied.new_accounts
+                       txn_applied )
                   ~new_state_hash:(Ledger.merkle_root ledger)
                   ~protocol_state:!protocol_state ~ledger
-                  ~txn:(Ledger.Transaction_applied.transaction txn_applied)
+                  ~txn:
+                    (Mina_transaction_logic.Transaction_applied
+                     .transaction_with_status txn_applied )
                   ~dummy_fee_payer:Zkapps_rollup.inner_public_key
                   ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
               in
@@ -126,9 +129,11 @@ let sync_archive ~(state : State.t) ~hash =
               if State.has_been_relayed state (Ledger.merkle_root ledger) then
                 return ()
               else
+                (* FIXME: Don't use Mina_compile_config.For_tests.t *)
+                let compile_config = Mina_compile_config.For_unit_tests.t in
                 match%bind
-                  Archive_client.dispatch ~logger state.archive_uri
-                    (Archive_lib.Diff.Transition_frontier diff)
+                  Archive_client.dispatch ~compile_config ~logger
+                    state.archive_uri (Archive_lib.Diff.Transition_frontier diff)
                 with
                 | Ok () ->
                     State.add_hash state (Ledger.merkle_root ledger) ;

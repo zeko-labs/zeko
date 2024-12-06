@@ -5,7 +5,7 @@ module PC = Signature_lib.Public_key.Compressed
 open Zeko_util
 open Checked.Let_syntax
 
-let constraint_constants = Genesis_constants.Constraint_constants.compiled
+let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 module Stack_frame = struct
   include Mina_base.Stack_frame.Digest
@@ -158,7 +158,7 @@ end
 
 let dummy_pc_init = Pending_coinbase.Stack.empty
 
-let genesis_constants = Genesis_constants.compiled
+let genesis_constants = Genesis_constants.Compiled.genesis_constants
 
 let consensus_constants =
   Consensus.Constants.create ~constraint_constants

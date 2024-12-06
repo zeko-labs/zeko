@@ -10,9 +10,9 @@ module Ledger = Mina_ledger.Ledger
 let logger = Logger.create ()
 
 module Constants = struct
-  let constraint_constants = Genesis_constants.Constraint_constants.compiled
+  let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
-  let genesis_constants = Genesis_constants.compiled
+  let genesis_constants = Genesis_constants.Compiled.genesis_constants
 
   let consensus_constants =
     Consensus.Constants.create ~constraint_constants
@@ -97,11 +97,14 @@ let apply_command t ~command =
     Transaction_hash.to_base58_check @@ Transaction_hash.hash_command command
   in
   Hashtbl.add_exn t.commands ~key:txn_hash
-    ~data:(command, Ledger.Transaction_applied.transaction_status txn_applied) ;
+    ~data:
+      ( command
+      , Mina_transaction_logic.Transaction_applied.transaction_status
+          txn_applied ) ;
 
   print_endline @@ "applied zkapp command: " ^ txn_hash ^ " "
   ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
-  @@ Ledger.Transaction_applied.transaction_status txn_applied ;
+  @@ Mina_transaction_logic.Transaction_applied.transaction_status txn_applied ;
 
   Ok ()
 

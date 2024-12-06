@@ -4,6 +4,9 @@ open Mina_base
 open Mina_ledger
 module Field = Snark_params.Tick.Field
 
+(* FIXME: Don't use Mina_compile_config.For_tests.t *)
+let compile_config = Mina_compile_config.For_unit_tests.t
+
 module Rpc = struct
   let dispatch ?(max_tries = 5) ?(timeout = 5.) ~logger
       (node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) rpc data =
@@ -22,7 +25,10 @@ module Rpc = struct
                 , ("daemon-argument", node_location.name) )
                 [%sexp_of: (string * Host_and_port.t) * (string * string)] ) )
       else
-        match%bind Daemon_rpcs.Client.dispatch rpc data node_location.value with
+        match%bind
+          Daemon_rpcs.Client.dispatch ~compile_config rpc data
+            node_location.value
+        with
         | Ok result ->
             return (Ok result)
         | Error e ->

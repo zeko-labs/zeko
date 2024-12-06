@@ -8,7 +8,7 @@ open Signature_lib
 module L = Ledger
 module Field = Snark_params.Tick.Field
 
-let constraint_constants = Genesis_constants.Constraint_constants.compiled
+let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 module Sequencer = struct
   let constraint_constants = constraint_constants
@@ -41,7 +41,7 @@ module Sequencer = struct
       }
   end
 
-  let genesis_constants = Genesis_constants.compiled
+  let genesis_constants = Genesis_constants.Compiled.genesis_constants
 
   let compile_time_genesis_state =
     let consensus_constants =
@@ -467,7 +467,10 @@ module Sequencer = struct
       let%bind.Result txn_applied =
         L.apply_transaction_second_pass l partialy_applied_txn
       in
-      match L.Transaction_applied.transaction_status txn_applied with
+      match
+        Mina_transaction_logic.Transaction_applied.transaction_status
+          txn_applied
+      with
       | Failed failure ->
           Error
             ( Error.of_string @@ Yojson.Safe.to_string
@@ -651,7 +654,8 @@ module Sequencer = struct
                     ( Mina_transaction.Transaction.fee_excess (Command command)
                     |> Or_error.ok_exn )
                   ~supply_increase:
-                    ( L.Transaction_applied.supply_increase txn_applied
+                    ( Mina_transaction_logic.Transaction_applied.supply_increase
+                        ~constraint_constants txn_applied
                     |> Or_error.ok_exn )
                   ~pending_coinbase_stack_state:pc
               in
@@ -731,7 +735,10 @@ module Sequencer = struct
           apply_user_command t ~skip_validity_check:true (Zkapp_command command)
         with
         | Ok (status, witness) -> (
-            match L.Transaction_applied.transaction_status status with
+            match
+              Mina_transaction_logic.Transaction_applied.transaction_status
+                status
+            with
             | Applied ->
                 return witness
             | Failed failure ->
@@ -1192,7 +1199,8 @@ let%test_module "Sequencer tests" =
                            ~data:command_witness ;
 
                       let status =
-                        L.Transaction_applied.transaction_status txn_applied
+                        Mina_transaction_logic.Transaction_applied
+                        .transaction_status txn_applied
                       in
                       [%test_eq: Transaction_status.t] status Applied )
                 in
@@ -1291,7 +1299,8 @@ let%test_module "Sequencer tests" =
                          ~data:command_witness ;
 
                     let status =
-                      L.Transaction_applied.transaction_status txn_applied
+                      Mina_transaction_logic.Transaction_applied
+                      .transaction_status txn_applied
                     in
                     [%test_eq: Transaction_status.t] status Applied )
               in

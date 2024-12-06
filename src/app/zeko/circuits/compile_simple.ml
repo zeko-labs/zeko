@@ -665,8 +665,8 @@ let compile (type out_t out_var first_input branches n_available_branches)
           ~max_proofs_verified:(module Pickles_types.Nat.N2)
           ~name:("compile_simple of " ^ name)
           ~constraint_constants:
-            Genesis_constants.Constraint_constants.(
-              to_snark_keys_header compiled)
+            (Genesis_constants.Constraint_constants.to_snark_keys_header
+               Genesis_constants.Compiled.constraint_constants )
       in
       let provers = transform_provers provers in
       let r :

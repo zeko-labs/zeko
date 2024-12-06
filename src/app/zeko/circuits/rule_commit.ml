@@ -63,7 +63,7 @@ struct
       (PathElt)
       (struct
         let length =
-          Genesis_constants.Constraint_constants.compiled.ledger_depth
+          Genesis_constants.Compiled.constraint_constants.ledger_depth
       end)
 
   module Witness = struct
