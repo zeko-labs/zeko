@@ -11,9 +11,6 @@
     ];
   };
 
-  inputs.dream2nix.url = "github:nix-community/dream2nix";
-  inputs.dream2nix.inputs.nixpkgs.follows = "nixpkgs";
-
   inputs.utils.url = "github:gytis-ivaskevicius/flake-utils-plus";
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-23.11-small";
 
