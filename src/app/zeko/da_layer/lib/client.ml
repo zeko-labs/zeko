@@ -36,27 +36,59 @@ module Rpc = struct
     go max_tries []
 
   let post_diff ~logger ~node_location ~ledger_openings ~diff =
-    dispatch ~logger node_location Rpc.Post_diff.v2 { ledger_openings; diff }
+    dispatch ~logger node_location Rpc.Post_diff.V1.t { ledger_openings; diff }
 
   let get_diff ~logger ~node_location ~ledger_hash =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.v2 ledger_hash
+    match%bind
+      dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V2.t ledger_hash
+    with
+    | Ok diff ->
+        return (Ok diff)
+    | Error e ->
+        let v2_unimplemented =
+          Error.to_string_mach e
+          |> String.is_substring
+               ~substring:"Unimplemented_rpc Get_diff (Version 2)"
+        in
+        if v2_unimplemented then
+          (* Fallback to older version *)
+          let%bind.Deferred.Result result =
+            dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V1.t
+              ledger_hash
+          in
+          return
+            (Ok (Option.map result ~f:(fun x -> Diff.Stable.V1.to_latest x)))
+        else return (Error e)
 
   let get_all_keys ~logger ~node_location () =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.v1 ()
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.V1.t ()
 
   let get_diff_source ~logger ~node_location ~ledger_hash =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.v1
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.V1.t
       ledger_hash
 
   let get_node_public_key ~logger ~node_location () =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signer_public_key.v1 ()
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signer_public_key.V1.t
+      ()
 
   let get_signature ~logger ~node_location ~ledger_hash =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.v1 ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.V1.t
+      ledger_hash
+
+  let get_ledger_hashes_chain ~logger ~node_location ~source ~target =
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_ledger_hashes_chain.V1.t
+      { source; target }
+
+  let get_diffs_chain ~logger ~node_location ~source ~target =
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diffs_chain.V1.t
+      { source; target }
 end
 
 module Config = struct
-  type t = { nodes : Host_and_port.t Cli_lib.Flag.Types.with_name list }
+  type t =
+    { mutable nodes : Host_and_port.t Cli_lib.Flag.Types.with_name list
+          (** Mutable in case we want to throw out some node *)
+    }
   [@@deriving fields]
 
   let of_string_list uris =
@@ -67,6 +99,11 @@ module Config = struct
               ; name = sprintf "da-node-%d" i
               } )
     }
+
+  let throw_out_node t ~(node : Host_and_port.t Cli_lib.Flag.Types.with_name) =
+    let open Cli_lib.Flag.Types in
+    t.nodes <-
+      List.filter t.nodes ~f:(fun n -> not (String.equal n.name node.name))
 end
 
 (** Send the diff to all the nodes in the [~config] *)
@@ -153,21 +190,18 @@ let try_all_nodes ~config ~f =
   in
   try_first ~accum_errors:[] (Config.nodes config)
 
-(** Get the chain of ledger hashes from empty ledger hash to [target_ledger_hash]  *)
-let get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash =
-  let rec go current =
-    if Ledger_hash.equal current (Diff.empty_ledger_hash ~depth) then
-      return (Ok [])
-    else
-      let%bind.Deferred.Result source =
-        try_all_nodes ~config ~f:(fun ~node_location () ->
-            Rpc.get_diff_source ~logger ~node_location ~ledger_hash:current )
-      in
-      let%bind.Deferred.Result next = go source in
-      return (Ok (current :: next))
-  in
-  let%bind.Deferred.Result from_target_to_genesis = go target_ledger_hash in
-  return (Ok (List.rev from_target_to_genesis))
+(** Get the chain of ledger hashes from [source_ledger_hash] hash to [target_ledger_hash] *)
+let get_ledger_hashes_chain ~logger ~config ~source_ledger_hash
+    ~target_ledger_hash =
+  try_all_nodes ~config ~f:(fun ~node_location () ->
+      Rpc.get_ledger_hashes_chain ~logger ~node_location
+        ~source:source_ledger_hash ~target:target_ledger_hash )
+
+(** Get the chain of diffs from [source_ledger_hash] hash to [target_ledger_hash] *)
+let get_diffs_chain ~logger ~config ~source_ledger_hash ~target_ledger_hash =
+  try_all_nodes ~config ~f:(fun ~node_location () ->
+      Rpc.get_diffs_chain ~logger ~node_location ~source:source_ledger_hash
+        ~target:target_ledger_hash )
 
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
 let get_diff ~logger ~config ~ledger_hash =
@@ -198,7 +232,7 @@ let distribute_genesis_diff ~logger ~config ~ledger =
       ~f:(fun acc (index, _) -> Sparse_ledger.set_exn acc index Account.empty)
   in
   let diff =
-    Diff.Without_timestamp.create
+    Diff.create
       ~source_ledger_hash:(Diff.empty_ledger_hash ~depth:(Ledger.depth ledger))
       ~changed_accounts ~command_with_action_step_flags:None
   in
@@ -220,21 +254,16 @@ let attach_openings ~diffs ~depth =
       (diff, openings) )
 
 let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
-  let%bind.Deferred.Result ledger_hashes_chain =
-    get_ledger_hashes_chain ~logger ~config ~depth ~target_ledger_hash
-  in
   let diffs_with_openings =
     lazy
-      (let%bind.Deferred.Result diffs_with_timestamps =
-         Deferred.List.map ledger_hashes_chain ~how:(`Max_concurrent_jobs 5)
-           ~f:(fun ledger_hash -> get_diff ~logger ~config ~ledger_hash)
-         >>| Result.all
+      (* TODO: don't fetch all the diffs from genesis, using binary search determine which diffs is the node missing *)
+      (let%bind.Deferred.Result diffs =
+         get_diffs_chain ~logger ~config ~source_ledger_hash:`Genesis
+           ~target_ledger_hash
        in
        return
-         (Ok
-            (attach_openings
-               ~diffs:(List.map diffs_with_timestamps ~f:fst)
-               ~depth ) ) )
+         (Ok (attach_openings ~diffs:(List.map diffs ~f:Diff.drop_time) ~depth))
+      )
   in
   Deferred.List.map config.nodes ~f:(fun node ->
       match%bind
@@ -244,14 +273,24 @@ let sync_nodes ~logger ~config ~depth ~target_ledger_hash =
           printf "Node %s is already synced\n%!"
             (Host_and_port.to_string node.value) ;
           return (Ok ())
-      | Ok None | Error _ ->
+      | Ok None | Error _ -> (
           printf "Syncing node %s\n%!" (Host_and_port.to_string node.value) ;
           let%bind.Deferred.Result diffs_with_openings =
             Lazy.force diffs_with_openings
           in
-          Deferred.List.map diffs_with_openings ~f:(fun (diff, openings) ->
-              Rpc.post_diff ~logger ~node_location:node
-                ~ledger_openings:openings ~diff
-              >>| Result.ignore_m )
-          >>| Result.all_unit )
+          match%bind
+            Deferred.List.map diffs_with_openings ~f:(fun (diff, openings) ->
+                Rpc.post_diff ~logger ~node_location:node
+                  ~ledger_openings:openings ~diff
+                >>| Result.ignore_m )
+            >>| Result.all_unit
+          with
+          | Ok () ->
+              return (Ok ())
+          | Error e ->
+              printf "Error syncing node %s: %s\n%!"
+                (Host_and_port.to_string node.value)
+                (Error.to_string_hum e) ;
+              Config.throw_out_node config ~node ;
+              return (Ok ()) ) )
   >>| Result.all_unit

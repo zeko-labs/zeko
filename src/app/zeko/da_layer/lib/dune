@@ -1,5 +1,6 @@
 (library
  (name da_layer)
+ (inline_tests)
  (libraries
   kvdb_base
   zkapps_rollup
