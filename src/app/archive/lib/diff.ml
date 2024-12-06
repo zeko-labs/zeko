@@ -140,10 +140,11 @@ module Builder = struct
       }
 
   (* ZEKO NOTE: needed by archive relay *)
+  (* FIXME: remove unused dummy_fee_payer argument. *)
   let zeko_transaction_added
       ~(constraint_constants : Genesis_constants.Constraint_constants.t)
       ~accounts_created ~new_state_hash ~protocol_state ~ledger ~txn
-      ~dummy_fee_payer ~timestamp =
+      ~dummy_fee_payer:_ ~timestamp =
     let advance_protocol_state ~protocol_state ~new_state_hash
         ~increase_blockchain_length =
       let old_protocol_state = protocol_state in
