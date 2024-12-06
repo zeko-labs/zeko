@@ -21,7 +21,11 @@ module Verification_key = struct
   let of_pickles x = x
 
   let var_of_pickles x = x
+
+  let of_tag (Tag tag) = of_compiled_promise tag
 end
+
+let force_tag tag = Promise.map ~f:(fun _ -> ()) (Verification_key.of_tag tag)
 
 include Compile_simple_intf.Make (struct
   type nonrec proof = Proof.t

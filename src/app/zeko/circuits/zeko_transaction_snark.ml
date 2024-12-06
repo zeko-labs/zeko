@@ -398,7 +398,7 @@ let rule_zkapp ~shift_action_states ~spec
   let*| zkapp_statement, _must_verify_zkapp =
     let@ () = make_checked in
     Transaction_snark.Base.Zkapp_command_snark.main
-      ~witness:(V.unsafe_unwrap witness |> Option.value_exn)
+      ?witness:(V.unsafe_unwrap witness)
       ~zeko_handler:
         { perform = (fun eff -> perform ~shift_action_states ~set_slot_range eff)
         }

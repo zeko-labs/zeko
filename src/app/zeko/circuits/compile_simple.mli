@@ -4,6 +4,10 @@ module Proof : sig
   val of_pickles : Pickles.Side_loaded.Proof.t -> t
 end
 
+type 'tag_var tag
+
+val force_tag : 'tag_var tag -> unit Promise.t
+
 module Verification_key : sig
   type t
 
@@ -14,9 +18,9 @@ module Verification_key : sig
   val of_pickles : Pickles.Side_loaded.Verification_key.t -> t
 
   val var_of_pickles : Pickles.Side_loaded.Verification_key.Checked.t -> var
-end
 
-type 'tag_var tag
+  val of_tag : 'tag_var tag -> t Promise.t
+end
 
 include module type of Compile_simple_intf.Make (struct
   type nonrec proof = Proof.t
