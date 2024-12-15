@@ -2241,6 +2241,8 @@ module Make_str (A : Wire_types.Concrete) = struct
         Transaction_union.Tag.Unpacked.is_fee_transfer tag
       in
       let is_coinbase = Transaction_union.Tag.Unpacked.is_coinbase tag in
+      (* ZEKO NOTE: We don't accept coinbase commands. *)
+      let%bind () = Boolean.not is_coinbase |> Boolean.Assert.is_true in
       let fee_token = payload.common.fee_token in
       let%bind fee_token_default =
         make_checked (fun () ->
