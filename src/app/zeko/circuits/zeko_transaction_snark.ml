@@ -1,4 +1,6 @@
 open Core_kernel
+
+(* if check is false, use x on both sides *)
 open Snark_params.Tick
 open Mina_base
 module PC = Signature_lib.Public_key.Compressed
@@ -6,6 +8,330 @@ open Zeko_util
 open Checked.Let_syntax
 
 let constraint_constants = Genesis_constants.Compiled.constraint_constants
+
+let fixme_as_prover _ = failwith "FIXME"
+
+module Account_set = Indexed_merkle_tree.Make (struct
+  open struct
+    let add_plonk_constraint c =
+      assert_
+        { basic =
+            Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.T c
+        ; annotation = None
+        }
+
+    let ( let- ) var f =
+      let+ var = As_prover.read_var var in
+      f var
+
+    module Range_check0 = struct
+      type t = Zeko_as_prover.range_check0 =
+        { v0p0 : F.t (* MSBs *)
+        ; v0p1 : F.t (* vpX are 12-bit plookup chunks *)
+        ; v0p2 : F.t
+        ; v0p3 : F.t
+        ; v0p4 : F.t
+        ; v0p5 : F.t
+        ; v0c0 : F.t (* vcX are 2-bit crumbs *)
+        ; v0c1 : F.t
+        ; v0c2 : F.t
+        ; v0c3 : F.t
+        ; v0c4 : F.t
+        ; v0c5 : F.t
+        ; v0c6 : F.t
+        ; v0c7 : F.t (* LSBs *)
+        }
+      [@@deriving snarky]
+    end
+
+    let range_check0 v0 =
+      let* ({ v0p0
+            ; v0p1
+            ; v0p2
+            ; v0p3
+            ; v0p4
+            ; v0p5
+            ; v0c0
+            ; v0c1
+            ; v0c2
+            ; v0c3
+            ; v0c4
+            ; v0c5
+            ; v0c6
+            ; v0c7
+            } :
+             Range_check0.var ) =
+        exists Range_check0.typ
+          ~compute:
+            (let- v0 in
+             Zeko_as_prover.range_check0 v0 |> As_prover.return )
+      in
+      let*| () =
+        add_plonk_constraint
+          (RangeCheck0
+             { v0
+             ; v0p0
+             ; v0p1
+             ; v0p2
+             ; v0p3
+             ; v0p4
+             ; v0p5
+             ; v0c0
+             ; v0c1
+             ; v0c2
+             ; v0c3
+             ; v0c4
+             ; v0c5
+             ; v0c6
+             ; v0c7
+             ; compact = Field.zero
+             } )
+      in
+      (v0p4, v0p5)
+
+    module Range_check1 = struct
+      type t = Zeko_as_prover.range_check1 =
+        { (* Current row *)
+          v2c0 : F.t (* MSBs, 2-bit crumb *)
+        ; v2p0 : F.t (* vpX are 12-bit plookup chunks *)
+        ; v2p1 : F.t
+        ; v2p2 : F.t
+        ; v2p3 : F.t
+        ; v2c1 : F.t (* vcX are 2-bit crumbs *)
+        ; v2c2 : F.t
+        ; v2c3 : F.t
+        ; v2c4 : F.t
+        ; v2c5 : F.t
+        ; v2c6 : F.t
+        ; v2c7 : F.t
+        ; v2c8 : F.t (* LSBs *)
+        ; (* Next row *) v2c9 : F.t
+        ; v2c10 : F.t
+        ; v2c11 : F.t
+        ; v2c12 : F.t
+        ; v2c13 : F.t
+        ; v2c14 : F.t
+        ; v2c15 : F.t
+        ; v2c16 : F.t
+        ; v2c17 : F.t
+        ; v2c18 : F.t
+        ; v2c19 : F.t
+        }
+      [@@deriving snarky]
+    end
+
+    let range_check1 ~v2 ~v0p0 ~v0p1 ~v1p0 ~v1p1 =
+      let* { v2c0
+           ; v2p0
+           ; v2p1
+           ; v2p2
+           ; v2p3
+           ; v2c1
+           ; v2c2
+           ; v2c3
+           ; v2c4
+           ; v2c5
+           ; v2c6
+           ; v2c7
+           ; v2c8
+           ; v2c9
+           ; v2c10
+           ; v2c11
+           ; v2c12
+           ; v2c13
+           ; v2c14
+           ; v2c15
+           ; v2c16
+           ; v2c17
+           ; v2c18
+           ; v2c19
+           } =
+        exists Range_check1.typ
+          ~compute:
+            (let- v2 in
+             Zeko_as_prover.range_check1 v2 |> As_prover.return )
+      in
+      add_plonk_constraint
+        (RangeCheck1
+           { v2
+           ; v12 = Field.Var.constant Field.zero
+           ; v2c0
+           ; v2p0
+           ; v2p1
+           ; v2p2
+           ; v2p3
+           ; v2c1
+           ; v2c2
+           ; v2c3
+           ; v2c4
+           ; v2c5
+           ; v2c6
+           ; v2c7
+           ; v2c8
+           ; v2c9
+           ; v2c10
+           ; v2c11
+           ; v0p0
+           ; v0p1
+           ; v1p0
+           ; v1p1
+           ; v2c12
+           ; v2c13
+           ; v2c14
+           ; v2c15
+           ; v2c16
+           ; v2c17
+           ; v2c18
+           ; v2c19
+           } )
+
+    let multi_range_check x y z =
+      let* v0p0, v0p1 = range_check0 x in
+      let* v1p0, v1p1 = range_check0 y in
+      range_check1 ~v2:z ~v0p0 ~v0p1 ~v1p0 ~v1p1
+
+    let sub_then_dec ~dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 =
+      let* (z0, z1), z2 =
+        exists
+          Typ.(F.typ * F.typ * F.typ)
+          ~compute:
+            (let- x0 in
+             let- x1 in
+             let- x2 in
+             let- y0 in
+             let- y1 in
+             let- y2 in
+             Zeko_as_prover.sub ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 |> As_prover.return )
+      in
+      let* (w0, w1), w2 =
+        exists
+          Typ.(F.typ * F.typ * F.typ)
+          ~compute:
+            (let- z0 in
+             let- z1 in
+             let- z2 in
+             Zeko_as_prover.sub ~x0:z0 ~x1:z1 ~x2:z2 ~y0:Field.one
+               ~y1:Field.zero ~y2:Field.zero
+             |> As_prover.return )
+      in
+      let* () =
+        add_plonk_constraint
+          (ForeignFieldAdd
+             { left_input_lo = x0
+             ; left_input_mi = x1
+             ; left_input_hi = x2
+             ; right_input_lo = y0
+             ; right_input_mi = y1
+             ; right_input_hi = y2
+             ; sign = Field.of_int (-1)
+             ; carry = Field.(constant typ zero)
+             ; field_overflow = Field.(constant typ zero)
+             ; foreign_field_modulus0 = Field.zero
+             ; foreign_field_modulus1 = Field.zero
+             ; foreign_field_modulus2 = Field.zero
+             } )
+      in
+      let* () =
+        add_plonk_constraint
+          (ForeignFieldAdd
+             { left_input_lo = z0
+             ; left_input_mi = z1
+             ; left_input_hi = z2
+             ; right_input_lo = dec
+             ; right_input_mi = Field.(constant typ zero)
+             ; right_input_hi = Field.(constant typ zero)
+             ; sign = Field.of_int (-1)
+             ; carry = Field.(constant typ zero)
+             ; field_overflow = Field.(constant typ zero)
+             ; foreign_field_modulus0 = Field.zero
+             ; foreign_field_modulus1 = Field.zero
+             ; foreign_field_modulus2 = Field.zero
+             } )
+      in
+      let* () =
+        add_plonk_constraint
+          (Raw { kind = Zero; values = [| w0; w1; w2 |]; coeffs = [||] })
+      in
+      multi_range_check z0 z1 z2
+
+    let field_to_field3 x =
+      let* (x0, x1), x2 =
+        exists
+          Typ.(F.typ * F.typ * F.typ)
+          ~compute:
+            (let- x in
+             Zeko_as_prover.field_to_field3 x |> As_prover.return )
+      in
+      let* () = multi_range_check x0 x1 x2 in
+      let l = Field.of_string "309485009821345068724781056" in
+      (* 2^88 *)
+      let l2 =
+        Field.of_string "95780971304118053647396689196894323976171195136475136"
+      in
+      (* 2^88 * 2^88 *)
+      let x' = Field.Checked.(x0 + (l * x1) + (l2 * x2)) in
+      let*| () = Field.Checked.Assert.equal x' x in
+      (x0, x1, x2)
+
+    let assert_greater_than_full ~check x y =
+      (* if check is false, use x on both sides *)
+      let* y = if_ check ~typ:F.typ ~then_:y ~else_:x in
+      let* x0, x1, x2 = field_to_field3 x in
+      let* y0, y1, y2 = field_to_field3 y in
+      let dec =
+        let (Typ typ) = Boolean.typ in
+        match typ.var_to_fields check with
+        | [| dec |], _ ->
+            dec
+        | _ ->
+            failwith "unreachable"
+      in
+      (* if check (dec) is false, then we decrement with 0, and expand to greater than or equality check *)
+      let* () = sub_then_dec ~dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 in
+      if
+        not
+          Bignum_bigint.(
+            Field.size
+            = of_string
+                "28948022309329048855892746252171976963363056481941560715954676764349967630337")
+      then failwith "Fp size assumption wrong" ;
+      let fp0 =
+        Field.(of_string "93054740644568405314109441" |> constant typ)
+      in
+      let fp1 = Field.(of_string "147213319177" |> constant typ) in
+      let fp2 = Field.(of_string "302231454903657293676544" |> constant typ) in
+      let* () =
+        sub_then_dec
+          ~dec:Field.(constant typ one)
+          ~x0:fp0 ~x1:fp1 ~x2:fp2 ~y0 ~y1 ~y2
+      in
+      Checked.return ()
+
+    let gte_boolean x y =
+      let open Boolean.Expr in
+      any [ !x && !y; !x && not !y; (not !x) && not !y ]
+  end
+
+  module Key = Account_id
+
+  let assert_x_less_than_y_less_than_z ~(x : Account_id.var)
+      ~(y : Account_id.var) ~(z : Account_id.var) =
+    (* pretty sure of_field is supposed to be of_field_unsafe, and to_field_unsafe is supposed to be to_field *)
+    let f owner =
+      make_checked
+      @@ fun () ->
+      Account_id.Checked.derive_token_id ~owner
+      |> Token_id.Checked.to_field_unsafe
+    in
+    let* x = f x in
+    let* y = f y in
+    let* z = f z in
+    let* () = assert_greater_than_full ~check:Boolean.true_ z y in
+    let*| () = assert_greater_than_full ~check:Boolean.true_ y x in
+    ()
+
+  let height = 32
+end)
 
 module Stack_frame = struct
   include Mina_base.Stack_frame.Digest
@@ -78,8 +404,10 @@ module Zeko_stmt = struct
   type t =
     { source_ledger : Ledger_hash.t
     ; target_ledger : Ledger_hash.t
+    ; source_acc_set : Account_set.t
+    ; target_acc_set : Account_set.t
     ; sequencer : Signature_lib.Public_key.Compressed.t
-    ; fee_excess : Currency.Fee.Signed.t
+    ; fee_excess : Currency.Amount.Signed.t
     ; slot_range : Slot_range.t
     ; source_local_state : Local_state.t
     ; target_local_state : Local_state.t
@@ -96,7 +424,7 @@ module Handler_V = Mk_V (Handler)
 module Base_input = struct
   type t =
     { source_ledger : Ledger_hash.t
-    ; target_ledger : Ledger_hash.t
+    ; source_acc_set : Account_set.t
     ; fee_excess : Currency.Fee.Signed.t
     ; sequencer : PC.t
     ; transaction : Mina_transaction.Transaction_union.t
@@ -267,76 +595,53 @@ let perform ~(shift_action_states : Boolean.var list)
 
 let rule_signed_command input =
   let* { source_ledger
-       ; target_ledger
+       ; source_acc_set
        ; fee_excess
-       ; transaction = _
+       ; transaction
        ; sequencer
-       ; handler = _
+       ; handler
        } =
     exists Base_input.typ ~compute:(V.get input)
   in
-  let handler =
-    let+| { source_ledger = _
-          ; target_ledger = _
-          ; fee_excess = _
-          ; transaction
-          ; sequencer = _
-          ; handler
-          } =
-      V.get input
-    in
-    let handler (Snarky_backendless.Request.With { request; respond } as r) =
-      match request with
-      | Transaction_snark.Base.Transaction ->
-          respond (Provide transaction)
-      | Transaction_snark.Base.State_body ->
-          respond (Provide dummy_state_body)
-      | Transaction_snark.Base.Init_stack ->
-          respond (Provide dummy_pc_init)
-      | Transaction_snark.Base.Global_slot ->
-          respond (Provide Mina_numbers.Global_slot_since_genesis.zero)
-      | _ ->
-          handler r
-    in
-    handler
+  let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
+  let accounts = ref [] in
+  let new_accounts_created ~account ~is_empty_and_writeable =
+    accounts := (account, is_empty_and_writeable) :: !accounts
   in
-  let source : _ Mina_state.Registers.t =
-    { first_pass_ledger = source_ledger
-    ; second_pass_ledger = target_ledger
-    ; pending_coinbase_stack = constant Pending_coinbase.Stack.typ dummy_pc
-    ; local_state = Mina_state.Local_state.(constant typ (dummy ()))
-    }
+  let* target_ledger, fee_excess, _supply_increase =
+    Fn.flip handle_as_prover (V.get handler)
+    @@ fun () ->
+    Transaction_snark.Base.apply_tagged_transaction ~new_accounts_created
+      ~constraint_constants
+      (module Shifted)
+      source_ledger Slot.Checked.zero
+      (constant Pending_coinbase.Stack.typ dummy_pc_init)
+      (constant Pending_coinbase.Stack.typ dummy_pc)
+      (constant Pending_coinbase.Stack.typ dummy_pc)
+      (constant
+         (Mina_state.Protocol_state.Body.typ ~constraint_constants)
+         dummy_state_body )
+      transaction
   in
-  let target : _ Mina_state.Registers.t =
-    { first_pass_ledger = target_ledger
-    ; second_pass_ledger = target_ledger
-    ; pending_coinbase_stack = constant Pending_coinbase.Stack.typ dummy_pc
-    ; local_state = Mina_state.Local_state.(constant typ (dummy ()))
-    }
-  in
-  let stmt : Transaction_snark.Statement.With_sok.var =
-    { source
-    ; target
-    ; connecting_ledger_left = target_ledger
-    ; connecting_ledger_right = target_ledger
-    ; supply_increase = Currency.Amount.Signed.(constant typ zero)
-    ; fee_excess =
-        { fee_token_l = Token_id.(Checked.constant default)
-        ; fee_excess_l = fee_excess
-        ; fee_token_r = Token_id.(Checked.constant default)
-        ; fee_excess_r = Currency.Fee.Signed.(Checked.constant zero)
-        }
-    ; sok_digest = Mina_base.Sok_message.Digest.(constant typ default)
-    }
-  in
-  let*| () =
-    handle_as_prover
-      (fun () -> Transaction_snark.Base.main ~constraint_constants stmt)
-      handler
+  let*| target_acc_set =
+    Checked.List.fold !accounts ~init:source_acc_set
+      ~f:(fun set (account_id, is_empty_and_writeable) ->
+        let* x = exists Account_id.typ in
+        let* path_x = exists Account_set.Path.typ in
+        let* path_y = exists Account_set.Path.typ in
+        let* z = exists Account_id.typ in
+        let* `Before_adding_y set', `After_adding_y new_set =
+          Account_set.add_key_var ~x ~path_x ~y:account_id ~path_y ~z
+            ~check:is_empty_and_writeable ()
+        in
+        let*| () = assert_equal ~label:__LOC__ Account_set.typ set set' in
+        new_set )
   in
   let out : Zeko_stmt.var =
     { source_ledger
     ; target_ledger
+    ; source_acc_set
+    ; target_acc_set
     ; sequencer
     ; fee_excess
     ; slot_range = Slot_range.(constant typ infinite)
@@ -410,10 +715,12 @@ let rule_zkapp ~shift_action_states ~spec
     { source_ledger
     ; target_ledger
     ; sequencer
-    ; fee_excess
+    ; fee_excess = Currency.Amount.Signed.Checked.of_fee fee_excess
     ; slot_range = !slot_range
     ; source_local_state
     ; target_local_state
+    ; source_acc_set = failwith "FIXME"
+    ; target_acc_set = failwith "FIXME"
     }
   in
   (zkapp_statement, out)
@@ -428,6 +735,8 @@ let rule_merge input =
                ; fee_excess = left_fee_excess
                ; sequencer = left_sequencer
                ; slot_range = left_slot_range
+               ; source_acc_set
+               ; target_acc_set = left_target_acc_set
                } as left_stmt
            ; proof = left_proof
            }
@@ -440,11 +749,17 @@ let rule_merge input =
                ; fee_excess = right_fee_excess
                ; sequencer = right_sequencer
                ; slot_range = right_slot_range
+               ; source_acc_set = right_source_acc_set
+               ; target_acc_set
                } as right_stmt
            ; proof = right_proof
            }
        } =
     exists Merge_input.typ ~compute:(V.get input)
+  in
+  let* () =
+    assert_equal ~label:__LOC__ Account_set.typ left_target_acc_set
+      right_source_acc_set
   in
   let* () = Ledger_hash.assert_equal left_target_ledger right_source_ledger in
   let* () =
@@ -452,7 +767,7 @@ let rule_merge input =
       right_source_local_state
   in
   let* fee_excess =
-    Currency.Fee.Signed.Checked.add left_fee_excess right_fee_excess
+    Currency.Amount.Signed.Checked.add left_fee_excess right_fee_excess
   in
   let* sequencer =
     assert_equal_safer ~label:__LOC__ PC.typ left_sequencer right_sequencer
@@ -486,6 +801,8 @@ let rule_merge input =
          ; fee_excess
          ; sequencer
          ; slot_range = { lower = slot_range_lower; upper = slot_range_upper }
+         ; source_acc_set
+         ; target_acc_set
          } : Zeko_stmt.var)
     }
 
