@@ -41,6 +41,9 @@ module Verify_both_ases = struct
     ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
             ~out_typ:Typ.(Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
             () )
+
+  (* FIXME: remove for lazy compilation *)
+  let () = Promise.block_on_async_exn (fun () -> Compile_simple.force_tag tag)
 end
 
 module Make (Inputs : sig
