@@ -20,3 +20,6 @@ include
           ~branches:
             [ Rule_commit_inst.rule; Rule_action_witness.rule; Rule_pause.rule ]
           ~name:"Outer_rules" )
+
+(* FIXME: remove for lazy compilation *)
+let () = Promise.block_on_async_exn (fun () -> Compile_simple.force_tag tag)

@@ -245,6 +245,10 @@ struct
             ]
           ~out_typ:Trans.typ () )
 
+  (* FIXME: remove for lazy compilation *)
+  let () =
+    Promise.block_on_async_exn (fun () -> Compile_simple.force_tag System.tag)
+
   type tag_var = System.tag_var
 
   type tag_t = System.tag_t
