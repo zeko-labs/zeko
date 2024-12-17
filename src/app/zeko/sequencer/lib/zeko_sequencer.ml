@@ -784,6 +784,7 @@ module Sequencer = struct
           don't_wait_for @@ Deferred.ignore_m @@ commit t )
 
   let bootstrap ~logger ({ config; _ } as t) da_config =
+    print_endline "Bootstrapping" ;
     let%bind committed_ledger_hash =
       Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
         ~signer_pk:(Public_key.compress config.signer.public_key)
@@ -797,8 +798,8 @@ module Sequencer = struct
     let%bind () =
       Da_layer.Client.map_diffs ~logger ~config:da_config
         ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
-        ~target_ledger_hash:committed_ledger_hash ~f:(fun progress diff ->
-          Zeko_util.progress_bar progress ;
+        ~print_progress:true ~target_ledger_hash:committed_ledger_hash
+        ~f:(fun diff ->
           assert (
             Ledger_hash.equal
               (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)

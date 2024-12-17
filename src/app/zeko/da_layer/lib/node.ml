@@ -218,8 +218,8 @@ let sync t ~node_location ~ledger_hash =
   Client.map_diffs ~logger ~depth:constraint_constants.ledger_depth
     ~config:(Client.Config.of_node_locations [ node_location ])
     ~source_ledger_hash:`Genesis ~target_ledger_hash:ledger_hash
-    ~f:(fun progress diff ->
-      Zeko_util.progress_bar progress ;
+    ~print_progress:true
+    ~f:(fun diff ->
       let diff = Diff.drop_time diff in
       let ledger_openings = Client.get_openings ~diff ~ledger in
       match post_diff t ~diff ~ledger_openings with

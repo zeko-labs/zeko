@@ -93,8 +93,8 @@ let sync_node =
            ~config:(Da_layer.Client.Config.of_node_locations [ synced_node ])
            ~source_ledger_hash:`Genesis
            ~target_ledger_hash:(Ledger_hash.of_decimal_string hash_to_sync)
-           ~f:(fun progress diff ->
-             Zeko_util.progress_bar progress ;
+           ~print_progress:true
+           ~f:(fun diff ->
              let diff = Da_layer.Diff.drop_time diff in
              let ledger_openings = Da_layer.Client.get_openings ~diff ~ledger in
              match%bind

@@ -256,8 +256,8 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
                  ~source_ledger_hash:(`Specific source)
                  ~target_ledger_hash:target () ) ) )
 
-let map_diffs ~logger ~depth ~config ~source_ledger_hash ~target_ledger_hash ~f
-    =
+let map_diffs ~logger ~depth ~config ~source_ledger_hash ~target_ledger_hash
+    ~print_progress ~f =
   let%bind.Deferred.Result lazy_chunks =
     get_lazy_diffs_chunks ~logger ~depth ~config ~source_ledger_hash
       ~target_ledger_hash ()
@@ -265,8 +265,9 @@ let map_diffs ~logger ~depth ~config ~source_ledger_hash ~target_ledger_hash ~f
   let l = List.length lazy_chunks in
   Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
       let progress = Float.of_int i /. Float.of_int l in
+      if print_progress then Zeko_util.progress_bar progress ;
       let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in
-      Deferred.List.map ~how:`Sequential diffs ~f:(f progress) >>| Result.return )
+      Deferred.List.map ~how:`Sequential diffs ~f >>| Result.return )
   >>| Result.all >>| Result.map ~f:List.join
 
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
@@ -328,4 +329,7 @@ let check_synced_nodes ~logger ~(config : Config.t) ~target_ledger_hash =
       | Ok (Some _) ->
           return ( (* synced node *) )
       | Ok None | Error _ ->
+          printf
+            !"Node %s is not synced\n%!"
+            (Host_and_port.to_string node.value) ;
           return (Config.throw_out_node config ~node) )
