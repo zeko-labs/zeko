@@ -19,5 +19,7 @@ let progress_bar ?(width = 30) progress =
   let bar =
     String.make filled_length '#' ^ String.make (width - filled_length) '-'
   in
-  Printf.printf "\r[%s] %.0f%%%!" bar (progress *. 100.0) ;
+  let no_bar = Sys.getenv_opt "ZEKO_NO_PROGRESS_BAR" in
+  if Option.is_some no_bar then Printf.printf "%.0f%%%!" (progress *. 100.0)
+  else Printf.printf "\r[%s] %.0f%%%!" bar (progress *. 100.0) ;
   if Float.(progress >= 1.0) then Printf.printf "\n%!"
