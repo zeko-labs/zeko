@@ -83,9 +83,8 @@ let sync_archive ~(state : State.t) ~hash =
   Da_layer.Client.map_diffs ~logger ~config:state.da_config
     ~depth:constraint_constants.ledger_depth
     ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root state.ledger_cache))
-    ~target_ledger_hash:hash
-    ~f:(fun progress diff ->
-      Zeko_util.progress_bar progress ;
+    ~target_ledger_hash:hash ~print_progress:true
+    ~f:(fun diff ->
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
           (* Apply accounts diff *)
