@@ -523,6 +523,17 @@ let dummy_pc =
     (Mina_state.Protocol_state.Body.hash dummy_state_body)
     Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
 
+let accumulate (f : ('a -> unit) -> 'b Checked.t) : ('b * 'a list) Checked.t =
+  let acc = ref [] in
+  let running = ref true in
+  let*| r =
+    f (fun x ->
+        assert !running ;
+        acc := x :: !acc )
+  in
+  running := false ;
+  (r, !acc)
+
 let account_with_hash (account : Account.Checked.Unhashed.t) :
     (Account.Checked.Unhashed.t, Field.Var.t lazy_t) With_hash.t =
   With_hash.of_data account ~hash_data:(fun a ->
@@ -536,8 +547,7 @@ let account_with_hash (account : Account.Checked.Unhashed.t) :
 
 let perform ~(shift_action_states : Boolean.var list)
     ~(set_slot_range : Slot_range.var -> unit)
-    ~(set_account_new :
-       account:Account_id.var -> is_new:Boolean.var Checked.t -> unit ) =
+    ~(set_account_new : Account_id.var * Boolean.var Checked.t -> unit) =
   let shift_action_states = ref shift_action_states in
   fun (type r)
       (eff :
@@ -602,7 +612,7 @@ let perform ~(shift_action_states : Boolean.var list)
         let is_new =
           PC.Checked.equal account.data.public_key PC.(constant typ empty)
         in
-        set_account_new ~account:account_id ~is_new ;
+        set_account_new (account_id, is_new) ;
         let account' : Account.Checked.Unhashed.t =
           { account.data with
             public_key = account_update.data.public_key
@@ -650,16 +660,14 @@ let rule_signed_command input =
     exists Base_input.typ ~compute:(V.get input)
   in
   let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
-  let accounts = ref [] in
-  let new_accounts_created ~account ~is_empty_and_writeable =
-    accounts := (account, is_empty_and_writeable) :: !accounts
-  in
-  let* target_ledger, fee_excess, _supply_increase =
+  let* (target_ledger, fee_excess, _supply_increase), accounts =
+    accumulate
+    @@ fun set_account_new ->
     Fn.flip handle_as_prover
       As_prover.(
         V.get witness >>| fun { ledger_path_handler; _ } -> ledger_path_handler)
     @@ fun () ->
-    Transaction_snark.Base.apply_tagged_transaction ~new_accounts_created
+    Transaction_snark.Base.apply_tagged_transaction ~set_account_new
       ~constraint_constants
       (module Shifted)
       source_ledger Slot.Checked.zero
@@ -672,7 +680,7 @@ let rule_signed_command input =
       transaction
   in
   let*| target_acc_set =
-    update_acc_set !accounts source_acc_set
+    update_acc_set accounts source_acc_set
       ~witness:As_prover.(V.get witness >>| fun x -> x.update_acc_set_witness)
   in
   let out : Zeko_stmt.var =
@@ -714,12 +722,6 @@ let rule_zkapp ~shift_action_states ~spec
       ; sequencer
       ; source_acc_set
       } =
-  let slot_ranges = ref [] in
-  let set_slot_range s = slot_ranges := s :: !slot_ranges in
-  let accounts = ref [] in
-  let set_account_new ~account ~is_new =
-    accounts := (account, is_new) :: !accounts
-  in
   let source : _ Mina_state.Registers.t =
     { first_pass_ledger = source_ledger
     ; second_pass_ledger = connecting_ledger
@@ -755,8 +757,13 @@ let rule_zkapp ~shift_action_states ~spec
     ; sok_digest = Mina_base.Sok_message.Digest.(constant typ default)
     }
   in
-  let* zkapp_statement, _must_verify_zkapp =
-    let@ () = make_checked in
+  let* ((zkapp_statement, _must_verify_zkapp), slot_ranges), accounts =
+    accumulate
+    @@ fun set_account_new ->
+    accumulate
+    @@ fun set_slot_range ->
+    make_checked
+    @@ fun () ->
     Transaction_snark.Base.Zkapp_command_snark.main
       ?witness:
         ( V.map ~f:(fun (x : Zkapp_witness.t) -> x.txn_snark_witness) witness
@@ -772,7 +779,7 @@ let rule_zkapp ~shift_action_states ~spec
       stmt
   in
   let* accounts =
-    Checked.List.map !accounts ~f:(fun (account, is_new) ->
+    Checked.List.map accounts ~f:(fun (account, is_new) ->
         let*| is_new in
         (account, is_new) )
   in
@@ -785,7 +792,7 @@ let rule_zkapp ~shift_action_states ~spec
         |> V.get )
   in
   let*| slot_range =
-    Checked.List.fold ~init:None !slot_ranges ~f:(function
+    Checked.List.fold ~init:None slot_ranges ~f:(function
       | None ->
           fun x -> Checked.return (Some x)
       | Some x ->
