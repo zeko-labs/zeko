@@ -252,6 +252,14 @@ module Account_set = Indexed_merkle_tree.Make (struct
       in
       multi_range_check z0 z1 z2
 
+    let l =
+      Bigint.of_bignum_bigint Bignum_bigint.(of_int 2 |> Fn.flip shift_left 88)
+      |> Bigint.to_field
+
+    let l2 =
+      Bigint.of_bignum_bigint Bignum_bigint.(of_int 2 |> Fn.flip shift_left 176)
+      |> Bigint.to_field
+
     let field_to_field3 x =
       let* (x0, x1), x2 =
         exists
@@ -261,12 +269,6 @@ module Account_set = Indexed_merkle_tree.Make (struct
              Zeko_as_prover.field_to_field3 x |> As_prover.return )
       in
       let* () = multi_range_check x0 x1 x2 in
-      let l = Field.of_string "309485009821345068724781056" in
-      (* 2^88 *)
-      let l2 =
-        Field.of_string "95780971304118053647396689196894323976171195136475136"
-      in
-      (* 2^88 * 2^88 *)
       let x' = Field.Checked.(x0 + (l * x1) + (l2 * x2)) in
       let*| () = Field.Checked.Assert.equal x' x in
       (x0, x1, x2)
@@ -293,15 +295,19 @@ module Account_set = Indexed_merkle_tree.Make (struct
             = of_string
                 "28948022309329048855892746252171976963363056481941560715954676764349967630337")
       then failwith "Fp size assumption wrong" ;
-      let fp0 =
-        Field.(of_string "93054740644568405314109441" |> constant typ)
-      in
-      let fp1 = Field.(of_string "147213319177" |> constant typ) in
-      let fp2 = Field.(of_string "302231454903657293676544" |> constant typ) in
+      let fp0 = Field.(of_string "93054740644568405314109441") in
+      let fp1 = Field.(of_string "147213319177") in
+      let fp2 = Field.(of_string "302231454903657293676544") in
+      (let c f = Bigint.of_field f |> Bigint.to_bignum_bigint in
+       assert (
+         Bignum_bigint.(c fp0 + (c fp1 * c l) + (c fp2 * c l2) = Field.size) )
+      ) ;
+      assert (Field.(fp0 + (fp1 * l) + (fp2 * l2) |> equal (of_int 0))) ;
       let* () =
         sub_then_dec
           ~dec:Field.(constant typ one)
-          ~x0:fp0 ~x1:fp1 ~x2:fp2 ~y0 ~y1 ~y2
+          ~x0:(constant Field.typ fp0) ~x1:(constant Field.typ fp1)
+          ~x2:(constant Field.typ fp2) ~y0 ~y1 ~y2
       in
       Checked.return ()
   end
@@ -523,6 +529,17 @@ let dummy_pc =
     (Mina_state.Protocol_state.Body.hash dummy_state_body)
     Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
 
+let accumulate (f : ('a -> unit) -> 'b Checked.t) : ('b * 'a list) Checked.t =
+  let acc = ref [] in
+  let running = ref true in
+  let*| r =
+    f (fun x ->
+        assert !running ;
+        acc := x :: !acc )
+  in
+  running := false ;
+  (r, !acc)
+
 let account_with_hash (account : Account.Checked.Unhashed.t) :
     (Account.Checked.Unhashed.t, Field.Var.t lazy_t) With_hash.t =
   With_hash.of_data account ~hash_data:(fun a ->
@@ -536,8 +553,7 @@ let account_with_hash (account : Account.Checked.Unhashed.t) :
 
 let perform ~(shift_action_states : Boolean.var list)
     ~(set_slot_range : Slot_range.var -> unit)
-    ~(set_account_new :
-       account:Account_id.var -> is_new:Boolean.var Checked.t -> unit ) =
+    ~(set_account_new : Account_id.var * Boolean.var Checked.t -> unit) =
   let shift_action_states = ref shift_action_states in
   fun (type r)
       (eff :
@@ -594,7 +610,6 @@ let perform ~(shift_action_states : Boolean.var list)
             ({ account_update; _ } : Zkapp_call_forest.Checked.account_update)
         ; account : (Account.Checked.Unhashed.t, Field.Var.t lazy_t) With_hash.t
         } ->
-        (* FIXME: Add account duplication check. *)
         let account_id =
           Account_id.Checked.create account_update.data.public_key
             account_update.data.token_id
@@ -602,7 +617,7 @@ let perform ~(shift_action_states : Boolean.var list)
         let is_new =
           PC.Checked.equal account.data.public_key PC.(constant typ empty)
         in
-        set_account_new ~account:account_id ~is_new ;
+        set_account_new (account_id, is_new) ;
         let account' : Account.Checked.Unhashed.t =
           { account.data with
             public_key = account_update.data.public_key
@@ -650,16 +665,14 @@ let rule_signed_command input =
     exists Base_input.typ ~compute:(V.get input)
   in
   let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
-  let accounts = ref [] in
-  let new_accounts_created ~account ~is_empty_and_writeable =
-    accounts := (account, is_empty_and_writeable) :: !accounts
-  in
-  let* target_ledger, fee_excess, _supply_increase =
+  let* (target_ledger, fee_excess, _supply_increase), accounts =
+    accumulate
+    @@ fun set_account_new ->
     Fn.flip handle_as_prover
       As_prover.(
         V.get witness >>| fun { ledger_path_handler; _ } -> ledger_path_handler)
     @@ fun () ->
-    Transaction_snark.Base.apply_tagged_transaction ~new_accounts_created
+    Transaction_snark.Base.apply_tagged_transaction ~set_account_new
       ~constraint_constants
       (module Shifted)
       source_ledger Slot.Checked.zero
@@ -672,7 +685,7 @@ let rule_signed_command input =
       transaction
   in
   let*| target_acc_set =
-    update_acc_set !accounts source_acc_set
+    update_acc_set accounts source_acc_set
       ~witness:As_prover.(V.get witness >>| fun x -> x.update_acc_set_witness)
   in
   let out : Zeko_stmt.var =
@@ -714,12 +727,6 @@ let rule_zkapp ~shift_action_states ~spec
       ; sequencer
       ; source_acc_set
       } =
-  let slot_ranges = ref [] in
-  let set_slot_range s = slot_ranges := s :: !slot_ranges in
-  let accounts = ref [] in
-  let set_account_new ~account ~is_new =
-    accounts := (account, is_new) :: !accounts
-  in
   let source : _ Mina_state.Registers.t =
     { first_pass_ledger = source_ledger
     ; second_pass_ledger = connecting_ledger
@@ -755,8 +762,13 @@ let rule_zkapp ~shift_action_states ~spec
     ; sok_digest = Mina_base.Sok_message.Digest.(constant typ default)
     }
   in
-  let* zkapp_statement, _must_verify_zkapp =
-    let@ () = make_checked in
+  let* ((zkapp_statement, _must_verify_zkapp), slot_ranges), accounts =
+    accumulate
+    @@ fun set_account_new ->
+    accumulate
+    @@ fun set_slot_range ->
+    make_checked
+    @@ fun () ->
     Transaction_snark.Base.Zkapp_command_snark.main
       ?witness:
         ( V.map ~f:(fun (x : Zkapp_witness.t) -> x.txn_snark_witness) witness
@@ -772,7 +784,7 @@ let rule_zkapp ~shift_action_states ~spec
       stmt
   in
   let* accounts =
-    Checked.List.map !accounts ~f:(fun (account, is_new) ->
+    Checked.List.map accounts ~f:(fun (account, is_new) ->
         let*| is_new in
         (account, is_new) )
   in
@@ -785,7 +797,7 @@ let rule_zkapp ~shift_action_states ~spec
         |> V.get )
   in
   let*| slot_range =
-    Checked.List.fold ~init:None !slot_ranges ~f:(function
+    Checked.List.fold ~init:None slot_ranges ~f:(function
       | None ->
           fun x -> Checked.return (Some x)
       | Some x ->
