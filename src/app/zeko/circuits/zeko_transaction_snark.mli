@@ -1,5 +1,5 @@
 open Snark_params.Tick
-module PC := Signature_lib.Public_key.Compressed
+open Zeko_util
 
 module Stack_frame : sig
   include module type of Mina_base.Stack_frame.Digest
@@ -39,12 +39,34 @@ module Local_state : sig
   val dummy : var
 end
 
+module Account_set : sig
+  type t
+
+  type var
+
+  val typ : (var, t) Typ.t
+
+  module PathStep : sig
+    type t = { hash : F.t; is_left : Boolean.t } [@@deriving snarky]
+  end
+
+  module Path : sig
+    type t = PathStep.t list
+
+    type var = PathStep.var list
+
+    val typ : (var, t) Typ.t
+  end
+end
+
 module Zeko_stmt : sig
   type t =
     { source_ledger : Mina_base.Ledger_hash.t
     ; target_ledger : Mina_base.Ledger_hash.t
-    ; sequencer : PC.t
-    ; fee_excess : Currency.Fee.Signed.t
+    ; source_acc_set : Account_set.t
+    ; target_acc_set : Account_set.t
+    ; sequencer : Even_PC.t
+    ; fee_excess : Currency.Amount.Signed.t
     ; slot_range : Zeko_util.Slot_range.t
     ; source_local_state : Local_state.t
     ; target_local_state : Local_state.t
@@ -57,22 +79,29 @@ module T : sig
   [@@deriving snarky]
 end
 
-module Handler_V : sig
-  type t = Handler.t
+type update_acc_set_witness =
+  { get_account_set_x : unit -> Mina_base.Account_id.t
+  ; get_account_set_z : unit -> Mina_base.Account_id.t
+  ; get_account_set_x_path : unit -> Account_set.Path.t
+  ; get_account_set_y_path : unit -> Account_set.Path.t
+  }
 
-  type var = t V.t
-
-  val typ : (var, t) Typ.t
+module Base_witness : sig
+  type t =
+    { ledger_path_handler : Handler.t
+    ; update_acc_set_witness : update_acc_set_witness
+    }
 end
+
+module Base_witness_V : Zeko_util.V_S with type t = Base_witness.t
 
 module Base_input : sig
   type t =
     { source_ledger : Mina_base.Ledger_hash.t
-    ; target_ledger : Mina_base.Ledger_hash.t
-    ; fee_excess : Currency.Fee.Signed.t
-    ; sequencer : PC.t
+    ; source_acc_set : Account_set.t
+    ; sequencer : Even_PC.t
     ; transaction : Mina_transaction.Transaction_union.t
-    ; handler : Handler_V.t
+    ; witness : Base_witness_V.t
     }
   [@@deriving snarky]
 end
@@ -85,13 +114,14 @@ module Merge_input : sig
   val typ : (var, t) Typ.t
 end
 
-module Witness_V : sig
-  type t = Transaction_snark.Zkapp_command_segment.Witness.t
-
-  type var = t V.t
-
-  val typ : (var, t) Typ.t
+module Zkapp_witness : sig
+  type t =
+    { txn_snark_witness : Transaction_snark.Zkapp_command_segment.Witness.t
+    ; update_acc_set_witness : update_acc_set_witness
+    }
 end
+
+module Zkapp_witness_V : V_S with type t = Zkapp_witness.t
 
 module Zkapp_rule_input : sig
   type t =
@@ -102,8 +132,9 @@ module Zkapp_rule_input : sig
     ; target_local_state : Local_state.t
     ; fee_excess : Currency.Fee.Signed.t
     ; supply_decrease : Currency.Amount.t
-    ; witness : Witness_V.t
-    ; sequencer : PC.t
+    ; witness : Zkapp_witness_V.t
+    ; sequencer : Even_PC.t
+    ; source_acc_set : Account_set.t
     }
   [@@deriving snarky]
 end

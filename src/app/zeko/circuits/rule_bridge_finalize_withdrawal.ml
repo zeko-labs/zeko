@@ -189,6 +189,7 @@ struct
                             }
                         ; sequencer = None
                         ; da_key = None
+                        ; acc_set = None
                         }
                       |> var_to_precondition_fine
                   ; action_state =

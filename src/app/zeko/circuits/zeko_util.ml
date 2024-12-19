@@ -388,3 +388,10 @@ let token_owner_id : Account_id.t option -> Token_id.t = function
       Token_id.default
   | Some owner ->
       Account_id.derive_token_id ~owner
+
+module Even_PC = struct
+  type t = { public_key : F.t } [@@deriving snarky]
+
+  let to_pc_var { public_key } : Signature_lib.Public_key.Compressed.var =
+    { x = public_key; is_odd = Boolean.false_ }
+end

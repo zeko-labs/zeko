@@ -35,6 +35,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
                   ; inner_action_state = { length = None; state = None }
                   ; sequencer = None
                   ; da_key = None
+                  ; acc_set = None
                   }
                 |> var_to_precondition_fine
             }

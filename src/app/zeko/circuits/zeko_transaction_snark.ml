@@ -9,8 +9,6 @@ open Checked.Let_syntax
 
 let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
-let fixme_as_prover _ = failwith "FIXME"
-
 module Account_set = Indexed_merkle_tree.Make (struct
   open struct
     let add_plonk_constraint c =
@@ -306,10 +304,6 @@ module Account_set = Indexed_merkle_tree.Make (struct
           ~x0:fp0 ~x1:fp1 ~x2:fp2 ~y0 ~y1 ~y2
       in
       Checked.return ()
-
-    let gte_boolean x y =
-      let open Boolean.Expr in
-      any [ !x && !y; !x && not !y; (not !x) && not !y ]
   end
 
   module Key = Account_id
@@ -406,7 +400,7 @@ module Zeko_stmt = struct
     ; target_ledger : Ledger_hash.t
     ; source_acc_set : Account_set.t
     ; target_acc_set : Account_set.t
-    ; sequencer : Signature_lib.Public_key.Compressed.t
+    ; sequencer : Even_PC.t
     ; fee_excess : Currency.Amount.Signed.t
     ; slot_range : Slot_range.t
     ; source_local_state : Local_state.t
@@ -419,16 +413,29 @@ module T = struct
   type t = { stmt : Zeko_stmt.t; proof : Proof_V.t } [@@deriving snarky]
 end
 
-module Handler_V = Mk_V (Handler)
+type update_acc_set_witness =
+  { get_account_set_x : unit -> Account_id.t
+  ; get_account_set_z : unit -> Account_id.t
+  ; get_account_set_x_path : unit -> Account_set.Path.t
+  ; get_account_set_y_path : unit -> Account_set.Path.t
+  }
+
+module Base_witness = struct
+  type t =
+    { ledger_path_handler : Handler.t
+    ; update_acc_set_witness : update_acc_set_witness
+    }
+end
+
+module Base_witness_V = Mk_V (Base_witness)
 
 module Base_input = struct
   type t =
     { source_ledger : Ledger_hash.t
     ; source_acc_set : Account_set.t
-    ; fee_excess : Currency.Fee.Signed.t
-    ; sequencer : PC.t
+    ; sequencer : Even_PC.t
     ; transaction : Mina_transaction.Transaction_union.t
-    ; handler : Handler_V.t
+    ; witness : Base_witness_V.t
     }
   [@@deriving snarky]
 end
@@ -437,7 +444,14 @@ module Merge_input = struct
   type t = { left : T.t; right : T.t } [@@deriving snarky]
 end
 
-module Witness_V = Mk_V (Transaction_snark.Zkapp_command_segment.Witness)
+module Zkapp_witness = struct
+  type t =
+    { txn_snark_witness : Transaction_snark.Zkapp_command_segment.Witness.t
+    ; update_acc_set_witness : update_acc_set_witness
+    }
+end
+
+module Zkapp_witness_V = Mk_V (Zkapp_witness)
 
 module Zkapp_rule_input = struct
   type t =
@@ -448,8 +462,9 @@ module Zkapp_rule_input = struct
     ; target_local_state : Local_state.t
     ; fee_excess : Currency.Fee.Signed.t
     ; supply_decrease : Currency.Amount.t
-    ; witness : Witness_V.t
-    ; sequencer : PC.t
+    ; witness : Zkapp_witness_V.t
+    ; sequencer : Even_PC.t
+    ; source_acc_set : Account_set.t
     }
   [@@deriving snarky]
 end
@@ -520,7 +535,9 @@ let account_with_hash (account : Account.Checked.Unhashed.t) :
          Run.run_checked (Account.Checked.digest a) ) )
 
 let perform ~(shift_action_states : Boolean.var list)
-    ~(set_slot_range : Slot_range.var -> unit) =
+    ~(set_slot_range : Slot_range.var -> unit)
+    ~(set_account_new :
+       account:Account_id.var -> is_new:Boolean.var Checked.t -> unit ) =
   let shift_action_states = ref shift_action_states in
   fun (type r)
       (eff :
@@ -578,6 +595,14 @@ let perform ~(shift_action_states : Boolean.var list)
         ; account : (Account.Checked.Unhashed.t, Field.Var.t lazy_t) With_hash.t
         } ->
         (* FIXME: Add account duplication check. *)
+        let account_id =
+          Account_id.Checked.create account_update.data.public_key
+            account_update.data.token_id
+        in
+        let is_new =
+          PC.Checked.equal account.data.public_key PC.(constant typ empty)
+        in
+        set_account_new ~account:account_id ~is_new ;
         let account' : Account.Checked.Unhashed.t =
           { account.data with
             public_key = account_update.data.public_key
@@ -593,14 +618,35 @@ let perform ~(shift_action_states : Boolean.var list)
             shift_action_states := xs ;
             x )
 
+let update_acc_set accounts init ~witness =
+  Checked.List.fold accounts ~init
+    ~f:(fun set (account_id, is_empty_and_writeable) ->
+      let open As_prover in
+      let* x =
+        exists Account_id.typ
+          ~compute:(witness >>| fun x -> x.get_account_set_x ())
+      in
+      let* path_x =
+        exists Account_set.Path.typ
+          ~compute:(witness >>| fun x -> x.get_account_set_x_path ())
+      in
+      let* path_y =
+        exists Account_set.Path.typ
+          ~compute:(witness >>| fun x -> x.get_account_set_y_path ())
+      in
+      let* z =
+        exists Account_id.typ
+          ~compute:(witness >>| fun x -> x.get_account_set_z ())
+      in
+      let* `Before_adding_y set', `After_adding_y new_set =
+        Account_set.add_key_var ~x ~path_x ~y:account_id ~path_y ~z
+          ~check:is_empty_and_writeable ()
+      in
+      let*| () = assert_equal ~label:__LOC__ Account_set.typ set set' in
+      new_set )
+
 let rule_signed_command input =
-  let* { source_ledger
-       ; source_acc_set
-       ; fee_excess
-       ; transaction
-       ; sequencer
-       ; handler
-       } =
+  let* { source_ledger; source_acc_set; transaction; sequencer; witness } =
     exists Base_input.typ ~compute:(V.get input)
   in
   let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
@@ -609,7 +655,9 @@ let rule_signed_command input =
     accounts := (account, is_empty_and_writeable) :: !accounts
   in
   let* target_ledger, fee_excess, _supply_increase =
-    Fn.flip handle_as_prover (V.get handler)
+    Fn.flip handle_as_prover
+      As_prover.(
+        V.get witness >>| fun { ledger_path_handler; _ } -> ledger_path_handler)
     @@ fun () ->
     Transaction_snark.Base.apply_tagged_transaction ~new_accounts_created
       ~constraint_constants
@@ -624,18 +672,8 @@ let rule_signed_command input =
       transaction
   in
   let*| target_acc_set =
-    Checked.List.fold !accounts ~init:source_acc_set
-      ~f:(fun set (account_id, is_empty_and_writeable) ->
-        let* x = exists Account_id.typ in
-        let* path_x = exists Account_set.Path.typ in
-        let* path_y = exists Account_set.Path.typ in
-        let* z = exists Account_id.typ in
-        let* `Before_adding_y set', `After_adding_y new_set =
-          Account_set.add_key_var ~x ~path_x ~y:account_id ~path_y ~z
-            ~check:is_empty_and_writeable ()
-        in
-        let*| () = assert_equal ~label:__LOC__ Account_set.typ set set' in
-        new_set )
+    update_acc_set !accounts source_acc_set
+      ~witness:As_prover.(V.get witness >>| fun x -> x.update_acc_set_witness)
   in
   let out : Zeko_stmt.var =
     { source_ledger
@@ -651,6 +689,18 @@ let rule_signed_command input =
   in
   Compile_simple.{ prevs = No_prevs; out }
 
+let merge_slot_ranges (x : Slot_range.var) (y : Slot_range.var) :
+    Slot_range.var Checked.t =
+  let* lower =
+    Slot.Checked.(x.lower < y.lower)
+    >>= if_ ~typ:Slot.typ ~then_:y.lower ~else_:x.lower
+  in
+  let*| upper =
+    Slot.Checked.(x.upper < y.upper)
+    >>= if_ ~typ:Slot.typ ~then_:x.lower ~else_:y.lower
+  in
+  ({ lower; upper } : Slot_range.var)
+
 let rule_zkapp ~shift_action_states ~spec
     Zkapp_rule_input.
       { source_ledger
@@ -662,9 +712,14 @@ let rule_zkapp ~shift_action_states ~spec
       ; target_local_state
       ; witness
       ; sequencer
+      ; source_acc_set
       } =
-  let slot_range = ref Slot_range.(constant typ infinite) in
-  let set_slot_range s = slot_range := s in
+  let slot_ranges = ref [] in
+  let set_slot_range s = slot_ranges := s :: !slot_ranges in
+  let accounts = ref [] in
+  let set_account_new ~account ~is_new =
+    accounts := (account, is_new) :: !accounts
+  in
   let source : _ Mina_state.Registers.t =
     { first_pass_ledger = source_ledger
     ; second_pass_ledger = connecting_ledger
@@ -700,27 +755,53 @@ let rule_zkapp ~shift_action_states ~spec
     ; sok_digest = Mina_base.Sok_message.Digest.(constant typ default)
     }
   in
-  let*| zkapp_statement, _must_verify_zkapp =
+  let* zkapp_statement, _must_verify_zkapp =
     let@ () = make_checked in
     Transaction_snark.Base.Zkapp_command_snark.main
-      ?witness:(V.unsafe_unwrap witness)
+      ?witness:
+        ( V.map ~f:(fun (x : Zkapp_witness.t) -> x.txn_snark_witness) witness
+        |> V.unsafe_unwrap )
       ~zeko_handler:
-        { perform = (fun eff -> perform ~shift_action_states ~set_slot_range eff)
+        { perform =
+            (fun eff ->
+              perform ~shift_action_states ~set_slot_range ~set_account_new eff
+              )
         }
       ~constraint_constants
       (Transaction_snark.Zkapp_command_segment.Basic.to_single_list spec)
       stmt
+  in
+  let* accounts =
+    Checked.List.map !accounts ~f:(fun (account, is_new) ->
+        let*| is_new in
+        (account, is_new) )
+  in
+  let* target_acc_set =
+    update_acc_set accounts source_acc_set
+      ~witness:
+        ( V.map
+            ~f:(fun (x : Zkapp_witness.t) -> x.update_acc_set_witness)
+            witness
+        |> V.get )
+  in
+  let*| slot_range =
+    Checked.List.fold ~init:None !slot_ranges ~f:(function
+      | None ->
+          fun x -> Checked.return (Some x)
+      | Some x ->
+          fun y -> merge_slot_ranges x y >>| fun x -> Some x )
+    >>| Option.value ~default:Slot_range.(constant typ infinite)
   in
   let out : Zeko_stmt.var =
     { source_ledger
     ; target_ledger
     ; sequencer
     ; fee_excess = Currency.Amount.Signed.Checked.of_fee fee_excess
-    ; slot_range = !slot_range
+    ; slot_range
     ; source_local_state
     ; target_local_state
-    ; source_acc_set = failwith "FIXME"
-    ; target_acc_set = failwith "FIXME"
+    ; source_acc_set
+    ; target_acc_set
     }
   in
   (zkapp_statement, out)
@@ -770,18 +851,9 @@ let rule_merge input =
     Currency.Amount.Signed.Checked.add left_fee_excess right_fee_excess
   in
   let* sequencer =
-    assert_equal_safer ~label:__LOC__ PC.typ left_sequencer right_sequencer
+    assert_equal_safer ~label:__LOC__ Even_PC.typ left_sequencer right_sequencer
   in
-  let* slot_range_lower =
-    Slot.Checked.(left_slot_range.lower < right_slot_range.lower)
-    >>= if_ ~typ:Slot.typ ~then_:right_slot_range.lower
-          ~else_:left_slot_range.lower
-  in
-  let*| slot_range_upper =
-    Slot.Checked.(left_slot_range.upper < right_slot_range.upper)
-    >>= if_ ~typ:Slot.typ ~then_:left_slot_range.lower
-          ~else_:right_slot_range.lower
-  in
+  let*| slot_range = merge_slot_ranges left_slot_range right_slot_range in
   Compile_simple.
     { prevs =
         Two_prevs
@@ -800,7 +872,7 @@ let rule_merge input =
          ; target_local_state
          ; fee_excess
          ; sequencer
-         ; slot_range = { lower = slot_range_lower; upper = slot_range_upper }
+         ; slot_range
          ; source_acc_set
          ; target_acc_set
          } : Zeko_stmt.var)

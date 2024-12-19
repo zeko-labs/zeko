@@ -1,10 +1,9 @@
 open Zeko_util
 open Snark_params.Tick
-module PC = Signature_lib.Public_key.Compressed
 open Rollup_state
 
 module Witness = struct
-  type t = { public_key : PC.t; vk_hash : F.t; pause_key : PC.t }
+  type t = { public_key : Even_PC.t; vk_hash : F.t; pause_key : Even_PC.t }
   [@@deriving snarky]
 end
 
@@ -14,14 +13,14 @@ let%snarkydef_ main (w : Witness.t V.t) =
   in
   let signature_witness =
     { default_account_update with
-      public_key = pause_key
+      public_key = Even_PC.to_pc_var pause_key
     ; authorization_kind = authorization_signed ()
     ; use_full_commitment = Boolean.true_ (* added here too to be extra sure *)
     }
   in
   let account_update =
     { default_account_update with
-      public_key
+      public_key = Even_PC.to_pc_var public_key
     ; authorization_kind = authorization_vk_hash vk_hash
     ; update =
         { default_account_update.update with
@@ -33,6 +32,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
               ; inner_action_state = { length = None; state = None }
               ; sequencer = None
               ; da_key = None
+              ; acc_set = None
               }
             |> var_to_app_state_fine
         }
@@ -48,6 +48,7 @@ let%snarkydef_ main (w : Witness.t V.t) =
                   ; inner_action_state = { length = None; state = None }
                   ; sequencer = None
                   ; da_key = None
+                  ; acc_set = None
                   }
                 |> var_to_precondition_fine
             }

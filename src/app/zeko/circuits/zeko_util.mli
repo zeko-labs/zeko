@@ -48,18 +48,6 @@ module F : sig
   val pp : Format.formatter -> Pasta_bindings.Fp.t -> unit
 end
 
-module Mk_V : functor
-  (T : sig
-     type t
-   end)
-  -> sig
-  type t = T.t
-
-  type var = t V.t
-
-  val typ : (var, t) Typ.t
-end
-
 module type SnarkType = sig
   type t
 
@@ -104,6 +92,12 @@ module type V_S = sig
 
   val typ : (var, t) Typ.t
 end
+
+module Mk_V : functor
+  (T : sig
+     type t
+   end)
+  -> V_S with type t = T.t
 
 module Proof_V : V_S with type t = Proof.t
 
@@ -192,3 +186,9 @@ val push_actions_var :
   actions:Field.Var.t -> Field.Var.t -> Field.Var.t Checked.t
 
 val token_owner_id : Account_id.t option -> Token_id.t
+
+module Even_PC : sig
+  type t = { public_key : F.t } [@@deriving snarky]
+
+  val to_pc_var : var -> Import.Public_key.Compressed.var
+end
