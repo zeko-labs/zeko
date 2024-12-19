@@ -1,15 +1,13 @@
 open Core_kernel
 open Mina_base
 open Snark_params.Tick
-module PC = Signature_lib.Public_key.Compressed
-open Bridge_state
 open Zeko_util
 open Checked.Let_syntax
 
 module Make (Inputs : sig
   module Deposit_params : Bridge_state.DEPOSIT_PARAMS
 
-  val holder_accounts_l1 : PC.t list
+  val holder_accounts_l1 : Signature_lib.Public_key.Compressed.t list
 
   val token_owner_l1 : Account_id.t option
 end)
