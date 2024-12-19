@@ -251,18 +251,22 @@ module type Full = sig
            Account_timing.As_record.t )
          Tick.Checked.t
 
-    type _ Snarky_backendless.Request.t +=
-      | Transaction : Transaction_union.t Snarky_backendless.Request.t
-      | State_body :
-          Mina_state.Protocol_state.Body.Value.t Snarky_backendless.Request.t
-      | Init_stack : Pending_coinbase.Stack.t Snarky_backendless.Request.t
-      | Global_slot :
-          Mina_numbers.Global_slot_since_genesis.t Snarky_backendless.Request.t
-
-    val main :
-         constraint_constants:Genesis_constants.Constraint_constants.t
-      -> Statement.With_sok.var
-      -> unit Tick.Checked.t
+    val apply_tagged_transaction :
+         ?new_accounts_created:
+           (   account:Account_id.var
+            -> is_empty_and_writeable:Tick.Boolean.var
+            -> unit )
+      -> constraint_constants:Genesis_constants.Constraint_constants.t
+      -> (module Tick.Inner_curve.Checked.Shifted.S with type t = 'shifted)
+      -> Ledger_hash.var
+      -> Mina_numbers.Global_slot_since_genesis.Checked.var
+      -> Pending_coinbase.Stack.var
+      -> Pending_coinbase.Stack.var
+      -> Pending_coinbase.Stack.var
+      -> Mina_state.Protocol_state.Body.var
+      -> Transaction_union.var
+      -> (Ledger_hash.var * Amount.Signed.var * Amount.Signed.var)
+         Tick.Checked.t
 
     module Zkapp_command_snark : sig
       module Global_state : sig

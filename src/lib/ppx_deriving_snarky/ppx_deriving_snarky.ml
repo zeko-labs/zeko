@@ -5,14 +5,14 @@ let deriver_name = "snarky"
 let str_decl ~loc (decl : type_declaration) : structure =
   let open Ast_builder.Default in
   match decl with
-  | { ptype_kind =
-        Ptype_record fields
-    ; ptype_name = { txt = "t" | "var"; _ } as name
-      (* FIXME [name]
-         For some reason when passed to the deriver the name if `t` becomes `var`.
-         This is certainly a bug. It makes no sense to me.
-         The code otherwise seems to work correctly. It's probably a small oversight somewhere.
-      *)
+  | { ptype_kind = Ptype_record fields
+    ; ptype_name =
+        { txt = "t" | "var"; _ } as name
+        (* FIXME [name]
+           For some reason when passed to the deriver the name if `t` becomes `var`.
+           This is certainly a bug. It makes no sense to me.
+           The code otherwise seems to work correctly. It's probably a small oversight somewhere.
+        *)
     ; _
     } ->
       let modules : module_expr list =
@@ -52,11 +52,14 @@ let str_decl ~loc (decl : type_declaration) : structure =
           fields
       in
       let decl' =
-        { decl with
-          ptype_name = { name with txt = "var" }
+        { ptype_name = { name with txt = "var" }
+        ; ptype_params = []
+        ; ptype_cstrs = []
         ; ptype_kind = Ptype_record fields'
-        ; ptype_loc = loc
+        ; ptype_private = decl.ptype_private
+        ; ptype_manifest = None
         ; ptype_attributes = []
+        ; ptype_loc = loc
         }
       in
       let tuple_typ =
@@ -88,7 +91,7 @@ let str_decl ~loc (decl : type_declaration) : structure =
         ppat_record ~loc
           (List.map
              (fun field ->
-               ( { loc = loc; txt = Lident field.pld_name.txt }
+               ( { loc; txt = Lident field.pld_name.txt }
                , ppat_var ~loc field.pld_name ) )
              fields )
           Closed
@@ -122,11 +125,11 @@ let str_decl ~loc (decl : type_declaration) : structure =
             ~there:(fun [%p pat_record_var] -> [%e con_tuple])
             ~back:(fun [%p pat_tuple] -> [%e con_record_var])]
       in
-      pstr_type ~loc Recursive [ decl' ] :: [%str
-        let typ = [%e typ]
-      (* FIXME: add this and fix it *)
-      (* module Constant = struct type nonrec t = t = {...} end *)
-      ]
+      pstr_type ~loc Recursive [ decl' ]
+      :: [%str
+           let typ = [%e typ]
+           (* FIXME: add this and fix it *)
+           (* module Constant = struct type nonrec t = t = {...} end *)]
   | { ptype_loc = loc; ptype_kind; ptype_name; _ } ->
       let i =
         match ptype_kind with
@@ -175,11 +178,14 @@ let sig_decl ~loc (decl : type_declaration) : signature =
           fields
       in
       let decl' =
-        { decl with
-          ptype_name = { name with txt = "var" }
+        { ptype_name = { name with txt = "var" }
+        ; ptype_params = []
+        ; ptype_cstrs = []
         ; ptype_kind = Ptype_record fields'
-        ; ptype_loc = loc
+        ; ptype_private = decl.ptype_private
+        ; ptype_manifest = None
         ; ptype_attributes = []
+        ; ptype_loc = loc
         }
       in
       psig_type ~loc Recursive [ decl' ] :: [%sig: val typ : (var, t) Typ.t]
@@ -188,16 +194,22 @@ let sig_decl ~loc (decl : type_declaration) : signature =
     ; _
     } ->
       let decl' =
-        { decl with
-          ptype_name = { name with txt = "var" }
-        ; ptype_loc = loc
+        { ptype_name = { name with txt = "var" }
+        ; ptype_params = []
+        ; ptype_cstrs = []
+        ; ptype_kind = Ptype_abstract
+        ; ptype_private = decl.ptype_private
+        ; ptype_manifest = None
         ; ptype_attributes = []
+        ; ptype_loc = loc
         }
       in
       psig_type ~loc Recursive [ decl' ] :: [%sig: val typ : (var, t) Typ.t]
   | { ptype_loc = loc; _ } ->
       [ psig_extension ~loc
-          (Location.error_extensionf ~loc "Cannot derive %s signature for this type; must be record or abstract"
+          (Location.error_extensionf ~loc
+             "Cannot derive %s signature for this type; must be record or \
+              abstract"
              deriver_name )
           []
       ]

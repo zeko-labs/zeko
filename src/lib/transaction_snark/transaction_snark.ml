@@ -2211,6 +2211,7 @@ module Make_str (A : Wire_types.Concrete) = struct
         ~else_:acc_burned_tokens
 
     let%snarkydef_ apply_tagged_transaction
+        ?(new_accounts_created = fun ~account:_ ~is_empty_and_writeable:_ -> ())
         ~(constraint_constants : Genesis_constants.Constraint_constants.t)
         (type shifted)
         (shifted : (module Inner_curve.Checked.Shifted.S with type t = shifted))
@@ -2241,6 +2242,8 @@ module Make_str (A : Wire_types.Concrete) = struct
         Transaction_union.Tag.Unpacked.is_fee_transfer tag
       in
       let is_coinbase = Transaction_union.Tag.Unpacked.is_coinbase tag in
+      (* ZEKO NOTE: We don't accept coinbase commands. *)
+      let%bind () = Boolean.not is_coinbase |> Boolean.Assert.is_true in
       let fee_token = payload.common.fee_token in
       let%bind fee_token_default =
         make_checked (fun () ->
@@ -2444,6 +2447,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               ~depth:constraint_constants.ledger_depth fee_payment_root
               ~is_writeable:can_create_fee_payer_account fee_payer
               ~f:(fun ~is_empty_and_writeable account ->
+                new_accounts_created ~account:fee_payer ~is_empty_and_writeable ;
                 (* this account is:
                    - the fee-payer for payments
                    - the fee-payer for stake delegation
@@ -2646,6 +2650,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               ~depth:constraint_constants.ledger_depth
               root_after_fee_payer_update receiver
               ~f:(fun ~is_empty_and_writeable account ->
+                new_accounts_created ~account:receiver ~is_empty_and_writeable ;
                 (* this account is:
                    - the receiver for payments
                    - the delegated-to account for stake delegation
@@ -2855,6 +2860,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                 user_command_failure.source_not_present
               root_after_receiver_update source
               ~f:(fun ~is_empty_and_writeable account ->
+                new_accounts_created ~account:source ~is_empty_and_writeable ;
                 (* this account is:
                    - the source for payments
                    - the delegator for stake delegation

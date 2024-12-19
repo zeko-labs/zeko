@@ -129,6 +129,8 @@ struct
            ; sequencer
            ; fee_excess
            ; slot_range
+           ; source_acc_set
+           ; target_acc_set
            }
          , verify_txn_snark ) =
       Zeko_transaction_snark.get txn_snark
@@ -165,7 +167,7 @@ struct
 
     (* Sequencer must take fees. *)
     let* () =
-      Currency.Fee.(
+      Currency.Amount.(
         Signed.Checked.magnitude fee_excess
         >>= assert_equal ~label:__LOC__ typ (constant typ zero))
     in
@@ -304,6 +306,7 @@ struct
             ; paused = None (* We don't pause the rollup. *)
             ; pause_key = None (* We don't update the pause key. *)
             ; da_key = None
+            ; acc_set = Some target_acc_set
             }
           |> var_to_app_state_fine
       }
@@ -336,6 +339,7 @@ struct
                 ; pause_key =
                     None (* We don't care about who can pause the rollup. *)
                 ; da_key = None
+                ; acc_set = Some source_acc_set
                 }
               |> var_to_precondition_fine
           ; action_state =
@@ -369,7 +373,7 @@ struct
 
     let sequencer_account_update =
       { default_account_update with
-        public_key = sequencer
+        public_key = Even_PC.to_pc_var sequencer
       ; authorization_kind = authorization_signed ()
       ; use_full_commitment = Boolean.true_
       }

@@ -46,10 +46,12 @@ end) : sig
   end
 
   val add_key_var :
-       x:Key.var
+       ?check:Boolean.var
+    -> x:Key.var
     -> path_x:Path.var
     -> y:Key.var
     -> path_y:Path.var
     -> z:Key.var
-    -> ([ `Old of var ] * [ `New of var ]) Checked.t
+    -> unit
+    -> ([ `Before_adding_y of var ] * [ `After_adding_y of var ]) Checked.t
 end
