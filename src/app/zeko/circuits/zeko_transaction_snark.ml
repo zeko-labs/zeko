@@ -610,7 +610,6 @@ let perform ~(shift_action_states : Boolean.var list)
             ({ account_update; _ } : Zkapp_call_forest.Checked.account_update)
         ; account : (Account.Checked.Unhashed.t, Field.Var.t lazy_t) With_hash.t
         } ->
-        (* FIXME: Add account duplication check. *)
         let account_id =
           Account_id.Checked.create account_update.data.public_key
             account_update.data.token_id
