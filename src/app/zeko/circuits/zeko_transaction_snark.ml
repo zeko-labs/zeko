@@ -252,6 +252,14 @@ module Account_set = Indexed_merkle_tree.Make (struct
       in
       multi_range_check z0 z1 z2
 
+    let l =
+      Bigint.of_bignum_bigint Bignum_bigint.(of_int 2 |> Fn.flip shift_left 88)
+      |> Bigint.to_field
+
+    let l2 =
+      Bigint.of_bignum_bigint Bignum_bigint.(of_int 2 |> Fn.flip shift_left 176)
+      |> Bigint.to_field
+
     let field_to_field3 x =
       let* (x0, x1), x2 =
         exists
@@ -261,12 +269,6 @@ module Account_set = Indexed_merkle_tree.Make (struct
              Zeko_as_prover.field_to_field3 x |> As_prover.return )
       in
       let* () = multi_range_check x0 x1 x2 in
-      let l = Field.of_string "309485009821345068724781056" in
-      (* 2^88 *)
-      let l2 =
-        Field.of_string "95780971304118053647396689196894323976171195136475136"
-      in
-      (* 2^88 * 2^88 *)
       let x' = Field.Checked.(x0 + (l * x1) + (l2 * x2)) in
       let*| () = Field.Checked.Assert.equal x' x in
       (x0, x1, x2)
@@ -293,15 +295,19 @@ module Account_set = Indexed_merkle_tree.Make (struct
             = of_string
                 "28948022309329048855892746252171976963363056481941560715954676764349967630337")
       then failwith "Fp size assumption wrong" ;
-      let fp0 =
-        Field.(of_string "93054740644568405314109441" |> constant typ)
-      in
-      let fp1 = Field.(of_string "147213319177" |> constant typ) in
-      let fp2 = Field.(of_string "302231454903657293676544" |> constant typ) in
+      let fp0 = Field.(of_string "93054740644568405314109441") in
+      let fp1 = Field.(of_string "147213319177") in
+      let fp2 = Field.(of_string "302231454903657293676544") in
+      (let c f = Bigint.of_field f |> Bigint.to_bignum_bigint in
+       assert (
+         Bignum_bigint.(c fp0 + (c fp1 * c l) + (c fp2 * c l2) = Field.size) )
+      ) ;
+      assert (Field.(fp0 + (fp1 * l) + (fp2 * l2) |> equal (of_int 0))) ;
       let* () =
         sub_then_dec
           ~dec:Field.(constant typ one)
-          ~x0:fp0 ~x1:fp1 ~x2:fp2 ~y0 ~y1 ~y2
+          ~x0:(constant Field.typ fp0) ~x1:(constant Field.typ fp1)
+          ~x2:(constant Field.typ fp2) ~y0 ~y1 ~y2
       in
       Checked.return ()
   end
