@@ -45,6 +45,7 @@ let
       };
     } else
       { }) // {
+        # Verify that gm4 is available for darwin
         conf-m4 = super.conf-m4.overrideAttrs (old: {
           buildPhase = ''
             ${pkgs.m4}/bin/m4 --version
@@ -57,9 +58,9 @@ let
           nativeBuildInputs = [ pkgs.m4 ];
         });
 
+        # Verify postgres is available for darwin
         conf-postgresql = super.conf-postgresql.overrideAttrs (old: {
           buildPhase = ''
-            # Verify postgres is available
             ${pkgs.postgresql}/bin/pg_config --version
           '';
           installPhase = ''
