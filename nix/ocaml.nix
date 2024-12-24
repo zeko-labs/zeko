@@ -45,6 +45,31 @@ let
       };
     } else
       { }) // {
+        conf-m4 = super.conf-m4.overrideAttrs (old: {
+          buildPhase = ''
+            ${pkgs.m4}/bin/m4 --version
+          '';
+          installPhase = ''
+            mkdir -p $out
+            touch $out/gm4-installed
+          '';
+          buildInputs = [ pkgs.m4 ];
+          nativeBuildInputs = [ pkgs.m4 ];
+        });
+
+        conf-postgresql = super.conf-postgresql.overrideAttrs (old: {
+          buildPhase = ''
+            # Verify postgres is available
+            ${pkgs.postgresql}/bin/pg_config --version
+          '';
+          installPhase = ''
+            mkdir -p $out
+            touch $out/pg-installed
+          '';
+          buildInputs = [ pkgs.postgresql ];
+          nativeBuildInputs = [ pkgs.postgresql ];
+        });
+
         # https://github.com/Drup/ocaml-lmdb/issues/41
         lmdb = super.lmdb.overrideAttrs
           (oa: { buildInputs = oa.buildInputs ++ [ self.conf-pkg-config ]; });
