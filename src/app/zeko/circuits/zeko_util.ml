@@ -96,7 +96,7 @@ let var_to_app_state_fine =
 
 (** To be used with deriving snarky, a simple field *)
 module F = struct
-  type t = field
+  type t = Field.t [@@deriving yojson]
 
   type var = Field.Var.t
 
