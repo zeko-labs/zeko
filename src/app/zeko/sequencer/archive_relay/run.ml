@@ -78,13 +78,13 @@ end
 
 let sync_archive ~(state : State.t) ~hash =
   let logger = state.logger in
-  let ledger = Ledger.of_database state.ledger_cache in
   let protocol_state = ref compile_time_genesis_state in
   Da_layer.Client.map_diffs ~logger ~config:state.da_config
     ~depth:constraint_constants.ledger_depth
     ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root state.ledger_cache))
     ~target_ledger_hash:hash ~print_progress:true
     ~f:(fun diff ->
+      let ledger = Ledger.of_database state.ledger_cache in
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
           (* Apply accounts diff *)
