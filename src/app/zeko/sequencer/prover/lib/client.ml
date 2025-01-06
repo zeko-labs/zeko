@@ -189,3 +189,23 @@ let transaction_snark_of_merge ?proving_timeout t
       Zeko_transaction_snark.make_unchecked ~proof stmt
   | _ ->
       failwith "Unexpected response from prover"
+
+let inner_step ?proving_timeout t ~all_deposits = failwith "Not implemented"
+
+let outer_step ?proving_timeout t ~last ~outer_public_key:zkapp_pk ~new_deposits
+    ~unprocessed_deposits ~old_inner_ledger ~new_inner_ledger =
+  failwith "Not implemented"
+
+let submit_deposit ?proving_timeout t ~outer_pk ~deposit =
+  failwith "Not implemented"
+
+let submit_withdrawal ?proving_timeout t ~withdrawal =
+  failwith "Not implemented"
+
+let process_deposit ?proving_timeout t ~is_new ~pointer ~before ~after ~deposit
+    =
+  failwith "Not implemented"
+
+let process_withdrawal ?proving_timeout t ~outer_pk ~is_new ~pointer ~before
+    ~after ~withdrawal =
+  failwith "Not implemented"
