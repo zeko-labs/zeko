@@ -20,6 +20,8 @@ module Verification_key : sig
   val var_of_pickles : Pickles.Side_loaded.Verification_key.Checked.t -> var
 
   val of_tag : 'tag_var tag -> t Promise.t
+
+  val to_pickles_lossy : t -> Pickles.Side_loaded.Verification_key.t
 end
 
 include module type of Compile_simple_intf.Make (struct

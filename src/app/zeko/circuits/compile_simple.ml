@@ -23,6 +23,8 @@ module Verification_key = struct
   let var_of_pickles x = x
 
   let of_tag (Tag tag) = of_compiled_promise tag
+
+  let to_pickles_lossy x = x
 end
 
 let force_tag tag = Promise.map ~f:(fun _ -> ()) (Verification_key.of_tag tag)
