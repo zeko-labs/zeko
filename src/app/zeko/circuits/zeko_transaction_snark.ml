@@ -312,20 +312,20 @@ module Account_set = Indexed_merkle_tree.Make (struct
       Checked.return ()
   end
 
-  module Key = Account_id
+  module Key = struct
+    type t = Token_id.t
 
-  let assert_x_less_than_y_less_than_z ~(x : Account_id.var)
-      ~(y : Account_id.var) ~(z : Account_id.var) =
+    type var = Token_id.Checked.t
+
+    let typ = Token_id.typ
+  end
+
+  let assert_x_less_than_y_less_than_z ~(x : Key.var) ~(y : Key.var)
+      ~(z : Key.var) =
     (* pretty sure of_field is supposed to be of_field_unsafe, and to_field_unsafe is supposed to be to_field *)
-    let f owner =
-      make_checked
-      @@ fun () ->
-      Account_id.Checked.derive_token_id ~owner
-      |> Token_id.Checked.to_field_unsafe
-    in
-    let* x = f x in
-    let* y = f y in
-    let* z = f z in
+    let x = Token_id.Checked.to_field_unsafe x in
+    let y = Token_id.Checked.to_field_unsafe y in
+    let z = Token_id.Checked.to_field_unsafe z in
     let* () = assert_greater_than_full ~check:Boolean.true_ z y in
     let*| () = assert_greater_than_full ~check:Boolean.true_ y x in
     ()
@@ -420,8 +420,8 @@ module T = struct
 end
 
 type update_acc_set_witness =
-  { get_account_set_x : unit -> Account_id.t
-  ; get_account_set_z : unit -> Account_id.t
+  { get_account_set_x : unit -> Token_id.t
+  ; get_account_set_z : unit -> Token_id.t
   ; get_account_set_x_path : unit -> Account_set.Path.t
   ; get_account_set_y_path : unit -> Account_set.Path.t
   }
@@ -633,12 +633,15 @@ let perform ~(shift_action_states : Boolean.var list)
             shift_action_states := xs ;
             x )
 
+let derive_token_id ~owner =
+  make_checked @@ fun () -> Account_id.Checked.derive_token_id ~owner
+
 let update_acc_set accounts init ~witness =
   Checked.List.fold accounts ~init
     ~f:(fun set (account_id, is_empty_and_writeable) ->
       let open As_prover in
       let* x =
-        exists Account_id.typ
+        exists Token_id.typ
           ~compute:(witness >>| fun x -> x.get_account_set_x ())
       in
       let* path_x =
@@ -650,11 +653,12 @@ let update_acc_set accounts init ~witness =
           ~compute:(witness >>| fun x -> x.get_account_set_y_path ())
       in
       let* z =
-        exists Account_id.typ
+        exists Token_id.typ
           ~compute:(witness >>| fun x -> x.get_account_set_z ())
       in
+      let* y = derive_token_id ~owner:account_id in
       let* `Before_adding_y set', `After_adding_y new_set =
-        Account_set.add_key_var ~x ~path_x ~y:account_id ~path_y ~z
+        Account_set.add_key_var ~x ~path_x ~y ~path_y ~z
           ~check:is_empty_and_writeable ()
       in
       let*| () = assert_equal ~label:__LOC__ Account_set.typ set set' in
