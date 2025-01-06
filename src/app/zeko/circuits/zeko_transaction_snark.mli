@@ -29,7 +29,7 @@ module Local_state : sig
     ; excess : Currency.Amount.Signed.t
     ; account_update_index : Account_update_index.t
     }
-  [@@deriving snarky]
+  [@@deriving snarky, yojson]
 
   val to_mina_var :
        supply_increase:Currency.Amount.Signed.var
@@ -71,7 +71,7 @@ module Zeko_stmt : sig
     ; source_local_state : Local_state.t
     ; target_local_state : Local_state.t
     }
-  [@@deriving snarky]
+  [@@deriving snarky, yojson]
 end
 
 module T : sig

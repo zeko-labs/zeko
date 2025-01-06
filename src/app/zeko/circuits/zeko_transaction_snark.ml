@@ -359,7 +359,7 @@ module Local_state = struct
     ; excess : Currency.Amount.Signed.t
     ; account_update_index : Account_update_index.t
     }
-  [@@deriving snarky]
+  [@@deriving snarky, yojson]
 
   let to_mina_var ~supply_increase
       { ledger
@@ -410,7 +410,7 @@ module Zeko_stmt = struct
     ; source_local_state : Local_state.t
     ; target_local_state : Local_state.t
     }
-  [@@deriving snarky]
+  [@@deriving snarky, yojson]
 end
 
 module T = struct

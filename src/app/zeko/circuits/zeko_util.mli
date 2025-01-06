@@ -158,7 +158,7 @@ module Slot_span : sig
 end
 
 module Slot_range : sig
-  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky]
+  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky, yojson]
 
   module Checked : sig
     val to_valid_while :
@@ -188,7 +188,7 @@ val push_actions_var :
 val token_owner_id : Account_id.t option -> Token_id.t
 
 module Even_PC : sig
-  type t = { public_key : F.t } [@@deriving snarky]
+  type t = { public_key : F.t } [@@deriving snarky, yojson]
 
   val to_pc_var : var -> Import.Public_key.Compressed.var
 end
