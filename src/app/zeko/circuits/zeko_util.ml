@@ -250,7 +250,7 @@ module Slot_span = struct
 end
 
 module Slot_range = struct
-  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky]
+  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky, yojson]
 
   module Checked = struct
     let to_valid_while (t : var) : Zkapp_precondition.Valid_while.Checked.t =
@@ -392,7 +392,7 @@ let token_owner_id : Account_id.t option -> Token_id.t = function
       Account_id.derive_token_id ~owner
 
 module Even_PC = struct
-  type t = { public_key : F.t } [@@deriving snarky]
+  type t = { public_key : F.t } [@@deriving snarky, yojson]
 
   let to_pc_var { public_key } : Signature_lib.Public_key.Compressed.var =
     { x = public_key; is_odd = Boolean.false_ }

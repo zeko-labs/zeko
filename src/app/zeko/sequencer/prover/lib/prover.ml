@@ -3,6 +3,7 @@ open Async
 open Mina_base
 open Mina_ledger
 open Signature_lib
+open Zeko_circuits
 
 (* Only for yojson serialization of Field *)
 module Field = Data_hash.Make_full_size (struct
@@ -31,59 +32,70 @@ let dummy_sok =
 module Input = struct
   type t =
     | Ping
-    | Wrapper_wrap of Transaction_snark.t
-    | Wrapper_merge of (Zkapps_rollup.t * Zkapps_rollup.t)
-    | Transaction_snark_of_signed_command of
-        ( Mina_state.Snarked_ledger_state.With_sok.t
-        * Signed_command.With_valid_signature.t Transaction_protocol_state.t
+    | Txn_snark_single_signed_command of
+        ( Ledger_hash.t
+        * Zeko_transaction_snark.Account_set.t
+        * Zeko_util.Even_PC.t
+        * Signed_command.t
         * Sparse_ledger.t )
-    | Transaction_snark_of_zkapp_command_segment of
-        ( Mina_state.Snarked_ledger_state.With_sok.t
-        * Transaction_witness.Zkapp_command_segment_witness.t
-        * Transaction_snark.Zkapp_command_segment.Basic.t )
-    | Transaction_snark_merge of (Transaction_snark.t * Transaction_snark.t)
-    | Submit_deposit of (Public_key.Compressed.t * Zkapps_rollup.TR.t)
-    | Submit_withdrawal of Zkapps_rollup.TR.t
-    | Process_deposit of
-        ( bool
-        * Field.t
-        * Zkapps_rollup.TR.t list
-        * Zkapps_rollup.TR.t list
-        * Zkapps_rollup.TR.t )
-    | Process_withdrawal of
-        ( Public_key.Compressed.t
+    | Txn_snark_single_unproved_zkapp_command of
+        ( Ledger_hash.t
+        * Ledger_hash.t
+        * Ledger_hash.t
+        * Zeko_transaction_snark.Local_state.t
+        * Zeko_transaction_snark.Local_state.t
+        * Currency.Fee.Signed.t
+        * Currency.Amount.t
+        * Transaction_snark.Zkapp_command_segment.Witness.t
+        * Zeko_util.Even_PC.t
+        * Zeko_transaction_snark.Account_set.t
+        * bool )
+    | Txn_snark_double_unproved_zkapp_command of
+        ( Ledger_hash.t
+        * Ledger_hash.t
+        * Ledger_hash.t
+        * Zeko_transaction_snark.Local_state.t
+        * Zeko_transaction_snark.Local_state.t
+        * Currency.Fee.Signed.t
+        * Currency.Amount.t
+        * Transaction_snark.Zkapp_command_segment.Witness.t
+        * Zeko_util.Even_PC.t
+        * Zeko_transaction_snark.Account_set.t
         * bool
-        * Field.t
-        * Zkapps_rollup.TR.t list
-        * Zkapps_rollup.TR.t list
-        * Zkapps_rollup.TR.t )
-    | Outer_step of
-        ( Zkapps_rollup.t
-        * Public_key.Compressed.t
-        * Zkapps_rollup.TR.t list
-        * Zkapps_rollup.TR.t list
-        * Sparse_ledger.t
-        * Sparse_ledger.t )
-    | Inner_step of Field.t
+        * bool )
+    | Txn_snark_single_proved_zkapp_command of
+        ( Ledger_hash.t
+        * Ledger_hash.t
+        * Ledger_hash.t
+        * Zeko_transaction_snark.Local_state.t
+        * Zeko_transaction_snark.Local_state.t
+        * Currency.Fee.Signed.t
+        * Currency.Amount.t
+        * Transaction_snark.Zkapp_command_segment.Witness.t
+        * Zeko_util.Even_PC.t
+        * Zeko_transaction_snark.Account_set.t
+        * Pickles.Side_loaded.Verification_key.t
+        * Compile_simple.Proof.t
+        * bool )
+    | Txn_snark_merge of
+        ( Zeko_transaction_snark.Zeko_stmt.t
+        * Compile_simple.Proof.t
+        * Zeko_transaction_snark.Zeko_stmt.t
+        * Compile_simple.Proof.t )
   [@@deriving yojson]
 end
-
-let asd = Ledger_hash.to_yojson
 
 module Output = struct
   type t =
     | Pong
-    | Wrapper_wrap of Zkapps_rollup.t
-    | Wrapper_merge of Zkapps_rollup.t
-    | Transaction_snark_of_signed_command of Transaction_snark.t
-    | Transaction_snark_of_zkapp_command_segment of Transaction_snark.t
-    | Transaction_snark_merge of Transaction_snark.t
     | Submit_deposit of Zeko_util.call_forest_tree
     | Submit_withdrawal of Zeko_util.call_forest_tree
     | Process_deposit of Zeko_util.call_forest
     | Process_withdrawal of Zeko_util.call_forest
     | Outer_step of Zeko_util.call_forest_tree
     | Inner_step of Zeko_util.call_forest_tree
+    | Zeko_transaction_snark of
+        (Zeko_transaction_snark.Zeko_stmt.t * Compile_simple.Proof.t)
   [@@deriving yojson]
 end
 
@@ -91,60 +103,201 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
   let prove ~logger : Input.t -> Output.t Deferred.t = function
     | Ping ->
         return Output.Pong
-    | Wrapper_wrap txn_snark ->
-        time ~logger "Wrapper.wrap" (M.Wrapper.wrap txn_snark)
-        >>| fun x -> Output.Wrapper_wrap x
-    | Wrapper_merge (last, wrapped) ->
-        time ~logger "Wrapper.merge" (M.Wrapper.merge last wrapped)
-        >>| fun x -> Output.Wrapper_merge x
-    | Transaction_snark_of_signed_command
-        (statement, user_command_in_block, sparse_ledger) ->
+    | Txn_snark_single_signed_command
+        (source_ledger, source_acc_set, sequencer, command, sparse_ledger) ->
+        let open Zeko_transaction_snark in
         let handler = unstage @@ Sparse_ledger.handler sparse_ledger in
-        time ~logger "Transaction_snark.of_signed_command"
-          (T.of_user_command ~init_stack:Mina_base.Pending_coinbase.Stack.empty
-             ~statement user_command_in_block handler )
-        >>| fun x -> Output.Transaction_snark_of_signed_command x
-    | Transaction_snark_of_zkapp_command_segment (statement, witness, spec) ->
-        time ~logger "Transaction_snark.of_zkapp_command_segment"
-          (T.of_zkapp_command_segment_exn ~statement ~witness ~spec)
-        >>| fun x -> Output.Transaction_snark_of_zkapp_command_segment x
-    | Transaction_snark_merge (a, b) ->
-        time ~logger "Transaction_snark.merge"
-          (T.merge a b ~sok_digest:dummy_sok)
-        >>| Or_error.ok_exn
-        >>| fun x -> Output.Transaction_snark_merge x
-    | Submit_deposit (outer_public_key, deposit) ->
-        time ~logger "Outer.Submit_deposit"
-          (M.Outer.submit_deposit ~outer_public_key ~deposit)
-        >>| fun x -> Output.Submit_deposit x
-    | Submit_withdrawal withdrawal ->
-        time ~logger "Inner.Submit_withdrawal"
-          (M.Inner.submit_withdrawal ~withdrawal)
-        >>| fun x -> Output.Submit_withdrawal x
-    | Process_deposit (is_new, pointer, before, after, deposit) ->
-        time ~logger "Inner.Process_deposit"
-          (M.Inner.process_deposit ~is_new ~pointer ~before ~after ~deposit)
-        >>| fun (_, x) -> Output.Process_deposit x
-    | Process_withdrawal
-        (outer_public_key, is_new, pointer, before, after, withdrawal) ->
-        time ~logger "Outer.Process_withdrawal"
-          (M.Outer.process_withdrawal ~outer_public_key ~is_new ~pointer ~before
-             ~after ~withdrawal )
-        >>| fun (_, x) -> Output.Process_withdrawal x
-    | Outer_step
-        ( last
-        , outer_public_key
-        , new_deposits
-        , unprocessed_deposits
-        , old_inner_ledger
-        , new_inner_ledger ) ->
-        time ~logger "Outer.step"
-          (M.Outer.step last ~outer_public_key ~new_deposits
-             ~unprocessed_deposits ~old_inner_ledger ~new_inner_ledger )
-        >>| fun x -> Output.Outer_step x
-    | Inner_step all_deposits ->
-        time ~logger "Inner.step" (M.Inner.step ~all_deposits)
-        >>| fun x -> Output.Inner_step x
+        let Compile_simple.[ single_signed_command; _; _; _; _ ] = provers in
+        let input : Base_input.t =
+          { source_ledger
+          ; source_acc_set
+          ; sequencer
+          ; transaction =
+              Mina_transaction.Transaction_union.of_transaction (Command command)
+          ; witness =
+              { ledger_path_handler = handler
+              ; update_acc_set_witness =
+                  { get_account_set_x = (fun () -> failwith "get_account_set_x")
+                  ; get_account_set_z = (fun () -> failwith "get_account_set_z")
+                  ; get_account_set_x_path =
+                      (fun () -> failwith "get_account_set_x_path")
+                  ; get_account_set_y_path =
+                      (fun () -> failwith "get_account_set_y_path")
+                  }
+              }
+          }
+        in
+        let%map stmt, proof =
+          time ~logger "Zeko_transaction_snark.single_signed_command"
+            (single_signed_command input |> Promise.to_deferred)
+        in
+        Output.Zeko_transaction_snark (stmt, proof)
+    | Txn_snark_single_unproved_zkapp_command
+        ( source_ledger
+        , target_ledger
+        , connecting_ledger
+        , source_local_state
+        , target_local_state
+        , fee_excess
+        , supply_decrease
+        , txn_snark_witness
+        , sequencer
+        , source_acc_set
+        , shift_action_state ) ->
+        let open Zeko_transaction_snark in
+        let Compile_simple.[ _; single_unproved_zkapp_command; _; _; _ ] =
+          provers
+        in
+        let input : Zkapp_single_unproved_input.t =
+          { base =
+              { source_ledger
+              ; target_ledger
+              ; connecting_ledger
+              ; source_local_state
+              ; target_local_state
+              ; fee_excess
+              ; supply_decrease
+              ; witness =
+                  { txn_snark_witness
+                  ; update_acc_set_witness =
+                      { get_account_set_x =
+                          (fun () -> failwith "get_account_set_x")
+                      ; get_account_set_z =
+                          (fun () -> failwith "get_account_set_z")
+                      ; get_account_set_x_path =
+                          (fun () -> failwith "get_account_set_x_path")
+                      ; get_account_set_y_path =
+                          (fun () -> failwith "get_account_set_y_path")
+                      }
+                  }
+              ; sequencer
+              ; source_acc_set
+              }
+          ; shift_action_state
+          }
+        in
+        let%map stmt, proof =
+          time ~logger "Zeko_transaction_snark.single_unproved_zkapp_command"
+            (single_unproved_zkapp_command input |> Promise.to_deferred)
+        in
+        Output.Zeko_transaction_snark (stmt, proof)
+    | Txn_snark_double_unproved_zkapp_command
+        ( source_ledger
+        , target_ledger
+        , connecting_ledger
+        , source_local_state
+        , target_local_state
+        , fee_excess
+        , supply_decrease
+        , txn_snark_witness
+        , sequencer
+        , source_acc_set
+        , shift_action_state_first
+        , shift_action_state_second ) ->
+        let open Zeko_transaction_snark in
+        let Compile_simple.[ _; _; double_unproved_zkapp_command; _; _ ] =
+          provers
+        in
+        let input : Zkapp_double_unproved_input.t =
+          { base =
+              { source_ledger
+              ; target_ledger
+              ; connecting_ledger
+              ; source_local_state
+              ; target_local_state
+              ; fee_excess
+              ; supply_decrease
+              ; witness =
+                  { txn_snark_witness
+                  ; update_acc_set_witness =
+                      { get_account_set_x =
+                          (fun () -> failwith "get_account_set_x")
+                      ; get_account_set_z =
+                          (fun () -> failwith "get_account_set_z")
+                      ; get_account_set_x_path =
+                          (fun () -> failwith "get_account_set_x_path")
+                      ; get_account_set_y_path =
+                          (fun () -> failwith "get_account_set_y_path")
+                      }
+                  }
+              ; sequencer
+              ; source_acc_set
+              }
+          ; shift_action_state_first
+          ; shift_action_state_second
+          }
+        in
+        let%map stmt, proof =
+          time ~logger "Zeko_transaction_snark.double_unproved_zkapp_command"
+            (double_unproved_zkapp_command input |> Promise.to_deferred)
+        in
+        Output.Zeko_transaction_snark (stmt, proof)
+    | Txn_snark_single_proved_zkapp_command
+        ( source_ledger
+        , target_ledger
+        , connecting_ledger
+        , source_local_state
+        , target_local_state
+        , fee_excess
+        , supply_decrease
+        , txn_snark_witness
+        , sequencer
+        , source_acc_set
+        , zkapp_vk
+        , zkapp_proof
+        , shift_action_state ) ->
+        let open Zeko_transaction_snark in
+        let Compile_simple.[ _; _; _; single_proved_zkapp_command; _ ] =
+          provers
+        in
+        let input : Zkapp_single_proved_input.t =
+          { base =
+              { source_ledger
+              ; target_ledger
+              ; connecting_ledger
+              ; source_local_state
+              ; target_local_state
+              ; fee_excess
+              ; supply_decrease
+              ; witness =
+                  { txn_snark_witness
+                  ; update_acc_set_witness =
+                      { get_account_set_x =
+                          (fun () -> failwith "get_account_set_x")
+                      ; get_account_set_z =
+                          (fun () -> failwith "get_account_set_z")
+                      ; get_account_set_x_path =
+                          (fun () -> failwith "get_account_set_x_path")
+                      ; get_account_set_y_path =
+                          (fun () -> failwith "get_account_set_y_path")
+                      }
+                  }
+              ; sequencer
+              ; source_acc_set
+              }
+          ; zkapp_vk
+          ; zkapp_proof
+          ; shift_action_state
+          }
+        in
+        let%map stmt, proof =
+          time ~logger "Zeko_transaction_snark.single_proved_zkapp_command"
+            (single_proved_zkapp_command input |> Promise.to_deferred)
+        in
+        Output.Zeko_transaction_snark (stmt, proof)
+    | Txn_snark_merge (left_stmt, left_proof, right_stmt, right_proof) ->
+        let open Zeko_transaction_snark in
+        let Compile_simple.[ _; _; _; _; merge ] = provers in
+        let input : Merge_input.t =
+          { left = { stmt = left_stmt; proof = left_proof }
+          ; right = { stmt = right_stmt; proof = right_proof }
+          }
+        in
+        let%map stmt, proof =
+          time ~logger "Zeko_transaction_snark.merge"
+            (merge input |> Promise.to_deferred)
+        in
+        Output.Zeko_transaction_snark (stmt, proof)
 
   let run ~logger ~port =
     ignore
