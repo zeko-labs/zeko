@@ -80,8 +80,8 @@ module T : sig
 end
 
 type update_acc_set_witness =
-  { get_account_set_x : unit -> Mina_base.Account_id.t
-  ; get_account_set_z : unit -> Mina_base.Account_id.t
+  { get_account_set_x : unit -> Mina_base.Token_id.t
+  ; get_account_set_z : unit -> Mina_base.Token_id.t
   ; get_account_set_x_path : unit -> Account_set.Path.t
   ; get_account_set_y_path : unit -> Account_set.Path.t
   }

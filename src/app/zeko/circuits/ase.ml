@@ -22,7 +22,7 @@ module M_with_length = struct
     let*| action_state = push_actions_var action_state ~actions in
     Stmt.{ action_state; length }
 
-  let name = "action state extension"
+  let name = "action state extension with length"
 
   let leaf_iterations = Int.pow 2 11
 
@@ -47,7 +47,7 @@ module M_without_length = struct
 
   let step actions action_state = push_actions_var action_state ~actions
 
-  let name = "action state extension with length"
+  let name = "action state extension without length"
 
   let leaf_iterations = Int.pow 2 12
 
