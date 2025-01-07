@@ -190,6 +190,8 @@ val token_owner_id : Account_id.t option -> Token_id.t
 module Even_PC : sig
   type t = { public_key : F.t } [@@deriving snarky, yojson]
 
+  val create_exn : Signature_lib.Public_key.Compressed.t -> t
+
   val to_pc_var : var -> Import.Public_key.Compressed.var
 end
 

@@ -76,7 +76,7 @@ end
 
 module T : sig
   type t = { stmt : Zeko_stmt.t; proof : Zeko_util.Proof_V.t }
-  [@@deriving snarky]
+  [@@deriving snarky, yojson]
 end
 
 type update_acc_set_witness =
