@@ -415,6 +415,16 @@ end
 
 module T = struct
   type t = { stmt : Zeko_stmt.t; proof : Proof_V.t } [@@deriving snarky]
+
+  let to_yojson ({ stmt; proof } : t) =
+    `Assoc
+      [ ("stmt", Zeko_stmt.to_yojson stmt); ("proof", Proof.to_yojson proof) ]
+
+  let of_yojson json =
+    let open Ppx_deriving_yojson_runtime in
+    let stmt = Zeko_stmt.of_yojson json in
+    let proof = Proof.of_yojson json in
+    stmt >>= fun stmt -> proof >>= fun proof -> Ok ({ stmt; proof } : t)
 end
 
 type update_acc_set_witness =

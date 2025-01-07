@@ -1,6 +1,7 @@
 open Async
 open Core_kernel
 open Zeko_circuits
+open Mina_base
 
 let try_connect where_to_connect =
   match%bind try_with (fun () -> Tcp.connect where_to_connect) with
@@ -102,7 +103,7 @@ let transaction_snark_of_single_signed_command ?proving_timeout t ~source_ledger
        (source_ledger, source_acc_set, sequencer_pk, command, sparse_ledger) )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
-      Zeko_transaction_snark.make_unchecked ~proof stmt
+      ({ stmt; proof } : Zeko_transaction_snark.T.t)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -125,7 +126,7 @@ let transaction_snark_of_single_unproved_zkapp_command ?proving_timeout t
        , shift_action_state ) )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
-      Zeko_transaction_snark.make_unchecked ~proof stmt
+      ({ stmt; proof } : Zeko_transaction_snark.T.t)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -150,7 +151,7 @@ let transaction_snark_of_double_unproved_zkapp_command ?proving_timeout t
        , shift_action_state_second ) )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
-      Zeko_transaction_snark.make_unchecked ~proof stmt
+      ({ stmt; proof } : Zeko_transaction_snark.T.t)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -175,7 +176,7 @@ let transaction_snark_of_single_proved_zkapp_command ?proving_timeout t
        , shift_action_state ) )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
-      Zeko_transaction_snark.make_unchecked ~proof stmt
+      ({ stmt; proof } : Zeko_transaction_snark.T.t)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -186,9 +187,150 @@ let transaction_snark_of_merge ?proving_timeout t
        (left.stmt, left.proof, right.stmt, right.proof) )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
-      Zeko_transaction_snark.make_unchecked ~proof stmt
+      ({ stmt; proof } : Zeko_transaction_snark.T.t)
   | _ ->
       failwith "Unexpected response from prover"
+
+let transaction_snark_of_segment ?proving_timeout t ~sequencer_pk
+    ~(witness :
+       Transaction_witness.Zkapp_command_segment_witness.t
+       * Transaction_snark.Zkapp_command_segment.Basic.t
+       * Mina_state.Snarked_ledger_state.With_sok.t ) =
+  let mina_local_state_to_zeko
+      (t :
+        Mina_transaction_logic.Zkapp_command_logic.Local_state.Value.Stable.V1.t
+        ) : Zeko_transaction_snark.Local_state.t =
+    { ledger = t.ledger
+    ; stack_frame = t.stack_frame
+    ; call_stack = t.call_stack
+    ; transaction_commitment = t.transaction_commitment
+    ; full_transaction_commitment = t.full_transaction_commitment
+    ; excess = t.excess
+    ; account_update_index = t.account_update_index
+    }
+  in
+  let first_account_update
+      (witness : Transaction_witness.Zkapp_command_segment_witness.t) =
+    match witness.local_state_init.stack_frame.calls with
+    | [] ->
+        with_return (fun { return } ->
+            List.iter witness.start_zkapp_command ~f:(fun s ->
+                Zkapp_command.Call_forest.iteri
+                  ~f:(fun _i x -> return (Some x))
+                  s.account_updates.account_updates ) ;
+            None )
+    | xs ->
+        Zkapp_command.Call_forest.hd_account_update xs
+  in
+  let account_update_proof (p : Account_update.t) =
+    match p.authorization with
+    | Proof proof ->
+        Some proof
+    | Signature _ | None_given ->
+        None
+  in
+  let snapp_proof_data
+      ~(witness : Transaction_witness.Zkapp_command_segment_witness.t) =
+    let open Option.Let_syntax in
+    let%bind p = first_account_update witness in
+    let%map pi = account_update_proof p in
+    let vk =
+      let account_id = Account_id.create p.body.public_key p.body.token_id in
+      let account : Account.t =
+        Mina_ledger.Sparse_ledger.(
+          get_exn witness.local_state_init.ledger
+            (find_index_exn witness.local_state_init.ledger account_id))
+      in
+      match
+        Option.value_map ~default:None account.zkapp ~f:(fun s ->
+            s.verification_key )
+      with
+      | None ->
+          failwith "No verification key found in the account"
+      | Some s ->
+          s
+    in
+    (pi, vk)
+  in
+  match witness with
+  | witness, Opt_signed, stmt ->
+      transaction_snark_of_single_unproved_zkapp_command ?proving_timeout t
+        ~source_ledger:stmt.source.first_pass_ledger
+        ~target_ledger:stmt.target.second_pass_ledger
+        ~connecting_ledger:stmt.connecting_ledger_left (* left or right? *)
+        ~source_local_state:(mina_local_state_to_zeko stmt.source.local_state)
+        ~target_local_state:(mina_local_state_to_zeko stmt.target.local_state)
+        ~fee_excess:stmt.fee_excess.fee_excess_l
+        ~supply_decrease:stmt.supply_increase.magnitude
+        ~txn_snark_witness:witness ~sequencer:sequencer_pk
+        ~source_acc_set:(failwith "Not implemented")
+        ~shift_action_state:true
+  | witness, Opt_signed_opt_signed, stmt ->
+      transaction_snark_of_double_unproved_zkapp_command ?proving_timeout t
+        ~source_ledger:stmt.source.first_pass_ledger
+        ~target_ledger:stmt.target.second_pass_ledger
+        ~connecting_ledger:stmt.connecting_ledger_left (* left or right? *)
+        ~source_local_state:(mina_local_state_to_zeko stmt.source.local_state)
+        ~target_local_state:(mina_local_state_to_zeko stmt.target.local_state)
+        ~fee_excess:stmt.fee_excess.fee_excess_l
+        ~supply_decrease:stmt.supply_increase.magnitude
+        ~txn_snark_witness:witness ~sequencer:sequencer_pk
+        ~source_acc_set:(failwith "Not implemented")
+        ~shift_action_state_first:true ~shift_action_state_second:true
+  | witness, Proved, stmt -> (
+      match snapp_proof_data ~witness with
+      | None ->
+          failwith "of_zkapp_command_segment: Expected exactly one proof"
+      | Some (p, v) ->
+          transaction_snark_of_single_proved_zkapp_command ?proving_timeout t
+            ~source_ledger:stmt.source.first_pass_ledger
+            ~target_ledger:stmt.target.second_pass_ledger
+            ~connecting_ledger:stmt.connecting_ledger_left (* left or right? *)
+            ~source_local_state:
+              (mina_local_state_to_zeko stmt.source.local_state)
+            ~target_local_state:
+              (mina_local_state_to_zeko stmt.target.local_state)
+            ~fee_excess:stmt.fee_excess.fee_excess_l
+            ~supply_decrease:stmt.supply_increase.magnitude
+            ~txn_snark_witness:witness ~sequencer:sequencer_pk
+            ~source_acc_set:(failwith "Not implemented")
+            ~zkapp_vk:v.data
+            ~zkapp_proof:(Compile_simple.Proof.of_pickles p)
+            ~shift_action_state:true )
+
+let transaction_snark_of_zkapp_command ?proving_timeout t ~sequencer_pk
+    ~(witnesses :
+       ( Transaction_witness.Zkapp_command_segment_witness.t
+       * Transaction_snark.Zkapp_command_segment.Basic.t
+       * Mina_state.Snarked_ledger_state.With_sok.t )
+       list ) =
+  match witnesses with
+  | [] ->
+      failwith "Empty zkapp command"
+  | witness :: rest ->
+      let%bind p1 =
+        transaction_snark_of_segment ?proving_timeout t ~sequencer_pk ~witness
+      in
+      Deferred.List.fold ~init:p1 rest ~f:(fun prev witness ->
+          let%bind curr =
+            transaction_snark_of_segment ?proving_timeout t ~sequencer_pk
+              ~witness
+          in
+          let%bind merged =
+            transaction_snark_of_merge ?proving_timeout t ~left:curr ~right:prev
+          in
+          return merged )
+
+let transaction_snark_of_signed_command ?proving_timeout t ~sequencer_pk
+    ~(witness :
+       Mina_ledger.Sparse_ledger.t
+       * Signed_command.t
+       * Transaction_snark.Statement.With_sok.t ) =
+  let sparse_ledger, command, stmt = witness in
+  transaction_snark_of_single_signed_command ?proving_timeout t
+    ~source_ledger:stmt.source.first_pass_ledger
+    ~source_acc_set:(failwith "Not implemented")
+    ~sequencer_pk ~command ~sparse_ledger
 
 let inner_step ?proving_timeout t ~all_deposits = failwith "Not implemented"
 
@@ -209,3 +351,17 @@ let process_deposit ?proving_timeout t ~is_new ~pointer ~before ~after ~deposit
 let process_withdrawal ?proving_timeout t ~outer_pk ~is_new ~pointer ~before
     ~after ~withdrawal =
   failwith "Not implemented"
+
+module type S = sig
+  type t = Zeko_transaction_snark.T.t =
+    { stmt : Zeko_transaction_snark.Zeko_stmt.t
+    ; proof : Compile_simple.Proof.t
+    }
+
+  type var = Zeko_transaction_snark.T.var =
+    { stmt : Zeko_transaction_snark.Zeko_stmt.var
+    ; proof : Zeko_circuits.Zeko_util.Proof_V.var
+    }
+
+  val typ : (var, t) Account_update.Impl.Internal_Basic.Typ.t
+end
