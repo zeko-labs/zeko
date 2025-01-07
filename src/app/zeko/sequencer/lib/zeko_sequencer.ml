@@ -5,6 +5,7 @@ open Async_kernel
 open Mina_base
 open Mina_ledger
 open Signature_lib
+open Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
 
@@ -154,7 +155,7 @@ module Sequencer = struct
       type t =
         | Signed_command of
             Sparse_ledger.t
-            * Signed_command.With_valid_signature.t Transaction_protocol_state.t
+            * Signed_command.t
             * Transaction_snark.Statement.With_sok.t
         | Zkapp_command of
             ( Transaction_witness.Zkapp_command_segment_witness.t
@@ -164,43 +165,6 @@ module Sequencer = struct
             * Zkapp_command.t
       [@@deriving yojson]
     end
-
-    let wrap provers txn_snark =
-      Zeko_prover.Client.wrapper_wrap provers ~txn_snark
-
-    let merge provers a b = Zeko_prover.Client.wrapper_merge provers a b
-
-    let prove_signed_command provers ~sparse_ledger ~user_command_in_block
-        ~statement =
-      let%bind txn_snark =
-        Zeko_prover.Client.transaction_snark_of_signed_command provers
-          ~statement ~user_command_in_block ~sparse_ledger
-      in
-      wrap provers txn_snark
-
-    let prove_zkapp_command provers ~witnesses ~zkapp_command =
-      let%bind txn_snark =
-        match witnesses with
-        | [] ->
-            failwith "No witnesses"
-        | (witness, spec, statement) :: rest ->
-            let%bind p1 =
-              Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
-                provers ~statement ~witness ~spec
-            in
-            Deferred.List.fold ~init:p1 rest
-              ~f:(fun acc (witness, spec, statement) ->
-                let%bind prev = return acc in
-                let%bind curr =
-                  Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
-                    provers ~statement ~witness ~spec
-                in
-                let%bind merged =
-                  Zeko_prover.Client.transaction_snark_merge provers curr prev
-                in
-                return merged )
-      in
-      wrap provers txn_snark
 
     module Context = struct
       module State = struct
@@ -262,9 +226,10 @@ module Sequencer = struct
     end
 
     module Merge = struct
-      type t = Zkapps_rollup.t [@@deriving yojson]
+      type t = Zeko_transaction_snark.T.t
 
-      let process ({ provers; _ } : Context.t) a b = merge provers a b
+      let process ({ provers; _ } : Context.t) a b =
+        Zeko_prover.Client.transaction_snark_of_merge provers ~left:a ~right:b
     end
 
     module Base = struct
@@ -272,13 +237,17 @@ module Sequencer = struct
 
       let process (ctx : Context.t) command_witness =
         Context.add_command ctx command_witness ;
+        let sequencer_pk =
+          Zeko_util.Even_PC.create_exn
+          @@ Public_key.compress ctx.config.signer.public_key
+        in
         match command_witness with
-        | Command_witness.Signed_command
-            (sparse_ledger, user_command_in_block, statement) ->
-            prove_signed_command ctx.provers ~sparse_ledger
-              ~user_command_in_block ~statement
         | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
-            prove_zkapp_command ctx.provers ~witnesses ~zkapp_command
+            Zeko_prover.Client.transaction_snark_of_zkapp_command ctx.provers
+              ~witnesses ~sequencer_pk
+        | Command_witness.Signed_command (l, c, s) ->
+            Zeko_prover.Client.transaction_snark_of_signed_command ctx.provers
+              ~sequencer_pk ~witness:(l, c, s)
     end
 
     module Commit = struct
@@ -622,15 +591,6 @@ module Sequencer = struct
           @@
           match command with
           | Signed_command signed_command ->
-              let user_command_in_block =
-                { Transaction_protocol_state.Poly.transaction =
-                    Signed_command.check_only_for_signature signed_command
-                    |> Option.value_exn
-                         ~message:"check_only_for_signature failed"
-                ; block_data = state_body
-                ; global_slot
-                }
-              in
               let source_ledger_hash =
                 Sparse_ledger.merkle_root first_pass_ledger
               in
@@ -654,7 +614,7 @@ module Sequencer = struct
               Result.return
                 ( txn_applied
                 , Merger.Command_witness.Signed_command
-                    (first_pass_ledger, user_command_in_block, statement) )
+                    (first_pass_ledger, signed_command, statement) )
           | Zkapp_command zkapp_command ->
               let witnesses =
                 Transaction_snark.zkapp_command_witnesses_exn
