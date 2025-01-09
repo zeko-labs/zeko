@@ -332,7 +332,13 @@ let transaction_snark_of_signed_command ?proving_timeout t ~sequencer_pk
     ~source_acc_set:(failwith "Not implemented")
     ~sequencer_pk ~command ~sparse_ledger
 
-let inner_step ?proving_timeout t ~all_deposits = failwith "Not implemented"
+let inner_sync ?proving_timeout t ~public_key ~ase =
+  send ?proving_timeout t (Prover.Input.Inner_sync (public_key, ase))
+  >>| function
+  | Prover.Output.Inner_sync tree ->
+      tree
+  | _ ->
+      failwith "Unexpected response from prover"
 
 let outer_step ?proving_timeout t ~last ~outer_public_key:zkapp_pk ~new_deposits
     ~unprocessed_deposits ~old_inner_ledger ~new_inner_ledger =
@@ -351,17 +357,3 @@ let process_deposit ?proving_timeout t ~is_new ~pointer ~before ~after ~deposit
 let process_withdrawal ?proving_timeout t ~outer_pk ~is_new ~pointer ~before
     ~after ~withdrawal =
   failwith "Not implemented"
-
-module type S = sig
-  type t = Zeko_transaction_snark.T.t =
-    { stmt : Zeko_transaction_snark.Zeko_stmt.t
-    ; proof : Compile_simple.Proof.t
-    }
-
-  type var = Zeko_transaction_snark.T.var =
-    { stmt : Zeko_transaction_snark.Zeko_stmt.var
-    ; proof : Zeko_circuits.Zeko_util.Proof_V.var
-    }
-
-  val typ : (var, t) Account_update.Impl.Internal_Basic.Typ.t
-end
