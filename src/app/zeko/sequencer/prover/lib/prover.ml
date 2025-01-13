@@ -97,12 +97,13 @@ module Input = struct
         * Compile_simple.Proof.t
         * Zeko_transaction_snark.Zeko_stmt.t
         * Compile_simple.Proof.t )
-    | Inner_sync of (Public_key.Compressed.t * Field.t list)
+    | Inner_sync of
+        (Public_key.Compressed.t * (Field.t list * Ase.With_length.Stmt.t))
     | Outer_commit of
         ( Zeko_transaction_snark.T.t
         * Public_key.Compressed.t
-        * Field.t list
-        * Field.t list
+        * (Field.t list * Field.t)
+        * (Field.t list * Ase.With_length.Stmt.t)
         * Sparse_ledger.t
         * Sparse_ledger.t
         * Signature.t
@@ -323,11 +324,15 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
           (merge input |> Promise.to_deferred)
       in
       Output.Zeko_transaction_snark (stmt, proof)
-  | Inner_sync (public_key, ase_fields) ->
+  | Inner_sync (public_key, ase) ->
       let open Inner_rules in
       let Compile_simple.[ inner_sync; _ ] = provers in
       let%bind vk =
         Compile_simple.Verification_key.of_tag Inner_rules.tag
+        |> Promise.to_deferred
+      in
+      let%bind ase =
+        Rule_inner_sync.Ase_inst.prove (snd ase) (fst ase)
         |> Promise.to_deferred
       in
       let input =
@@ -335,7 +340,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
           ; vk_hash =
               Zkapp_account.digest_vk
                 (Compile_simple.Verification_key.to_pickles vk)
-          ; ase = failwith "Not implemented"
+          ; ase
           }
           : Rule_inner_sync.Witness.t )
       in
@@ -348,8 +353,8 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
   | Outer_commit
       ( txn_snark
       , public_key
-      , _ase1
-      , _ase2
+      , outer_ase
+      , inner_ase
       , old_inner_ledger
       , new_inner_ledger
       , da_signature
@@ -389,6 +394,21 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         @@ Mina_ledger.Sparse_ledger.path_exn new_inner_ledger
              inner_account_index
       in
+      let%bind outer_ase =
+        Rule_commit.Ase_outer_inst.prove (snd outer_ase) (fst outer_ase)
+        |> Promise.to_deferred
+      in
+      let%bind inner_ase =
+        Rule_commit.Ase_inner_inst.prove (snd inner_ase) (fst inner_ase)
+        |> Promise.to_deferred
+      in
+      let%bind verify_both_ases =
+        let Compile_simple.[ prove ] = Rule_commit.Verify_both_ases.provers in
+        let%map out, proof =
+          prove (outer_ase, inner_ase) |> Promise.to_deferred
+        in
+        Rule_commit.Verify_both_ases.make_unchecked ~proof out
+      in
       let input =
         ( { txn_snark =
               Zeko_transaction_snark.make_unchecked ~proof:txn_snark.proof
@@ -397,7 +417,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
           ; vk_hash =
               Zkapp_account.digest_vk
                 (Compile_simple.Verification_key.to_pickles vk)
-          ; verify_both_ases = failwith "Not implemented"
+          ; verify_both_ases
           ; old_inner_acc
           ; old_inner_acc_path
           ; new_inner_acc

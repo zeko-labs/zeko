@@ -332,8 +332,8 @@ let transaction_snark_of_signed_command ?proving_timeout t ~sequencer_pk
     ~source_acc_set:(failwith "Not implemented")
     ~sequencer_pk ~command ~sparse_ledger
 
-let inner_sync ?proving_timeout t ~public_key ~all_actions =
-  send ?proving_timeout t (Prover.Input.Inner_sync (public_key, all_actions))
+let inner_sync ?proving_timeout t ~public_key ~ase =
+  send ?proving_timeout t (Prover.Input.Inner_sync (public_key, ase))
   >>| function
   | Prover.Output.Call_forest_tree tree ->
       tree
@@ -358,10 +358,6 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
       tree
   | _ ->
       failwith "Unexpected response from prover"
-
-let outer_step ?proving_timeout t ~last ~outer_public_key:zkapp_pk ~new_deposits
-    ~unprocessed_deposits ~old_inner_ledger ~new_inner_ledger =
-  failwith "Not implemented"
 
 let submit_deposit ?proving_timeout t ~outer_pk ~deposit =
   failwith "Not implemented"
