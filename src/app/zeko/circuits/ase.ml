@@ -6,7 +6,8 @@ open Zeko_util
 
 module M_with_length = struct
   module Stmt = struct
-    type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
+    type t = { action_state : F.t; length : Checked32.t }
+    [@@deriving snarky, yojson]
   end
 
   module Elem = F
@@ -111,6 +112,24 @@ module With_length = struct
       (({ source; target } : Stmt.var), verifier)
 
     let make = Made_2.make
+
+    module Init = M_with_length.Stmt
+
+    let prove (init : Init.t) l =
+      if List.length l > Made_2.get_iterations then
+        failwith "TODO: Too many actions to prove"
+      else
+        let proof_target =
+          List.fold l ~init ~f:(fun acc action ->
+              { action_state =
+                  Mina_base.Zkapp_account.Actions.push_hash acc.action_state
+                    action
+              ; length = Checked32.succ acc.length
+              } )
+        in
+        let proof = None in
+        Promise.return
+          (Made_2.make ?proof ~proof_source:init ~proof_target init l)
   end
 end
 
@@ -150,5 +169,19 @@ module Without_length = struct
       (({ source; target } : Stmt.var), verifier)
 
     let make = Made_2.make
+
+    module Init = M_without_length.Stmt
+
+    let prove (init : Init.t) l =
+      if List.length l > Made_2.get_iterations then
+        failwith "TODO: Too many actions to prove"
+      else
+        let proof_target =
+          List.fold l ~init ~f:(fun acc action ->
+              Mina_base.Zkapp_account.Actions.push_hash acc action )
+        in
+        let proof = None in
+        Promise.return
+          (Made_2.make ?proof ~proof_source:init ~proof_target init l)
   end
 end

@@ -5,7 +5,8 @@ open Zeko_util
 
 module With_length : sig
   module Stmt : sig
-    type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
+    type t = { action_state : F.t; length : Checked32.t }
+    [@@deriving snarky, yojson]
   end
 
   type trans = { source : Stmt.t; target : Stmt.t }
@@ -47,6 +48,8 @@ module With_length : sig
     -> sig
     type original_stmt_t := Stmt.t
 
+    module Init = Stmt
+
     module Stmt : sig
       type t =
         { source : Inputs.Action_state.With_length.t
@@ -73,6 +76,8 @@ module With_length : sig
       -> original_stmt_t
       -> field list
       -> t
+
+    val prove : Init.t -> field list -> t Promise.t
   end
 end
 
@@ -116,6 +121,8 @@ module Without_length : sig
        val get_iterations : int
      end)
     -> sig
+    module Init = Stmt
+
     module Stmt : sig
       type t =
         { source : Inputs.Action_state.t; target : Inputs.Action_state.t }
@@ -144,5 +151,7 @@ module Without_length : sig
       -> field
       -> field list
       -> t
+
+    val prove : Init.t -> field list -> t Promise.t
   end
 end
