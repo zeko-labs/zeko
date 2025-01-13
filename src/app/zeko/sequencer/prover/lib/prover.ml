@@ -4,6 +4,7 @@ open Mina_base
 open Mina_ledger
 open Signature_lib
 open Zeko_circuits
+module Field = Snark_params.Tick.Field
 
 type call_forest =
   ( Account_update.t
@@ -25,13 +26,6 @@ let mktree (account_update, account_update_digest, calls) proof =
   in
   Zkapp_command.Call_forest.Tree.
     { account_update; account_update_digest; calls }
-
-(* Only for yojson serialization of Field *)
-module Field = Data_hash.Make_full_size (struct
-  let description = "Field"
-
-  let version_byte = '\x00'
-end)
 
 let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
@@ -104,6 +98,15 @@ module Input = struct
         * Zeko_transaction_snark.Zeko_stmt.t
         * Compile_simple.Proof.t )
     | Inner_sync of (Public_key.Compressed.t * Field.t list)
+    | Outer_commit of
+        ( Zeko_transaction_snark.T.t
+        * Public_key.Compressed.t
+        * Field.t list
+        * Field.t list
+        * Sparse_ledger.t
+        * Sparse_ledger.t
+        * Signature.t
+        * Public_key.Compressed.t )
   [@@deriving yojson]
 end
 
@@ -118,7 +121,7 @@ module Output = struct
     | Inner_step of Zeko_util.call_forest_tree
     | Zeko_transaction_snark of
         (Zeko_transaction_snark.Zeko_stmt.t * Compile_simple.Proof.t)
-    | Inner_sync of call_forest_tree
+    | Call_forest_tree of call_forest_tree
   [@@deriving yojson]
 end
 
@@ -340,7 +343,75 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         time ~logger "Inner_rules.inner_sync"
           (inner_sync input |> Promise.to_deferred)
       in
-      Output.Inner_sync (mktree au (Compile_simple.Proof.to_pickles proof))
+      Output.Call_forest_tree
+        (mktree au (Compile_simple.Proof.to_pickles proof))
+  | Outer_commit
+      ( txn_snark
+      , public_key
+      , _ase1
+      , _ase2
+      , old_inner_ledger
+      , new_inner_ledger
+      , da_signature
+      , da_key ) ->
+      let open Outer_rules in
+      let Compile_simple.[ commit; _; _ ] = provers in
+      let%bind vk =
+        Compile_simple.Verification_key.of_tag Outer_rules.tag
+        |> Promise.to_deferred
+      in
+      let inner_account_index = 0 in
+      let old_inner_acc =
+        Mina_ledger.Sparse_ledger.get_exn old_inner_ledger inner_account_index
+      in
+      let old_inner_acc_path =
+        List.map ~f:(function
+          | `Left _ ->
+              ( { right_side = Field.zero }
+                : Outer_rules.Rule_commit_inst.PathElt.t )
+          | `Right _ ->
+              ( { right_side = Field.one }
+                : Outer_rules.Rule_commit_inst.PathElt.t ) )
+        @@ Mina_ledger.Sparse_ledger.path_exn old_inner_ledger
+             inner_account_index
+      in
+      let new_inner_acc =
+        Mina_ledger.Sparse_ledger.get_exn new_inner_ledger inner_account_index
+      in
+      let new_inner_acc_path =
+        List.map ~f:(function
+          | `Left _ ->
+              ( { right_side = Field.zero }
+                : Outer_rules.Rule_commit_inst.PathElt.t )
+          | `Right _ ->
+              ( { right_side = Field.one }
+                : Outer_rules.Rule_commit_inst.PathElt.t ) )
+        @@ Mina_ledger.Sparse_ledger.path_exn new_inner_ledger
+             inner_account_index
+      in
+      let input =
+        ( { txn_snark =
+              Zeko_transaction_snark.make_unchecked ~proof:txn_snark.proof
+                txn_snark.stmt
+          ; public_key
+          ; vk_hash =
+              Zkapp_account.digest_vk
+                (Compile_simple.Verification_key.to_pickles vk)
+          ; verify_both_ases = failwith "Not implemented"
+          ; old_inner_acc
+          ; old_inner_acc_path
+          ; new_inner_acc
+          ; new_inner_acc_path
+          ; da_signature
+          ; da_key
+          }
+          : Outer_rules.Rule_commit_inst.Witness.t )
+      in
+      let%map (a, au), proof =
+        time ~logger "Outer_rules.commit" (commit input |> Promise.to_deferred)
+      in
+      Output.Call_forest_tree
+        (mktree au (Compile_simple.Proof.to_pickles proof))
 
 let run ~logger ~port =
   ignore
