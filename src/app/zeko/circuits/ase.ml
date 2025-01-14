@@ -111,6 +111,7 @@ module With_length = struct
       in
       (({ source; target } : Stmt.var), verifier)
 
+<<<<<<< HEAD
     let make = Made_2.make
 
     module Init = M_with_length.Stmt
@@ -130,6 +131,15 @@ module With_length = struct
         let proof = None in
         Promise.return
           (Made_2.make ?proof ~proof_source:init ~proof_target init l)
+=======
+    let fold (source : Init.t) actions =
+      Made_2.fold ~source ~init_arg:source ~elems:actions
+        ~step_state:(fun acc action ->
+          { action_state =
+              Mina_base.Zkapp_account.Actions.push_hash acc.action_state action
+          ; length = Checked32.succ acc.length
+          } )
+>>>>>>> 6310f464fd (Implement folding of actions in ase)
   end
 end
 
@@ -168,20 +178,9 @@ module Without_length = struct
       let target = Action_state.unsafe_var_of_field target in
       (({ source; target } : Stmt.var), verifier)
 
-    let make = Made_2.make
-
-    module Init = M_without_length.Stmt
-
-    let prove (init : Init.t) l =
-      if List.length l > Made_2.get_iterations then
-        failwith "TODO: Too many actions to prove"
-      else
-        let proof_target =
-          List.fold l ~init ~f:(fun acc action ->
-              Mina_base.Zkapp_account.Actions.push_hash acc action )
-        in
-        let proof = None in
-        Promise.return
-          (Made_2.make ?proof ~proof_source:init ~proof_target init l)
+    let fold (source : Init.t) actions =
+      Made_2.fold ~source ~init_arg:source ~elems:actions
+        ~step_state:(fun acc action ->
+          Mina_base.Zkapp_account.Actions.push_hash acc action )
   end
 end
