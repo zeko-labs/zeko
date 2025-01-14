@@ -332,8 +332,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         |> Promise.to_deferred
       in
       let%bind ase =
-        Rule_inner_sync.Ase_inst.prove (snd ase) (fst ase)
-        |> Promise.to_deferred
+        Rule_inner_sync.Ase_inst.fold (snd ase) (fst ase) |> Promise.to_deferred
       in
       let input =
         ( { public_key
@@ -395,11 +394,11 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
              inner_account_index
       in
       let%bind outer_ase =
-        Rule_commit.Ase_outer_inst.prove (snd outer_ase) (fst outer_ase)
+        Rule_commit.Ase_outer_inst.fold (snd outer_ase) (fst outer_ase)
         |> Promise.to_deferred
       in
       let%bind inner_ase =
-        Rule_commit.Ase_inner_inst.prove (snd inner_ase) (fst inner_ase)
+        Rule_commit.Ase_inner_inst.fold (snd inner_ase) (fst inner_ase)
         |> Promise.to_deferred
       in
       let%bind verify_both_ases =
