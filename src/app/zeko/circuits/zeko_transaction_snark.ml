@@ -253,12 +253,10 @@ module Account_set = Indexed_merkle_tree.Make (struct
       multi_range_check z0 z1 z2
 
     let l =
-      Bigint.of_bignum_bigint Bignum_bigint.(of_int 2 |> Fn.flip shift_left 88)
+      Bigint.of_bignum_bigint Bignum_bigint.(of_int 1 |> Fn.flip shift_left 88)
       |> Bigint.to_field
 
-    let l2 =
-      Bigint.of_bignum_bigint Bignum_bigint.(of_int 2 |> Fn.flip shift_left 176)
-      |> Bigint.to_field
+    let l2 = Field.(l * l)
 
     let field_to_field3 x =
       let* (x0, x1), x2 =
