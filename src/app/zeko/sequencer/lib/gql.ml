@@ -1273,12 +1273,12 @@ module Types = struct
         let arg_typ =
           enum "TransferDirection"
             ~values:
-              [ enum_value "DEPOSIT" ~value:Zeko_sequencer.Transfer.Deposit
-              ; enum_value "WITHDRAW" ~value:Zeko_sequencer.Transfer.Withdraw
+              [ enum_value "DEPOSIT" ~value:Transfer.Deposit
+              ; enum_value "WITHDRAW" ~value:Transfer.Withdraw
               ]
       end
 
-      module Transfer = struct
+      module Transfer_input = struct
         type input = Zkapps_rollup.TR.t
 
         let arg_typ =
@@ -1295,16 +1295,15 @@ module Types = struct
       end
 
       module Request = struct
-        type input = Zeko_sequencer.Transfer.t
+        type input = Transfer.t
 
         let arg_typ =
           obj "TransferRequestInput"
-            ~coerce:(fun transfer direction ->
-              Zeko_sequencer.Transfer.{ transfer; direction } )
+            ~coerce:(fun transfer direction -> Transfer.{ transfer; direction })
             ~split:(fun f ({ transfer; direction } : input) ->
               f transfer direction )
             ~fields:
-              [ arg "transfer" ~typ:(non_null Transfer.arg_typ)
+              [ arg "transfer" ~typ:(non_null Transfer_input.arg_typ)
               ; arg "direction" ~typ:(non_null @@ Direction.arg_typ)
               ]
       end
@@ -1312,12 +1311,12 @@ module Types = struct
       module Claim = struct
         open Snark_params.Tick
 
-        type input = Zeko_sequencer.Transfer.claim
+        type input = Transfer.claim
 
         let arg_typ =
           obj "TransferClaimInput"
             ~coerce:(fun is_new pointer before after transfer ->
-              Zeko_sequencer.Transfer.
+              Transfer.
                 { is_new
                 ; pointer = Field.of_string pointer
                 ; before
@@ -1330,8 +1329,10 @@ module Types = struct
             ~fields:
               [ arg "isNew" ~typ:(non_null bool)
               ; arg "pointer" ~typ:(non_null string)
-              ; arg "before" ~typ:(non_null (list @@ non_null Transfer.arg_typ))
-              ; arg "after" ~typ:(non_null (list @@ non_null Transfer.arg_typ))
+              ; arg "before"
+                  ~typ:(non_null (list @@ non_null Transfer_input.arg_typ))
+              ; arg "after"
+                  ~typ:(non_null (list @@ non_null Transfer_input.arg_typ))
               ; arg "transfer" ~typ:(non_null Request.arg_typ)
               ]
       end
@@ -1680,8 +1681,9 @@ module Mutations = struct
       ~resolve:(fun { ctx = sequencer; _ } () transfer ->
         let key = Int.to_string @@ Random.int Int.max_value in
         don't_wait_for
-        @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer_request
+        @@ Snark_queue.enqueue_prove_transfer_request
              Zeko_sequencer.(sequencer.snark_q)
+             ~zkapp_pk:Zeko_sequencer.(sequencer.config.zkapp_pk)
              ~key ~transfer ;
         return (Ok key) )
 
@@ -1692,8 +1694,9 @@ module Mutations = struct
       ~resolve:(fun { ctx = sequencer; _ } () claim ->
         let key = Int.to_string @@ Random.int Int.max_value in
         don't_wait_for
-        @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer_claim
+        @@ Snark_queue.enqueue_prove_transfer_claim
              Zeko_sequencer.(sequencer.snark_q)
+             ~zkapp_pk:Zeko_sequencer.(sequencer.config.zkapp_pk)
              ~key ~claim ;
         return (Ok key) )
 
@@ -1801,7 +1804,7 @@ module Queries = struct
       ~args:Arg.[ arg "key" ~typ:(non_null string) ]
       ~resolve:(fun { ctx = sequencer; _ } () key ->
         match
-          Transfers_memory.get
+          Transfer.Transfers_memory.get
             Zeko_sequencer.(sequencer.snark_q.transfers_memory)
             key
         with
