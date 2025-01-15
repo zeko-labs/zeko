@@ -1384,140 +1384,6 @@ module Types = struct
     end
   end
 
-  module Analytics = struct
-    module User_activity = struct
-      type t = Analytics.User_activity.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.User_activity in
-        obj "UserActivity" ~fields:(fun _ ->
-            [ field "totalAccounts" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_accounts)
-            ; field "newAccounts30d" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.new_accounts_30d)
-            ; field "activeAccounts30d" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.active_accounts_30d)
-            ] )
-    end
-
-    module Zkapp_activity = struct
-      type t = Analytics.Zkapp_activity.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Zkapp_activity in
-        obj "ZkappActivity" ~fields:(fun _ ->
-            [ field "totalZkapps" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_zkapps)
-            ; field "newZkapps30d" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.new_zkapps_30d)
-            ; field "activeZkapps30d" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.active_zkapps_30d)
-            ] )
-    end
-
-    module Transaction_activity = struct
-      type t = Analytics.Transaction_activity.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Transaction_activity in
-        obj "TransactionActivity" ~fields:(fun _ ->
-            [ field "totalDeposits" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_deposits)
-            ; field "totalSignedCommands" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_signed_commands)
-            ; field "totalZkappCommands" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_zkapp_commands)
-            ; field "totalTransactions" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x ->
-                  x.total_signed_commands + x.total_zkapp_commands )
-            ] )
-    end
-
-    module Transaction_statistics = struct
-      type t = Analytics.Transaction_statistics.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Transaction_statistics in
-        obj "TransactionStatistics" ~fields:(fun _ ->
-            [ field "averageFee" ~typ:(non_null float)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.avg_fee)
-            ; field "averagePFS" ~typ:(non_null float)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.avg_pfs)
-            ] )
-    end
-
-    module Top_zkapps = struct
-      type t = Analytics.Top_zkapps.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Top_zkapps in
-        list @@ non_null
-        @@ obj "TopZkapps" ~fields:(fun _ ->
-               [ field "zkapp" ~typ:(non_null string)
-                   ~args:Arg.[]
-                   ~resolve:(fun _ x -> fst x)
-               ; field "count" ~typ:(non_null int)
-                   ~args:Arg.[]
-                   ~resolve:(fun _ x -> snd x)
-               ] )
-    end
-
-    module Lumina_activity = struct
-      type t = Analytics.Lumina_activity.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Lumina_activity in
-        obj "LuminaActivity" ~fields:(fun _ ->
-            [ field "totalSwaps" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_swaps)
-            ; field "totalLiquidityPools" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_liquidity_pools)
-            ] )
-    end
-
-    type t = Analytics.t
-
-    let t : ('context, t option) typ =
-      obj "Analytics" ~fields:(fun _ ->
-          [ field "userActivity" ~typ:(non_null User_activity.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.user_activity))
-          ; field "zkappActivity"
-              ~typ:(non_null Zkapp_activity.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.zkapp_activity))
-          ; field "transactionActivity"
-              ~typ:(non_null Transaction_activity.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.transaction_activity))
-          ; field "transactionStatistics"
-              ~typ:(non_null Transaction_statistics.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.transaction_statistics))
-          ; field "topZkapps" ~typ:(non_null Top_zkapps.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.top_zkapps))
-          ; field "luminaActivity"
-              ~typ:(non_null Lumina_activity.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.lumina_activity))
-          ] )
-  end
-
   module Archive = struct
     module BlockInfo = struct
       type t = Archive.Block_info.t
@@ -1969,21 +1835,6 @@ module Queries = struct
         let%map account_id = Ledger.token_owner l token in
         Types.AccountObj.get_best_ledger_account l account_id )
 
-  let analytics =
-    io_field "analytics"
-      ~typ:(non_null Types.Analytics.t)
-      ~args:
-        Arg.
-          [ arg "luminaFactory" ~typ:(non_null Types.Input.PublicKey.arg_typ) ]
-      ~resolve:(fun { ctx = sequencer; _ } () lumina_factory ->
-        let%bind analytics =
-          let open Zeko_sequencer in
-          Analytics.get sequencer.analytics_state
-            ~archive_uri:sequencer.config.archive_uri
-            ~zkapp_pk:sequencer.config.zkapp_pk ~lumina_factory
-        in
-        return (Ok analytics) )
-
   module Archive = struct
     let actions =
       io_field "actions"
@@ -2031,7 +1882,6 @@ module Queries = struct
     ; state_hashes
     ; token_owner
     ; network_id
-    ; analytics
     ]
     @ Archive.commands
 end

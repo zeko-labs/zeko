@@ -354,7 +354,6 @@ module Sequencer = struct
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
     ; mutable subscriptions : Subscriptions.t
-    ; mutable analytics_state : Analytics.State.t
     }
 
   let close t =
@@ -398,7 +397,7 @@ module Sequencer = struct
 
   (** Apply user command to the ledger without checking the validity of the command *)
   let apply_user_command_without_check l archive command ~global_slot
-      ~state_body ~analytics_state =
+      ~state_body =
     let accounts_referenced = User_command.accounts_referenced command in
 
     let first_pass_ledger =
@@ -467,11 +466,7 @@ module Sequencer = struct
                            @@ Account_update.body update
                        } ) ))
     in
-    ( first_pass_ledger
-    , second_pass_ledger
-    , txn_applied
-    , target_ledger_hash
-    , Analytics.State.update_with_command analytics_state command l )
+    (first_pass_ledger, second_pass_ledger, txn_applied, target_ledger_hash)
 
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
@@ -534,13 +529,11 @@ module Sequencer = struct
           let%bind.Deferred.Result ( first_pass_ledger
                                    , second_pass_ledger
                                    , txn_applied
-                                   , target_ledger_hash
-                                   , new_analytics_state ) =
+                                   , target_ledger_hash ) =
             return
               (apply_user_command_without_check l t.archive command ~global_slot
-                 ~state_body ~analytics_state:t.analytics_state )
+                 ~state_body )
           in
-          t.analytics_state <- new_analytics_state ;
 
           (* Post transaction to the DA layer *)
           let changed_accounts =
@@ -781,12 +774,11 @@ module Sequencer = struct
               let state_body =
                 Mina_state.Protocol_state.body compile_time_genesis_state
               in
-              let _, _, _, _, analytics_state =
+              let _, _, _, _ =
                 apply_user_command_without_check mask t.archive command
-                  ~global_slot ~state_body ~analytics_state:t.analytics_state
+                  ~global_slot ~state_body
                 |> Or_error.ok_exn
               in
-              t.analytics_state <- analytics_state ;
               L.Mask.Attached.commit mask ;
               return () )
       >>| Or_error.ok_exn >>| ignore
@@ -857,7 +849,6 @@ module Sequencer = struct
       ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
       ; subscriptions = Subscriptions.create ()
-      ; analytics_state = Analytics.State.empty
       }
     in
     let%bind () =
