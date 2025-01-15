@@ -53,11 +53,13 @@ let get_state_transition pk command =
   Some (source, target)
 
 let get_inner_deposits_state_exn l =
-  let (old_deposits_commit :: _) =
+  let open Zeko_circuits in
+  let ({ outer_action_state } : Rollup_state.Inner_state.t) =
     let idx =
       Mina_ledger.Ledger.index_of_account_exn l Zkapps_rollup.inner_account_id
     in
     let inner_acc = Mina_ledger.Ledger.get_at_index_exn l idx in
     (Option.value_exn inner_acc.zkapp).app_state
+    |> Rollup_state.Inner_state.value_of_app_state
   in
-  old_deposits_commit
+  outer_action_state
