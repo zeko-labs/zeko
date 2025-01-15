@@ -9,10 +9,8 @@ open Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
 
-let constraint_constants = Genesis_constants.Compiled.constraint_constants
-
 module Sequencer = struct
-  let constraint_constants = constraint_constants
+  let constraint_constants = Zeko_constants.constraint_constants
 
   module Config = struct
     type t =
@@ -27,22 +25,6 @@ module Sequencer = struct
       ; deposit_delay_blocks : int
       }
   end
-
-  let genesis_constants = Genesis_constants.Compiled.genesis_constants
-
-  let compile_time_genesis_state =
-    let consensus_constants =
-      Consensus.Constants.create ~constraint_constants
-        ~protocol_constants:genesis_constants.protocol
-    in
-    let compile_time_genesis =
-      Mina_state.Genesis_protocol_state.t
-        ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-        ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-        ~constraint_constants ~consensus_constants
-        ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-    in
-    compile_time_genesis.data
 
   let keypair = Keypair.create ()
 
@@ -363,7 +345,8 @@ module Sequencer = struct
           (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
           let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
           let state_body =
-            Mina_state.Protocol_state.body compile_time_genesis_state
+            Mina_state.Protocol_state.body
+              Zeko_constants.compile_time_genesis_state
           in
           let l = L.of_database t.db in
 
@@ -411,7 +394,7 @@ module Sequencer = struct
               User_command.accounts_referenced command
               |> List.map ~f:(fun id ->
                      if Public_key.Compressed.(Account_id.public_key id = empty)
-                     then Zkapps_rollup.inner_account_id
+                     then Zeko_constants.inner_account_id
                      else id )
               |> List.stable_dedup
             in
@@ -581,7 +564,7 @@ module Sequencer = struct
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.db)
-        [ Zkapps_rollup.inner_account_id ]
+        [ Zeko_constants.inner_account_id ]
     in
     if
       Merger.P.current_tree t.merger
@@ -648,7 +631,8 @@ module Sequencer = struct
               let mask = L.of_database t.db in
               let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
               let state_body =
-                Mina_state.Protocol_state.body compile_time_genesis_state
+                Mina_state.Protocol_state.body
+                  Zeko_constants.compile_time_genesis_state
               in
               let _, _, _, _ =
                 apply_user_command_without_check mask t.archive command
@@ -669,7 +653,7 @@ module Sequencer = struct
     let sparse_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.db)
-        [ Zkapps_rollup.inner_account_id ]
+        [ Zeko_constants.inner_account_id ]
     in
     Merger.Context.set_last_committed_ledger t.merger_ctx sparse_ledger ;
     return ()
@@ -750,12 +734,11 @@ let%test_module "Sequencer tests" =
     let logger = Logger.create ()
 
     module T = Transaction_snark.Make (struct
-      let constraint_constants = constraint_constants
+      let constraint_constants = Zeko_constants.constraint_constants
 
       let proof_level = Genesis_constants.Proof_level.Full
     end)
 
-    module M = Zkapps_rollup.Make (T)
     open Sequencer
 
     let number_of_transactions = 5
@@ -800,7 +783,7 @@ let%test_module "Sequencer tests" =
         in
 
         let genesis_accounts =
-          (M.Inner.account_id, M.Inner.initial_account)
+          (Zeko_constants.inner_account_id, M.Inner.initial_account)
           :: ( Array.map init_ledger ~f:(fun (keypair, balance) ->
                    let pk =
                      Signature_lib.Public_key.compress keypair.public_key
@@ -847,7 +830,6 @@ let%test_module "Sequencer tests" =
               Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
                 ~fee:(Currency.Fee.of_mina_int_exn 1)
                 ~nonce ~initial_ledger:ephemeral_ledger ~constraint_constants
-                (module M)
             in
             let%bind _ = Gql_client.send_zkapp gql_uri command in
             let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
@@ -971,7 +953,9 @@ let%test_module "Sequencer tests" =
                                   ~state_view:
                                     Mina_state.Protocol_state.(
                                       Body.view
-                                      @@ body compile_time_genesis_state)
+                                      @@ body
+                                           Zeko_constants
+                                           .compile_time_genesis_state)
                               with
                             | Ok (applied, _) ->
                                 [%test_eq: Transaction_status.t]
@@ -1073,7 +1057,10 @@ let%test_module "Sequencer tests" =
                                   Mina_numbers.Global_slot_since_genesis.zero
                                 ~state_view:
                                   Mina_state.Protocol_state.(
-                                    Body.view @@ body compile_time_genesis_state)
+                                    Body.view
+                                    @@ body
+                                         Zeko_constants
+                                         .compile_time_genesis_state)
                             with
                           | Ok _ ->
                               ()

@@ -1,23 +1,19 @@
-(env (_ (flags (:standard -w @a-42-40-44-70-45-41))))
+(env
+ (_
+  (flags
+   (:standard -w @a-42-40-44-70-45-41))))
 
 (library
- (name zeko_util)
- (libraries zeko_circuits)
+ (name zeko_constants)
+ (libraries
+  mina_base
+  snark_params
+  signature_lib
+  consensus
+  mina_state
+  genesis_ledger
+  staged_ledger_diff)
  (inline_tests)
  (instrumentation
   (backend bisect_ppx))
- (preprocess
-  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules zeko_util)
- )
-
-(library
- (name zkapps_rollup)
- (libraries zeko_util)
- (inline_tests)
- (instrumentation
-  (backend bisect_ppx))
- (preprocess
-  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules zkapps_rollup)
- )
+ (modules zeko_constants))

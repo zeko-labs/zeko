@@ -364,9 +364,9 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         Compile_simple.Verification_key.of_tag Outer_rules.tag
         |> Promise.to_deferred
       in
-      let inner_account_index = 0 in
       let old_inner_acc =
-        Mina_ledger.Sparse_ledger.get_exn old_inner_ledger inner_account_index
+        Mina_ledger.Sparse_ledger.get_exn old_inner_ledger
+          Zeko_constants.inner_account_index
       in
       let old_inner_acc_path =
         List.map ~f:(function
@@ -377,10 +377,11 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
               ( { right_side = Field.one }
                 : Outer_rules.Rule_commit_inst.PathElt.t ) )
         @@ Mina_ledger.Sparse_ledger.path_exn old_inner_ledger
-             inner_account_index
+             Zeko_constants.inner_account_index
       in
       let new_inner_acc =
-        Mina_ledger.Sparse_ledger.get_exn new_inner_ledger inner_account_index
+        Mina_ledger.Sparse_ledger.get_exn new_inner_ledger
+          Zeko_constants.inner_account_index
       in
       let new_inner_acc_path =
         List.map ~f:(function
@@ -391,7 +392,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
               ( { right_side = Field.one }
                 : Outer_rules.Rule_commit_inst.PathElt.t ) )
         @@ Mina_ledger.Sparse_ledger.path_exn new_inner_ledger
-             inner_account_index
+             Zeko_constants.inner_account_index
       in
       let%bind outer_ase =
         let ({ outer_action_state } : Rollup_state.Inner_state.t) =

@@ -30,7 +30,6 @@
  (name deploy)
  (libraries
   sequencer_lib
-  zkapps_rollup
   ;; mina ;;
   mina_base
   mina_numbers
