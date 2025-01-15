@@ -5,7 +5,7 @@ open Signature_lib
 module Rpc_def = Rpc
 open Async
 
-let constraint_constants = Genesis_constants.Compiled.constraint_constants
+let constraint_constants = Zeko_constants.constraint_constants
 
 type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
 
@@ -143,7 +143,7 @@ let post_diff t ~ledger_openings ~diff =
                   let account_id =
                     let aid = Account_update.account_id account_update in
                     if Public_key.Compressed.(Account_id.public_key aid = empty)
-                    then Zkapps_rollup.inner_account_id
+                    then Zeko_constants.inner_account_id
                     else aid
                   in
                   let%bind.Result old_receipt_chain_hash =

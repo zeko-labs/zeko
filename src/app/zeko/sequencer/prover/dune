@@ -2,7 +2,6 @@
  (name cli)
  (libraries
   zeko_prover
-  zkapps_rollup
   mina_lib
   mina_ledger
   core_unix.command_unix

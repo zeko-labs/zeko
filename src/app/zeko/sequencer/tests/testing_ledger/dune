@@ -1,7 +1,6 @@
 (executable
  (name run)
  (libraries
-  zkapps_rollup
   sequencer_lib
   ;; mina ;;
   mina_base
