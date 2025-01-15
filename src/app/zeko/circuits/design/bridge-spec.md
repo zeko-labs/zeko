@@ -6,7 +6,7 @@ a corresponding bank on the L2.
 The bank on the L2 must be seeded with the appropriate amount of the token.
 
 Account updates that have authorization_kind = Proof,
-where the account id is `holder_account_l1`, or where the token id is `helper_token_id`,
+where the account id is `holder_account_l1`, or where the token id is `helper_token_id_l1`,
 define the circuit for the verification keys for the L1-side of the bridge contract.
 Likewise, the ones for `account_id_l2` define the circuit for the L2-side.
 
@@ -40,7 +40,7 @@ val token_id_l1 : Token_id.t
 val token_id_l2 : Token_id.t
 val holder_accounts_l1 : Public_key.t list
 val window_size : nat
-let helper_token_id = Account_id.create helper_token_owner_l1 Token_id.default
+let helper_token_id_l1 = Account_id.create helper_token_owner_l1 Token_id.default
 
 let account_id_l2 = Account_id.create public_key_l2 token_id_l2
 
@@ -261,7 +261,7 @@ let do_finalize_cancelled_deposit
       ; authorization_kind = Proof
       ; children =
         [ { public_key = deposit.recipient
-          ; token_id = helper_token_id
+          ; token_id = helper_token_id_l1
           ; authorization_kind = Signature
           ; use_full_commitment = true
           ; may_use_token = Parents_own_token
@@ -316,7 +316,7 @@ let do_finalize_cancelled_deposit_simple
       ; authorization_kind = Proof
       ; children =
         [ { public_key = deposit.recipient
-          ; token_id = helper_token_id
+          ; token_id = helper_token_id_l1
           ; authorization_kind = Signature
           ; use_full_commitment = true
           ; may_use_token = Parents_own_token
@@ -377,7 +377,7 @@ let do_finalize_withdrawal
       ; authorization_kind = Proof
       ; children =
         [ { public_key = withdrawal.recipient
-          ; token_id = helper_token_id
+          ; token_id = helper_token_id_l1
           ; authorization_kind = Signature
           ; use_full_commitment = true
           ; may_use_token = Parents_own_token
