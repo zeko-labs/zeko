@@ -102,8 +102,8 @@ module Input = struct
     | Outer_commit of
         ( Zeko_transaction_snark.T.t
         * Public_key.Compressed.t
-        * (Field.t list * Field.t)
-        * (Field.t list * Ase.With_length.Stmt.t)
+        * Field.t list
+        * Field.t list
         * Sparse_ledger.t
         * Sparse_ledger.t
         * Signature.t
@@ -352,8 +352,8 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
   | Outer_commit
       ( txn_snark
       , public_key
-      , outer_ase
-      , inner_ase
+      , outer_ase_fields
+      , inner_ase_fields
       , old_inner_ledger
       , new_inner_ledger
       , da_signature
@@ -394,11 +394,28 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
              inner_account_index
       in
       let%bind outer_ase =
-        Rule_commit.Ase_outer_inst.fold (snd outer_ase) (fst outer_ase)
+        let ({ outer_action_state } : Rollup_state.Inner_state.t) =
+          Rollup_state.Inner_state.value_of_app_state
+            (Option.value_exn new_inner_acc.zkapp).app_state
+        in
+        let action_state =
+          Rollup_state.Outer_action_state.With_length.raw outer_action_state
+        in
+        Rule_commit.Ase_outer_inst.fold action_state outer_ase_fields
         |> Promise.to_deferred
       in
       let%bind inner_ase =
-        Rule_commit.Ase_inner_inst.fold (snd inner_ase) (fst inner_ase)
+        let ({ outer_action_state } : Rollup_state.Inner_state.t) =
+          Rollup_state.Inner_state.value_of_app_state
+            (Option.value_exn old_inner_acc.zkapp).app_state
+        in
+        let action_state : Ase.With_length.Stmt.t =
+          Rollup_state.Outer_action_state.With_length.
+            { action_state = raw outer_action_state
+            ; length = length outer_action_state
+            }
+        in
+        Rule_commit.Ase_inner_inst.fold action_state inner_ase_fields
         |> Promise.to_deferred
       in
       let%bind verify_both_ases =

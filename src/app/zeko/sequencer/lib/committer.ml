@@ -3,6 +3,7 @@ open Async
 open Mina_base
 open Signature_lib
 open Mina_ledger
+open Zeko_circuits
 module Field = Snark_params.Tick.Field
 
 module Commit_witness = struct
@@ -12,7 +13,7 @@ module Commit_witness = struct
     ; old_deposits_pointer : Frozen_ledger_hash.t
     ; processed_deposits_pointer : Frozen_ledger_hash.t
     ; signatures : Signature.t list
-    ; last_snark : Zkapps_rollup.t
+    ; txn_snark : Zeko_transaction_snark.T.t
     }
   [@@deriving yojson]
 end
@@ -111,27 +112,26 @@ let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
      ; old_deposits_pointer
      ; processed_deposits_pointer
      ; signatures
-     ; last_snark
+     ; txn_snark
      } :
       Commit_witness.t ) =
-  (* FIXME: pass this check into circuit *)
-  assert (List.length signatures <> 0) ;
-  let%bind new_deposits =
-    Gql_client.fetch_transfers archive_uri
-      ~from_action_state:old_deposits_pointer
+  let%bind new_actions =
+    Gql_client.fetch_actions archive_uri ~from_action_state:old_deposits_pointer
       ~end_action_state:processed_deposits_pointer zkapp_pk
-    |> Deferred.map ~f:(List.map ~f:fst)
+    >>| List.map ~f:fst >>| List.rev
+    >>| List.map ~f:Account_update.Actions.hash
   in
-  let%bind unprocessed_deposits =
-    Gql_client.fetch_transfers archive_uri
+  let%bind unprocessed_actions =
+    Gql_client.fetch_actions archive_uri
       ~from_action_state:processed_deposits_pointer zkapp_pk
-    |> Deferred.map ~f:(List.map ~f:fst)
+    >>| List.map ~f:fst >>| List.rev
+    >>| List.map ~f:Account_update.Actions.hash
   in
   let%bind account_update =
-    Zeko_prover.Client.outer_step ~proving_timeout:30. provers ~last:last_snark
-      ~outer_public_key:zkapp_pk ~new_deposits:(List.rev new_deposits)
-      ~unprocessed_deposits:(List.rev unprocessed_deposits)
-      ~old_inner_ledger ~new_inner_ledger
+    Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
+      ~public_key:zkapp_pk ~new_actions ~unprocessed_actions ~old_inner_ledger
+      ~new_inner_ledger ~da_signature:(List.hd_exn signatures)
+      ~da_key:(failwith "Not implemented")
   in
   let command : Zkapp_command.t =
     { fee_payer =
