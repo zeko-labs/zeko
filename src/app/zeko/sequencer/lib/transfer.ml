@@ -1,12 +1,25 @@
+open Mina_base
+module Field = Snark_params.Tick.Field
+
+type direction = Deposit | Withdraw
+
+type t = { transfer : Zkapps_rollup.TR.t; direction : direction }
+
+type claim =
+  { is_new : bool
+  ; pointer : Field.t
+  ; before : Zkapps_rollup.TR.t list
+  ; after : Zkapps_rollup.TR.t list
+  ; transfer : t
+  }
+
 (**
   Hash table that holds the item only for the specified lifetime.
   Used to store proved transfer requested by users.
 *)
-
-open Base
-open Mina_base
-
 module Transfers_memory = struct
+  open Base
+
   type t_ =
     ( ( Account_update.t
       , Zkapp_command.Digest.Account_update.t
@@ -48,5 +61,3 @@ module Transfers_memory = struct
 
   let get t key = Hashtbl.find t.table key
 end
-
-include Transfers_memory
