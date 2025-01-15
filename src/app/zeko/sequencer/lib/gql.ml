@@ -1889,23 +1889,7 @@ end
 module Subscriptions = struct
   open Schema
 
-  let state_hashes_changed =
-    subscription_field "stateHashesChanged"
-      ~doc:
-        "Event that triggers when some of the state hashes are changed. Max \
-         once per minute."
-      ~typ:(non_null Types.State_hashes.t)
-      ~args:Arg.[]
-      ~resolve:(fun { ctx = sequencer; _ } ->
-        let r, w =
-          Zeko_sequencer.Subscriptions.add_state_hashes_subscriber
-            sequencer.subscriptions
-        in
-        Pipe.write_without_pushback_if_open w
-          (Zeko_sequencer.get_latest_state sequencer) ;
-        return (Ok r) )
-
-  let commands = [ state_hashes_changed ]
+  let commands = []
 end
 
 let schema =
