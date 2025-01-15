@@ -337,16 +337,10 @@ module Sequencer = struct
     ; snark_q : Snark_queue.t
     ; merger : Merger.P.t
     ; merger_ctx : Merger.Context.t
-    ; stop : unit Ivar.t
     ; da_client : Da_layer.Client.Sequencer.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
     }
-
-  let close t =
-    L.Db.close t.db ;
-    Ivar.fill_if_empty t.stop () ;
-    Throttle.kill t.snark_q.q
 
   let add_account t account_id account =
     ( L.Db.get_or_create_account t.db account_id account |> Or_error.ok_exn
@@ -713,7 +707,7 @@ module Sequencer = struct
     if Float.(t.config.commitment_period_sec <= 0.) then ()
     else
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
-      every ~start:(after period) ~stop:(Ivar.read t.stop) period (fun () ->
+      every ~start:(after period) period (fun () ->
           don't_wait_for @@ Deferred.ignore_m @@ commit t )
 
   let bootstrap ~logger ({ config; _ } as t) da_config =
@@ -834,7 +828,6 @@ module Sequencer = struct
           ; kvdb
           ; state = Merger.Context.load_state kvdb
           }
-      ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
       }
     in
