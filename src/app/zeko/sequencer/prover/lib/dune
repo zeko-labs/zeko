@@ -1,7 +1,8 @@
 (library
  (name zeko_prover)
  (libraries
-  zkapps_rollup
+  zeko_circuits
+  zeko_constants
   mina_lib
   mina_ledger
   yojson

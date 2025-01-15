@@ -4,7 +4,7 @@ open Mina_base
 open Mina_lib
 open Mina_ledger
 
-let constraint_constants = Genesis_constants.Compiled.constraint_constants
+let constraint_constants = Zeko_constants.constraint_constants
 
 let rec rmrf path =
   match Sys.is_directory path with
@@ -15,20 +15,7 @@ let rec rmrf path =
   | false ->
       Sys.remove path
 
-let compile_time_genesis_state =
-  let genesis_constants = Genesis_constants.Compiled.genesis_constants in
-  let consensus_constants =
-    Consensus.Constants.create ~constraint_constants
-      ~protocol_constants:genesis_constants.protocol
-  in
-  let compile_time_genesis =
-    Mina_state.Genesis_protocol_state.t
-      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-      ~constraint_constants ~consensus_constants
-      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-  in
-  compile_time_genesis.data
+let compile_time_genesis_state = Zeko_constants.compile_time_genesis_state
 
 let time ~logger label (d : 'a Deferred.t) =
   let start = Time.now () in
@@ -122,7 +109,7 @@ let sync_archive ~(state : State.t) ~hash =
                   ~txn:
                     (Mina_transaction_logic.Transaction_applied
                      .transaction_with_status txn_applied )
-                  ~dummy_fee_payer:Zkapps_rollup.inner_public_key
+                  ~dummy_fee_payer:Zeko_constants.inner_public_key
                   ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
               in
               protocol_state := new_protocol_state ;

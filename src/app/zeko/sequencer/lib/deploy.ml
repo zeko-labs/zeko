@@ -5,8 +5,8 @@ module L = Mina_ledger.Ledger
 
 let deploy_command_exn ~(signer : Keypair.t) ~(fee : Currency.Fee.t)
     ~(nonce : Account.Nonce.t) ~(zkapp : Keypair.t) ~(initial_ledger : L.t)
-    ~(constraint_constants : Genesis_constants.Constraint_constants.t)
-    (module Z : Zkapps_rollup.S) : Zkapp_command.t =
+    ~(constraint_constants : Genesis_constants.Constraint_constants.t) :
+    Zkapp_command.t =
   let zkapp_update =
     { body =
         { Body.dummy with

@@ -3,7 +3,7 @@
  (inline_tests)
  (libraries
   kvdb_base
-  zkapps_rollup
+  zeko_constants
   ;; mina ;;
   mina_base
   mina_base.import
