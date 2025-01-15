@@ -329,18 +329,6 @@ module Sequencer = struct
       }
   end
 
-  module Subscriptions = struct
-    type t =
-      { mutable state_hashes_changed : State_hashes.t Pipe.Writer.t list }
-
-    let create () = { state_hashes_changed = [] }
-
-    let add_state_hashes_subscriber t =
-      let r, w = Pipe.create () in
-      t.state_hashes_changed <- w :: t.state_hashes_changed ;
-      (r, w)
-  end
-
   type t =
     { db : L.Db.t
     ; logger : Logger.t
@@ -353,7 +341,6 @@ module Sequencer = struct
     ; da_client : Da_layer.Client.Sequencer.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
-    ; mutable subscriptions : Subscriptions.t
     }
 
   let close t =
@@ -389,11 +376,6 @@ module Sequencer = struct
       ; unproved_ledger_hash = get_root t
       ; committed_ledger_hash = Field.zero
       }
-
-  let trigger_state_hashes_changed t =
-    let state_hashes = get_latest_state t in
-    List.iter t.subscriptions.state_hashes_changed ~f:(fun w ->
-        Pipe.write_without_pushback_if_open w state_hashes )
 
   (** Apply user command to the ledger without checking the validity of the command *)
   let apply_user_command_without_check l archive command ~global_slot
@@ -565,8 +547,6 @@ module Sequencer = struct
           in
           Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
             ~ledger_openings:first_pass_ledger ~diff ~target_ledger_hash ;
-
-          trigger_state_hashes_changed t ;
 
           let pc : Transaction_snark.Pending_coinbase_stack_state.t =
             (* No coinbase to add to the stack. *)
@@ -856,7 +836,6 @@ module Sequencer = struct
           }
       ; stop = Ivar.create ()
       ; apply_q = Sequencer.create ()
-      ; subscriptions = Subscriptions.create ()
       }
     in
     let%bind () =
