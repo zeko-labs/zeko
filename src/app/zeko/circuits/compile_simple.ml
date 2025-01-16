@@ -623,7 +623,7 @@ let get_first_backtrace_entry b =
           filename ^ ":" ^ Int.to_string line_number )
 
 let compile (type out_t out_var first_input branches n_available_branches)
-    ?(override_wrap_domain : [ `N0 | `N1 | `N2 ] option) ~(name : string)
+    ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
     ~(branches :
        ( out_var
        , (first_input, branches) cons_branch
@@ -640,15 +640,15 @@ let compile (type out_t out_var first_input branches n_available_branches)
   let (Count_branches_result tag_branches) = count_branches branches in
   let (module N_branches) = branches_length_to_module tag_branches in
   let override_wrap_domain : Pickles_base.Proofs_verified.t option =
-    match override_wrap_domain with
+    match wrap_domain with
     | None ->
         Some N1
         (* TODO: This should have been None, but pickles is really bad at estimating it. *)
-    | Some `N0 ->
+    | Some `N13 ->
         Some N0
-    | Some `N1 ->
+    | Some `N14 ->
         Some N1
-    | Some `N2 ->
+    | Some `N15 ->
         Some N2
   in
   match branches_to_choices ~name branches with
@@ -686,8 +686,8 @@ let compile (type out_t out_var first_input branches n_available_branches)
       in
       (* FIXME: Don't do this. Make lazy compilation work. Fix Pickles bug. *)
       Promise.block_on_async_exn (fun () ->
-          time_promise ("(compile_simple) compiled " ^ name)
-            (fun () -> Verification_key.of_compiled_promise tag)
+          time_promise ("(compile_simple) compiled " ^ name) (fun () ->
+              Verification_key.of_compiled_promise tag )
           |> Promise.map ~f:(fun _ -> ()) ) ;
       let provers = transform_provers provers in
       let r :

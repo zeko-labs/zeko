@@ -119,7 +119,7 @@ struct
 
     let extend_option_iterations = Int.pow 2 7
 
-    let override_wrap_domain = Some `N1
+    let wrap_domain = Some `N14
   end
 
   include Folder.Make (Definition) ()

@@ -32,7 +32,7 @@ module M_with_length = struct
 
   let extend_option_iterations = Int.pow 2 9
 
-  let override_wrap_domain = Some `N1
+  let wrap_domain = Some `N14
 end
 
 module M_without_length = struct
@@ -57,7 +57,7 @@ module M_without_length = struct
 
   let extend_option_iterations = Int.pow 2 9
 
-  let override_wrap_domain = Some `N1
+  let wrap_domain = Some `N14
 end
 
 module Made_without_length = Folder.Make (M_without_length) ()
