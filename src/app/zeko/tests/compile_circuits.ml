@@ -3,11 +3,9 @@ let point_of_string s =
     to_affine_exn @@ point_near_x @@ Snark_params.Tick.Field.of_string s)
   |> Signature_lib.Public_key.compress
 
-(*
 let _tag = Zeko_circuits.Inner_rules.tag
 
 let _tag = Zeko_circuits.Outer_rules.tag
-*)
 
 module B_mina =
   Zeko_circuits.Bridge_rules.Make_mina
@@ -62,7 +60,6 @@ let _tag = B_mina.System_L1.tag
 
 let _tag = B_mina.System_L2.tag
 
-(*
 module B_custom =
   Zeko_circuits.Bridge_rules.Make_custom
     (struct
@@ -120,5 +117,6 @@ module B_custom =
     end)
     ()
 
-let _tag = B_custom.System.tag
-*)
+let _tag = B_custom.System_L1.tag
+
+let _tag = B_custom.System_L2.tag
