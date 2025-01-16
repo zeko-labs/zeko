@@ -1,39 +1,124 @@
-let () =
-  Promise.block_on_async_exn (fun () ->
-      Zeko_circuits.Compile_simple.force_tag
-        Zeko_circuits.Zeko_transaction_snark.tag )
+let point_of_string s =
+  Snark_params.Tick.Inner_curve.(
+    to_affine_exn @@ point_near_x @@ Snark_params.Tick.Field.of_string s)
+  |> Signature_lib.Public_key.compress
 
 (*
-let Zeko_circuits.Compile_simple.[ sync; _action ] =
-  Zeko_circuits.Inner_rules.provers
+let _tag = Zeko_circuits.Inner_rules.tag
 
-(* FIXME *)
-let public_key = Signature_lib.Public_key.Compressed.empty
+let _tag = Zeko_circuits.Outer_rules.tag
+*)
 
-let init_action_state = Mina_base.Zkapp_account.Actions.empty_state_element
+module B_mina =
+  Zeko_circuits.Bridge_rules.Make_mina
+    (struct
+      let holder_accounts_l1 = [ point_of_string "89888" ]
 
-let action1 : Zeko_circuits.Rollup_state.Inner_action.t =
-  { aux = Snark_params.Tick.Field.zero
-  ; children =
-      Mina_base.Zkapp_command.Call_forest.With_hashes.of_account_updates []
-  }
+      let holder_account_l2 = point_of_string "11111"
 
-let action2 : Zeko_circuits.Rollup_state.Inner_action.t =
-  { aux = Snark_params.Tick.Field.zero
-  ; children =
-      Mina_base.Zkapp_command.Call_forest.With_hashes.of_account_updates []
-  }
+      let zeko_l1 = point_of_string "39992"
 
-let ase = Zeko_circuits.Ase.With_length.leaf_option
+      let zeko_l2 = point_of_string "39921"
 
-let witness : Zeko_circuits.Rule_inner_sync.Witness.t =
-  { public_key; ase; vk_hash }
+      let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
 
-let () = Promise.block_on_async_exn @@ fun () -> sync witness
+      let holder_account_l1_permissions_enabled : Mina_base.Permissions.t =
+        { edit_state = Proof
+        ; access = None
+        ; send = Proof
+        ; receive = None
+        ; set_delegate = Impossible
+        ; set_permissions = Proof
+        ; set_verification_key =
+            (Proof, Mina_numbers.Txn_version.current) (* TODO: correct? *)
+        ; set_zkapp_uri = Impossible
+        ; edit_action_state = Impossible
+        ; set_token_symbol = Impossible
+        ; increment_nonce = Impossible
+        ; set_voting_for = Impossible
+        ; set_timing = Impossible
+        }
+
+      let holder_account_l1_permissions_disabled : Mina_base.Permissions.t =
+        { edit_state = Proof
+        ; access = None
+        ; send = Impossible
+        ; receive = None
+        ; set_delegate = Impossible
+        ; set_permissions = Proof
+        ; set_verification_key =
+            (Proof, Mina_numbers.Txn_version.current) (* TODO: correct? *)
+        ; set_zkapp_uri = Impossible
+        ; edit_action_state = Impossible
+        ; set_token_symbol = Impossible
+        ; increment_nonce = Impossible
+        ; set_voting_for = Impossible
+        ; set_timing = Impossible
+        }
+    end)
+    ()
+
+let _tag = B_mina.System_L1.tag
+
+let _tag = B_mina.System_L2.tag
 
 (*
-  let _out, _proof =
-    let@ () = Promise.block_on_async_exn in
-    base input
-    *)
-    *)
+module B_custom =
+  Zeko_circuits.Bridge_rules.Make_custom
+    (struct
+      let token_owner_l1 =
+        Mina_base.Account_id.create (point_of_string "344213")
+          Mina_base.Account_id.Digest.default
+
+      let token_owner_l2 =
+        Mina_base.Account_id.create (point_of_string "344213")
+          Mina_base.Account_id.Digest.default
+
+      let holder_accounts_l1 = [ point_of_string "89888" ]
+
+      let holder_account_l2 = point_of_string "11111"
+
+      let zeko_l1 = point_of_string "39992"
+
+      let zeko_l2 = point_of_string "39921"
+
+      let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
+
+      let holder_account_l1_permissions_enabled : Mina_base.Permissions.t =
+        { edit_state = Proof
+        ; access = None
+        ; send = Proof
+        ; receive = None
+        ; set_delegate = Impossible
+        ; set_permissions = Proof
+        ; set_verification_key =
+            (Proof, Mina_numbers.Txn_version.current) (* TODO: correct? *)
+        ; set_zkapp_uri = Impossible
+        ; edit_action_state = Impossible
+        ; set_token_symbol = Impossible
+        ; increment_nonce = Impossible
+        ; set_voting_for = Impossible
+        ; set_timing = Impossible
+        }
+
+      let holder_account_l1_permissions_disabled : Mina_base.Permissions.t =
+        { edit_state = Proof
+        ; access = None
+        ; send = Impossible
+        ; receive = None
+        ; set_delegate = Impossible
+        ; set_permissions = Proof
+        ; set_verification_key =
+            (Proof, Mina_numbers.Txn_version.current) (* TODO: correct? *)
+        ; set_zkapp_uri = Impossible
+        ; edit_action_state = Impossible
+        ; set_token_symbol = Impossible
+        ; increment_nonce = Impossible
+        ; set_voting_for = Impossible
+        ; set_timing = Impossible
+        }
+    end)
+    ()
+
+let _tag = B_custom.System.tag
+*)

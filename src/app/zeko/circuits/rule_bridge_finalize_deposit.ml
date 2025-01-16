@@ -52,7 +52,7 @@ struct
   end
 
   module Check_accepted_params = struct
-    let get_iterations = Int.pow 2 8
+    let get_iterations = Int.pow 2 7
   end
 
   module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)

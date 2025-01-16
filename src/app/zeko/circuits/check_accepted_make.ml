@@ -109,7 +109,7 @@ struct
         ; deposit_index
         }
 
-    let name = "deposit acceptance/rejection check"
+    let name = "check_accepted"
 
     let leaf_iterations = Int.pow 2 8
 
@@ -119,7 +119,7 @@ struct
 
     let extend_option_iterations = Int.pow 2 7
 
-    let override_wrap_domain = None
+    let override_wrap_domain = Some `N1
   end
 
   include Folder.Make (Definition) ()
