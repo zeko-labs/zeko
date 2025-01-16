@@ -19,4 +19,4 @@ include
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
           ~branches:
             [ Rule_commit_inst.rule; Rule_action_witness.rule; Rule_pause.rule ]
-          ~name:"Outer_rules" )
+          ~name:"Outer_rules" ~override_wrap_domain:`N1 )

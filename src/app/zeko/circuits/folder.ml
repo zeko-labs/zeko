@@ -225,8 +225,6 @@ struct
   type merge_input = Rule_merge.Witness.t =
     { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
 
-  let name = "State_machine.Make(" ^ name ^ ")"
-
   module System =
   ( val Compile_simple.compile ?override_wrap_domain
           ~name:("folder(" ^ name ^ ")")

@@ -10,14 +10,14 @@ open Checked.Let_syntax
 module Ase_outer_inst = Ase.Without_length.Make (struct
   module Action_state = Outer_action_state
 
-  let get_iterations = Int.pow 2 14
+  let get_iterations = Int.pow 2 10
 end)
 
 (** Used to prove the length of the inner action state as stored on the outer account. *)
 module Ase_inner_inst = Ase.With_length.Make (struct
   module Action_state = Inner_action_state
 
-  let get_iterations = Int.pow 2 14
+  let get_iterations = Int.pow 2 10
 end)
 
 (** Proves both Ase_outer_inst and Ase_inner_inst, to circumvent limitation of two recursive proof verifications per proof. *)
@@ -40,7 +40,7 @@ module Verify_both_ases = struct
   include
     ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
             ~out_typ:Typ.(Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
-            () )
+            ~override_wrap_domain:`N1 () )
 end
 
 module Make (Inputs : sig

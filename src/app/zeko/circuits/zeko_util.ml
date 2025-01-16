@@ -69,8 +69,9 @@ let var_to_state_generic_fine :
          zkapp state!"
     else
       let r' =
-        List.(append r (init ~f:(fun _ -> Maybe_var.none) (length r - 8)))
+        List.(append r (init ~f:(fun _ -> Maybe_var.none) (8 - length r)))
       in
+      assert (List.length r' = 8) ;
       Zkapp_state.V.of_list_exn r'
 
 let var_to_precondition_fine =
