@@ -88,7 +88,6 @@ struct
 
     include
       ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
-              ~override_wrap_domain:`N1
               ~out_typ:
                 Typ.(
                   Ase_outer_inst.Stmt.typ * Ase_outer_with_length_inst.Stmt.typ)
@@ -129,7 +128,7 @@ struct
 
     include
       ( val Compile_simple.compile ~name:"Verify_check_accepted_and_ase"
-              ~branches:[ rule ] ~override_wrap_domain:`N2
+              ~wrap_domain:`N15 ~branches:[ rule ]
               ~out_typ:
                 Typ.(
                   Check_accepted.Definition.Stmt.typ

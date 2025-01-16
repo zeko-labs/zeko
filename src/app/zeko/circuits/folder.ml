@@ -28,7 +28,7 @@ module Make (Inputs : sig
 
   val name : string
 
-  val override_wrap_domain : [ `N0 | `N1 | `N2 ] option
+  val wrap_domain : [ `N13 | `N14 | `N15 ] option
 end)
 () =
 struct
@@ -226,7 +226,7 @@ struct
     { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
 
   module System =
-  ( val Compile_simple.compile ?override_wrap_domain
+  ( val Compile_simple.compile ?wrap_domain
           ~name:("folder(" ^ name ^ ")")
           ~branches:
             [ Rule_leaf.rule

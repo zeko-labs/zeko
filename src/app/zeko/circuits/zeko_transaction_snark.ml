@@ -286,13 +286,11 @@ module Account_set = Indexed_merkle_tree.Make (struct
       in
       (* if check (dec) is false, then we decrement with 0, and expand to greater than or equality check *)
       let* () = sub_then_dec ~dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 in
-      if
-        not
-          Bignum_bigint.(
-            Field.size
-            = of_string
-                "28948022309329048855892746252171976963363056481941560715954676764349967630337")
-      then failwith "Fp size assumption wrong" ;
+      assert (
+        Bignum_bigint.(
+          Field.size
+          = of_string
+              "28948022309329048855892746252171976963363056481941560715954676764349967630337") ) ;
       let fp0 = Field.(of_string "93054740644568405314109441") in
       let fp1 = Field.(of_string "147213319177") in
       let fp2 = Field.(of_string "302231454903657293676544") in
@@ -532,6 +530,8 @@ let accumulate (f : ('a -> unit) -> 'b Checked.t) : ('b * 'a list) Checked.t =
   let running = ref true in
   let*| r =
     f (fun x ->
+        (* if this fails it's because you used the generated function after the
+           end of its scope, i.e., a case of use-after-free. *)
         assert !running ;
         acc := x :: !acc )
   in
@@ -752,8 +752,10 @@ let rule_zkapp ~shift_action_states ~spec
   let stmt : Transaction_snark.Statement.With_sok.var =
     { source
     ; target
-    ; connecting_ledger_left = connecting_ledger
-    ; connecting_ledger_right = connecting_ledger
+    ; connecting_ledger_left =
+        Frozen_ledger_hash.(constant typ empty_hash)
+        (* TODO: should this be connecting_ledger? *)
+    ; connecting_ledger_right = Frozen_ledger_hash.(constant typ empty_hash)
     ; supply_increase = Currency.Amount.Signed.(constant typ zero)
     ; fee_excess =
         { fee_token_l = Token_id.(Checked.constant default)
@@ -893,7 +895,7 @@ let rule_merge input =
     }
 
 include
-  ( val Compile_simple.compile ~override_wrap_domain:`N1
+  ( val Compile_simple.compile
           ~name:"zeko-transaction-snark" ~out_typ:Zeko_stmt.typ
           ~branches:
             [ { branch_name = "single-signed-command"
