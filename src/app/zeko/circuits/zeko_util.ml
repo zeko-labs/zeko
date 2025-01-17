@@ -161,7 +161,7 @@ struct
   type var = { array : T.var array; length : int V.t }
 
   let typ : (var, t) Typ.t =
-    let pad : int -> T.t list -> T.t array =
+    let pad : int -> T.t list -> T.t array * int =
      fun len list ->
       let arr = Array.create ~len dummy_filler in
       let rec go idx = function
@@ -169,9 +169,10 @@ struct
             Array.set arr idx x ;
             go (idx + 1) xs
         | [] ->
-            ()
+            idx
       in
-      go 0 list ; arr
+      let real_len = go 0 list in
+      (arr, real_len)
     in
     let rec extract : int -> int -> T.t array -> T.t list =
      fun len offset array ->
@@ -184,7 +185,7 @@ struct
     let open Typ in
     array ~length:max_length T.typ * V.typ
     |> transport
-         ~there:(fun xs -> (pad max_length xs, 0))
+         ~there:(fun xs -> pad max_length xs)
          ~back:(fun (xs, len) -> extract len 0 xs)
     |> transport_var
          ~there:(fun { array; length } -> (array, length))
