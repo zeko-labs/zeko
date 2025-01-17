@@ -109,6 +109,8 @@ module With_length = struct
           ~length:target.length
       in
       (({ source; target } : Stmt.var), verifier)
+
+    let make = Made_2.make
   end
 end
 
@@ -146,5 +148,7 @@ module Without_length = struct
       let source = Action_state.unsafe_var_of_field source in
       let target = Action_state.unsafe_var_of_field target in
       (({ source; target } : Stmt.var), verifier)
+
+    let make = Made_2.make
   end
 end
