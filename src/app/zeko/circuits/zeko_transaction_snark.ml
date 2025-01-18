@@ -895,8 +895,8 @@ let rule_merge input =
     }
 
 include
-  ( val Compile_simple.compile
-          ~name:"zeko-transaction-snark" ~out_typ:Zeko_stmt.typ
+  ( val Compile_simple.compile ~name:"zeko-transaction-snark"
+          ~out_typ:Zeko_stmt.typ
           ~branches:
             [ { branch_name = "single-signed-command"
               ; tags = No_tags
