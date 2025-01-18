@@ -1,3 +1,4 @@
+(*
 [@@@warning "-8-4"] (* ignore partial match and fragile-match warning *)
 
 open Core
@@ -522,6 +523,10 @@ let prove_zkapp ~source_acc_set
     ; account_update_index
     }
   in
+  let xs = failwith "FIXME" in
+  let zs = failwith "FIXME" in
+  let xs_paths = failwith "FIXME" in
+  let ys_paths = failwith "FIXME" in
   let update_acc_set_witness :
       Zeko_circuits.Zeko_transaction_snark.update_acc_set_witness =
     { get_account_set_x = list_to_unit_function xs
@@ -600,6 +605,15 @@ let prove_zkapp ~source_acc_set
 let prove_merge left right =
   let stmt, proof = block_exn @@ fun () -> prove_merge { left; right } in
   ({ stmt; proof } : Zeko_circuits.Zeko_transaction_snark.T.t)
+
+(*
+let zkapp_command_witness_exn (ledger : staged_ledger) (cmd : Zkapp_command.t) =
+  let supply_increase = Amount.(Signed.of_unsigned zero) in
+  let state_view = Mina_state.Protocol_state.Body.view state_body in
+
+  let sparse_ledger = to_sparse ledger.ledger cmd in
+  ()
+*)
 
 (* FIXME: allow paying fees *)
 let prove_zeko_command (staged_ledger : staged_ledger) ~source_acc_set cmd :
@@ -1144,3 +1158,4 @@ let main () =
   done
 
 let () = main ()
+*)
