@@ -246,7 +246,7 @@ let transform_prover :
     -> ('out_t * Pickles.Side_loaded.Proof.t) Promise.t =
  fun ?pre_prove ~branch_name ~name prover handler input ->
   let@ () =
-    time_promise @@ "(compile_simple) proving " ^ name ^ "." ^ branch_name
+    time_promise @@ "(compile_simple) proved " ^ name ^ "." ^ branch_name
   in
   (match pre_prove with Some f -> f input | None -> ()) ;
   let@ stmt, (), proof =
