@@ -59,4 +59,4 @@ let%snarkydef_ main (w : Witness.t V.t) =
   Compile_simple.{ prevs = No_prevs; out }
 
 let rule : _ Compile_simple.branch =
-  { branch_name = "zeko action witness"; tags = No_tags; main }
+  { branch_name = "zeko pause"; tags = No_tags; main }
