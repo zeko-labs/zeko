@@ -78,7 +78,7 @@ struct
       ; new_inner_acc : Account.t
       ; new_inner_acc_path : Path.t
       ; da_signature : Signature_lib.Schnorr.Chunked.Signature.t
-      ; da_key : PC.t
+      ; da_key : Even_PC.t
       }
     [@@deriving snarky]
   end
@@ -151,7 +151,7 @@ struct
       (* TODO: Is this correct? *)
       let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
       let* da_key_uncompressed =
-        Signature_lib.Public_key.decompress_var da_key
+        Even_PC.to_pc_var da_key |> Signature_lib.Public_key.decompress_var
       in
       let* payload =
         make_checked (fun () ->
@@ -338,7 +338,7 @@ struct
                 ; paused = Some Boolean.false_ (* We must not be paused. *)
                 ; pause_key =
                     None (* We don't care about who can pause the rollup. *)
-                ; da_key = None
+                ; da_key = Some da_key
                 ; acc_set = Some source_acc_set
                 }
               |> var_to_precondition_fine
