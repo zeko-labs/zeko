@@ -210,6 +210,7 @@ struct
       let new_stmt : Trans.var =
         { source = left.source; target = right.target }
       in
+      let* () = assert_equal ~label:__LOC__ Stmt.typ left.target right.source in
       Checked.return
         Compile_simple.
           { prevs =
