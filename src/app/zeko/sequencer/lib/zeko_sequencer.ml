@@ -783,7 +783,7 @@ let%test_module "Sequencer tests" =
         in
 
         let genesis_accounts =
-          (Zeko_constants.inner_account_id, M.Inner.initial_account)
+          (Zeko_constants.inner_account_id, Deploy.Z.Inner.initial_account)
           :: ( Array.map init_ledger ~f:(fun (keypair, balance) ->
                    let pk =
                      Signature_lib.Public_key.compress keypair.public_key

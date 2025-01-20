@@ -3,13 +3,22 @@ module Field = Snark_params.Tick.Field
 
 type direction = Deposit | Withdraw
 
-type t = { transfer : Zkapps_rollup.TR.t; direction : direction }
+module TR = struct
+  (* FIXME *)
+  type t =
+    { amount : Currency.Amount.t
+    ; recipient : Signature_lib.Public_key.Compressed.t
+    }
+  [@@deriving yojson]
+end
+
+type t = { transfer : TR.t; direction : direction }
 
 type claim =
   { is_new : bool
   ; pointer : Field.t
-  ; before : Zkapps_rollup.TR.t list
-  ; after : Zkapps_rollup.TR.t list
+  ; before : TR.t list
+  ; after : TR.t list
   ; transfer : t
   }
 

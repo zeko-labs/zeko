@@ -34,14 +34,6 @@ module Test_accounts = struct
         (account_id, account) )
 end
 
-module T = Transaction_snark.Make (struct
-  let constraint_constants = constraint_constants
-
-  let proof_level = Genesis_constants.Proof_level.Full
-end)
-
-module M = Zkapps_rollup.Make (T)
-
 let run ~l1_uri ~sk ~initial_state ~da_nodes () =
   let logger = Logger.create () in
   let sender_keypair =
@@ -65,7 +57,8 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes () =
     let ledger =
       L.create_ephemeral ~depth:constraint_constants.ledger_depth ()
     in
-    L.create_new_account_exn ledger M.Inner.account_id M.Inner.initial_account ;
+    L.create_new_account_exn ledger Zeko_constants.inner_account_id
+      Sequencer_lib.Deploy.Z.Inner.initial_account ;
     match initial_state with
     | `None ->
         ledger
@@ -85,7 +78,6 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes () =
       ~zkapp:zkapp_keypair
       ~fee:(Currency.Fee.of_mina_int_exn 1)
       ~nonce ~constraint_constants ~initial_ledger:ledger
-      (module M)
   in
 
   (* Post genesis batch *)
