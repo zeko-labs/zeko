@@ -1279,13 +1279,12 @@ module Types = struct
       end
 
       module Transfer_input = struct
-        type input = Zkapps_rollup.TR.t
+        type input = Transfer.TR.t
 
         let arg_typ =
           obj "TransferInput"
             ~coerce:(fun amount recipient ->
-              Zkapps_rollup.TR.{ amount = Amount.of_uint64 amount; recipient }
-              )
+              Transfer.TR.{ amount = Amount.of_uint64 amount; recipient } )
             ~split:(fun f (x : input) ->
               f (Currency.Amount.to_uint64 x.amount) x.recipient )
             ~fields:
