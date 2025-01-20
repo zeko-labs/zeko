@@ -3,6 +3,16 @@ open Account_update
 open Signature_lib
 module L = Mina_ledger.Ledger
 
+module Z = struct
+  module Inner = struct
+    let initial_account = failwith "not implemented"
+  end
+
+  module Outer = struct
+    let deploy_exn _ledger = failwith "not implemented"
+  end
+end
+
 let deploy_command_exn ~(signer : Keypair.t) ~(fee : Currency.Fee.t)
     ~(nonce : Account.Nonce.t) ~(zkapp : Keypair.t) ~(initial_ledger : L.t)
     ~(constraint_constants : Genesis_constants.Constraint_constants.t) :
