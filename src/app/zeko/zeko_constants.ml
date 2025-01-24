@@ -31,3 +31,5 @@ let inner_account_id =
   Account_id.of_public_key (Public_key.decompress_exn inner_public_key)
 
 let inner_account_index = 0
+
+let indexed_merkle_tree_salt = "indexed merkle tree entry hash"
