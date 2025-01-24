@@ -7,6 +7,7 @@
   zeko_prover
   parallel_merger
   zeko_constants
+  indexed_merkle_tree
   ;; mina ;;
   mina_base
   mina_base.import
