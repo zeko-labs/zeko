@@ -7,7 +7,18 @@ module PC = Signature_lib.Public_key.Compressed
 open Zeko_util
 open Checked.Let_syntax
 
-let constraint_constants = Genesis_constants.Compiled.constraint_constants
+let constraint_constants : Genesis_constants.Constraint_constants.t =
+  { sub_windows_per_window = 1
+  ; ledger_depth = 35
+  ; work_delay = 1
+  ; block_window_duration_ms = 1
+  ; transaction_capacity_log_2 = 1
+  ; pending_coinbase_depth = 1
+  ; coinbase_amount = Currency.Amount.zero
+  ; supercharged_coinbase_factor = 1
+  ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
+  ; fork = None
+  }
 
 module Account_set = Indexed_merkle_tree.Make (struct
   open struct
@@ -503,11 +514,17 @@ end
 
 let dummy_pc_init = Pending_coinbase.Stack.empty
 
-let genesis_constants = Genesis_constants.Compiled.genesis_constants
+let protocol_constants : Genesis_constants.Protocol.t =
+  { k = 1
+  ; slots_per_epoch = 1000
+  ; slots_per_sub_window = 1
+  ; grace_period_slots = 1
+  ; delta = 1
+  ; genesis_state_timestamp = Int64.one
+  }
 
 let consensus_constants =
-  Consensus.Constants.create ~constraint_constants
-    ~protocol_constants:genesis_constants.protocol
+  Consensus.Constants.create ~constraint_constants ~protocol_constants
 
 (** Dummy state body, network preconditions are disabled anyway *)
 let dummy_state_body =
@@ -716,7 +733,7 @@ let merge_slot_ranges (x : Slot_range.var) (y : Slot_range.var) :
   in
   ({ lower; upper } : Slot_range.var)
 
-let rule_zkapp ~shift_action_states ~spec
+let rule_zkapp_single ~shift_action_state ~is_start
     Zkapp_rule_input.
       { source_ledger
       ; target_ledger
@@ -729,6 +746,20 @@ let rule_zkapp ~shift_action_states ~spec
       ; sequencer
       ; source_acc_set
       } =
+  let module Inputs = Transaction_snark.Base.Zkapp_command_snark.Single (struct
+    let constraint_constants = constraint_constants
+
+    let spec : Transaction_snark.Zkapp_command_segment.Spec.single = {
+      auth_type = Signature
+      ; is_start
+    }
+
+    let set_zkapp_input _ = failwith "impossible"
+
+    let set_must_verify _ = failwith "impossible"
+  end) in
+  let module Logic = Mina_transaction_logic.Zkapp_command_logic.Make (Inputs.Inputs) in
+  let () = Logic.apply ~constraint_constants in
   let source : _ Mina_state.Registers.t =
     { first_pass_ledger = source_ledger
     ; second_pass_ledger = connecting_ledger
