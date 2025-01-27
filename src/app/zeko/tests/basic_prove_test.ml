@@ -3,6 +3,13 @@ open Signature_lib
 open Snark_params.Tick
 open Zeko_circuits
 
+let da_sk =
+  Quickcheck.random_value ~seed:(`Deterministic "182128381918") Private_key.gen
+
+let da_key = Public_key.of_private_key_exn da_sk |> Public_key.compress
+
+let () = assert (not da_key.is_odd)
+
 let ase_with_length, ase_with_length_proof =
   let open struct
     let trans0, proof0 =
@@ -17,7 +24,7 @@ let ase_with_length, ase_with_length_proof =
     let trans1, proof1 =
       Promise.block_on_async_exn
       @@ fun () ->
-      Ase.With_length.leaf_option ([ Field.of_string "2" ], trans0.source)
+      Ase.With_length.leaf_option ([ Field.of_string "2" ], trans0.target)
 
     let trans2, proof2 =
       Promise.block_on_async_exn
@@ -50,7 +57,7 @@ let ase_without_length =
     let trans1, proof1 =
       Promise.block_on_async_exn
       @@ fun () ->
-      Ase.Without_length.leaf_option ([ Field.of_string "2" ], trans0.source)
+      Ase.Without_length.leaf_option ([ Field.of_string "2" ], trans0.target)
 
     let trans2, proof2 =
       Promise.block_on_async_exn
@@ -211,12 +218,6 @@ let _outer =
             }
       }
 
-    let da_sk = Quickcheck.random_value Private_key.gen
-
-    let da_key = Public_key.of_private_key_exn da_sk |> Public_key.compress
-
-    let () = assert (not da_key.is_odd)
-
     let Compile_simple.
           [ _signed_command
           ; _zkapp_single
@@ -226,15 +227,31 @@ let _outer =
           ] =
       Zeko_transaction_snark.provers
 
-    let genesis_constants = Genesis_constants.Compiled.genesis_constants
+    let constraint_constants : Genesis_constants.Constraint_constants.t =
+      { sub_windows_per_window = 1
+      ; ledger_depth = 35
+      ; work_delay = 1
+      ; block_window_duration_ms = 1
+      ; transaction_capacity_log_2 = 1
+      ; pending_coinbase_depth = 1
+      ; coinbase_amount = Currency.Amount.zero
+      ; supercharged_coinbase_factor = 1
+      ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
+      ; fork = None
+      }
 
-    let constraint_constants = Genesis_constants.Compiled.constraint_constants
+    let protocol_constants : Genesis_constants.Protocol.t =
+      { k = 1
+      ; slots_per_epoch = 1000
+      ; slots_per_sub_window = 1
+      ; grace_period_slots = 1
+      ; delta = 1
+      ; genesis_state_timestamp = Int64.one
+      }
 
     let consensus_constants =
-      Consensus.Constants.create ~constraint_constants
-        ~protocol_constants:genesis_constants.protocol
+      Consensus.Constants.create ~constraint_constants ~protocol_constants
 
-    (** Dummy state body, network preconditions are disabled anyway *)
     let _dummy_state_body =
       let compile_time_genesis =
         Mina_state.Genesis_protocol_state.t
@@ -245,20 +262,22 @@ let _outer =
       in
       Mina_state.Protocol_state.body compile_time_genesis.data
 
-    let () = assert (Int.(constraint_constants.ledger_depth = 32))
+    let () = printf "%i\n%!" constraint_constants.ledger_depth
+
+    let () = assert (Int.(constraint_constants.ledger_depth = 35))
 
     let intermediate_ledger_hashes =
       let base = force Mina_base.Account.empty_digest in
       let rec go = function
-        | 31, hash ->
-            [ (31, hash) ]
+        | 34, hash ->
+            [ (34, hash) ]
         | height, hash ->
             (height, hash)
             :: go (height + 1, Mina_base.Ledger_hash.merge ~height hash hash)
       in
       go (0, base)
 
-    let () = assert (List.length intermediate_ledger_hashes = 32)
+    let () = assert (List.length intermediate_ledger_hashes = 35)
 
     let implied_root (account : Mina_base.Account.t) : field =
       let init = Mina_base.Account.digest account in
@@ -278,7 +297,7 @@ let _outer =
 
     let sparse_source_ledger : Mina_ledger.Sparse_ledger.t =
       Mina_ledger.Sparse_ledger.(
-        add_path (empty ~depth:32 ())
+        add_path (empty ~depth:constraint_constants.ledger_depth ())
           (List.map ~f:(fun (_, h) -> `Right h) intermediate_ledger_hashes)
           inner_account_id old_inner_acc)
 
@@ -1209,7 +1228,8 @@ let _outer =
         ; memo_hash = Field.zero
         ; will_succeed = true
         }
-        Env.{ perform } initial_state
+        Env.{ perform }
+        initial_state
     (*
 
     let zkapp_single : Zeko_transaction_snark.Zkapp_single_unproved_input.t =
