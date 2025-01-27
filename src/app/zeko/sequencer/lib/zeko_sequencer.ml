@@ -5,6 +5,7 @@ open Async_kernel
 open Mina_base
 open Mina_ledger
 open Signature_lib
+module Imt_db = Indexed_merkle_tree.Db
 open Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
@@ -17,6 +18,7 @@ module Sequencer = struct
       { max_pool_size : int
       ; commitment_period_sec : float
       ; db_dir : string option
+      ; imt_dir : string option
       ; zkapp_pk : Public_key.Compressed.t
       ; signer : Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
@@ -207,6 +209,7 @@ module Sequencer = struct
 
   type t =
     { db : L.Db.t
+    ; imt : Imt_db.t
     ; logger : Logger.t
     ; archive : Archive.t
     ; config : Config.t
@@ -248,7 +251,7 @@ module Sequencer = struct
       }
 
   (** Apply user command to the ledger without checking the validity of the command *)
-  let apply_user_command_without_check l archive command ~global_slot
+  let apply_user_command_without_check l imt archive command ~global_slot
       ~state_body =
     let accounts_referenced = User_command.accounts_referenced command in
 
@@ -283,6 +286,20 @@ module Sequencer = struct
     let target_ledger_hash = L.merkle_root l in
 
     L.Mask.Attached.commit l ;
+
+    (* Create entires in Indexed Merkle Tree *)
+    Mina_transaction_logic.Transaction_applied.new_accounts txn_applied
+    |> List.iter ~f:(fun aid ->
+           match
+             Imt_db.get_or_create_entry_exn imt
+               (Account_id.derive_token_id ~owner:aid)
+           with
+           | `Existed, _, _, _, _, _ ->
+               printf
+                 !"Warning: Account %{sexp: Account_id.t} already existed\n%!"
+                 aid
+           | `Added, _, _, _, _, _ ->
+               () ) ;
 
     (* Add events and actions to the memory *)
     let () =
@@ -384,8 +401,8 @@ module Sequencer = struct
                                    , txn_applied
                                    , target_ledger_hash ) =
             return
-              (apply_user_command_without_check l t.archive command ~global_slot
-                 ~state_body )
+              (apply_user_command_without_check l t.imt t.archive command
+                 ~global_slot ~state_body )
           in
 
           (* Post transaction to the DA layer *)
@@ -635,7 +652,7 @@ module Sequencer = struct
                   Zeko_constants.compile_time_genesis_state
               in
               let _, _, _, _ =
-                apply_user_command_without_check mask t.archive command
+                apply_user_command_without_check mask t.imt t.archive command
                   ~global_slot ~state_body
                 |> Or_error.ok_exn
               in
@@ -659,7 +676,7 @@ module Sequencer = struct
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
-      ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~network_id
+      ~da_quorum ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~network_id
       ~deposit_delay_blocks ~provers =
     print_endline "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
@@ -667,11 +684,16 @@ module Sequencer = struct
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
     in
+    let imt =
+      Imt_db.create ?directory_name:imt_dir
+        ~depth:constraint_constants.ledger_depth ()
+    in
     let config =
       Config.
         { max_pool_size
         ; commitment_period_sec
         ; db_dir
+        ; imt_dir
         ; l1_uri
         ; archive_uri
         ; zkapp_pk
@@ -692,6 +714,7 @@ module Sequencer = struct
     let executor = Executor.create ~l1_uri:config.l1_uri ~signer ~kvdb () in
     let t =
       { db
+      ; imt
       ; logger
       ; archive = Archive.create ~kvdb:(L.Db.zeko_kvdb db)
       ; config
@@ -842,8 +865,8 @@ let%test_module "Sequencer tests" =
                 ~zkapp_pk:
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                 ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
-                ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
-                ~signer ~network_id:"testnet"
+                ~da_quorum:1 ~db_dir:None ~imt_dir:None ~l1_uri:gql_uri
+                ~archive_uri:gql_uri ~signer ~network_id:"testnet"
                 ~deposit_delay_blocks:delay_deposit ~provers )
         in
 
@@ -1144,8 +1167,9 @@ let%test_module "Sequencer tests" =
                   ~zkapp_pk:
                     Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                   ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
-                  ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
-                  ~signer ~network_id:"testnet" ~deposit_delay_blocks:0 ~provers
+                  ~da_quorum:1 ~db_dir:None ~imt_dir:None ~l1_uri:gql_uri
+                  ~archive_uri:gql_uri ~signer ~network_id:"testnet"
+                  ~deposit_delay_blocks:0 ~provers
               in
               return
               @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
