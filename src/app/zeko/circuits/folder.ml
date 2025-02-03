@@ -28,7 +28,7 @@ module Make (Inputs : sig
 
   val name : string
 
-  val wrap_domain : [ `N13 | `N14 | `N15 ] option
+  val override_wrap_domain : [ `N0 | `N1 | `N2 ] option
 end)
 () =
 struct
@@ -54,7 +54,6 @@ struct
             ~compute:
               (let+ length = V.get length in
                (* there must be at least one element *)
-               (* TODO: maybe return source in this case? *)
                assert (Int.(length > 0)) ;
                As_prover.read Stmt.typ targets.(length - 1) )
         in
@@ -142,14 +141,12 @@ struct
   end)
 
   module Make_rule_extend (Inputs : sig
-    val branch_name : string
-
     val iterations : int
 
     val middle_or_end : [ `Middle | `End ]
   end) =
   Make_rule (struct
-    let branch_name = Inputs.branch_name
+    let branch_name = "Rule_extend"
 
     let iterations = Inputs.iterations
 
@@ -176,16 +173,12 @@ struct
   end)
 
   module Rule_extend = Make_rule_extend (struct
-    let branch_name = "Rule_extend"
-
     let iterations = extend_iterations
 
     let middle_or_end = `End
   end)
 
   module Rule_extend_option = Make_rule_extend (struct
-    let branch_name = "Rule_extend_option"
-
     let iterations = extend_option_iterations
 
     let middle_or_end = `Middle
@@ -210,7 +203,6 @@ struct
       let new_stmt : Trans.var =
         { source = left.source; target = right.target }
       in
-      let* () = assert_equal ~label:__LOC__ Stmt.typ left.target right.source in
       Checked.return
         Compile_simple.
           { prevs =
@@ -233,8 +225,10 @@ struct
   type merge_input = Rule_merge.Witness.t =
     { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
 
+  let name = "State_machine.Make(" ^ name ^ ")"
+
   module System =
-  ( val Compile_simple.compile ?wrap_domain
+  ( val Compile_simple.compile ?override_wrap_domain
           ~name:("folder(" ^ name ^ ")")
           ~branches:
             [ Rule_leaf.rule

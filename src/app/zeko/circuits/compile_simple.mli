@@ -35,7 +35,7 @@ include module type of Compile_simple_intf.Make (struct
 end)
 
 val compile :
-     ?wrap_domain:[ `N13 | `N14 | `N15 ]
+     ?override_wrap_domain:[ `N0 | `N1 | `N2 ]
   -> name:string
   -> branches:
        ( 'out_var

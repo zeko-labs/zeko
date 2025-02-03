@@ -6,9 +6,11 @@ module T = Mina_numbers.Nat.Make32 ()
 
 include (T : module type of T with module Checked := T.Checked)
 
-(* ZEKO NOTE: this always returns true to get around an annoying assertion.
-   We don't use this anyway. *)
-let in_seed_update_range ~constants:_ _ = true
+let in_seed_update_range ~(constants : Constants.t) (slot : t) =
+  let open UInt32.Infix in
+  let third_epoch = constants.slots_per_epoch / UInt32.of_int 3 in
+  assert (UInt32.(equal constants.slots_per_epoch (of_int 3 * third_epoch))) ;
+  slot < third_epoch * UInt32.of_int 2
 
 module Checked = struct
   include T.Checked

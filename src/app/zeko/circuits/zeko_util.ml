@@ -69,9 +69,8 @@ let var_to_state_generic_fine :
          zkapp state!"
     else
       let r' =
-        List.(append r (init ~f:(fun _ -> Maybe_var.none) (8 - length r)))
+        List.(append r (init ~f:(fun _ -> Maybe_var.none) (length r - 8)))
       in
-      assert (List.length r' = 8) ;
       Zkapp_state.V.of_list_exn r'
 
 let var_to_precondition_fine =
@@ -161,7 +160,7 @@ struct
   type var = { array : T.var array; length : int V.t }
 
   let typ : (var, t) Typ.t =
-    let pad : int -> T.t list -> T.t array * int =
+    let pad : int -> T.t list -> T.t array =
      fun len list ->
       let arr = Array.create ~len dummy_filler in
       let rec go idx = function
@@ -169,10 +168,9 @@ struct
             Array.set arr idx x ;
             go (idx + 1) xs
         | [] ->
-            idx
+            ()
       in
-      let real_len = go 0 list in
-      (arr, real_len)
+      go 0 list ; arr
     in
     let rec extract : int -> int -> T.t array -> T.t list =
      fun len offset array ->
@@ -185,7 +183,7 @@ struct
     let open Typ in
     array ~length:max_length T.typ * V.typ
     |> transport
-         ~there:(fun xs -> pad max_length xs)
+         ~there:(fun xs -> (pad max_length xs, 0))
          ~back:(fun (xs, len) -> extract len 0 xs)
     |> transport_var
          ~there:(fun { array; length } -> (array, length))

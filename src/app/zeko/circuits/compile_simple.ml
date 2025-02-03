@@ -1,4 +1,3 @@
-module P = Printexc
 open Core_kernel
 open Snark_params.Tick
 open Checked.Let_syntax
@@ -51,7 +50,8 @@ let time_promise : string -> (unit -> 'a Promise.t) -> 'a Promise.t =
   let start = Time.now () in
   let@ x = f () |> Promise.( >>| ) in
   let stop = Time.now () in
-  printf "%s: %s\n%!" label (Time.Span.to_string_hum (Time.diff stop start)) ;
+  printf "(time_async) %s: %s\n%!" label
+    (Time.Span.to_string_hum (Time.diff stop start)) ;
   x
 
 type ('branches, 'n_branches) branches_length =
@@ -246,7 +246,7 @@ let transform_prover :
     -> ('out_t * Pickles.Side_loaded.Proof.t) Promise.t =
  fun ?pre_prove ~branch_name ~name prover handler input ->
   let@ () =
-    time_promise @@ "(compile_simple) proved " ^ name ^ "." ^ branch_name
+    time_promise @@ "(compile_simple) proving " ^ name ^ "." ^ branch_name
   in
   (match pre_prove with Some f -> f input | None -> ()) ;
   let@ stmt, (), proof =
@@ -610,20 +610,8 @@ let rec branches_to_choices :
                       rule :: f ~self )
                 } ) )
 
-let get_first_backtrace_entry b =
-  let open P in
-  match backtrace_slots b with
-  | None ->
-      "<invalid>"
-  | Some slots -> (
-      match Slot.location slots.(1) with
-      | None ->
-          "<invalid>"
-      | Some { filename; line_number; _ } ->
-          filename ^ ":" ^ Int.to_string line_number )
-
 let compile (type out_t out_var first_input branches n_available_branches)
-    ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
+    ?(override_wrap_domain : [ `N0 | `N1 | `N2 ] option) ~(name : string)
     ~(branches :
        ( out_var
        , (first_input, branches) cons_branch
@@ -633,22 +621,20 @@ let compile (type out_t out_var first_input branches n_available_branches)
        with type out_t = out_t
         and type out_var = out_var
         and type branches = (first_input, branches) cons_branch ) =
-  printf "(compile_simple) called for circuit %s from %s\n%!" name
-    (P.get_callstack 9999 |> get_first_backtrace_entry) ;
+  printf "(compile_simple) called for circuit %s\n" name ;
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
   let (Count_branches_result tag_branches) = count_branches branches in
   let (module N_branches) = branches_length_to_module tag_branches in
   let override_wrap_domain : Pickles_base.Proofs_verified.t option =
-    match wrap_domain with
+    match override_wrap_domain with
     | None ->
-        Some N1
-        (* TODO: This should have been None, but pickles is really bad at estimating it. *)
-    | Some `N13 ->
+        None
+    | Some `N0 ->
         Some N0
-    | Some `N14 ->
+    | Some `N1 ->
         Some N1
-    | Some `N15 ->
+    | Some `N2 ->
         Some N2
   in
   match branches_to_choices ~name branches with
@@ -665,11 +651,11 @@ let compile (type out_t out_var first_input branches n_available_branches)
                        If not ok, need dependency on compilation to
                        figure out override wrap domain. *)
                 | Some N0 ->
-                    13
-                | Some N1 ->
                     14
+                | Some N1 ->
+                    15
                 | Some N2 ->
-                    15 ))
+                    16 ))
       in
       assert (Run.in_checked_computation () |> not) ;
       assert (Run.in_prover () |> not) ;
@@ -684,11 +670,6 @@ let compile (type out_t out_var first_input branches n_available_branches)
             (Genesis_constants.Constraint_constants.to_snark_keys_header
                Genesis_constants.Compiled.constraint_constants )
       in
-      (* FIXME: Don't do this. Make lazy compilation work. Fix Pickles bug. *)
-      Promise.block_on_async_exn (fun () ->
-          time_promise ("(compile_simple) compiled " ^ name) (fun () ->
-              Verification_key.of_compiled_promise tag )
-          |> Promise.map ~f:(fun _ -> ()) ) ;
       let provers = transform_provers provers in
       let r :
           (module Result
