@@ -144,8 +144,23 @@ module type Indexed_merkle_tree_intf = sig
          * [> `Y_path of path ]
          * [> `Z of Token_id.t ] )
 
-  val find_lower_entry_aid_exn : t -> Token_id.t -> Token_id.t
+  val find_lower_entry_aid : t -> Token_id.t -> Token_id.t option
 end
+
+let lowest_key = Token_id.of_field Field.zero
+
+let highest_key =
+  Token_id.of_field
+    (Field.of_string Bigint.(Field.size - of_int 1 |> to_string))
+
+let lowest_entry = { Entry.value = lowest_key; value_next = highest_key }
+
+let highest_entry = { Entry.value = highest_key; value_next = highest_key }
+
+let base_entries =
+  [ (Account_id.with_empty_key lowest_key, lowest_entry)
+  ; (Account_id.with_empty_key highest_key, highest_entry)
+  ]
 
 module Db : Indexed_merkle_tree_intf = struct
   include Database.Make (Inputs)
@@ -165,12 +180,6 @@ module Db : Indexed_merkle_tree_intf = struct
       | Error e ->
           raise (Exn.create_s ([%sexp_of: t] e))
   end
-
-  let lowest_key = Token_id.of_field Field.zero
-
-  let highest_key =
-    Token_id.of_field
-      (Field.of_string Bigint.(Field.size - of_int 1 |> to_string))
 
   let get_raw t location =
     Kvdb.get (zeko_kvdb t)
@@ -212,26 +221,23 @@ module Db : Indexed_merkle_tree_intf = struct
            Db_error.Malformed_database "Failed to parse prev location" )
     |> Db_error.ok_exn
 
-  let find_lower_entry_aid_exn t tid =
+  let find_lower_entry_aid t tid =
     let lower_entry_location = find_lower_entry_location_exn t tid in
     get t lower_entry_location
-    |> Result.of_option
-         ~error:(Db_error.Malformed_database "Could not find lower entry")
-    |> Db_error.ok_exn
-    |> fun entry -> entry.value
+    |> Option.map ~f:(fun entry -> Entry.(entry.value))
 
   let create ?directory_name ~depth () =
     let db = create ?directory_name ~depth () in
     let (_ : [ `Added | `Existed ] * Location_at_depth.t) =
       get_or_create_account db
         (Account_id.with_empty_key lowest_key)
-        { Entry.value = lowest_key; value_next = highest_key }
+        lowest_entry
       |> Or_error.ok_exn
     in
     let (_ : [ `Added | `Existed ] * Location_at_depth.t) =
       get_or_create_account db
         (Account_id.with_empty_key highest_key)
-        { Entry.value = highest_key; value_next = highest_key }
+        highest_entry
       |> Or_error.ok_exn
     in
     db
@@ -268,6 +274,77 @@ module Db : Indexed_merkle_tree_intf = struct
         Error.raise e
 end
 
+module Null = Null_ledger.Make (Inputs)
+
+module Any_ledger :
+  Merkle_ledger.Intf.Ledger.ANY
+    with module Location = Location_at_depth
+    with type account := Entry.t
+     and type key := Public_key.Compressed.t
+     and type token_id := Token_id.t
+     and type token_id_set := Token_id.Set.t
+     and type account_id := Account_id.t
+     and type account_id_set := Account_id.Set.t
+     and type hash := Hash.t =
+  Merkle_ledger.Any_ledger.Make_base (Inputs)
+
+module Mask :
+  Merkle_mask.Masking_merkle_tree_intf.S
+    with module Location = Location_at_depth
+     and module Attached.Addr = Location_at_depth.Addr
+    with type account := Entry.t
+     and type key := Public_key.Compressed.t
+     and type token_id := Token_id.t
+     and type token_id_set := Token_id.Set.t
+     and type account_id := Account_id.t
+     and type account_id_set := Account_id.Set.t
+     and type hash := Hash.t
+     and type location := Location_at_depth.t
+     and type parent := Any_ledger.M.t =
+Merkle_mask.Masking_merkle_tree.Make (struct
+  include Inputs
+  module Base = Any_ledger.M
+end)
+
+module Maskable :
+  Merkle_mask.Maskable_merkle_tree_intf.S
+    with module Location = Location_at_depth
+    with module Addr = Location_at_depth.Addr
+    with type account := Entry.t
+     and type key := Public_key.Compressed.t
+     and type token_id := Token_id.t
+     and type token_id_set := Token_id.Set.t
+     and type account_id := Account_id.t
+     and type account_id_set := Account_id.Set.t
+     and type hash := Hash.t
+     and type root_hash := Hash.t
+     and type unattached_mask := Mask.t
+     and type attached_mask := Mask.Attached.t
+     and type accumulated_t := Mask.accumulated_t
+     and type t := Any_ledger.M.t =
+Merkle_mask.Maskable_merkle_tree.Make (struct
+  include Inputs
+  module Base = Any_ledger.M
+  module Mask = Mask
+
+  let mask_to_base m = Any_ledger.cast (module Mask.Attached) m
+end)
+
+include Mask.Attached
+
+let create_ephemeral_with_base ~depth () =
+  let maskable = Null.create ~depth () in
+  let casted = Any_ledger.cast (module Null) maskable in
+  let mask = Mask.create ~depth () in
+  (casted, Maskable.register_mask casted mask)
+
+let create_ephemeral ~depth () =
+  let _base, mask = create_ephemeral_with_base ~depth () in
+  List.iter base_entries ~f:(fun (aid, entry) ->
+      let _ignore = get_or_create_account mask aid entry |> Or_error.ok_exn in
+      () ) ;
+  mask
+
 module Sparse_indexed_merkle_tree = struct
   include Sparse_ledger_lib.Sparse_ledger.Make (Hash) (Account_id) (Entry)
 
@@ -287,7 +364,8 @@ module Sparse_indexed_merkle_tree = struct
       impl
     in
     let lower_entries =
-      List.map tids ~f:(fun tid -> Db.find_lower_entry_aid_exn db tid)
+      List.map tids ~f:(fun tid -> Db.find_lower_entry_aid db tid)
+      |> List.filter_opt
     in
     let tids = List.concat [ lower_entries; tids ] in
     let locations =
@@ -375,4 +453,11 @@ module Sparse_indexed_merkle_tree = struct
       , `Y new_entry.value
       , `Y_path (path_exn t new_entry_location)
       , `Z new_entry.value_next ) )
+
+  let create_from_tids ~depth tids =
+    let db = Db.create ~depth () in
+    let sparse = of_db_subset_exn db tids in
+    List.fold tids ~init:sparse ~f:(fun sparse tid ->
+        let sparse, _ = get_or_create_entry_exn sparse tid in
+        sparse )
 end
