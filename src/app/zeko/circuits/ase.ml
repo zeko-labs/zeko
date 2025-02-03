@@ -32,7 +32,7 @@ module M_with_length = struct
 
   let extend_option_iterations = Int.pow 2 9
 
-  let override_wrap_domain = None
+  let wrap_domain = Some `N14
 end
 
 module M_without_length = struct
@@ -49,15 +49,15 @@ module M_without_length = struct
 
   let name = "action state extension without length"
 
-  let leaf_iterations = Int.pow 2 12
+  let leaf_iterations = Int.pow 2 11
 
-  let leaf_option_iterations = Int.pow 2 11
+  let leaf_option_iterations = Int.pow 2 10
 
-  let extend_iterations = Int.pow 2 11
+  let extend_iterations = Int.pow 2 10
 
-  let extend_option_iterations = Int.pow 2 10
+  let extend_option_iterations = Int.pow 2 9
 
-  let override_wrap_domain = None
+  let wrap_domain = Some `N14
 end
 
 module Made_without_length = Folder.Make (M_without_length) ()
@@ -109,6 +109,8 @@ module With_length = struct
           ~length:target.length
       in
       (({ source; target } : Stmt.var), verifier)
+
+    let make = Made_2.make
   end
 end
 
@@ -146,5 +148,7 @@ module Without_length = struct
       let source = Action_state.unsafe_var_of_field source in
       let target = Action_state.unsafe_var_of_field target in
       (({ source; target } : Stmt.var), verifier)
+
+    let make = Made_2.make
   end
 end
