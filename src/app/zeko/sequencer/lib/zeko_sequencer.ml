@@ -6,6 +6,7 @@ open Mina_base
 open Mina_ledger
 open Signature_lib
 module Imt_db = Indexed_merkle_tree.Db
+module Sparse_imt = Indexed_merkle_tree.Sparse_indexed_merkle_tree
 open Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
@@ -42,10 +43,12 @@ module Sequencer = struct
             Sparse_ledger.t
             * Signed_command.t
             * Transaction_snark.Statement.With_sok.t
+            * Zeko_prover.Prover.Account_set_witness.t
         | Zkapp_command of
             ( Transaction_witness.Zkapp_command_segment_witness.t
             * Transaction_snark.Zkapp_command_segment.Basic.t
-            * Mina_state.Snarked_ledger_state.With_sok.t )
+            * Mina_state.Snarked_ledger_state.With_sok.t
+            * Zeko_prover.Prover.Account_set_witness.t )
             list
             * Zkapp_command.t
       [@@deriving yojson]
@@ -130,9 +133,9 @@ module Sequencer = struct
         | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
             Zeko_prover.Client.transaction_snark_of_zkapp_command ctx.provers
               ~witnesses ~sequencer_pk
-        | Command_witness.Signed_command (l, c, s) ->
+        | Command_witness.Signed_command (l, c, s, imt) ->
             Zeko_prover.Client.transaction_snark_of_signed_command ctx.provers
-              ~sequencer_pk ~witness:(l, c, s)
+              ~sequencer_pk ~witness:(l, c, s, imt)
     end
 
     module Commit = struct
@@ -255,6 +258,11 @@ module Sequencer = struct
       ~state_body =
     let accounts_referenced = User_command.accounts_referenced command in
 
+    let source_imt =
+      List.map accounts_referenced ~f:(fun id ->
+          Account_id.derive_token_id ~owner:id )
+      |> Sparse_imt.of_db_subset_exn imt
+    in
     let first_pass_ledger =
       Sparse_ledger.of_ledger_subset_exn l accounts_referenced
     in
@@ -287,18 +295,18 @@ module Sequencer = struct
 
     L.Mask.Attached.commit l ;
 
-    (* Create entires in Indexed Merkle Tree *)
+    (* Create entries in Indexed Merkle Tree *)
     Mina_transaction_logic.Transaction_applied.new_accounts txn_applied
     |> List.iter ~f:(fun aid ->
            match
              Imt_db.get_or_create_entry_exn imt
                (Account_id.derive_token_id ~owner:aid)
            with
-           | `Existed, _, _, _, _, _ ->
+           | `Existed, _ ->
                printf
                  !"Warning: Account %{sexp: Account_id.t} already existed\n%!"
                  aid
-           | `Added, _, _, _, _, _ ->
+           | `Added, _ ->
                () ) ;
 
     (* Add events and actions to the memory *)
@@ -335,7 +343,11 @@ module Sequencer = struct
                            @@ Account_update.body update
                        } ) ))
     in
-    (first_pass_ledger, second_pass_ledger, txn_applied, target_ledger_hash)
+    ( first_pass_ledger
+    , second_pass_ledger
+    , txn_applied
+    , target_ledger_hash
+    , source_imt )
 
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
@@ -399,7 +411,8 @@ module Sequencer = struct
           let%bind.Deferred.Result ( first_pass_ledger
                                    , second_pass_ledger
                                    , txn_applied
-                                   , target_ledger_hash ) =
+                                   , target_ledger_hash
+                                   , source_imt ) =
             return
               (apply_user_command_without_check l t.imt t.archive command
                  ~global_slot ~state_body )
@@ -472,10 +485,30 @@ module Sequencer = struct
                     |> Or_error.ok_exn )
                   ~pending_coinbase_stack_state:pc
               in
+              let _, account_set_witness =
+                Mina_transaction_logic.Transaction_applied.new_accounts
+                  txn_applied
+                |> List.fold
+                     ~init:
+                       ( source_imt
+                       , Zeko_prover.Prover.Account_set_witness.empty source_imt
+                       )
+                     ~f:(fun (imt, witness) aid ->
+                       let imt, w =
+                         Sparse_imt.get_or_create_entry_exn imt
+                           (Account_id.derive_token_id ~owner:aid)
+                       in
+                       ( imt
+                       , Zeko_prover.Prover.Account_set_witness.add witness w )
+                       )
+              in
               Result.return
                 ( txn_applied
                 , Merger.Command_witness.Signed_command
-                    (first_pass_ledger, signed_command, statement) )
+                    ( first_pass_ledger
+                    , signed_command
+                    , statement
+                    , account_set_witness ) )
           | Zkapp_command zkapp_command ->
               let witnesses =
                 Transaction_snark.zkapp_command_witnesses_exn
@@ -492,6 +525,40 @@ module Sequencer = struct
                         (Sparse_ledger.merkle_root second_pass_ledger)
                     , zkapp_command )
                   ]
+              in
+              let witnesses =
+                List.map witnesses ~f:(fun (witness, spec, txn_snark) ->
+                    let account_updates =
+                      Zkapp_command.Call_forest.to_account_updates
+                        witness.local_state_init.stack_frame.calls
+                    in
+                    let aids =
+                      match (spec, account_updates) with
+                      | Proved, first :: _ | Opt_signed, first :: _ ->
+                          [ Account_update.account_id first ]
+                      | Opt_signed_opt_signed, first :: second :: _ ->
+                          [ Account_update.account_id first
+                          ; Account_update.account_id second
+                          ]
+                      | _ ->
+                          failwith "Failed to pop stack frame based on spec"
+                    in
+                    let _, account_set_witness =
+                      List.fold aids
+                        ~init:
+                          ( source_imt
+                          , Zeko_prover.Prover.Account_set_witness.empty
+                              source_imt )
+                        ~f:(fun (imt, witness) aid ->
+                          let imt, w =
+                            Sparse_imt.get_or_create_entry_exn imt
+                              (Account_id.derive_token_id ~owner:aid)
+                          in
+                          ( imt
+                          , Zeko_prover.Prover.Account_set_witness.add witness w
+                          ) )
+                    in
+                    (witness, spec, txn_snark, account_set_witness) )
               in
               Result.return
                 ( txn_applied
@@ -651,7 +718,7 @@ module Sequencer = struct
                 Mina_state.Protocol_state.body
                   Zeko_constants.compile_time_genesis_state
               in
-              let _, _, _, _ =
+              let _, _, _, _, _ =
                 apply_user_command_without_check mask t.imt t.archive command
                   ~global_slot ~state_body
                 |> Or_error.ok_exn

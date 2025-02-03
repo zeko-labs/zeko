@@ -16,7 +16,7 @@ struct
     type t = { key : Key.t; next_key : Key.t } [@@deriving snarky]
   end
 
-  type t = F.t [@@deriving yojson]
+  type t = F.t [@@deriving yojson, sexp]
 
   type var = F.var
 

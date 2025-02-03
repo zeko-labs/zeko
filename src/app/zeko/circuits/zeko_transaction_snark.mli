@@ -40,7 +40,7 @@ module Local_state : sig
 end
 
 module Account_set : sig
-  type t [@@deriving yojson]
+  type t = F.t [@@deriving yojson, sexp]
 
   type var
 
