@@ -53,21 +53,16 @@ struct
   module Rule_bridge_disable = Rule_bridge_disable.Make (Inputs)
   module Rule_bridge_enable = Rule_bridge_enable.Make (Inputs)
 
-  module System_L1 =
-  ( val Compile_simple.compile ~name:"bridge rules for mina l1"
+  module System =
+  ( val Compile_simple.compile ~name:"bridge rules for mina"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
           ~branches:
-            [ Rule_bridge_finalize_cancelled_deposit.rule
+            [ Rule_bridge_finalize_deposit.rule
+            ; Rule_bridge_finalize_cancelled_deposit.rule
             ; Rule_bridge_finalize_withdrawal.rule
             ; Rule_bridge_disable.rule
             ; Rule_bridge_enable.rule
             ]
-          () )
-
-  module System_L2 =
-  ( val Compile_simple.compile ~name:"bridge rules for mina l2"
-          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:[ Rule_bridge_finalize_deposit.rule ]
           () )
 end
 
@@ -99,7 +94,7 @@ struct
 
         let token_owner_l1 = Some Inputs.token_owner_l1
 
-        module Deposit_params = Deposit_params_custom
+        module Deposit_params = Deposit_params_base
       end)
       ()
 
@@ -110,8 +105,8 @@ struct
 
     let token_owner_l2 = Some Inputs.token_owner_l2
 
-    module Deposit_params = Deposit_params_custom
-    module Withdrawal_params = Withdrawal_params_custom
+    module Deposit_params = Deposit_params_base
+    module Withdrawal_params = Withdrawal_params_base
     module Check_accepted = Check_accepted
   end
 
@@ -126,20 +121,15 @@ struct
   module Rule_bridge_disable = Rule_bridge_disable.Make (Inputs)
   module Rule_bridge_enable = Rule_bridge_enable.Make (Inputs)
 
-  module System_L1 =
-  ( val Compile_simple.compile ~name:"bridge rules for custom l1"
+  module System =
+  ( val Compile_simple.compile ~name:"bridge rules for mina"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
           ~branches:
-            [ Rule_bridge_finalize_cancelled_deposit.rule
+            [ Rule_bridge_finalize_deposit.rule
+            ; Rule_bridge_finalize_cancelled_deposit.rule
             ; Rule_bridge_finalize_withdrawal.rule
             ; Rule_bridge_disable.rule
             ; Rule_bridge_enable.rule
             ]
-          () )
-
-  module System_L2 =
-  ( val Compile_simple.compile ~name:"bridge rules for custom l2"
-          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:[ Rule_bridge_finalize_deposit.rule ]
           () )
 end
