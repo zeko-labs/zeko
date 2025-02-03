@@ -39,7 +39,7 @@ val var_to_hash :
   init:string -> ('var, 'value) Typ.t -> 'var -> Field.Var.t Checked.t
 
 module F : sig
-  type t = Pasta_bindings.Fp.t [@@deriving yojson]
+  type t = Pasta_bindings.Fp.t [@@deriving yojson, sexp]
 
   type var = Field.Var.t
 

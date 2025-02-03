@@ -27,7 +27,7 @@ module Make (Inputs : sig
 end) : sig
   open Inputs
 
-  type t [@@deriving yojson]
+  type t = F.t [@@deriving yojson, sexp]
 
   type var
 

@@ -2,6 +2,7 @@
  (name zeko_prover)
  (libraries
   zeko_circuits
+  indexed_merkle_tree
   zeko_constants
   mina_lib
   mina_ledger

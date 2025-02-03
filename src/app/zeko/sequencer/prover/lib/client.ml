@@ -107,10 +107,11 @@ let rec send ?(proving_timeout = 10.) ?(wait_for_prover_timeout = 600.)
       else failwith "Timeout while proving"
 
 let transaction_snark_of_single_signed_command ?proving_timeout t ~source_ledger
-    ~source_acc_set ~sequencer_pk ~command ~sparse_ledger =
+    ~sequencer_pk ~command ~sparse_ledger ~account_set_witness =
   send ?proving_timeout t
     (Prover.Input.Txn_snark_single_signed_command
-       (source_ledger, source_acc_set, sequencer_pk, command, sparse_ledger) )
+       (source_ledger, sequencer_pk, command, sparse_ledger, account_set_witness)
+    )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
       ({ stmt; proof } : Zeko_transaction_snark.T.t)
@@ -120,7 +121,7 @@ let transaction_snark_of_single_signed_command ?proving_timeout t ~source_ledger
 let transaction_snark_of_single_unproved_zkapp_command ?proving_timeout t
     ~source_ledger ~target_ledger ~connecting_ledger ~source_local_state
     ~target_local_state ~fee_excess ~supply_decrease ~txn_snark_witness
-    ~sequencer ~source_acc_set ~shift_action_state =
+    ~sequencer ~account_set_witness ~shift_action_state =
   send ?proving_timeout t
     (Prover.Input.Txn_snark_single_unproved_zkapp_command
        ( source_ledger
@@ -132,8 +133,8 @@ let transaction_snark_of_single_unproved_zkapp_command ?proving_timeout t
        , supply_decrease
        , txn_snark_witness
        , sequencer
-       , source_acc_set
-       , shift_action_state ) )
+       , shift_action_state
+       , account_set_witness ) )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
       ({ stmt; proof } : Zeko_transaction_snark.T.t)
@@ -143,8 +144,8 @@ let transaction_snark_of_single_unproved_zkapp_command ?proving_timeout t
 let transaction_snark_of_double_unproved_zkapp_command ?proving_timeout t
     ~source_ledger ~target_ledger ~connecting_ledger ~source_local_state
     ~target_local_state ~fee_excess ~supply_decrease ~txn_snark_witness
-    ~sequencer ~source_acc_set ~shift_action_state_first
-    ~shift_action_state_second =
+    ~sequencer ~shift_action_state_first ~shift_action_state_second
+    ~account_set_witness =
   send ?proving_timeout t
     (Prover.Input.Txn_snark_double_unproved_zkapp_command
        ( source_ledger
@@ -156,9 +157,9 @@ let transaction_snark_of_double_unproved_zkapp_command ?proving_timeout t
        , supply_decrease
        , txn_snark_witness
        , sequencer
-       , source_acc_set
        , shift_action_state_first
-       , shift_action_state_second ) )
+       , shift_action_state_second
+       , account_set_witness ) )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
       ({ stmt; proof } : Zeko_transaction_snark.T.t)
@@ -168,7 +169,7 @@ let transaction_snark_of_double_unproved_zkapp_command ?proving_timeout t
 let transaction_snark_of_single_proved_zkapp_command ?proving_timeout t
     ~source_ledger ~target_ledger ~connecting_ledger ~source_local_state
     ~target_local_state ~fee_excess ~supply_decrease ~txn_snark_witness
-    ~sequencer ~source_acc_set ~zkapp_vk ~zkapp_proof ~shift_action_state =
+    ~sequencer ~zkapp_vk ~zkapp_proof ~shift_action_state ~account_set_witness =
   send ?proving_timeout t
     (Prover.Input.Txn_snark_single_proved_zkapp_command
        ( source_ledger
@@ -180,10 +181,10 @@ let transaction_snark_of_single_proved_zkapp_command ?proving_timeout t
        , supply_decrease
        , txn_snark_witness
        , sequencer
-       , source_acc_set
        , zkapp_vk
        , zkapp_proof
-       , shift_action_state ) )
+       , shift_action_state
+       , account_set_witness ) )
   >>| function
   | Prover.Output.Zeko_transaction_snark (stmt, proof) ->
       ({ stmt; proof } : Zeko_transaction_snark.T.t)
@@ -205,7 +206,8 @@ let transaction_snark_of_segment ?proving_timeout t ~sequencer_pk
     ~(witness :
        Transaction_witness.Zkapp_command_segment_witness.t
        * Transaction_snark.Zkapp_command_segment.Basic.t
-       * Mina_state.Snarked_ledger_state.With_sok.t ) =
+       * Mina_state.Snarked_ledger_state.With_sok.t
+       * Prover.Account_set_witness.t ) =
   let mina_local_state_to_zeko
       (t :
         Mina_transaction_logic.Zkapp_command_logic.Local_state.Value.Stable.V1.t
@@ -263,7 +265,7 @@ let transaction_snark_of_segment ?proving_timeout t ~sequencer_pk
     (pi, vk)
   in
   match witness with
-  | witness, Opt_signed, stmt ->
+  | witness, Opt_signed, stmt, account_set_witness ->
       transaction_snark_of_single_unproved_zkapp_command ?proving_timeout t
         ~source_ledger:stmt.source.first_pass_ledger
         ~target_ledger:stmt.target.second_pass_ledger
@@ -273,9 +275,8 @@ let transaction_snark_of_segment ?proving_timeout t ~sequencer_pk
         ~fee_excess:stmt.fee_excess.fee_excess_l
         ~supply_decrease:stmt.supply_increase.magnitude
         ~txn_snark_witness:witness ~sequencer:sequencer_pk
-        ~source_acc_set:(failwith "Not implemented")
-        ~shift_action_state:true
-  | witness, Opt_signed_opt_signed, stmt ->
+        ~shift_action_state:true ~account_set_witness
+  | witness, Opt_signed_opt_signed, stmt, account_set_witness ->
       transaction_snark_of_double_unproved_zkapp_command ?proving_timeout t
         ~source_ledger:stmt.source.first_pass_ledger
         ~target_ledger:stmt.target.second_pass_ledger
@@ -285,9 +286,9 @@ let transaction_snark_of_segment ?proving_timeout t ~sequencer_pk
         ~fee_excess:stmt.fee_excess.fee_excess_l
         ~supply_decrease:stmt.supply_increase.magnitude
         ~txn_snark_witness:witness ~sequencer:sequencer_pk
-        ~source_acc_set:(failwith "Not implemented")
         ~shift_action_state_first:true ~shift_action_state_second:true
-  | witness, Proved, stmt -> (
+        ~account_set_witness
+  | witness, Proved, stmt, account_set_witness -> (
       match snapp_proof_data ~witness with
       | None ->
           failwith "of_zkapp_command_segment: Expected exactly one proof"
@@ -302,17 +303,16 @@ let transaction_snark_of_segment ?proving_timeout t ~sequencer_pk
               (mina_local_state_to_zeko stmt.target.local_state)
             ~fee_excess:stmt.fee_excess.fee_excess_l
             ~supply_decrease:stmt.supply_increase.magnitude
-            ~txn_snark_witness:witness ~sequencer:sequencer_pk
-            ~source_acc_set:(failwith "Not implemented")
-            ~zkapp_vk:v.data
+            ~txn_snark_witness:witness ~sequencer:sequencer_pk ~zkapp_vk:v.data
             ~zkapp_proof:(Compile_simple.Proof.of_pickles p)
-            ~shift_action_state:true )
+            ~shift_action_state:true ~account_set_witness )
 
 let transaction_snark_of_zkapp_command ?proving_timeout t ~sequencer_pk
     ~(witnesses :
        ( Transaction_witness.Zkapp_command_segment_witness.t
        * Transaction_snark.Zkapp_command_segment.Basic.t
-       * Mina_state.Snarked_ledger_state.With_sok.t )
+       * Mina_state.Snarked_ledger_state.With_sok.t
+       * Prover.Account_set_witness.t )
        list ) =
   match witnesses with
   | [] ->
@@ -335,12 +335,12 @@ let transaction_snark_of_signed_command ?proving_timeout t ~sequencer_pk
     ~(witness :
        Mina_ledger.Sparse_ledger.t
        * Signed_command.t
-       * Transaction_snark.Statement.With_sok.t ) =
-  let sparse_ledger, command, stmt = witness in
+       * Transaction_snark.Statement.With_sok.t
+       * Prover.Account_set_witness.t ) =
+  let sparse_ledger, command, stmt, account_set_witness = witness in
   transaction_snark_of_single_signed_command ?proving_timeout t
-    ~source_ledger:stmt.source.first_pass_ledger
-    ~source_acc_set:(failwith "Not implemented")
-    ~sequencer_pk ~command ~sparse_ledger
+    ~source_ledger:stmt.source.first_pass_ledger ~sequencer_pk ~command
+    ~sparse_ledger ~account_set_witness
 
 let inner_sync ?proving_timeout t ~public_key ~ase =
   send ?proving_timeout t (Prover.Input.Inner_sync (public_key, ase))
