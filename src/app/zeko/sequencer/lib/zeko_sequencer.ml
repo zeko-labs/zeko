@@ -7,7 +7,7 @@ open Mina_ledger
 open Signature_lib
 module Imt_db = Indexed_merkle_tree.Db
 module Sparse_imt = Indexed_merkle_tree.Sparse_indexed_merkle_tree
-open Zeko_circuits
+module C = Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
 
@@ -114,7 +114,7 @@ module Sequencer = struct
     end
 
     module Merge = struct
-      type t = Zeko_transaction_snark.T.t
+      type t = C.Zeko_transaction_snark.T.t
 
       let process ({ provers; _ } : Context.t) a b =
         Zeko_prover.Client.transaction_snark_of_merge provers ~left:a ~right:b
@@ -126,7 +126,7 @@ module Sequencer = struct
       let process (ctx : Context.t) command_witness =
         Context.add_command ctx command_witness ;
         let sequencer_pk =
-          Zeko_util.Even_PC.create_exn
+          C.Zeko_util.Even_PC.create_exn
           @@ Public_key.compress ctx.config.signer.public_key
         in
         match command_witness with
@@ -568,7 +568,7 @@ module Sequencer = struct
   let update_inner_account t =
     let old_deposits_state, old_deposits_length =
       let s = Utils.get_inner_deposits_state_exn (L.of_database t.db) in
-      Rollup_state.Outer_action_state.With_length.(raw s, length s)
+      C.Rollup_state.Outer_action_state.With_length.(raw s, length s)
     in
     let%bind all_new_actions =
       Gql_client.fetch_actions t.config.archive_uri
@@ -593,11 +593,11 @@ module Sequencer = struct
           ~public_key:(failwith "Not implemented: near 123456789?")
           ~ase:
             ( List.map processed_new_actions ~f:Account_update.Actions.hash
-            , ( Rollup_state.Outer_action_state.With_length.
+            , ( C.Rollup_state.Outer_action_state.With_length.
                   { action_state = old_deposits_state
                   ; length = old_deposits_length
                   }
-                : Ase.With_length.Stmt.t ) )
+                : C.Ase.With_length.Stmt.t ) )
       in
       let fee = Currency.Fee.of_mina_int_exn 0 in
       let command : Zkapp_command.t =
@@ -709,6 +709,14 @@ module Sequencer = struct
               List.iter changed_accounts ~f:(fun (index, account) ->
                   L.set_at_index_exn mask index account ) ;
               L.Mask.Attached.commit mask ;
+              (* Add to Indexed Merkle Tree *)
+              List.iter changed_accounts ~f:(fun (_, account) ->
+                  let aid = Account.identifier account in
+                  let _w =
+                    Imt_db.get_or_create_entry_exn t.imt
+                      (Account_id.derive_token_id ~owner:aid)
+                  in
+                  () ) ;
               return ()
           | Some (command, _) ->
               (* Apply command *)
@@ -872,8 +880,11 @@ let%test_module "Sequencer tests" =
             ~num_transactions:number_of_transactions ()
         in
 
+        let initial_inner_account =
+          Thread_safe.block_on_async_exn Deploy.Z.Inner.initial_account
+        in
         let genesis_accounts =
-          (Zeko_constants.inner_account_id, Deploy.Z.Inner.initial_account)
+          (Zeko_constants.inner_account_id, initial_inner_account)
           :: ( Array.map init_ledger ~f:(fun (keypair, balance) ->
                    let pk =
                      Signature_lib.Public_key.compress keypair.public_key
@@ -894,6 +905,12 @@ let%test_module "Sequencer tests" =
         in
         List.iter genesis_accounts ~f:(fun (aid, acc) ->
             L.create_new_account_exn ephemeral_ledger aid acc ) ;
+        let account_set_hash =
+          Sparse_imt.create_from_tids ~depth:constraint_constants.ledger_depth
+            (List.map genesis_accounts ~f:(fun (aid, _) ->
+                 Account_id.derive_token_id ~owner:aid ) )
+          |> Sparse_imt.merkle_root
+        in
 
         (* Post genesis batch *)
         Thread_safe.block_on_async_exn (fun () ->
@@ -906,6 +923,11 @@ let%test_module "Sequencer tests" =
             | Error e ->
                 Error.raise e ) ;
 
+        let stub_pk =
+          Public_key.compress signer.public_key
+          |> C.Zeko_util.Even_PC.create_exn
+        in
+
         (* Deploy *)
         Thread_safe.block_on_async_exn (fun () ->
             ( print_endline
@@ -916,10 +938,12 @@ let%test_module "Sequencer tests" =
               Gql_client.infer_nonce gql_uri
                 (Public_key.compress signer.public_key)
             in
-            let command =
+            let%bind command =
               Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
                 ~fee:(Currency.Fee.of_mina_int_exn 1)
                 ~nonce ~initial_ledger:ephemeral_ledger ~constraint_constants
+                ~account_set_hash ~pause_key:stub_pk ~sequencer:stub_pk
+                ~da_key:stub_pk
             in
             let%bind _ = Gql_client.send_zkapp gql_uri command in
             let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
