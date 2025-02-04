@@ -34,7 +34,7 @@ module State = struct
     in
     { provers = connections; next = 0 }
 
-  let rec next_prover (t : t) =
+  let rec next_prover t =
     let rotate l n =
       let left, right = List.split_n l n in
       right @ left
@@ -46,7 +46,9 @@ module State = struct
              match !status with `Available -> true | `In_use -> false )
     with
     | Some prover ->
-        return prover
+        let status = trd3 prover in
+        status := `In_use ;
+        return (prover, fun () -> status := `Available)
     | None ->
         let%bind () = Clock.after (Time.Span.of_sec 1.) in
         next_prover t
@@ -56,7 +58,7 @@ end
    If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
 let rec send ?(proving_timeout = 10.) ?(wait_for_prover_timeout = 600.)
     ?(attempts = 5) t (input : Prover.Input.t) : Prover.Output.t Deferred.t =
-  let%bind connection_ref, where_to_connect, status =
+  let%bind (connection_ref, where_to_connect, status), release_prover =
     match%bind
       Async.with_timeout
         (Time.Span.of_sec wait_for_prover_timeout)
@@ -67,7 +69,6 @@ let rec send ?(proving_timeout = 10.) ?(wait_for_prover_timeout = 600.)
     | `Timeout ->
         failwith "Timeout while getting prover"
   in
-  status := `In_use ;
   match%bind
     Async.with_timeout
       (Time.Span.of_sec proving_timeout)
@@ -93,12 +94,11 @@ let rec send ?(proving_timeout = 10.) ?(wait_for_prover_timeout = 600.)
                   failwith "Error parsing response" )
           | None ->
               failwith "Timeout while proving" ) )
+    >>| fun r -> release_prover () ; r
   with
   | `Result (`Ok r) ->
-      status := `Available ;
       return r
   | `Timeout | `Result `Connection_error ->
-      status := `Available ;
       printf "Timeout while proving %f, retrying attempts remaining: %d\n%!"
         proving_timeout attempts ;
       if attempts > 0 then (
