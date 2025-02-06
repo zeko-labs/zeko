@@ -44,13 +44,13 @@ struct
   module Ase_outer_inst = Ase.Without_length.Make (struct
     module Action_state = Rollup_state.Outer_action_state
 
-    let get_iterations = Int.pow 2 14
+    let get_iterations = Int.pow 2 10
   end)
 
   module Ase_inner_inst = Ase.With_length.Make (struct
     module Action_state = Rollup_state.Inner_action_state
 
-    let get_iterations = Int.pow 2 14
+    let get_iterations = Int.pow 2 10
   end)
 
   module Witness = struct

@@ -46,7 +46,7 @@ module Make (Inputs : sig
   val name : string
 
   (** The size of the circuit. Set to None to deduce automatically via default Pickles mechanism. *)
-  val override_wrap_domain : [ `N0 | `N1 | `N2 ] option
+  val wrap_domain : [ `N13 | `N14 | `N15 ] option
 end)
 () : sig
   open Inputs

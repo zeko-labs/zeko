@@ -327,6 +327,18 @@ module type Full = sig
         -> Statement.With_sok.var
         -> Zkapp_statement.Checked.t option
            * [> `Must_verify of Tick.Boolean.var ]
+
+      module Single (_ : sig
+        val constraint_constants : Genesis_constants.Constraint_constants.t
+
+        val spec : Zkapp_command_segment.Spec.single
+
+        val set_zkapp_input : Zkapp_statement.Checked.t -> unit
+
+        val set_must_verify : Tick.Boolean.var -> unit
+      end) : sig
+        module Inputs : Mina_transaction_logic.Zkapp_command_logic.Inputs_intf
+      end
     end
   end
 
