@@ -54,7 +54,7 @@ end
 
 (* Get the reference of next available prover.
    If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
-let rec send ?(proving_timeout = 10.) ?(wait_for_prover_timeout = 600.)
+let rec send ?(proving_timeout = 20.) ?(wait_for_prover_timeout = 600.)
     ?(attempts = 5) t (input : Prover.Input.t) : Prover.Output.t Deferred.t =
   let%bind (connection_ref, where_to_connect, status), release_prover =
     match%bind
