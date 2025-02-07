@@ -80,7 +80,7 @@ let rec send ?(proving_timeout = 20.) ?(wait_for_prover_timeout = 600.)
               Prover.Input.to_yojson input
               |> Yojson.Safe.to_string |> Writer.write_line w
             in
-            Reader.really_read_line ~wait_time:(Time.Span.of_sec 60.) r
+            Reader.really_read_line ~wait_time:(Time.Span.of_sec 1.) r
           with
           | Some response -> (
               match
