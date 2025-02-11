@@ -25,11 +25,34 @@ module State = struct
     ; mutable next : int
     }
 
-  let create provers =
+  let create ?(ping_interval = 10.) ?(ping_timeout = 10.) provers =
     let connections =
       List.map provers ~f:(fun x ->
           (ref (lazy (try_connect x)), x, ref `Available) )
     in
+    let rec ping_loop () =
+      let%bind () = after (Time.Span.of_sec ping_interval) in
+      Deferred.List.iter ~how:`Parallel connections
+        ~f:(fun (connection_ref, _, status) ->
+          if Lazy.is_val !connection_ref && phys_equal !status `Available then (
+            status := `In_use ;
+            match%bind Lazy.force !connection_ref with
+            | Error _ ->
+                return ()
+            | Ok (_, r, w) ->
+                let () =
+                  Prover.Input.to_yojson Prover.Input.Ping
+                  |> Yojson.Safe.to_string |> Writer.write_line w
+                in
+                let%bind _result =
+                  Reader.really_read_line
+                    ~wait_time:(Time.Span.of_sec ping_timeout)
+                    r
+                in
+                return (status := `Available) )
+          else return () )
+    in
+    don't_wait_for @@ ping_loop () ;
     { provers = connections; next = 0 }
 
   let rec next_prover (t : t) =

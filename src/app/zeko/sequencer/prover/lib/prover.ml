@@ -30,6 +30,7 @@ let dummy_sok =
 (* Unfortunately yojson doesn't support GADTs so it can't be one type, or maybe I'm just bad *)
 module Input = struct
   type t =
+    | Ping
     | Wrapper_wrap of Transaction_snark.t
     | Wrapper_merge of (Zkapps_rollup.t * Zkapps_rollup.t)
     | Transaction_snark_of_signed_command of
@@ -71,6 +72,7 @@ let asd = Ledger_hash.to_yojson
 
 module Output = struct
   type t =
+    | Pong
     | Wrapper_wrap of Zkapps_rollup.t
     | Wrapper_merge of Zkapps_rollup.t
     | Transaction_snark_of_signed_command of Transaction_snark.t
@@ -87,6 +89,8 @@ end
 
 module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
   let prove ~logger : Input.t -> Output.t Deferred.t = function
+    | Ping ->
+        return Output.Pong
     | Wrapper_wrap txn_snark ->
         time ~logger "Wrapper.wrap" (M.Wrapper.wrap txn_snark)
         >>| fun x -> Output.Wrapper_wrap x
@@ -148,25 +152,32 @@ module Make (T : Transaction_snark.S) (M : Zkapps_rollup.S) = struct
          ~on_handler_error:`Ignore (fun s r w ->
            [%log info] "Accepted connection from %s"
              (Socket.Address.Inet.to_string s) ;
-           let%bind () =
-             Pipe.transfer' ~max_queue_length:1 (Reader.pipe r) (Writer.pipe w)
-               ~f:
-                 (Deferred.Queue.map ~how:`Sequential ~f:(fun input ->
-                      Yojson.Safe.from_string input
-                      |> Input.of_yojson
-                      |> function
+           let rec loop () =
+             match%bind
+               Reader.really_read_line ~wait_time:(Time.Span.of_sec 30.) r
+             with
+             | None ->
+                 return ()
+             | Some input ->
+                 Yojson.Safe.from_string input
+                 |> Input.of_yojson
+                 |> (function
                       | Ok input -> (
                           match%bind
                             try_with (fun () -> prove ~logger input)
                           with
                           | Ok output ->
-                              Output.to_yojson output |> Yojson.Safe.to_string
-                              |> fun s -> String.concat [ s; "\n" ] |> return
+                              return
+                                ( Yojson.Safe.to_string
+                                @@ Output.to_yojson output )
                           | Error e ->
                               return (Exn.to_string e) )
                       | Error e ->
-                          return e ) )
+                          return e )
+                 >>| Writer.write_line w
+                 >>= fun () -> loop ()
            in
+           let%bind () = loop () in
            return
              ([%log info] "Closed connection from %s"
                 (Socket.Address.Inet.to_string s) ) ) ;
