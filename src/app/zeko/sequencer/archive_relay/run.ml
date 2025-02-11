@@ -35,8 +35,7 @@ let time ~logger label (d : 'a Deferred.t) =
   let start = Time.now () in
   let%bind x = d in
   let stop = Time.now () in
-  [%log info] "%s: %s\n%!" label
-    (Time.Span.to_string_hum @@ Time.diff stop start) ;
+  [%log info] "%s: %s" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
 module State = struct
@@ -102,8 +101,8 @@ let sync_archive (t : t) ~hash =
   Da_layer.Client.map_diffs ~logger ~config:t.da_config
     ~depth:constraint_constants.ledger_depth
     ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.db))
-    ~target_ledger_hash:hash ~print_progress:true
-    ~f:(fun diff ->
+    ~target_ledger_hash:hash
+    ~f:(fun ~current_chunk ~chunks_length diff ->
       let ledger = Ledger.of_database t.db in
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
@@ -146,9 +145,12 @@ let sync_archive (t : t) ~hash =
               (Archive_lib.Diff.Transition_frontier diff)
           with
           | Ok () ->
-              return
-              @@ [%log info] "Synced diff to archive with hash: %s\n%!"
-                   (Ledger_hash.to_decimal_string @@ Ledger.merkle_root ledger)
+              [%log info]
+                "Synced diff to archive with hash: %s, progress %.0f%%"
+                (Ledger_hash.to_decimal_string @@ Ledger.merkle_root ledger)
+                ( Float.of_int current_chunk /. Float.of_int chunks_length
+                *. 100.0 ) ;
+              return ()
           | Error e ->
               raise (Error.to_exn e) ) )
   >>| Result.map ~f:ignore
@@ -210,7 +212,7 @@ let sync (t : t) () =
       let%bind ledger_hash =
         match%bind fetch_current_ledger_hash ~zeko_uri:t.zeko_uri () with
         | Ok hash ->
-            [%log info] "Fetched ledger hash: %s\n%!"
+            [%log info] "Fetched ledger hash: %s"
               (Ledger_hash.to_decimal_string hash) ;
             return hash
         | Error e ->
@@ -228,7 +230,7 @@ let rec run (t : t) ~sync_period () =
             after (Time.Span.of_sec sync_period) )
     | Error e ->
         (* ledger_hash_invalidated *)
-        [%log error] "Error syncing: %s\n%!" (Error.to_string_hum e) ;
+        [%log error] "Error syncing: %s" (Error.to_string_hum e) ;
         [%log warn] "Invalidating ledger cache" ;
         reset_ledger_cache t ()
   in
@@ -249,7 +251,7 @@ let () =
           flag "--archive-port" (required int) ~doc:"Archive node port"
         and sync_period =
           flag "--sync-period"
-            (optional_with_default 60. float)
+            (optional_with_default 30. float)
             ~doc:"Sync period"
         and ledger_cache =
           flag "--ledger-cache"
