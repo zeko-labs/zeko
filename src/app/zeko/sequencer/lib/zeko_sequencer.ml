@@ -173,9 +173,8 @@ module Sequencer = struct
     let prove_signed_command provers ~sparse_ledger ~user_command_in_block
         ~statement =
       let%bind txn_snark =
-        Utils.print_time "Transaction_snark.of_signed_command"
-          (Zeko_prover.Client.transaction_snark_of_signed_command provers
-             ~statement ~user_command_in_block ~sparse_ledger )
+        Zeko_prover.Client.transaction_snark_of_signed_command provers
+          ~statement ~user_command_in_block ~sparse_ledger
       in
       wrap provers txn_snark
 
@@ -186,23 +185,18 @@ module Sequencer = struct
             failwith "No witnesses"
         | (witness, spec, statement) :: rest ->
             let%bind p1 =
-              Utils.print_time "Transaction_snark.of_zkapp_command_segment"
-                (Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
-                   provers ~statement ~witness ~spec )
+              Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
+                provers ~statement ~witness ~spec
             in
             Deferred.List.fold ~init:p1 rest
               ~f:(fun acc (witness, spec, statement) ->
                 let%bind prev = return acc in
                 let%bind curr =
-                  Utils.print_time "Transaction_snark.of_zkapp_command_segment"
-                    (Zeko_prover.Client
-                     .transaction_snark_of_zkapp_command_segment provers
-                       ~statement ~witness ~spec )
+                  Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
+                    provers ~statement ~witness ~spec
                 in
                 let%bind merged =
-                  Utils.print_time "Transaction_snark.merge"
-                    (Zeko_prover.Client.transaction_snark_merge provers curr
-                       prev )
+                  Zeko_prover.Client.transaction_snark_merge provers curr prev
                 in
                 return merged )
       in
@@ -224,37 +218,11 @@ module Sequencer = struct
           }
       end
 
-      module Db = struct
-        module Key_value = struct
-          type _ t = Context_state : (unit * State.t) t
+      module Db = Kvdb_base.Make_singleton (struct
+        type t = State.t [@@deriving yojson]
 
-          let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
-           fun pair_type key ->
-            match pair_type with
-            | Context_state ->
-                Bigstring.of_string "context_state"
-
-          let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
-           fun pair_type value ->
-            match pair_type with
-            | Context_state ->
-                Bigstring.of_string @@ Yojson.Safe.to_string
-                @@ State.to_yojson value
-
-          let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
-            let ok_exn x =
-              let open Ppx_deriving_yojson_runtime.Result in
-              match x with Ok x -> x | Error e -> failwith e
-            in
-            fun pair_type data ->
-              match pair_type with
-              | Context_state ->
-                  ok_exn @@ State.of_yojson @@ Yojson.Safe.from_string
-                  @@ Bigstring.to_string data
-        end
-
-        include Kvdb_base.Make (Key_value)
-      end
+        let key = "context_state"
+      end)
 
       type t =
         { provers : Zeko_prover.Client.State.t
@@ -265,15 +233,10 @@ module Sequencer = struct
         ; state : State.t
         }
 
-      let save_state t =
-        Db.set t.kvdb Db.Key_value.Context_state ~key:() ~data:t.state
+      let save_state t = Db.set t.kvdb ~data:t.state
 
       let load_state kvdb =
-        match Db.get kvdb Db.Key_value.Context_state ~key:() with
-        | Some state ->
-            state
-        | None ->
-            State.create ()
+        match Db.get kvdb with Some state -> state | None -> State.create ()
 
       let reset_state t ledger =
         t.state.commands <- [] ;
