@@ -256,18 +256,18 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
                  ~source_ledger_hash:(`Specific source)
                  ~target_ledger_hash:target () ) ) )
 
-let map_diffs ~logger ~depth ~config ~source_ledger_hash ~target_ledger_hash
-    ~print_progress ~f =
+let map_diffs ~logger ~depth ~config ~source_ledger_hash ~target_ledger_hash ~f
+    =
   let%bind.Deferred.Result lazy_chunks =
     get_lazy_diffs_chunks ~logger ~depth ~config ~source_ledger_hash
       ~target_ledger_hash ()
   in
   let l = List.length lazy_chunks in
   Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
-      let progress = Float.of_int i /. Float.of_int l in
-      if print_progress then Zeko_util.progress_bar progress ;
       let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in
-      Deferred.List.map ~how:`Sequential diffs ~f >>| Result.return )
+      Deferred.List.map ~how:`Sequential diffs ~f:(fun diff ->
+          f ~current_chunk:i ~chunks_length:l diff )
+      >>| Result.return )
   >>| Result.all >>| Result.map ~f:List.join
 
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)

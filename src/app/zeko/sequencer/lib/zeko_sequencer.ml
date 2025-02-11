@@ -761,12 +761,16 @@ module Sequencer = struct
     let%bind () =
       Da_layer.Client.map_diffs ~logger ~config:da_config
         ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
-        ~print_progress:true ~target_ledger_hash:committed_ledger_hash
-        ~f:(fun diff ->
+        ~target_ledger_hash:committed_ledger_hash
+        ~f:(fun ~current_chunk ~chunks_length diff ->
           assert (
             Ledger_hash.equal
               (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
               (get_root t) ) ;
+          [%log info] "Applying diff with hash %s, progress: %.0f%%"
+            (Ledger_hash.to_decimal_string
+               (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) )
+            (Float.of_int current_chunk /. Float.of_int chunks_length *. 100.0) ;
           match
             Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
           with
