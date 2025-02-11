@@ -3,11 +3,14 @@ open Async
 open Signature_lib
 open Mina_base
 open Mina_ledger
+open Cli_lib
 
 let run_node =
   ( "run-node"
   , Command.async ~summary:"Run da layer node"
-      (let%map_open.Command db_dir =
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and db_dir =
          flag "--db-dir"
            (optional_with_default "da_db" string)
            ~doc:"string Directory to store the database"
@@ -33,6 +36,7 @@ let run_node =
            else Sys.getenv_exn "MINA_PRIVATE_KEY"
          in
          let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
          let sync_arg =
            match (node_to_sync, hash_to_sync) with
            | Some node_to_sync, Some hash_to_sync ->
