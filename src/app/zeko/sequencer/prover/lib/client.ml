@@ -80,7 +80,9 @@ let rec send ?(proving_timeout = 20.) ?(wait_for_prover_timeout = 600.)
               Prover.Input.to_yojson input
               |> Yojson.Safe.to_string |> Writer.write_line w
             in
-            Reader.really_read_line ~wait_time:(Time.Span.of_sec 1.) r
+            Reader.really_read_line
+              ~wait_time:(Time.Span.of_sec proving_timeout)
+              r
           with
           | Some response -> (
               match
@@ -91,12 +93,12 @@ let rec send ?(proving_timeout = 20.) ?(wait_for_prover_timeout = 600.)
               | Error _ ->
                   failwith "Error parsing response" )
           | None ->
-              failwith "Timeout while proving" ) )
+              return `Timeout ) )
     >>| fun r -> release_prover () ; r
   with
   | `Result (`Ok r) ->
       return r
-  | `Timeout | `Result `Connection_error ->
+  | `Timeout | `Result `Connection_error | `Result `Timeout ->
       printf "Timeout while proving %f, retrying attempts remaining: %d\n%!"
         proving_timeout attempts ;
       if attempts > 0 then (
