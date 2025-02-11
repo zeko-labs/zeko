@@ -39,52 +39,71 @@ let time ~logger label (d : 'a Deferred.t) =
   return x
 
 module State = struct
-  type t =
-    { logger : Logger.t
-    ; archive_uri : Host_and_port.t Cli_lib.Flag.Types.with_name
-    ; zeko_uri : Uri.t
-    ; da_config : Da_layer.Client.Config.t
-    ; mutable ledger_cache : Ledger.Db.t
-    ; mutable already_relayed_hashes : Ledger_hash.Set.t
-    }
+  type _t = { mutable protocol_state : Mina_state.Protocol_state.value }
+  [@@deriving yojson]
 
-  let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache =
-    { logger
-    ; archive_uri
-    ; zeko_uri
-    ; da_config = Da_layer.Client.Config.of_string_list da_nodes
-    ; ledger_cache =
-        Ledger.Db.create ~directory_name:ledger_cache
-          ~depth:constraint_constants.ledger_depth ()
-    ; already_relayed_hashes = Ledger_hash.Set.empty
-    }
+  type t = _t
 
-  let add_hash t hash =
-    t.already_relayed_hashes <- Set.add t.already_relayed_hashes hash
+  module Db = Kvdb_base.Make_singleton (struct
+    type t = _t [@@deriving yojson]
 
-  let has_been_relayed t hash = Set.mem t.already_relayed_hashes hash
+    let key = "archive_relay_state"
+  end)
 
-  let reset_ledger_cache t () =
-    let directory_name =
-      Option.value_exn ~message:"No ledger_cache directory"
-      @@ Ledger.Db.get_directory t.ledger_cache
-    in
-    Ledger.Db.close t.ledger_cache ;
-    rmrf directory_name ;
-    t.ledger_cache <-
-      Ledger.Db.create ~directory_name ~depth:constraint_constants.ledger_depth
-        ()
+  let save kvdb t = Db.set ~data:t kvdb
+
+  let load kvdb =
+    match Db.get kvdb with
+    | Some state ->
+        state
+    | None ->
+        { protocol_state = compile_time_genesis_state }
+
+  let set_protocol_state t kvdb protocol_state =
+    t.protocol_state <- protocol_state ;
+    save kvdb t
 end
 
-let sync_archive ~(state : State.t) ~hash =
-  let logger = state.logger in
-  let protocol_state = ref compile_time_genesis_state in
-  Da_layer.Client.map_diffs ~logger ~config:state.da_config
+type t =
+  { logger : Logger.t
+  ; archive_uri : Host_and_port.t Cli_lib.Flag.Types.with_name
+  ; zeko_uri : Uri.t
+  ; da_config : Da_layer.Client.Config.t
+  ; state : State.t
+  ; mutable db : Ledger.Db.t
+  }
+
+let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache =
+  let db =
+    Ledger.Db.create ~directory_name:ledger_cache
+      ~depth:constraint_constants.ledger_depth ()
+  in
+  { logger
+  ; archive_uri
+  ; zeko_uri
+  ; da_config = Da_layer.Client.Config.of_string_list da_nodes
+  ; state = State.load (Ledger.Db.zeko_kvdb db)
+  ; db
+  }
+
+let reset_ledger_cache t () =
+  let directory_name =
+    Option.value_exn ~message:"No ledger_cache directory"
+    @@ Ledger.Db.get_directory t.db
+  in
+  Ledger.Db.close t.db ;
+  rmrf directory_name ;
+  t.db <-
+    Ledger.Db.create ~directory_name ~depth:constraint_constants.ledger_depth ()
+
+let sync_archive (t : t) ~hash =
+  let logger = t.logger in
+  Da_layer.Client.map_diffs ~logger ~config:t.da_config
     ~depth:constraint_constants.ledger_depth
-    ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root state.ledger_cache))
+    ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.db))
     ~target_ledger_hash:hash ~print_progress:true
     ~f:(fun diff ->
-      let ledger = Ledger.of_database state.ledger_cache in
+      let ledger = Ledger.of_database t.db in
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
           (* Apply accounts diff *)
@@ -114,26 +133,23 @@ let sync_archive ~(state : State.t) ~hash =
               ~accounts_created:
                 (Ledger.Transaction_applied.new_accounts txn_applied)
               ~new_state_hash:(Ledger.merkle_root ledger)
-              ~protocol_state:!protocol_state ~ledger
+              ~protocol_state:t.state.protocol_state ~ledger
               ~txn:(Ledger.Transaction_applied.transaction txn_applied)
               ~dummy_fee_payer:Zkapps_rollup.inner_public_key
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
-          protocol_state := new_protocol_state ;
-          if State.has_been_relayed state (Ledger.merkle_root ledger) then
-            return ()
-          else
-            match%bind
-              Archive_client.dispatch ~logger state.archive_uri
-                (Archive_lib.Diff.Transition_frontier diff)
-            with
-            | Ok () ->
-                State.add_hash state (Ledger.merkle_root ledger) ;
-                return
-                @@ [%log info] "Synced diff to archive with hash: %s\n%!"
-                     (Ledger_hash.to_decimal_string @@ Ledger.merkle_root ledger)
-            | Error e ->
-                raise (Error.to_exn e) ) )
+          State.set_protocol_state t.state (Ledger.Db.zeko_kvdb t.db)
+            new_protocol_state ;
+          match%bind
+            Archive_client.dispatch ~logger t.archive_uri
+              (Archive_lib.Diff.Transition_frontier diff)
+          with
+          | Ok () ->
+              return
+              @@ [%log info] "Synced diff to archive with hash: %s\n%!"
+                   (Ledger_hash.to_decimal_string @@ Ledger.merkle_root ledger)
+          | Error e ->
+              raise (Error.to_exn e) ) )
   >>| Result.map ~f:ignore
 
 let fetch_current_ledger_hash ~zeko_uri () =
@@ -187,11 +203,11 @@ let fetch_current_ledger_hash ~zeko_uri () =
       in
       return (Ok unproved_ledger_hash)
 
-let sync ~(state : State.t) () =
-  let logger = state.logger in
+let sync (t : t) () =
+  let logger = t.logger in
   Thread_safe.block_on_async_exn (fun () ->
       let%bind ledger_hash =
-        match%bind fetch_current_ledger_hash ~zeko_uri:state.zeko_uri () with
+        match%bind fetch_current_ledger_hash ~zeko_uri:t.zeko_uri () with
         | Ok hash ->
             [%log info] "Fetched ledger hash: %s\n%!"
               (Ledger_hash.to_decimal_string hash) ;
@@ -199,12 +215,12 @@ let sync ~(state : State.t) () =
         | Error e ->
             failwith e
       in
-      time ~logger "Synced" (sync_archive ~state ~hash:ledger_hash) )
+      time ~logger "Synced" (sync_archive t ~hash:ledger_hash) )
 
-let rec run ~(state : State.t) ~sync_period () =
-  let logger = state.logger in
+let rec run (t : t) ~sync_period () =
+  let logger = t.logger in
   let () =
-    match sync ~state () with
+    match sync t () with
     | Ok () ->
         (* wait *)
         Thread_safe.block_on_async_exn (fun () ->
@@ -213,10 +229,10 @@ let rec run ~(state : State.t) ~sync_period () =
         (* ledger_hash_invalidated *)
         [%log error] "Error syncing: %s\n%!" (Error.to_string_hum e) ;
         [%log warn] "Invalidating ledger cache" ;
-        State.reset_ledger_cache state ()
+        reset_ledger_cache t ()
   in
   (* go again *)
-  run ~state ~sync_period ()
+  run t ~sync_period ()
 
 let () =
   Command_unix.run
@@ -246,7 +262,5 @@ let () =
             }
         in
 
-        let state =
-          State.create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache
-        in
-        run ~state ~sync_period )
+        let t = create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache in
+        run t ~sync_period )
