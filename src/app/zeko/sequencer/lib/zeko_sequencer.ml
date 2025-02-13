@@ -522,7 +522,11 @@ module Sequencer = struct
                      command
               in
               match%bind
-                Verifier.verify_command { data = verifiable; status = Applied }
+                try_with (fun () ->
+                    Verifier.verify_command
+                      { data = verifiable; status = Applied } )
+                >>| Result.map_error ~f:Error.of_exn
+                >>| Result.join
               with
               | Ok (`Valid _) ->
                   return (Ok ())
