@@ -824,6 +824,8 @@ module Sequencer = struct
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
       ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~network_id
       ~deposit_delay_blocks ~provers =
+    print_endline "Precomputing srs" ;
+    Pickles.Side_loaded.srs_precomputation () ;
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
