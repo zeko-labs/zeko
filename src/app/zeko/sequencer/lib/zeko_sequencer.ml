@@ -207,7 +207,7 @@ module Sequencer = struct
         type t =
           { mutable previous_committed_ledger : Sparse_ledger.t option
           ; mutable previous_committed_ledger_hash : Ledger_hash.t option
-          ; mutable commands : Command_witness.t list
+          ; mutable commands : Command_witness.t array ref list
           }
         [@@deriving yojson]
 
@@ -238,15 +238,26 @@ module Sequencer = struct
       let load_state kvdb =
         match Db.get kvdb with Some state -> state | None -> State.create ()
 
-      let reset_state t ledger =
-        t.state.commands <- [] ;
+      let committed t ledger =
+        t.state.commands <- List.tl_exn t.state.commands ;
+        t.state.previous_committed_ledger <- Some ledger ;
+        t.state.previous_committed_ledger_hash <-
+          Some (Sparse_ledger.merkle_root ledger) ;
+        save_state t
+
+      let set_last_committed_ledger t ledger =
         t.state.previous_committed_ledger <- Some ledger ;
         t.state.previous_committed_ledger_hash <-
           Some (Sparse_ledger.merkle_root ledger) ;
         save_state t
 
       let add_command t command =
-        t.state.commands <- t.state.commands @ [ command ] ;
+        let arr = List.last_exn t.state.commands in
+        arr := Array.append !arr [| command |] ;
+        save_state t
+
+      let created_new_tree t =
+        t.state.commands <- t.state.commands @ [ ref [||] ] ;
         save_state t
     end
 
@@ -319,16 +330,20 @@ module Sequencer = struct
             ~archive_uri:config.archive_uri commit_witness
         in
         let%bind () = Executor.send_zkapp_command executor command in
-        Context.reset_state ctx new_inner_ledger ;
+        Context.committed ctx new_inner_ledger ;
         return ()
     end
 
     module P = Parallel_merger.Make (Context) (Merge) (Base) (Commit)
 
     let requeue_after_restart t (ctx : Context.t) =
-      let commands_to_requeue = ctx.state.commands in
+      let commands_to_requeue =
+        ctx.state.commands
+        |> List.map ~f:(fun arr -> Array.to_list !arr)
+        |> List.join
+      in
       (* Adding jobs will repopulate the list *)
-      ctx.state.commands <- [] ;
+      ctx.state.commands <- [ ref [||] ] ;
       printf "Requeueing %d commands\n%!" (List.length commands_to_requeue) ;
       List.iter commands_to_requeue ~f:(fun command ->
           don't_wait_for @@ P.add_job t ctx ~data:command )
@@ -818,7 +833,7 @@ module Sequencer = struct
         L.(of_database t.db)
         [ Zkapps_rollup.inner_account_id ]
     in
-    Merger.Context.reset_state t.merger_ctx sparse_ledger ;
+    Merger.Context.set_last_committed_ledger t.merger_ctx sparse_ledger ;
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
