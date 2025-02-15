@@ -63,7 +63,7 @@ let () =
          ~doc:"float Commitment period in seconds"
      and max_pool_size =
        flag "--max-pool-size"
-         (optional_with_default 10 int)
+         (optional_with_default 20 int)
          ~doc:"int Maximum transaction pool size"
      and da_nodes =
        flag "--da-node" (listed string)
