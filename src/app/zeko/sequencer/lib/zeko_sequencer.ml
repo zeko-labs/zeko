@@ -69,7 +69,7 @@ module Sequencer = struct
       { q : unit Throttle.t
       ; config : Config.t
       ; transfers_memory : Transfers_memory.t
-      ; provers : Zeko_prover.Client.State.t
+      ; provers : Zeko_prover.Client.t
       }
 
     let create ~config ~provers =
@@ -225,7 +225,7 @@ module Sequencer = struct
       end)
 
       type t =
-        { provers : Zeko_prover.Client.State.t
+        { provers : Zeko_prover.Client.t
         ; da_client : Da_layer.Client.Sequencer.t
         ; executor : Executor.t
         ; config : Config.t
@@ -510,10 +510,15 @@ module Sequencer = struct
     else
       Throttle.enqueue t.apply_q (fun () ->
           let%bind.Deferred.Result () =
+            let weight = User_command.weight command in
             return
             @@
-            if Merger.P.number_of_wip_jobs t.merger >= t.config.max_pool_size
-            then Error (Error.of_string "Maximum pool size reached, try later")
+            if
+              Zeko_prover.Client.queue_size t.merger_ctx.provers + weight
+              > t.config.max_pool_size
+            then
+              Error
+                (Error.of_string "Maximum proof queue size reached, try later")
             else Ok ()
           in
 
@@ -864,7 +869,7 @@ module Sequencer = struct
     in
     let kvdb = L.Db.zeko_kvdb db in
     let provers =
-      Zeko_prover.Client.State.create
+      Zeko_prover.Client.create
         (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
     in
     let executor = Executor.create ~l1_uri:config.l1_uri ~signer ~kvdb () in
