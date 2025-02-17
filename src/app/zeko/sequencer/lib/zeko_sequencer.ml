@@ -343,7 +343,8 @@ module Sequencer = struct
         |> List.join
       in
       (* Adding jobs will repopulate the list *)
-      ctx.state.commands <- [ ref [||] ] ;
+      assert (phys_equal (P.current_tree t) None) ;
+      ctx.state.commands <- [] ;
       printf "Requeueing %d commands\n%!" (List.length commands_to_requeue) ;
       List.iter commands_to_requeue ~f:(fun command ->
           don't_wait_for @@ P.add_job t ctx ~data:command )
