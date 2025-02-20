@@ -280,54 +280,35 @@ module type Full = sig
           }
       end
 
-      type stack_frame
+      type zeko_stack_frame_t =
+        ( (Token_id.Checked.t, Zkapp_call_forest.Checked.t) Stack_frame.t
+        , Stack_frame.Digest.Checked.t Lazy.t )
+        With_hash.t
 
-      type call_stack
+      type zeko_call_stack_t =
+        ( ( ( ( Token_id.Stable.V2.t
+              , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
+              Stack_frame.Stable.V1.t
+            , Stack_frame.Digest.Stable.V1.t )
+            With_hash.t
+          , Call_stack_digest.Stable.V1.t )
+          With_stack_hash.Stable.V1.t
+          list
+          Prover_value.t
+        , Call_stack_digest.Checked.t )
+        With_hash.t
 
-      type length
+      type zeko_call_forest_t = Zkapp_call_forest.Checked.t
 
-      val main :
-           ?witness:Zkapp_command_segment.Witness.t
-        -> ?zeko_handler:
-             < account :
-                 ( Account.Checked.Unhashed.t
-                 , Tick.Field.Var.t lazy_t )
-                 With_hash.t
-             ; account_update : Zkapp_call_forest.Checked.account_update
-             ; amount : Amount.var
-             ; bool : Tick.Boolean.var
-             ; failure : unit
-             ; field : Tick.Field.Var.t
-             ; full_transaction_commitment : Tick.Field.Var.t
-             ; global_state : Global_state.t
-             ; inclusion_proof : (Tick.Boolean.var * Tick.Field.Var.t) list
-             ; ledger :
-                 Ledger_hash.var * Mina_ledger.Sparse_ledger.t Prover_value.t
-             ; local_state :
-                 ( stack_frame
-                 , call_stack
-                 , Amount.Signed.var
-                 , Ledger_hash.var * Mina_ledger.Sparse_ledger.t Prover_value.t
-                 , Tick.Boolean.var
-                 , Tick.Field.Var.t
-                 , length
-                 , unit )
-                 Mina_transaction_logic.Zkapp_command_logic.Local_state.t
-             ; protocol_state_precondition :
-                 Zkapp_precondition.Protocol_state.Checked.t
-             ; signed_amount : Amount.Signed.var
-             ; token_id : Token_id.Checked.t
-             ; transaction_commitment : Tick.Field.Var.t
-             ; valid_while_precondition :
-                 Zkapp_precondition.Valid_while.Checked.t
-             ; zkapp_command : Zkapp_command.t >
-             Mina_transaction_logic.Zkapp_command_logic.handler
-        -> Zkapp_command_segment.Spec.t
-        -> constraint_constants:Genesis_constants.Constraint_constants.t
-        -> Statement.With_sok.var
-        -> Zkapp_statement.Checked.t option
-           * [> `Must_verify of Tick.Boolean.var ]
+      type zeko_transaction_commitment_t = Tick.Field.Var.t
 
+      val zeko_stack_frame_unhash :
+           Mina_base.Stack_frame.Digest.Checked.t
+        -> (Mina_base.Token_id.t, Zkapp_call_forest.t) Mina_base.Stack_frame.t
+           Prover_value.t
+        -> zeko_stack_frame_t
+
+      (* ZEKO NOTE: all for Zeko *)
       module Single (_ : sig
         val constraint_constants : Genesis_constants.Constraint_constants.t
 
@@ -337,7 +318,38 @@ module type Full = sig
 
         val set_must_verify : Tick.Boolean.var -> unit
       end) : sig
-        module Inputs : Mina_transaction_logic.Zkapp_command_logic.Inputs_intf
+        module Inputs : sig
+          include
+            Mina_transaction_logic.Zkapp_command_logic.Inputs_intf
+              with type Ledger.t =
+                Ledger_hash.var * Mina_ledger.Sparse_ledger.t Prover_value.t
+               and type Amount.Signed.t = Amount.Signed.var
+               and type Global_slot_since_genesis.t =
+                Mina_numbers.Global_slot_since_genesis.Checked.t
+               and type Field.t = Tick.Field.Var.t
+               and type Bool.t = Tick.Boolean.var
+               and type Account.t =
+                ( Account.Checked.Unhashed.t
+                , Tick.Field.Var.t lazy_t )
+                With_hash.t
+               and type Account_update.t =
+                Zkapp_call_forest.Checked.account_update
+               and type Protocol_state_precondition.t =
+                Zkapp_precondition.Protocol_state.Checked.t
+               and type Valid_while_precondition.t =
+                Zkapp_precondition.Valid_while.Checked.t
+               and type Global_state.t = Global_state.t
+               and type Index.t = Mina_numbers.Index.Checked.t
+               and type Bool.failure_status_tbl = unit
+               and type Stack_frame.t = zeko_stack_frame_t
+               and type Call_stack.t = zeko_call_stack_t
+
+          val zeko_call_forest_type_eq :
+            (Call_forest.t, Zkapp_call_forest.Checked.t) Type_equal.t
+
+          val zeko_transaction_commitment_type_eq :
+            (Transaction_commitment.t, Tick.Field.Var.t) Type_equal.t
+        end
       end
     end
   end

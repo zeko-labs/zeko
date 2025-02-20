@@ -397,3 +397,29 @@ module Even_PC = struct
   let to_pc_var { public_key } : Signature_lib.Public_key.Compressed.var =
     { x = public_key; is_odd = Boolean.false_ }
 end
+
+let slot_range_intersection (x : Slot_range.var) (y : Slot_range.var) :
+    Slot_range.var Checked.t =
+  let open Checked.Let_syntax in
+  let* lower =
+    Slot.Checked.(x.lower < y.lower)
+    >>= if_ ~typ:Slot.typ ~then_:y.lower ~else_:x.lower
+  in
+  let*| upper =
+    Slot.Checked.(x.upper < y.upper)
+    >>= if_ ~typ:Slot.typ ~then_:x.upper ~else_:y.upper
+  in
+  ({ lower; upper } : Slot_range.var)
+
+let accumulate (f : ('a -> unit) -> 'b Checked.t) : ('b * 'a list) Checked.t =
+  let acc = ref [] in
+  let running = ref true in
+  let*| r =
+    f (fun x ->
+        (* if this fails it's because you used the generated function after the
+           end of its scope, i.e., use-after-free. *)
+        assert !running ;
+        acc := x :: !acc )
+  in
+  running := false ;
+  (r, !acc)

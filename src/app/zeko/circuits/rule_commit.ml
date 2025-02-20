@@ -387,7 +387,7 @@ struct
 
   let rule : _ Compile_simple.branch =
     { branch_name = "Rollup step"
-    ; tags = Two_tags (Zeko_transaction_snark.tag, Verify_both_ases.tag)
+    ; tags = Two_tags (Txn_rules.tag, Verify_both_ases.tag)
     ; main
     }
 end
