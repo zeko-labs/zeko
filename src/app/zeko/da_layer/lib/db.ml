@@ -76,3 +76,18 @@ let get_diff t ~ledger_hash = get t Diff ~key:ledger_hash
 let get_migration t = get t Migration ~key:() |> Option.value ~default:0
 
 let set_migration t ~migration = set t Migration ~key:() ~data:migration
+
+module Async = struct
+  let set_index t ~index = Async.return (set_index t ~index)
+
+  let get_index t = Async.return (get_index t)
+
+  let add_diff t ~ledger_hash ~diff =
+    Async.return (add_diff t ~ledger_hash ~diff)
+
+  let get_diff t ~ledger_hash = Async.return (get_diff t ~ledger_hash)
+
+  let get_migration t = Async.return (get_migration t)
+
+  let set_migration t ~migration = Async.return (set_migration t ~migration)
+end

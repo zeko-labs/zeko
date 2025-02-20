@@ -2,6 +2,8 @@ open Core_kernel
 open Mina_base
 open Mina_ledger
 open Signature_lib
+module Rpc_def = Rpc
+open Async
 
 let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
@@ -209,7 +211,6 @@ let post_diff t ~ledger_openings ~diff =
 
 let sync t ~node_location ~ledger_hash =
   let logger = t.logger in
-  let open Async in
   [%log info] "Syncing" ;
   [%log info] "Fetching intervals" ;
   let ledger =
@@ -241,7 +242,7 @@ let get_signature t ~ledger_hash =
 
 let get_ledger_hashes_chain t
     ({ source = source_opt; target; max_length = max_length_opt } :
-      Rpc.Get_ledger_hashes_chain.V1.Query.t ) =
+      Rpc_def.Get_ledger_hashes_chain.V1.Query.t ) =
   let max_length =
     match max_length_opt with Some n -> n | None -> Int.max_value
   in
@@ -253,76 +254,79 @@ let get_ledger_hashes_chain t
         source
   in
   let rec go n current =
-    if Ledger_hash.equal current source || n <= 0 then []
+    if Ledger_hash.equal current source || n <= 0 then return []
     else
-      let source =
-        Db.get_diff ~ledger_hash:current t.db
-        |> Option.value_exn ~here:[%here]
-             ~message:"Get_ledger_hashes_chain: diff not found"
+      let%bind source =
+        Db.Async.get_diff ~ledger_hash:current t.db
+        >>| fun diff ->
+        Option.value_exn ~here:[%here]
+          ~message:"Get_ledger_hashes_chain: diff not found" diff
         |> Diff.Stable.V2.source_ledger_hash
       in
-      current :: go (n - 1) source
+      let%map next = go (n - 1) source in
+      current :: next
   in
-  List.rev (go max_length target)
+  go max_length target >>| List.rev
 
 let implementations t =
-  Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
+  Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
     ~implementations:
       [ (* Post_diff *)
-        Async.Rpc.Rpc.implement Rpc.Post_diff.V1.t
+        Rpc.Rpc.implement Rpc_def.Post_diff.V1.t
           (fun () { ledger_openings; diff } ->
             match post_diff t ~ledger_openings ~diff with
             | Ok signature ->
-                Async.return signature
+                return signature
             | Error e ->
                 let logger = t.logger in
                 [%log warn] "Error posting diff: $error"
                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
                 failwith (Error.to_string_hum e) )
       ; (* Get_diff *)
-        Async.Rpc.Rpc.implement Rpc.Get_diff.V1.t (fun () query ->
-            let v2_diff = Db.get_diff t.db ~ledger_hash:query in
+        Rpc.Rpc.implement Rpc_def.Get_diff.V1.t (fun () query ->
+            let%map v2_diff = Db.Async.get_diff t.db ~ledger_hash:query in
             let v1_diff = Option.map v2_diff ~f:Diff.drop_time in
-            Async.return @@ v1_diff )
-      ; Async.Rpc.Rpc.implement Rpc.Get_diff.V2.t (fun () query ->
-            Async.return @@ Db.get_diff t.db ~ledger_hash:query )
+            v1_diff )
+      ; Rpc.Rpc.implement Rpc_def.Get_diff.V2.t (fun () query ->
+            Db.Async.get_diff t.db ~ledger_hash:query )
       ; (* Get_all_keys *)
-        Async.Rpc.Rpc.implement Rpc.Get_all_keys.V1.t (fun () () ->
-            Async.return @@ Db.get_index t.db )
+        Rpc.Rpc.implement Rpc_def.Get_all_keys.V1.t (fun () () ->
+            Db.Async.get_index t.db )
       ; (* Get_diff_source *)
-        Async.Rpc.Rpc.implement Rpc.Get_diff_source.V1.t (fun () query ->
-            Async.return @@ Diff.Stable.Latest.source_ledger_hash
-            @@ Option.value_exn
-                 ~error:
-                   ( Error.of_string
-                   @@ sprintf
-                        "Get_diff_source exception: Diff not found for ledger \
-                         hash %s"
-                        (Ledger_hash.to_decimal_string query) )
-            @@ Db.get_diff t.db ~ledger_hash:query )
+        Rpc.Rpc.implement Rpc_def.Get_diff_source.V1.t (fun () query ->
+            Db.Async.get_diff t.db ~ledger_hash:query
+            >>| fun diff ->
+            Option.value_exn
+              ~error:
+                ( Error.of_string
+                @@ sprintf
+                     "Get_diff_source exception: Diff not found for ledger \
+                      hash %s"
+                     (Ledger_hash.to_decimal_string query) )
+              diff
+            |> Diff.Stable.Latest.source_ledger_hash )
       ; (* Get_signed_public_key *)
-        Async.Rpc.Rpc.implement Rpc.Get_signer_public_key.V1.t (fun () () ->
-            Async.return @@ Public_key.compress @@ t.signer.public_key )
+        Rpc.Rpc.implement Rpc_def.Get_signer_public_key.V1.t (fun () () ->
+            return @@ Public_key.compress @@ t.signer.public_key )
       ; (* Get_signature *)
-        Async.Rpc.Rpc.implement Rpc.Get_signature.V1.t (fun () query ->
-            Async.return @@ get_signature t ~ledger_hash:query )
+        Rpc.Rpc.implement Rpc_def.Get_signature.V1.t (fun () query ->
+            return @@ get_signature t ~ledger_hash:query )
       ; (* Get_ledger_hashes_chain *)
-        Async.Rpc.Rpc.implement Rpc.Get_ledger_hashes_chain.V1.t
-          (fun () query -> Async.return @@ get_ledger_hashes_chain t query)
+        Rpc.Rpc.implement Rpc_def.Get_ledger_hashes_chain.V1.t (fun () query ->
+            get_ledger_hashes_chain t query )
       ; (* Get_diffs_chain *)
-        Async.Rpc.Rpc.implement Rpc.Get_diffs_chain.V1.t
+        Rpc.Rpc.implement Rpc_def.Get_diffs_chain.V1.t
           (fun () { source; target; max_length } ->
-            let chain =
+            let%bind chain =
               get_ledger_hashes_chain t { source; target; max_length }
             in
-            Async.return
-            @@ List.map chain ~f:(fun ledger_hash ->
-                   Db.get_diff ~ledger_hash t.db
-                   |> Option.value_exn ~here:[%here] ~message:"Diff not found" ) )
+            Deferred.List.map ~how:`Parallel chain ~f:(fun ledger_hash ->
+                Db.Async.get_diff ~ledger_hash t.db
+                >>| fun diff ->
+                Option.value_exn ~here:[%here] ~message:"Diff not found" diff ) )
       ]
 
 let create_server ~sync_arg ~port ~logger ~db_dir ~signer_sk ~no_migrations () =
-  let open Async in
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
   in
