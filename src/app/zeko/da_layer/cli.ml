@@ -83,13 +83,13 @@ let sync_node =
          let synced_node =
            Cli_lib.Flag.Types.
              { value = Host_and_port.of_string synced_node
-             ; name = sprintf "synced_node"
+             ; name = "synced_node"
              }
          in
          let unsynced_node =
            Cli_lib.Flag.Types.
              { value = Host_and_port.of_string unsynced_node
-             ; name = sprintf "unsynced_node"
+             ; name = "unsynced_node"
              }
          in
          Da_layer.Client.map_diffs ~logger
