@@ -1,4 +1,6 @@
-(env (_ (flags (:standard -w @a-42-40-44-70-45-41))))
+(env
+ (_
+  (flags (:standard -w @a-42-40-44-70-45-41))))
 
 (library
  (name zeko_circuits)
@@ -6,14 +8,50 @@
   ;; opam libraries
   core_kernel
   transaction_snark
-  staged_ledger_diff
-  )
+  staged_ledger_diff)
  (inline_tests)
  (instrumentation
   (backend bisect_ppx))
  (preprocess
-  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules bridge_rules rule_bridge_enable rule_bridge_disable rule_bridge_finalize_withdrawal rule_bridge_finalize_cancelled_deposit rule_bridge_finalize_deposit check_accepted_make bridge_state outer_rules inner_rules rule_pause rule_commit rule_inner_action_witness rule_action_witness rule_inner_sync ase rollup_state zeko_transaction_snark indexed_merkle_tree folder zeko_util compile_simple compile_simple_intf zeko_as_prover v)
+  (pps
+   ppx_deriving.show
+   ppx_deriving_snarky
+   ppx_snarky
+   ppx_mina
+   ppx_version
+   ppx_jane
+   ppx_compare
+   h_list.ppx))
+ (modules
+  bridge_rules
+  rule_bridge_enable
+  rule_bridge_disable
+  rule_bridge_finalize_withdrawal
+  rule_bridge_finalize_cancelled_deposit
+  rule_bridge_finalize_deposit
+  check_accepted_make
+  bridge_state
+  outer_rules
+  inner_rules
+  rule_pause
+  rule_commit
+  rule_inner_action_witness
+  rule_action_witness
+  rule_inner_sync
+  ase
+  rollup_state
+  txn_rules
+  rule_txn_merge
+  rule_signed_command
+  rule_zkapp_command
+  txn_state
+  account_set
+  indexed_merkle_tree
+  folder
+  zeko_util
+  compile_simple
+  compile_simple_intf
+  zeko_as_prover
+  v)
  (virtual_modules zeko_as_prover)
- (default_implementation zeko_circuits_as_prover)
- )
+ (default_implementation zeko_circuits_as_prover))

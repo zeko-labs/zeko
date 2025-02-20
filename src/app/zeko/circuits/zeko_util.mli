@@ -192,3 +192,8 @@ module Even_PC : sig
 
   val to_pc_var : var -> Import.Public_key.Compressed.var
 end
+
+val slot_range_intersection :
+  Slot_range.var -> Slot_range.var -> Slot_range.var Checked.t
+
+val accumulate : (('a -> unit) -> 'b Checked.t) -> ('b * 'a list) Checked.t

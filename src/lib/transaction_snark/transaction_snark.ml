@@ -703,6 +703,8 @@ module Make_str (A : Wire_types.Concrete) = struct
               commitment ~memo_hash ~fee_payer_hash:account_update.hash
         end
 
+        let zeko_transaction_commitment_type_eq = Type_equal.T
+
         module Bool = struct
           type t = Boolean.var
 
@@ -1083,6 +1085,10 @@ module Make_str (A : Wire_types.Concrete) = struct
 
         module Call_forest = Zkapp_call_forest.Checked
 
+        let zeko_call_forest_type_eq = Type_equal.T
+
+        let zeko_call_stack_type_eq = Type_equal.T
+
         module Stack_frame = struct
           type frame = (Token_id.Checked.t, Call_forest.t) Stack_frame.t
 
@@ -1151,6 +1157,8 @@ module Make_str (A : Wire_types.Concrete) = struct
                 t )
         end
 
+        let zeko_stack_frame_unhash = Stack_frame.unhash
+
         module Call_stack = struct
           module Value = struct
             open Mina_base
@@ -1165,8 +1173,6 @@ module Make_str (A : Wire_types.Concrete) = struct
                 Zkapp_command.Call_forest.t )
               Stack_frame.t
           end
-
-          type elt = Stack_frame.t
 
           module Elt = struct
             type t = (Value.frame, Mina_base.Stack_frame.Digest.t) With_hash.t
@@ -1192,9 +1198,12 @@ module Make_str (A : Wire_types.Concrete) = struct
                 x.stack_hash
 
           type t =
-            ( (Elt.t, Call_stack_digest.t) With_stack_hash.t list V.t
+            ( (Elt.t, Call_stack_digest.t) With_stack_hash.t list
+              Mina_base.Prover_value.t
             , Call_stack_digest.Checked.t )
             With_hash.t
+
+          type elt = Stack_frame.t
 
           let if_ b ~then_:(t : t) ~else_:(e : t) : t =
             { hash = Call_stack_digest.Checked.if_ b ~then_:t.hash ~else_:e.hash
@@ -1409,6 +1418,28 @@ module Make_str (A : Wire_types.Concrete) = struct
             respond (Provide proof)
         | _ ->
             respond Unhandled
+
+      type zeko_stack_frame_t =
+        ( (Token_id.Checked.t, Zkapp_call_forest.Checked.t) Stack_frame.t
+        , Stack_frame.Digest.Checked.t Lazy.t )
+        With_hash.t
+
+      type zeko_call_stack_t =
+        ( ( ( ( Token_id.Stable.V2.t
+              , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
+              Stack_frame.Stable.V1.t
+            , Stack_frame.Digest.Stable.V1.t )
+            With_hash.t
+          , Call_stack_digest.Stable.V1.t )
+          With_stack_hash.Stable.V1.t
+          list
+          Prover_value.t
+        , Call_stack_digest.Checked.t )
+        With_hash.t
+
+      type zeko_call_forest_t = Zkapp_call_forest.Checked.t
+
+      type zeko_transaction_commitment_t = Tick.Field.Var.t
 
       module Single (I : Single_inputs) = struct
         open I
@@ -1854,22 +1885,6 @@ module Make_str (A : Wire_types.Concrete) = struct
                 in
                 Boolean.Assert.all
                   [ correct_coinbase_target_stack; valid_init_state ] ) )
-
-      type stack_frame =
-        ( (Token_id.Checked.t, Zkapp_call_forest.Checked.t) Stack_frame.t
-        , Stack_frame.Digest.Checked.t lazy_t )
-        With_hash.t
-
-      type call_stack =
-        ( ( (Inputs.Call_stack.Value.frame, Stack_frame.Digest.t) With_hash.t
-          , Call_stack_digest.t )
-          With_stack_hash.t
-          list
-          Prover_value.t
-        , Call_stack_digest.Checked.t )
-        With_hash.t
-
-      type length = Inputs.Index.t
 
       let main ?(witness : Witness.t option) ?zeko_handler (spec : Spec.t)
           ~constraint_constants (statement : Statement.With_sok.var) =

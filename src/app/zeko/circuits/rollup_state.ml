@@ -186,7 +186,7 @@ module Outer_state = struct
     ; inner_action_state : Inner_action_state.With_length.t
     ; sequencer : Even_PC.t
     ; da_key : Even_PC.t
-    ; acc_set : Zeko_transaction_snark.Account_set.t
+    ; acc_set : Account_set.t
     }
   [@@deriving snarky]
 
@@ -197,7 +197,7 @@ module Outer_state = struct
     ; inner_action_state : Inner_action_state.With_length.fine
     ; sequencer : Even_PC.var option
     ; da_key : Even_PC.var option
-    ; acc_set : Zeko_transaction_snark.Account_set.var option
+    ; acc_set : Account_set.var option
     }
 
   (* NB! This will warn you if add a field to `t` without fixing it here.
@@ -232,7 +232,7 @@ module Outer_state = struct
     ; Recursive (Inner_action_state.With_length.fine inner_action_state)
     ; Whole (Even_PC.typ, sequencer)
     ; Whole (Even_PC.typ, da_key)
-    ; Whole (Zeko_transaction_snark.Account_set.typ, acc_set)
+    ; Whole (Account_set.typ, acc_set)
     ]
 end
 
