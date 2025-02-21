@@ -1087,8 +1087,6 @@ module Make_str (A : Wire_types.Concrete) = struct
 
         let zeko_call_forest_type_eq = Type_equal.T
 
-        let zeko_call_stack_type_eq = Type_equal.T
-
         module Stack_frame = struct
           type frame = (Token_id.Checked.t, Call_forest.t) Stack_frame.t
 
@@ -1156,8 +1154,6 @@ module Make_str (A : Wire_types.Concrete) = struct
                   h ;
                 t )
         end
-
-        let zeko_stack_frame_unhash = Stack_frame.unhash
 
         module Call_stack = struct
           module Value = struct
@@ -1423,6 +1419,8 @@ module Make_str (A : Wire_types.Concrete) = struct
         ( (Token_id.Checked.t, Zkapp_call_forest.Checked.t) Stack_frame.t
         , Stack_frame.Digest.Checked.t Lazy.t )
         With_hash.t
+
+      let zeko_stack_frame_unhash = Inputs.Stack_frame.unhash
 
       type zeko_call_stack_t =
         ( ( ( ( Token_id.Stable.V2.t

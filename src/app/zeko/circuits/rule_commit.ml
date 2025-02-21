@@ -68,8 +68,7 @@ struct
 
   module Witness = struct
     type t =
-      { txn_snark : Zeko_transaction_snark.t
-            (** The ledger transition we are performing. *)
+      { txn_snark : Txn_rules.t  (** The ledger transition we are performing. *)
       ; public_key : PC.t  (** Our public key on the L2 *)
       ; vk_hash : F.t  (** Our vk hash *)
       ; verify_both_ases : Verify_both_ases.t
@@ -127,22 +126,22 @@ struct
            ; source_local_state
            ; target_local_state
            ; sequencer
-           ; fee_excess
+           ; accumulated_fees
            ; slot_range
            ; source_acc_set
            ; target_acc_set
            }
          , verify_txn_snark ) =
-      Zeko_transaction_snark.get txn_snark
+      Txn_rules.get txn_snark
     in
 
     (* The local states must be empty, ensuring that there is no incomplete zkapp transaction being committed. *)
     let* () =
-      Zeko_transaction_snark.Local_state.(
+      Txn_state.Local_state.(
         assert_equal ~label:__LOC__ typ source_local_state dummy)
     in
     let* () =
-      Zeko_transaction_snark.Local_state.(
+      Txn_state.Local_state.(
         assert_equal ~label:__LOC__ typ target_local_state dummy)
     in
 
@@ -165,10 +164,11 @@ struct
         (Random_oracle.Input.Chunked.field payload)
     in
 
-    (* Sequencer must take fees. *)
+    (* Sequencer must take fees. A non-zero magnitude would
+       either mean printing or burning L2 MINA. *)
     let* () =
       Currency.Amount.(
-        Signed.Checked.magnitude fee_excess
+        Signed.Checked.magnitude accumulated_fees
         >>= assert_equal ~label:__LOC__ typ (constant typ zero))
     in
 

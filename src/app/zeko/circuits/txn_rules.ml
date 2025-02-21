@@ -1,6 +1,6 @@
 include
   ( val Compile_simple.compile ~name:"zeko-transaction-snark"
-          ~out_typ:Zeko_stmt.typ
+          ~out_typ:Txn_state.Zeko_stmt.typ
           ~branches:
             [ { branch_name = "single-signed-command"
               ; tags = No_tags
@@ -21,11 +21,15 @@ include
                         "single-proved-zkapp-command-sideloaded-vk"
                     ; typ = Mina_base.Zkapp_statement.typ
                     ; extract_vk =
-                        (fun ({ zkapp_vk; _ } : Zkapp_single_proved_input.t) ->
-                          Compile_simple.Verification_key.of_pickles zkapp_vk )
+                        (fun ({ vk; _ } :
+                               Rule_zkapp_command.Zkapp_single_proved_input.t ) ->
+                          vk )
                     }
               ; main = Rule_zkapp_command.single_proved
               }
-            ; { branch_name = "merge"; tags = Two_tags_own; main = Rule_txn_merge.main }
+            ; { branch_name = "merge"
+              ; tags = Two_tags_own
+              ; main = Rule_txn_merge.main
+              }
             ]
           () )
