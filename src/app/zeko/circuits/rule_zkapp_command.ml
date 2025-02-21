@@ -27,12 +27,6 @@ open struct
     ; fork = None
     }
 
-  module Verification_key = struct
-    include Pickles.Side_loaded.Verification_key
-
-    type var = Checked.t
-  end
-
   let account_with_hash (account : Account.Checked.Unhashed.t) :
       (Account.Checked.Unhashed.t, Field.Var.t lazy_t) With_hash.t =
     With_hash.of_data account ~hash_data:(fun a ->
@@ -161,8 +155,8 @@ open struct
     f x
 
   type local_state_var =
-    ( Transaction_snark.Base.Zkapp_command_snark.stack_frame_t
-    , Transaction_snark.Base.Zkapp_command_snark.call_stack_t
+    ( Transaction_snark.Base.Zkapp_command_snark.zeko_stack_frame_t
+    , Transaction_snark.Base.Zkapp_command_snark.zeko_call_stack_t
     , Currency.Amount.Signed.var
     , Ledger_hash.var * Sparse_ledger_base.t Prover_value.t
     , Boolean.var
@@ -191,13 +185,25 @@ module Zkapp_rule_input_witness = struct
         list
     ; source_ledger_sparse : Mina_ledger.Sparse_ledger.t
     ; update_acc_set_witness : update_acc_set_witness
-    ; account_updates_when_start :
-        Mina_base.Zkapp_command.Call_forest.With_hashes.t
     }
 end
 
 open struct
   module Zkapp_rule_input_witness_V = Mk_V (Zkapp_rule_input_witness)
+end
+
+open struct
+  module Call_forest_V = Mk_V (Mina_base.Zkapp_command.Call_forest.With_hashes)
+end
+
+module Per_account_update = struct
+  type t =
+    { account_updates : F.t
+    ; memo_hash : F.t
+    ; account_updates_data : Call_forest_V.t
+    ; shift_action_state : Boolean.t
+    }
+  [@@deriving snarky]
 end
 
 module Zkapp_rule_input = struct
@@ -206,222 +212,298 @@ module Zkapp_rule_input = struct
     ; source_local_state : Local_state.t
     ; sequencer : Even_PC.t
     ; source_acc_set : Account_set.t
-    ; account_updates_when_start : F.t
-    ; memo_hash_when_start : F.t
     ; witness : Zkapp_rule_input_witness_V.t
     }
   [@@deriving snarky]
 end
 
+open struct
+  let shared ~gen_prevs
+      Zkapp_rule_input.
+        { source_ledger
+        ; source_local_state
+        ; sequencer
+        ; source_acc_set
+        ; witness
+        }
+      (account_updates_data :
+        ( Control.Tag.t
+        * [ `Compute_in_circuit | `Yes | `No ]
+        * Per_account_update.var )
+        list ) =
+    let witness_p =
+      Prover_value.create
+      @@ fun () -> V.unsafe_unwrap witness |> Option.value_exn
+    in
+    let source_ledger_sparse =
+      Prover_value.map ~f:(fun x -> x.source_ledger_sparse) witness_p
+    in
+    let stack_frame = Prover_value.map ~f:(fun x -> x.stack_frame) witness_p in
+    let* ( (((((g, l), vks), must_verify_zkapp), zkapp_input), accounts_new)
+         , slot_ranges ) =
+      accumulate
+      @@ fun set_slot_range ->
+      accumulate
+      @@ fun set_account_new ->
+      accumulate
+      @@ fun set_zkapp_input ->
+      accumulate
+      @@ fun set_must_verify_zkapp ->
+      accumulate
+      @@ fun set_vk ->
+      let epoch_data : Epoch_data.var =
+        { ledger =
+            { hash = Ledger_hash.(constant typ empty_hash)
+            ; total_currency = Currency.Amount.(constant typ zero)
+            }
+        ; seed = Epoch_seed.var_of_hash_packed (constant F.typ Field.zero)
+        ; start_checkpoint =
+            State_hash.var_of_hash_packed (constant F.typ Field.zero)
+        ; lock_checkpoint =
+            State_hash.var_of_hash_packed (constant F.typ Field.zero)
+        ; epoch_length = Mina_numbers.Length.(constant typ zero)
+        }
+      in
+      let l : _ Mina_transaction_logic.Zkapp_command_logic.Local_state.t =
+        { ledger = (source_ledger, source_ledger_sparse)
+        ; stack_frame =
+            Transaction_snark.Base.Zkapp_command_snark.zeko_stack_frame_unhash
+              source_local_state.stack_frame_digest stack_frame
+        ; call_stack =
+            { With_hash.hash = source_local_state.call_stack_digest
+            ; data = Prover_value.map ~f:(fun x -> x.call_stack) witness_p
+            }
+        ; transaction_commitment = source_local_state.transaction_commitment
+        ; full_transaction_commitment =
+            source_local_state.full_transaction_commitment
+        ; excess = source_local_state.excess
+        ; supply_increase = Currency.Amount.Signed.(constant typ zero)
+        ; will_succeed = Boolean.true_
+        ; success = Boolean.true_
+        ; account_update_index = source_local_state.account_update_index
+        ; failure_status_tbl = ()
+        }
+      in
+      let g : Transaction_snark.Base.Zkapp_command_snark.Global_state.t =
+        { first_pass_ledger = (source_ledger, source_ledger_sparse)
+        ; second_pass_ledger = (source_ledger, source_ledger_sparse)
+        ; fee_excess = Currency.Amount.Signed.(constant typ zero)
+        ; supply_increase = Currency.Amount.Signed.(constant typ zero)
+        ; protocol_state =
+            ({ snarked_ledger_hash = Ledger_hash.(constant typ empty_hash)
+             ; blockchain_length = Mina_numbers.Length.(constant typ zero)
+             ; min_window_density = Mina_numbers.Length.(constant typ zero)
+             ; total_currency = Currency.Amount.(constant typ zero)
+             ; global_slot_since_genesis =
+                 Mina_numbers.Global_slot_since_genesis.(constant typ zero)
+             ; staking_epoch_data = epoch_data
+             ; next_epoch_data = epoch_data
+             } : Zkapp_precondition.Protocol_state.View.Checked.t)
+        ; block_global_slot =
+            Mina_numbers.Global_slot_since_genesis.(constant typ zero)
+        }
+      in
+      Checked.List.fold account_updates_data ~init:(g, l)
+        ~f:(fun
+             (g, l)
+             ( auth_type
+             , is_start
+             , { account_updates
+               ; memo_hash
+               ; account_updates_data
+               ; shift_action_state
+               } )
+           ->
+          make_checked
+          @@ fun () ->
+          let module Patched = struct
+            module Inst =
+            Transaction_snark.Base.Zkapp_command_snark.Single (struct
+              let constraint_constants = constraint_constants
+
+              let spec : Transaction_snark.Zkapp_command_segment.Spec.single =
+                { auth_type; is_start }
+
+              let set_zkapp_input = set_zkapp_input
+
+              let set_must_verify = set_must_verify_zkapp
+            end)
+
+            include Inst.Inputs
+
+            module Account = struct
+              include Account
+
+              let register_verification_key ({ data = a; _ } : t) =
+                Data_as_hash.hash a.zkapp.verification_key.data |> set_vk
+            end
+          end in
+          let module Logic =
+            Mina_transaction_logic.Zkapp_command_logic.Make (Patched) in
+          let T = Patched.zeko_transaction_commitment_type_eq in
+          let T = Patched.zeko_call_forest_type_eq in
+          let ( (g : Transaction_snark.Base.Zkapp_command_snark.Global_state.t)
+              , (l : local_state_var) ) =
+            Logic.apply ~constraint_constants
+              ~is_start:
+                (`Compute
+                  { account_updates =
+                      With_hash.
+                        { hash =
+                            (Obj.magic (account_updates : F.var) : Zkapp_call_forest
+                                                                   .Checked
+                                                                   .F
+                                                                   .t)
+                            (* horrible hack *)
+                        ; data =
+                            ( Prover_value.create
+                            @@ fun () ->
+                            V.unsafe_unwrap account_updates_data
+                            |> Option.value_exn )
+                        }
+                  ; memo_hash
+                  ; will_succeed = Boolean.true_
+                  } )
+              { perform =
+                  (fun x ->
+                    perform ~shift_action_states:[ shift_action_state ]
+                      ~set_slot_range ~set_account_new x )
+              }
+              (g, l)
+          in
+          (g, l) )
+    in
+    let* accounts_new =
+      Checked.List.map accounts_new ~f:(fun (account, is_new) ->
+          let*| is_new in
+          (account, is_new) )
+    in
+    let* target_acc_set =
+      update_acc_set accounts_new source_acc_set
+        ~witness:
+          ( V.map
+              ~f:(fun (x : Zkapp_rule_input_witness.t) ->
+                x.update_acc_set_witness )
+              witness
+          |> V.get )
+    in
+    let* slot_range =
+      Checked.List.fold ~init:None slot_ranges ~f:(function
+        | None ->
+            fun x -> Checked.return (Some x)
+        | Some x ->
+            fun y -> slot_range_intersection x y >>| fun x -> Some x )
+      >>| Option.value ~default:Slot_range.(constant typ infinite)
+    in
+    let* target_ledger, isnt_target_ledger =
+      Checked.List.fold
+        [ l.ledger; g.first_pass_ledger; g.second_pass_ledger ]
+        ~init:(Ledger_hash.(constant typ empty_hash), Boolean.true_)
+        ~f:(fun (maybe_target_ledger, isnt_target_ledger) (ledger, _) ->
+          let* isnt_target_ledger' =
+            Boolean.( || )
+            <$> Ledger_hash.equal_var ledger source_ledger
+            <*> Ledger_hash.equal_var ledger
+                  Ledger_hash.(constant typ empty_hash)
+          in
+          let* isnt_target_ledger' in
+          let* () =
+            Boolean.( || ) isnt_target_ledger isnt_target_ledger'
+            >>| Boolean.not >>= Boolean.Assert.is_true
+          in
+          let* next_ledger =
+            Ledger_hash.if_ isnt_target_ledger ~then_:ledger
+              ~else_:maybe_target_ledger
+          in
+          let*| next_isnt_target_ledger =
+            Boolean.( && ) isnt_target_ledger isnt_target_ledger'
+          in
+          (next_ledger, next_isnt_target_ledger) )
+    in
+    let* () = Boolean.not isnt_target_ledger |> Boolean.Assert.is_true in
+    let out : Zeko_stmt.var =
+      { source_ledger
+      ; target_ledger
+      ; sequencer
+      ; accumulated_fees = g.fee_excess
+      ; slot_range
+      ; source_local_state
+      ; target_local_state =
+          { transaction_commitment = l.transaction_commitment
+          ; full_transaction_commitment = l.transaction_commitment
+          ; account_update_index = l.account_update_index
+          ; stack_frame_digest = force l.stack_frame.hash
+          ; call_stack_digest = l.call_stack.hash
+          ; excess = l.excess
+          }
+      ; source_acc_set
+      ; target_acc_set
+      }
+    in
+    let*| prevs = gen_prevs vks must_verify_zkapp zkapp_input in
+    { Compile_simple.out; prevs }
+end
+
 module Zkapp_single_unproved_input = struct
-  type t = { base : Zkapp_rule_input.t; shift_action_state : Boolean.t }
+  type t = { base : Zkapp_rule_input.t; first : Per_account_update.t }
   [@@deriving snarky]
 end
+
+let single_unproved input =
+  let* Zkapp_single_unproved_input.{ base; first } =
+    exists Zkapp_single_unproved_input.typ ~compute:(V.get input)
+  in
+  shared
+    ~gen_prevs:(fun _ _ _ -> Checked.return Compile_simple.No_prevs)
+    base
+    [ (Signature, `Compute_in_circuit, first) ]
 
 module Zkapp_double_unproved_input = struct
   type t =
     { base : Zkapp_rule_input.t
-    ; shift_action_state_first : Boolean.t
-    ; shift_action_state_second : Boolean.t
+    ; first : Per_account_update.t
+    ; second : Per_account_update.t
     }
   [@@deriving snarky]
 end
+
+let double_unproved input =
+  let* Zkapp_double_unproved_input.{ base; first; second } =
+    exists Zkapp_double_unproved_input.typ ~compute:(V.get input)
+  in
+  shared
+    ~gen_prevs:(fun _ _ _ -> Checked.return Compile_simple.No_prevs)
+    base
+    [ (Signature, `Compute_in_circuit, first)
+    ; (Signature, `Compute_in_circuit, second)
+    ]
 
 module Zkapp_single_proved_input = struct
   type t =
     { base : Zkapp_rule_input.t
-    ; zkapp_vk : Verification_key.t
+    ; vk : Compile_simple.Verification_key.t
     ; zkapp_proof : Proof_V.t
-    ; shift_action_state : Boolean.t
+    ; first : Per_account_update.t
     }
   [@@deriving snarky]
 end
 
-let single_unproved ~shift_action_state ~is_start
-    Zkapp_rule_input.
-      { source_ledger
-      ; source_local_state
-      ; sequencer
-      ; source_acc_set
-      ; witness
-      ; account_updates_when_start
-      ; memo_hash_when_start
-      } =
-  let witness_p =
-    Prover_value.create @@ fun () -> V.unsafe_unwrap witness |> Option.value_exn
+let single_proved input =
+  let* Zkapp_single_proved_input.{ base; vk; zkapp_proof; first } =
+    exists Zkapp_single_proved_input.typ ~compute:(V.get input)
   in
-  let source_ledger_sparse =
-    Prover_value.map ~f:(fun x -> x.source_ledger_sparse) witness_p
-  in
-  let stack_frame = Prover_value.map ~f:(fun x -> x.stack_frame) witness_p in
-  let* ( ( ((g : Transaction_snark.Base.Zkapp_command_snark.Global_state.t), l)
-         , accounts_new )
-       , slot_ranges ) =
-    accumulate
-    @@ fun set_slot_range ->
-    accumulate
-    @@ fun set_account_new ->
-    make_checked
-    @@ fun () ->
-    let module Inputs =
-    Transaction_snark.Base.Zkapp_command_snark.Single (struct
-      let constraint_constants = constraint_constants
-
-      let spec : Transaction_snark.Zkapp_command_segment.Spec.single =
-        { auth_type = Signature; is_start }
-
-      let set_zkapp_input _ = failwith "impossible"
-
-      let set_must_verify _ = failwith "impossible"
-    end) in
-    let module Logic =
-      Mina_transaction_logic.Zkapp_command_logic.Make (Inputs.Inputs) in
-    let T = Inputs.Inputs.call_forest_type_eq in
-    let T = Inputs.Inputs.call_stack_type_eq in
-    let T = Inputs.Inputs.transaction_commitment_type_eq in
-    let epoch_data : Epoch_data.var =
-      { ledger =
-          { hash = Ledger_hash.(constant typ empty_hash)
-          ; total_currency = Currency.Amount.(constant typ zero)
-          }
-      ; seed = Epoch_seed.var_of_hash_packed (constant F.typ Field.zero)
-      ; start_checkpoint =
-          State_hash.var_of_hash_packed (constant F.typ Field.zero)
-      ; lock_checkpoint =
-          State_hash.var_of_hash_packed (constant F.typ Field.zero)
-      ; epoch_length = Mina_numbers.Length.(constant typ zero)
-      }
-    in
-    let l : Inputs.Inputs.Local_state.t =
-      { ledger = (source_ledger, source_ledger_sparse)
-      ; stack_frame =
-          Inputs.Inputs.stack_frame_unhash source_local_state.stack_frame_digest
-            stack_frame
-      ; call_stack =
-          { With_hash.hash = source_local_state.call_stack_digest
-          ; data = Prover_value.map ~f:(fun x -> x.call_stack) witness_p
-          }
-      ; transaction_commitment = source_local_state.transaction_commitment
-      ; full_transaction_commitment =
-          source_local_state.full_transaction_commitment
-      ; excess = source_local_state.excess
-      ; supply_increase = Currency.Amount.Signed.(constant typ zero)
-      ; will_succeed = Boolean.true_
-      ; success = Boolean.true_
-      ; account_update_index = source_local_state.account_update_index
-      ; failure_status_tbl = ()
-      }
-    in
-    let ( (g : Transaction_snark.Base.Zkapp_command_snark.Global_state.t)
-        , (l : local_state_var) ) =
-      Logic.apply ~constraint_constants
-        ~is_start:
-          (`Compute
-            { account_updates =
-                With_hash.
-                  { hash =
-                      (Obj.magic (account_updates_when_start : Field.Var.t) : Zkapp_call_forest
-                                                                              .Checked
-                                                                              .F
-                                                                              .t)
-                      (* horrible hack *)
-                  ; data =
-                      Prover_value.map
-                        ~f:(fun x -> x.account_updates_when_start)
-                        witness_p
-                  }
-            ; memo_hash = memo_hash_when_start
-            ; will_succeed = Boolean.true_
-            } )
-        { perform =
-            (fun x ->
-              perform ~shift_action_states:[ shift_action_state ]
-                ~set_slot_range ~set_account_new x )
-        }
-        ( { first_pass_ledger = (source_ledger, source_ledger_sparse)
-          ; second_pass_ledger = (source_ledger, source_ledger_sparse)
-          ; fee_excess = Currency.Amount.Signed.(constant typ zero)
-          ; supply_increase = Currency.Amount.Signed.(constant typ zero)
-          ; protocol_state =
-              ({ snarked_ledger_hash = Ledger_hash.(constant typ empty_hash)
-               ; blockchain_length = Mina_numbers.Length.(constant typ zero)
-               ; min_window_density = Mina_numbers.Length.(constant typ zero)
-               ; total_currency = Currency.Amount.(constant typ zero)
-               ; global_slot_since_genesis =
-                   Mina_numbers.Global_slot_since_genesis.(constant typ zero)
-               ; staking_epoch_data = epoch_data
-               ; next_epoch_data = epoch_data
-               } : Zkapp_precondition.Protocol_state.View.Checked.t)
-          ; block_global_slot =
-              Mina_numbers.Global_slot_since_genesis.(constant typ zero)
-          }
-        , l )
-    in
-    (g, l)
-  in
-  let* accounts_new =
-    Checked.List.map accounts_new ~f:(fun (account, is_new) ->
-        let*| is_new in
-        (account, is_new) )
-  in
-  let* target_acc_set =
-    update_acc_set accounts_new source_acc_set
-      ~witness:
-        ( V.map
-            ~f:(fun (x : Zkapp_rule_input_witness.t) -> x.update_acc_set_witness)
-            witness
-        |> V.get )
-  in
-  let* slot_range =
-    Checked.List.fold ~init:None slot_ranges ~f:(function
-      | None ->
-          fun x -> Checked.return (Some x)
-      | Some x ->
-          fun y -> slot_range_intersection x y >>| fun x -> Some x )
-    >>| Option.value ~default:Slot_range.(constant typ infinite)
-  in
-  let* target_ledger, isnt_target_ledger =
-    Checked.List.fold
-      [ l.ledger; g.first_pass_ledger; g.second_pass_ledger ]
-      ~init:(Ledger_hash.(constant typ empty_hash), Boolean.true_)
-      ~f:(fun (maybe_target_ledger, isnt_target_ledger) (ledger, _) ->
-        let* isnt_target_ledger' =
-          Boolean.( || )
-          <$> Ledger_hash.equal_var ledger source_ledger
-          <*> Ledger_hash.equal_var ledger Ledger_hash.(constant typ empty_hash)
-        in
-        let* isnt_target_ledger' in
-        let* () =
-          Boolean.( || ) isnt_target_ledger isnt_target_ledger'
-          >>| Boolean.not >>= Boolean.Assert.is_true
-        in
-        let* next_ledger =
-          Ledger_hash.if_ isnt_target_ledger ~then_:ledger
-            ~else_:maybe_target_ledger
-        in
-        let*| next_isnt_target_ledger =
-          Boolean.( && ) isnt_target_ledger isnt_target_ledger'
-        in
-        (next_ledger, next_isnt_target_ledger) )
-  in
-  let*| () = Boolean.not isnt_target_ledger |> Boolean.Assert.is_true in
-  let out : Zeko_stmt.var =
-    { source_ledger
-    ; target_ledger
-    ; sequencer
-    ; accumulated_fees = g.fee_excess
-    ; slot_range
-    ; source_local_state
-    ; target_local_state =
-        { transaction_commitment = l.transaction_commitment
-        ; full_transaction_commitment = l.transaction_commitment
-        ; account_update_index = l.account_update_index
-        ; stack_frame_digest = Inputs.Inputs.stack_frame_hash l.stack_frame
-        ; call_stack_digest = l.call_stack.hash
-        ; excess = l.excess
-        }
-    ; source_acc_set
-    ; target_acc_set
-    }
-  in
-  { Compile_simple.out; prevs = No_prevs }
+  shared
+    ~gen_prevs:(fun vks proof_must_verify_list public_input_list ->
+      match (vks, proof_must_verify_list, public_input_list) with
+      | [ vk_hash ], [ proof_must_verify ], [ public_input ] ->
+          let*| () =
+            assert_equal ~label:__LOC__ F.typ
+              (Compile_simple.Verification_key.hash_var vk)
+              vk_hash
+          in
+          Compile_simple.One_prev_sideloaded
+            { public_input; proof = zkapp_proof; proof_must_verify; vk }
+      | _ ->
+          failwith "impossible" )
+    base
+    [ (Proof, `Compute_in_circuit, first) ]

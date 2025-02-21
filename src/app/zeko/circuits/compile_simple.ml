@@ -26,6 +26,10 @@ module Verification_key = struct
   let of_tag (Tag tag) = of_compiled_promise tag
 
   let to_pickles_lossy x = x
+  
+  let hash = Mina_base.Zkapp_account.digest_vk
+
+  let hash_var = Mina_base.Zkapp_account.Checked.digest_vk
 end
 
 let force_tag tag = Promise.map ~f:(fun _ -> ()) (Verification_key.of_tag tag)
