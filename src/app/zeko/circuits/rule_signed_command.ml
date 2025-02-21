@@ -6,19 +6,6 @@ open Zeko_util
 open Txn_state
 
 open struct
-  let constraint_constants : Genesis_constants.Constraint_constants.t =
-    { sub_windows_per_window = 1
-    ; ledger_depth = 35
-    ; work_delay = 1
-    ; block_window_duration_ms = 1
-    ; transaction_capacity_log_2 = 1
-    ; pending_coinbase_depth = 1
-    ; coinbase_amount = Currency.Amount.zero
-    ; supercharged_coinbase_factor = 1
-    ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
-    ; fork = None
-    }
-
   let dummy_pc_init = Pending_coinbase.Stack.empty
 
   let protocol_constants : Genesis_constants.Protocol.t =
@@ -48,59 +35,6 @@ open struct
     Pending_coinbase.Stack.push_state
       (Mina_state.Protocol_state.Body.hash dummy_state_body)
       Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
-
-  let accumulate (f : ('a -> unit) -> 'b Checked.t) : ('b * 'a list) Checked.t =
-    let acc = ref [] in
-    let running = ref true in
-    let*| r =
-      f (fun x ->
-          (* if this fails it's because you used the generated function after the
-             end of its scope, i.e., use-after-free. *)
-          assert !running ;
-          acc := x :: !acc )
-    in
-    running := false ;
-    (r, !acc)
-
-  let derive_token_id ~owner =
-    make_checked @@ fun () -> Account_id.Checked.derive_token_id ~owner
-end
-
-type update_acc_set_witness =
-  { get_account_set_x : unit -> Token_id.t
-  ; get_account_set_z : unit -> Token_id.t
-  ; get_account_set_x_path : unit -> Account_set.Path.t
-  ; get_account_set_y_path : unit -> Account_set.Path.t
-  }
-
-open struct
-  let update_acc_set accounts init ~witness =
-    Checked.List.fold accounts ~init
-      ~f:(fun set (account_id, is_empty_and_writeable) ->
-        let open As_prover in
-        let* x =
-          exists Token_id.typ
-            ~compute:(witness >>| fun x -> x.get_account_set_x ())
-        in
-        let* path_x =
-          exists Account_set.Path.typ
-            ~compute:(witness >>| fun x -> x.get_account_set_x_path ())
-        in
-        let* path_y =
-          exists Account_set.Path.typ
-            ~compute:(witness >>| fun x -> x.get_account_set_y_path ())
-        in
-        let* z =
-          exists Token_id.typ
-            ~compute:(witness >>| fun x -> x.get_account_set_z ())
-        in
-        let* y = derive_token_id ~owner:account_id in
-        let* `Before_adding_y set', `After_adding_y new_set =
-          Account_set.add_key_var ~x ~path_x ~y ~path_y ~z
-            ~check:is_empty_and_writeable ()
-        in
-        let*| () = assert_equal ~label:__LOC__ Account_set.typ set set' in
-        new_set )
 end
 
 module Base_witness = struct

@@ -6,27 +6,7 @@ open Zeko_util
 open Txn_state
 open Checked.Let_syntax
 
-type update_acc_set_witness =
-  { get_account_set_x : unit -> Token_id.t
-  ; get_account_set_z : unit -> Token_id.t
-  ; get_account_set_x_path : unit -> Account_set.Path.t
-  ; get_account_set_y_path : unit -> Account_set.Path.t
-  }
-
 open struct
-  let constraint_constants : Genesis_constants.Constraint_constants.t =
-    { sub_windows_per_window = 1
-    ; ledger_depth = 35
-    ; work_delay = 1
-    ; block_window_duration_ms = 1
-    ; transaction_capacity_log_2 = 1
-    ; pending_coinbase_depth = 1
-    ; coinbase_amount = Currency.Amount.zero
-    ; supercharged_coinbase_factor = 1
-    ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
-    ; fork = None
-    }
-
   let account_with_hash (account : Account.Checked.Unhashed.t) :
       (Account.Checked.Unhashed.t, Field.Var.t lazy_t) With_hash.t =
     With_hash.of_data account ~hash_data:(fun a ->
@@ -112,37 +92,6 @@ open struct
               shift_action_states := xs ;
               x )
 
-  let derive_token_id ~owner =
-    make_checked @@ fun () -> Account_id.Checked.derive_token_id ~owner
-
-  let update_acc_set accounts init ~witness =
-    Checked.List.fold accounts ~init
-      ~f:(fun set (account_id, is_empty_and_writeable) ->
-        let open As_prover in
-        let* x =
-          exists Token_id.typ
-            ~compute:(witness >>| fun x -> x.get_account_set_x ())
-        in
-        let* path_x =
-          exists Account_set.Path.typ
-            ~compute:(witness >>| fun x -> x.get_account_set_x_path ())
-        in
-        let* path_y =
-          exists Account_set.Path.typ
-            ~compute:(witness >>| fun x -> x.get_account_set_y_path ())
-        in
-        let* z =
-          exists Token_id.typ
-            ~compute:(witness >>| fun x -> x.get_account_set_z ())
-        in
-        let* y = derive_token_id ~owner:account_id in
-        let* `Before_adding_y set', `After_adding_y new_set =
-          Account_set.add_key_var ~x ~path_x ~y ~path_y ~z
-            ~check:is_empty_and_writeable ()
-        in
-        let*| () = assert_equal ~label:__LOC__ Account_set.typ set set' in
-        new_set )
-
   let ( <*> ) : ('a -> 'b) Checked.t -> 'a Checked.t -> 'b Checked.t =
    fun f x ->
     let* f in
@@ -190,15 +139,20 @@ end
 
 open struct
   module Zkapp_rule_input_witness_V = Mk_V (Zkapp_rule_input_witness)
-end
-
-open struct
   module Call_forest_V = Mk_V (Mina_base.Zkapp_command.Call_forest.With_hashes)
+
+  module Zkapp_call_forest_F = struct
+    type t = Mina_base.Zkapp_command.Digest.Forest.t
+
+    type var = Mina_base.Zkapp_command.Digest.Forest.Checked.t
+
+    let typ = Mina_base.Zkapp_command.Digest.Forest.typ
+  end
 end
 
 module Per_account_update = struct
   type t =
-    { account_updates : F.t
+    { account_updates : Zkapp_call_forest_F.t
     ; memo_hash : F.t
     ; account_updates_data : Call_forest_V.t
     ; shift_action_state : Boolean.t
@@ -349,12 +303,7 @@ open struct
                 (`Compute
                   { account_updates =
                       With_hash.
-                        { hash =
-                            (Obj.magic (account_updates : F.var) : Zkapp_call_forest
-                                                                   .Checked
-                                                                   .F
-                                                                   .t)
-                            (* horrible hack *)
+                        { hash = account_updates
                         ; data =
                             ( Prover_value.create
                             @@ fun () ->
