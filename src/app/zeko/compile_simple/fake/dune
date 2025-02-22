@@ -1,0 +1,27 @@
+(env
+ (_
+  (flags (:standard -w @a-42-40-44-70-45-41))))
+
+(library
+ (name compile_simple_fake)
+ (implements compile_simple)
+ (libraries
+  ;; opam libraries
+  core_kernel
+  pickles
+  snark_params
+  v
+  random_oracle
+  hash_prefix_states)
+ (inline_tests)
+ (instrumentation
+  (backend bisect_ppx))
+ (preprocess
+  (pps
+   ppx_deriving.show
+   ppx_deriving_snarky
+   ppx_mina
+   ppx_jane
+   ppx_compare
+   h_list.ppx))
+ (modules compile_simple))

@@ -10,7 +10,7 @@
 
 (executable
  (name basic_prove_test)
- (libraries zeko_circuits)
+ (libraries zeko_circuits compile_simple_fake)
  (instrumentation
   (backend bisect_ppx))
  (preprocess
