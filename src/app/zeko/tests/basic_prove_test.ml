@@ -268,16 +268,34 @@ let _outer =
       Mina_base.Account_id.create old_inner_acc.public_key
         old_inner_acc.token_id
 
+    let kp = Keypair.gen |> Quickcheck.random_value
+
+    let () =
+      printf "Private key generated: %s\n"
+        (Signature_lib.Private_key.to_base58_check kp.private_key)
+
+    let () =
+      printf "Public_key key generated: %s\n"
+        (Signature_lib.Public_key.Compressed.to_base58_check
+           (Signature_lib.Public_key.compress kp.public_key) )
+
+    let pk = kp.public_key |> Signature_lib.Public_key.compress
+
+    let account_id = Mina_base.Account_id.create pk Mina_base.Token_id.default
+
     let sparse_source_ledger : Mina_ledger.Sparse_ledger.t =
       Mina_ledger.Sparse_ledger.(
         add_path
           (empty ~depth:constraint_constants.ledger_depth ())
           (List.map ~f:(fun (_, h) -> `Right h) intermediate_ledger_hashes)
           inner_account_id old_inner_acc)
-
-    let kp = Keypair.gen |> Quickcheck.random_value
-
-    let pk = kp.public_key |> Signature_lib.Public_key.compress
+      |> fun x ->
+      Mina_ledger.Sparse_ledger.add_path x
+        ( `Left (Mina_base.Account.digest old_inner_acc)
+        :: List.map
+             ~f:(fun (_, h) -> `Right h)
+             (List.drop intermediate_ledger_hashes 1) )
+        account_id Mina_base.Account.empty
 
     let first_account_update : Mina_base.Account_update.t =
       { body =
