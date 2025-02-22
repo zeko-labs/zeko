@@ -58,7 +58,9 @@ open struct
           , (account : _ With_hash.t)
           , new_account
           , local_state ) ->
-          let check _failure b = Run.Boolean.Assert.is_true b in
+          let check _failure b =
+            Run.with_label __LOC__ @@ fun () -> Run.Boolean.Assert.is_true b
+          in
           Zkapp_precondition.Account.Checked.check ~new_account ~check
             account_update.data.preconditions.account account.data ;
           local_state
@@ -359,7 +361,8 @@ open struct
           in
           let* () =
             let* x = Boolean.( && ) is_target_ledger is_target_ledger' in
-            Boolean.Assert.is_true (Boolean.not x)
+            with_label __LOC__
+            @@ fun () -> Boolean.Assert.is_true (Boolean.not x)
           in
           let* next_ledger =
             Ledger_hash.if_ is_target_ledger ~then_:maybe_target_ledger
@@ -370,7 +373,9 @@ open struct
           in
           (next_ledger, next_is_target_ledger) )
     in
-    let* () = Boolean.Assert.is_true is_target_ledger in
+    let* () =
+      with_label __LOC__ @@ fun () -> Boolean.Assert.is_true is_target_ledger
+    in
     let out : Zeko_stmt.var =
       { source_ledger
       ; target_ledger
