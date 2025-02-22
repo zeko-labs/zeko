@@ -354,12 +354,6 @@ module type Full = sig
     end
   end
 
-  module Merge : sig
-    val main :
-         Statement.With_sok.var
-      -> (Statement.With_sok.var * Statement.With_sok.var) Tick.Checked.t
-  end
-
   module For_tests : sig
     module Deploy_snapp_spec : sig
       type t =
