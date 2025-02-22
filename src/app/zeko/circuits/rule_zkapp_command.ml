@@ -344,32 +344,33 @@ open struct
             fun y -> slot_range_intersection x y >>| fun x -> Some x )
       >>| Option.value ~default:Slot_range.(constant typ infinite)
     in
-    let* target_ledger, isnt_target_ledger =
+    let* target_ledger, is_target_ledger =
       Checked.List.fold
         [ l.ledger; g.first_pass_ledger; g.second_pass_ledger ]
-        ~init:(Ledger_hash.(constant typ empty_hash), Boolean.true_)
-        ~f:(fun (maybe_target_ledger, isnt_target_ledger) (ledger, _) ->
-          let* isnt_target_ledger' =
-            Boolean.( || )
-            <$> Ledger_hash.equal_var ledger source_ledger
-            <*> Ledger_hash.equal_var ledger
-                  Ledger_hash.(constant typ empty_hash)
+        ~init:(Ledger_hash.(constant typ empty_hash), Boolean.false_)
+        ~f:(fun (maybe_target_ledger, is_target_ledger) (ledger, _) ->
+          let* is_target_ledger' =
+            Boolean.( && )
+            <$> (Ledger_hash.equal_var ledger source_ledger >>| Boolean.not)
+            <*> ( Ledger_hash.equal_var ledger
+                    Ledger_hash.(constant typ empty_hash)
+                >>| Boolean.not )
+            >>= Fn.id
           in
-          let* isnt_target_ledger' in
           let* () =
-            Boolean.( || ) isnt_target_ledger isnt_target_ledger'
-            >>| Boolean.not >>= Boolean.Assert.is_true
+            let* x = Boolean.( && ) is_target_ledger is_target_ledger' in
+            Boolean.Assert.is_true (Boolean.not x)
           in
           let* next_ledger =
-            Ledger_hash.if_ isnt_target_ledger ~then_:ledger
-              ~else_:maybe_target_ledger
+            Ledger_hash.if_ is_target_ledger ~then_:maybe_target_ledger
+              ~else_:ledger
           in
-          let*| next_isnt_target_ledger =
-            Boolean.( && ) isnt_target_ledger isnt_target_ledger'
+          let*| next_is_target_ledger =
+            Boolean.( || ) is_target_ledger is_target_ledger'
           in
-          (next_ledger, next_isnt_target_ledger) )
+          (next_ledger, next_is_target_ledger) )
     in
-    let* () = Boolean.not isnt_target_ledger |> Boolean.Assert.is_true in
+    let* () = Boolean.Assert.is_true is_target_ledger in
     let out : Zeko_stmt.var =
       { source_ledger
       ; target_ledger
