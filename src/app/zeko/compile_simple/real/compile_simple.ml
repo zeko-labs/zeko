@@ -5,11 +5,7 @@ open Checked.Let_syntax
 
 type self_width = Pickles_types.Nat.N2.n
 
-module Proof = struct
-  include Pickles.Side_loaded.Proof
-
-  let of_pickles x = x
-end
+module Proof = Pickles.Side_loaded.Proof
 
 type 'var tag =
   | Tag : ('var, 'value, self_width, 'height) Pickles.Tag.t -> 'var tag
@@ -19,17 +15,17 @@ module Verification_key = struct
 
   type var = Checked.t
 
-  let of_pickles x = x
-
-  let var_of_pickles x = x
-
   let of_tag (Tag tag) = of_compiled_promise tag
 
-  let to_pickles_lossy x = x
+  let hash x =
+    Random_oracle.(
+      hash ~init:Hash_prefix_states.side_loaded_vk
+        (pack_input (Pickles.Side_loaded.Verification_key.to_input x)))
 
-  let hash = Mina_base.Zkapp_account.digest_vk
-
-  let hash_var = Mina_base.Zkapp_account.Checked.digest_vk
+  let hash_var x =
+    Random_oracle.Checked.(
+      hash ~init:Hash_prefix_states.side_loaded_vk
+        (pack_input (Pickles.Side_loaded.Verification_key.Checked.to_input x)))
 end
 
 let force_tag tag = Promise.map ~f:(fun _ -> ()) (Verification_key.of_tag tag)
@@ -685,8 +681,17 @@ let compile (type out_t out_var first_input branches n_available_branches)
           ~max_proofs_verified:(module Pickles_types.Nat.N2)
           ~name:("compile_simple of " ^ name)
           ~constraint_constants:
-            (Genesis_constants.Constraint_constants.to_snark_keys_header
-               Genesis_constants.Compiled.constraint_constants )
+            { sub_windows_per_window = -1
+            ; ledger_depth = -1
+            ; work_delay = -1
+            ; block_window_duration_ms = -1
+            ; transaction_capacity = Log_2 (-1)
+            ; pending_coinbase_depth = -1
+            ; coinbase_amount = Unsigned.UInt64.zero
+            ; supercharged_coinbase_factor = -1
+            ; account_creation_fee = Unsigned.UInt64.zero
+            ; fork = None
+            }
       in
       (* FIXME: Don't do this. Make lazy compilation work. Fix Pickles bug. *)
       Promise.block_on_async_exn (fun () ->

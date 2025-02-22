@@ -8,7 +8,9 @@
   ;; opam libraries
   core_kernel
   transaction_snark
-  staged_ledger_diff)
+  staged_ledger_diff
+  compile_simple
+  v)
  (inline_tests)
  (instrumentation
   (backend bisect_ppx))
@@ -49,9 +51,6 @@
   indexed_merkle_tree
   folder
   zeko_util
-  compile_simple
-  compile_simple_intf
-  zeko_as_prover
-  v)
+  zeko_as_prover)
  (virtual_modules zeko_as_prover)
  (default_implementation zeko_circuits_as_prover))
