@@ -22,7 +22,7 @@ module Verification_key : sig
   val of_tag : 'tag_var tag -> t Promise.t
 
   val to_pickles_lossy : t -> Pickles.Side_loaded.Verification_key.t
-  
+
   val hash : t -> Snark_params.Tick.Field.t
 
   val hash_var : var -> Snark_params.Tick.Field.Var.t
