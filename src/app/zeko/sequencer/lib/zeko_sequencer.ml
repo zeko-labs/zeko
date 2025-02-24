@@ -304,13 +304,15 @@ module Sequencer = struct
         let%bind signatures =
           Da_layer.Client.Sequencer.get_signatures da_client
             ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
-          |> Deferred.map ~f:(fun x -> Option.value_exn x)
+          |> Deferred.map ~f:(fun x ->
+                 Option.value_exn x ~message:"No signatures" )
         in
         printf "Received %d signatures from da layer\n%!"
           (List.length signatures) ;
 
         let old_inner_ledger =
           Option.value_exn state.previous_committed_ledger
+            ~message:"No previous committed ledger"
         in
         let commit_witness : Committer.Commit_witness.t =
           { old_inner_ledger
@@ -478,9 +480,10 @@ module Sequencer = struct
                       (Account_update.token_id update)
                   in
                   let location =
-                    L.location_of_account l account_id |> Option.value_exn
+                    L.location_of_account l account_id
+                    |> Option.value_exn ~message:"No location"
                   in
-                  L.get l location |> Option.value_exn
+                  L.get l location |> Option.value_exn ~message:"No account"
                 in
                 Archive.add_account_update archive update account
                   (Some
@@ -623,6 +626,7 @@ module Sequencer = struct
                 { Transaction_protocol_state.Poly.transaction =
                     Signed_command.check_only_for_signature signed_command
                     |> Option.value_exn
+                         ~message:"check_only_for_signature failed"
                 ; block_data = state_body
                 ; global_slot
                 }
