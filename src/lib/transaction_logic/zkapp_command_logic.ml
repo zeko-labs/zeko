@@ -982,6 +982,7 @@ module Make (Inputs : Inputs_intf) = struct
         (* Invariant: call_stack contains only non-empty forests. *)
         pop_call_stack call_stack
       in
+      (* ZEKO NOTE: I don't think this comment is correct. Code seems to be correct though. *)
       (* TODO: I believe current should only be empty for the first account_update in
          a transaction. *)
       let current_is_empty =
