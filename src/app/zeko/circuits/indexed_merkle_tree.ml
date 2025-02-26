@@ -23,7 +23,7 @@ struct
   let typ = F.typ
 
   module PathStep = struct
-    type t = { hash : F.t; is_left : Boolean.t } [@@deriving snarky]
+    type t = { hash_other : F.t; is_right : Boolean.t } [@@deriving snarky]
   end
 
   module Path =
@@ -37,11 +37,11 @@ struct
 
   (* TODO: consider different salt per level. *)
   let implied_root_raw (init : F.var) (path : Path.var) : F.var Checked.t =
-    Checked.List.fold path ~init ~f:(fun acc { hash; is_left } ->
+    Checked.List.fold path ~init ~f:(fun acc { hash_other; is_right } ->
         let* left, right =
-          if_ is_left
+          if_ is_right
             ~typ:Typ.(F.typ * F.typ)
-            ~then_:(hash, acc) ~else_:(acc, hash)
+            ~then_:(hash_other, acc) ~else_:(acc, hash_other)
         in
         var_to_hash ~init:"indexed merkle tree" Typ.(F.typ * F.typ) (left, right) )
 

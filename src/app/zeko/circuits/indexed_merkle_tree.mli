@@ -34,7 +34,7 @@ end) : sig
   val typ : (var, t) Typ.t
 
   module PathStep : sig
-    type t = { hash : F.t; is_left : Boolean.t } [@@deriving snarky]
+    type t = { hash_other : F.t; is_right : Boolean.t } [@@deriving snarky]
   end
 
   module Path : sig
