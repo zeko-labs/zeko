@@ -267,7 +267,9 @@ let _outer =
             let acc' = Mina_base.Ledger_hash.merge ~height acc right in
             acc' )
 
-    let fee_payer_kp = Keypair.gen |> Quickcheck.random_value
+    let fee_payer_kp, new_kp =
+      Base_quickcheck.Generator.both Keypair.gen Keypair.gen
+      |> Quickcheck.random_value
 
     let fee_payer_acc =
       { Mina_base.Account.empty with
@@ -303,12 +305,10 @@ let _outer =
       Mina_base.Account_id.create account.Mina_base.Account.public_key
         account.token_id
 
-    let kp_new = Keypair.gen |> Quickcheck.random_value
-
-    let pk_new = kp_new.public_key |> Public_key.compress
+    let new_pk = new_kp.public_key |> Public_key.compress
 
     let account_id_new =
-      Mina_base.Account_id.create pk_new Mina_base.Token_id.default
+      Mina_base.Account_id.create new_pk Mina_base.Token_id.default
 
     let sparse_source_ledger : Mina_ledger.Sparse_ledger.t =
       Mina_ledger.Sparse_ledger.of_root ~depth:constraint_constants.ledger_depth
@@ -328,7 +328,7 @@ let _outer =
         (Public_key.Compressed.to_base58_check fee_payer_acc.public_key)
 
     let () =
-      printf "New  key: %s\n" (Public_key.Compressed.to_base58_check pk_new)
+      printf "New  key: %s\n" (Public_key.Compressed.to_base58_check new_pk)
 
     let () =
       printf "Inner key:                %s\n"
@@ -345,6 +345,17 @@ let _outer =
       ; authorization_kind = Signature
       ; increment_nonce = true
       ; use_full_commitment = true
+      ; preconditions =
+          { Mina_base.Account_update.Body.dummy.preconditions with
+            account =
+              { Mina_base.Account_update.Body.dummy.preconditions.account with
+                nonce =
+                  Check
+                    { lower = Unsigned.UInt32.zero
+                    ; upper = Unsigned.UInt32.zero
+                    }
+              }
+          }
       }
 
     let second_account_update : Mina_base.Account_update.Body.t =
@@ -371,7 +382,7 @@ let _outer =
 
     let fourth_account_update : Mina_base.Account_update.Body.t =
       { Mina_base.Account_update.Body.dummy with
-        public_key = pk_new
+        public_key = new_pk
       ; balance_change =
           Currency.Amount.of_mina_string_exn "1"
           |> Currency.Amount.Signed.of_unsigned
@@ -396,9 +407,14 @@ let _outer =
              first_account_update )
 
     let signature =
-      Signature_lib.Schnorr.Chunked.sign
-        ~signature_kind:Mina_signature_kind.Testnet fee_payer_kp.private_key
+      Signature_lib.Schnorr.Chunked.sign fee_payer_kp.private_key
         (Random_oracle.Input.Chunked.field full_transaction_commitment)
+
+    let () =
+      printf "public key out circuit: %s\n"
+        (fee_payer_acc.public_key |> Public_key.Compressed.to_base58_check) ;
+      printf "commitment out circuit: %s\n"
+        (full_transaction_commitment |> Field.to_string)
 
     type acc_set_entry = { key : field; next_key : field }
 
