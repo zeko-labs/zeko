@@ -220,11 +220,15 @@ open struct
         ; epoch_length = Mina_numbers.Length.(constant typ zero)
         }
       in
+      let* stack_frame =
+        make_checked
+        @@ fun () ->
+        Transaction_snark.Base.Zkapp_command_snark.zeko_stack_frame_unhash
+          source_local_state.stack_frame_digest stack_frame
+      in
       let l : _ Mina_transaction_logic.Zkapp_command_logic.Local_state.t =
         { ledger = (source_ledger, source_ledger_sparse)
-        ; stack_frame =
-            Transaction_snark.Base.Zkapp_command_snark.zeko_stack_frame_unhash
-              source_local_state.stack_frame_digest stack_frame
+        ; stack_frame
         ; call_stack =
             { With_hash.hash = source_local_state.call_stack_digest
             ; data = Prover_value.map ~f:(fun x -> x.call_stack) witness_p
@@ -385,7 +389,7 @@ open struct
       ; source_local_state
       ; target_local_state =
           { transaction_commitment = l.transaction_commitment
-          ; full_transaction_commitment = l.transaction_commitment
+          ; full_transaction_commitment = l.full_transaction_commitment
           ; account_update_index = l.account_update_index
           ; stack_frame_digest = force l.stack_frame.hash
           ; call_stack_digest = l.call_stack.hash
