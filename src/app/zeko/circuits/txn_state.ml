@@ -65,7 +65,7 @@ end
 
 let constraint_constants : Genesis_constants.Constraint_constants.t =
   { sub_windows_per_window = 1
-  ; ledger_depth = 35
+  ; ledger_depth = Account_set.height
   ; work_delay = 1
   ; block_window_duration_ms = 1
   ; transaction_capacity_log_2 = 1
