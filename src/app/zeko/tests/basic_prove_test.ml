@@ -370,12 +370,12 @@ let _outer =
         public_key = fee_payer_acc.public_key
       ; token_id = fee_payer_acc.token_id
       ; balance_change =
-          (let ( + ) x y = Currency.Amount.Signed.add x y |> Option.value_exn in
-           Currency.Amount.Signed.of_fee
-             Currency.Fee.Signed.(
-               of_unsigned constraint_constants.account_creation_fee |> negate)
-           + Currency.Amount.Signed.of_unsigned
-               (Currency.Amount.of_mina_string_exn "1") )
+          Currency.Amount.Signed.(
+            of_fee
+              Currency.Fee.Signed.(
+                of_unsigned constraint_constants.account_creation_fee)
+            + of_unsigned (Currency.Amount.of_mina_string_exn "1")
+            |> Option.value_exn |> negate)
       ; authorization_kind = Signature
       ; use_full_commitment = true
       }
@@ -384,8 +384,12 @@ let _outer =
       { Mina_base.Account_update.Body.dummy with
         public_key = new_pk
       ; balance_change =
-          Currency.Amount.of_mina_string_exn "1"
-          |> Currency.Amount.Signed.of_unsigned
+          Currency.Amount.Signed.(
+            of_fee
+              Currency.Fee.Signed.(
+                of_unsigned constraint_constants.account_creation_fee)
+            + of_unsigned (Currency.Amount.of_mina_string_exn "1")
+            |> Option.value_exn)
       }
 
     let full_transaction_commitment =
@@ -464,23 +468,12 @@ let _outer =
          |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
                 { hash_other; is_right = false } ) )
 
-    let _account_set_y_path : Account_set.Path.t =
+    let account_set_new_path : Account_set.Path.t =
       { hash_other = Field.zero; is_right = false }
       :: { hash_other = acc_set_merge base_left base_right; is_right = true }
       :: ( List.drop acc_set_intermediate_ledger_hashes 2
          |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
                 { hash_other; is_right = false } ) )
-
-    let _list_to_func : 'a list -> unit -> 'a =
-     fun xs ->
-      let xs = ref xs in
-      fun () ->
-        match !xs with
-        | x :: xs' ->
-            xs := xs' ;
-            x
-        | _ ->
-            failwith "empty"
 
     let zkapp_double_witness : Rule_zkapp_command.Zkapp_double_unproved_input.t
         =
@@ -551,31 +544,116 @@ let _outer =
           }
       }
 
-    let _stmt, _proof =
+    let stmt, _proof =
       Promise.block_on_async_exn @@ fun () -> zkapp_double zkapp_double_witness
 
-    (*
-    let inner_acc_path =
-      List.map
-        ~f:(fun (_, hash) : Outer_rules.Rule_commit_inst.PathElt.t ->
-          { right_side = hash } )
-        intermediate_ledger_hashes
+    let receipt_chain_hash =
+      let open Random_oracle in
+      Input.Chunked.(
+        append
+          (Mina_numbers.Index.to_input Unsigned.UInt32.zero)
+          (append
+             (field full_transaction_commitment)
+             (field Mina_base.Receipt.Chain_hash.empty) ))
+      |> pack_input
+      |> hash ~init:Hash_prefix_states.receipt_chain_zkapp_command
 
-    let commit_witness : Outer_rules.Rule_commit_inst.Witness.t =
-      { txn_snark
-      ; public_key = point_of_string "28811121"
-      ; vk_hash = Field.of_string "31923919199191"
-      ; verify_both_ases
-      ; old_inner_acc
-      ; old_inner_acc_path = inner_acc_path
-      ; new_inner_acc
-      ; new_inner_acc_path = inner_acc_path
-      ; da_signature
-      ; da_key = { public_key = da_key.x }
+    let fee_payer_acc =
+      { fee_payer_acc with nonce = Unsigned.UInt32.one; receipt_chain_hash }
+
+    let path_inner =
+      `Left (Mina_base.Account.digest fee_payer_acc)
+      :: ( List.map ~f:(fun (_, h) -> `Left h)
+         @@ List.drop intermediate_ledger_hashes 1 )
+
+    let path_new =
+      `Left (force Mina_base.Account.empty_digest)
+      :: `Right
+           Mina_base.Account.(
+             Mina_base.Ledger_hash.merge ~height:0 (digest old_inner_acc)
+               (digest fee_payer_acc))
+      :: List.map
+           ~f:(fun (_, h) -> `Left h)
+           (List.drop intermediate_ledger_hashes 2)
+
+    let sparse_source_ledger : Mina_ledger.Sparse_ledger.t =
+      Mina_ledger.Sparse_ledger.of_root ~depth:constraint_constants.ledger_depth
+        stmt.target_ledger
+      |> fun x ->
+      Mina_ledger.Sparse_ledger.add_path x path_inner (id_of old_inner_acc)
+        old_inner_acc
+      |> fun x ->
+      Mina_ledger.Sparse_ledger.add_path x path_fee_payer (id_of fee_payer_acc)
+        { fee_payer_acc with nonce = Unsigned.UInt32.one }
+      |> fun x ->
+      Mina_ledger.Sparse_ledger.add_path x path_new account_id_new
+        Mina_base.Account.empty
+
+    let () =
+      printf "old full_transaction_commitment: %s\n"
+        (Field.to_string stmt.source_local_state.full_transaction_commitment) ;
+      printf "new full_transaction_commitment: %s\n"
+        (Field.to_string stmt.target_local_state.full_transaction_commitment)
+
+    let zkapp_second_double_witness :
+        Rule_zkapp_command.Zkapp_double_unproved_input.t =
+      { base =
+          { source_ledger = stmt.target_ledger
+          ; source_local_state = stmt.target_local_state
+          ; sequencer = point_of_string_even "1991991991"
+          ; source_acc_set = stmt.target_acc_set
+          ; witness =
+              { stack_frame =
+                  { caller = Mina_base.Token_id.default
+                  ; caller_caller = Mina_base.Token_id.default
+                  ; calls =
+                      Mina_base.Zkapp_command.Call_forest.of_account_updates
+                        ~account_update_depth:(fun _ -> 0)
+                        [ { Mina_base.Account_update.body = third_account_update
+                          ; authorization = Signature signature
+                          }
+                        ; { Mina_base.Account_update.body =
+                              fourth_account_update
+                          ; authorization = None_given
+                          }
+                        ]
+                      |> Mina_base.Zkapp_command.Call_forest.accumulate_hashes'
+                  }
+              ; call_stack = []
+              ; source_ledger_sparse = sparse_source_ledger
+              ; update_acc_set_witness =
+                  { get_account_set_x =
+                      (fun () -> Mina_base.Token_id.of_field Field.zero)
+                  ; get_account_set_z =
+                      (fun () ->
+                        Mina_base.Token_id.of_field (Field.negate Field.one) )
+                  ; get_account_set_x_path = (fun () -> account_set_least_path)
+                  ; get_account_set_y_path = (fun () -> account_set_new_path)
+                  }
+              }
+          }
+      ; first =
+          { account_updates_data =
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+          ; memo_hash = Field.zero
+          ; account_updates =
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              |> Mina_base.Zkapp_command.Call_forest.hash
+          ; shift_action_state = false
+          }
+      ; second =
+          { account_updates_data =
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+          ; memo_hash = Field.zero
+          ; account_updates =
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              |> Mina_base.Zkapp_command.Call_forest.hash
+          ; shift_action_state = false
+          }
       }
 
     let _stmt, _proof =
-      Promise.block_on_async_exn @@ fun () -> commit commit_witness
-    *)
+      Promise.block_on_async_exn
+      @@ fun () -> zkapp_double zkapp_second_double_witness
   end in
   ()
