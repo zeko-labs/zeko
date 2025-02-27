@@ -265,14 +265,16 @@ include Indexed_merkle_tree.Make (struct
       in
       let* () = multi_range_check x0 x1 x2 in
       let x' = Field.Checked.(x0 + (l * x1) + (l2 * x2)) in
-      let*| () = Field.Checked.Assert.equal x' x in
+      let*| () =
+        with_label __LOC__ @@ fun () -> Field.Checked.Assert.equal x' x
+      in
       (x0, x1, x2)
 
     let assert_greater_than_full ~check x y =
       (* if check is false, use x on both sides *)
       let* y = if_ check ~typ:F.typ ~then_:y ~else_:x in
-      let* x0, x1, x2 = field_to_field3 x in
-      let* y0, y1, y2 = field_to_field3 y in
+      let* x0, x1, x2 = with_label __LOC__ @@ fun () -> field_to_field3 x in
+      let* y0, y1, y2 = with_label __LOC__ @@ fun () -> field_to_field3 y in
       let dec =
         let (Typ typ) = Boolean.typ in
         match typ.var_to_fields check with
@@ -282,7 +284,10 @@ include Indexed_merkle_tree.Make (struct
             failwith "unreachable"
       in
       (* if check (dec) is false, then we decrement with 0, and expand to greater than or equality check *)
-      let* () = sub_then_dec ~dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 in
+      let* () =
+        with_label __LOC__
+        @@ fun () -> sub_then_dec ~dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2
+      in
       assert (
         Bignum_bigint.(
           Field.size
@@ -297,6 +302,8 @@ include Indexed_merkle_tree.Make (struct
       ) ;
       assert (Field.(fp0 + (fp1 * l) + (fp2 * l2) |> equal (of_int 0))) ;
       let* () =
+        with_label __LOC__
+        @@ fun () ->
         sub_then_dec
           ~dec:Field.(constant typ one)
           ~x0:(constant Field.typ fp0) ~x1:(constant Field.typ fp1)

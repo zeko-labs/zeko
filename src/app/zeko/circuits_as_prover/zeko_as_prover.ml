@@ -54,7 +54,7 @@ open struct
   let slice_bigint (f : Bignum_bigint.t) (first_bit : int) (n_bits : int) =
     let open Bignum_bigint in
     assert (is_non_negative f) ;
-    shift_right f first_bit |> bit_and (shift_left (of_int 2) n_bits - one)
+    shift_right f first_bit |> bit_and (shift_left (of_int 1) n_bits - one)
 
   let slice (f : field) (first_bit : int) (n_bits : int) =
     slice_bigint (to_ f) first_bit n_bits |> of_
@@ -113,8 +113,8 @@ let sub ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 =
   let- y1 in
   let- y2 in
   let open Bignum_bigint in
-  let l = of_int 2 |> Fn.flip shift_left 88 in
-  let l2 = of_int 2 |> Fn.flip shift_left 176 in
+  let l = of_int 1 |> Fn.flip shift_left 88 in
+  let l2 = of_int 1 |> Fn.flip shift_left 176 in
   let x = x0 + (x1 * l) + (x2 * l2) in
   let y = y0 + (y1 * l) + (y2 * l2) in
   let r = x - y in
