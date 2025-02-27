@@ -4,6 +4,8 @@ open Mina_base
 module PC = Signature_lib.Public_key.Compressed
 open Zeko_util
 
+let height = 35
+
 include Indexed_merkle_tree.Make (struct
   open struct
     let add_plonk_constraint c =
@@ -317,9 +319,15 @@ include Indexed_merkle_tree.Make (struct
     let x = Token_id.Checked.to_field_unsafe x in
     let y = Token_id.Checked.to_field_unsafe y in
     let z = Token_id.Checked.to_field_unsafe z in
-    let* () = assert_greater_than_full ~check:Boolean.true_ z y in
-    let*| () = assert_greater_than_full ~check:Boolean.true_ y x in
+    let* () =
+      with_label __LOC__
+      @@ fun () -> assert_greater_than_full ~check:Boolean.true_ z y
+    in
+    let*| () =
+      with_label __LOC__
+      @@ fun () -> assert_greater_than_full ~check:Boolean.true_ y x
+    in
     ()
 
-  let height = 32
+  let height = height
 end)
