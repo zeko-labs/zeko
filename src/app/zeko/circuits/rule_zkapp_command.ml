@@ -94,17 +94,6 @@ open struct
               shift_action_states := xs ;
               x )
 
-  let ( <*> ) : ('a -> 'b) Checked.t -> 'a Checked.t -> 'b Checked.t =
-   fun f x ->
-    let* f in
-    let*| x in
-    f x
-
-  let ( <$> ) : ('a -> 'b) -> 'a Checked.t -> 'b Checked.t =
-   fun f x ->
-    let*| x in
-    f x
-
   type local_state_var =
     ( Transaction_snark.Base.Zkapp_command_snark.zeko_stack_frame_t
     , Transaction_snark.Base.Zkapp_command_snark.zeko_call_stack_t
@@ -195,6 +184,22 @@ open struct
       Prover_value.map ~f:(fun x -> x.source_ledger_sparse) witness_p
     in
     let stack_frame = Prover_value.map ~f:(fun x -> x.stack_frame) witness_p in
+    let module Global_state = struct
+      type t =
+        { fee_excess : Currency.Amount.Signed.var
+        ; supply_increase : Currency.Amount.Signed.var
+        }
+
+      let fee_excess { fee_excess; _ } = fee_excess
+
+      let set_fee_excess t fee_excess = { t with fee_excess }
+
+      let supply_increase { supply_increase; _ } = supply_increase
+
+      let set_supply_increase t supply_increase = { t with supply_increase }
+
+      let block_global_slot _ = constant Slot.typ Slot.zero
+    end in
     let* ( (((((g, l), vks), must_verify_zkapp), zkapp_input), accounts_new)
          , slot_ranges ) =
       accumulate
@@ -207,19 +212,6 @@ open struct
       @@ fun set_must_verify_zkapp ->
       accumulate
       @@ fun set_vk ->
-      let epoch_data : Epoch_data.var =
-        { ledger =
-            { hash = Ledger_hash.(constant typ empty_hash)
-            ; total_currency = Currency.Amount.(constant typ zero)
-            }
-        ; seed = Epoch_seed.var_of_hash_packed (constant F.typ Field.zero)
-        ; start_checkpoint =
-            State_hash.var_of_hash_packed (constant F.typ Field.zero)
-        ; lock_checkpoint =
-            State_hash.var_of_hash_packed (constant F.typ Field.zero)
-        ; epoch_length = Mina_numbers.Length.(constant typ zero)
-        }
-      in
       let* stack_frame =
         make_checked
         @@ fun () ->
@@ -244,23 +236,9 @@ open struct
         ; failure_status_tbl = ()
         }
       in
-      let g : Transaction_snark.Base.Zkapp_command_snark.Global_state.t =
-        { first_pass_ledger = (source_ledger, source_ledger_sparse)
-        ; second_pass_ledger = (source_ledger, source_ledger_sparse)
-        ; fee_excess = Currency.Amount.Signed.(constant typ zero)
+      let g : Global_state.t =
+        { fee_excess = Currency.Amount.Signed.(constant typ zero)
         ; supply_increase = Currency.Amount.Signed.(constant typ zero)
-        ; protocol_state =
-            ({ snarked_ledger_hash = Ledger_hash.(constant typ empty_hash)
-             ; blockchain_length = Mina_numbers.Length.(constant typ zero)
-             ; min_window_density = Mina_numbers.Length.(constant typ zero)
-             ; total_currency = Currency.Amount.(constant typ zero)
-             ; global_slot_since_genesis =
-                 Mina_numbers.Global_slot_since_genesis.(constant typ zero)
-             ; staking_epoch_data = epoch_data
-             ; next_epoch_data = epoch_data
-             } : Zkapp_precondition.Protocol_state.View.Checked.t)
-        ; block_global_slot =
-            Mina_numbers.Global_slot_since_genesis.(constant typ zero)
         }
       in
       Checked.List.fold account_updates_data ~init:(g, l)
@@ -289,6 +267,10 @@ open struct
               let set_must_verify = set_must_verify_zkapp
             end)
 
+            open struct
+              module G = Global_state
+            end
+
             include Inst.Inputs
 
             module Account = struct
@@ -297,13 +279,14 @@ open struct
               let register_verification_key ({ data = a; _ } : t) =
                 Data_as_hash.hash a.zkapp.verification_key.data |> set_vk
             end
+
+            module Global_state = G
           end in
           let module Logic =
             Mina_transaction_logic.Zkapp_command_logic.Make (Patched) in
           let T = Patched.zeko_transaction_commitment_type_eq in
           let T = Patched.zeko_call_forest_type_eq in
-          let ( (g : Transaction_snark.Base.Zkapp_command_snark.Global_state.t)
-              , (l : local_state_var) ) =
+          let g, (l : local_state_var) =
             Logic.apply ~constraint_constants
               ~is_start:
                 (`Compute
@@ -350,36 +333,7 @@ open struct
             fun y -> slot_range_intersection x y >>| fun x -> Some x )
       >>| Option.value ~default:Slot_range.(constant typ infinite)
     in
-    let* target_ledger, is_target_ledger =
-      Checked.List.fold
-        [ l.ledger; g.first_pass_ledger; g.second_pass_ledger ]
-        ~init:(Ledger_hash.(constant typ empty_hash), Boolean.false_)
-        ~f:(fun (maybe_target_ledger, is_target_ledger) (ledger, _) ->
-          let* is_target_ledger' =
-            Boolean.( && )
-            <$> (Ledger_hash.equal_var ledger source_ledger >>| Boolean.not)
-            <*> ( Ledger_hash.equal_var ledger
-                    Ledger_hash.(constant typ empty_hash)
-                >>| Boolean.not )
-            >>= Fn.id
-          in
-          let* () =
-            let* x = Boolean.( && ) is_target_ledger is_target_ledger' in
-            with_label __LOC__
-            @@ fun () -> Boolean.Assert.is_true (Boolean.not x)
-          in
-          let* next_ledger =
-            Ledger_hash.if_ is_target_ledger ~then_:maybe_target_ledger
-              ~else_:ledger
-          in
-          let*| next_is_target_ledger =
-            Boolean.( || ) is_target_ledger is_target_ledger'
-          in
-          (next_ledger, next_is_target_ledger) )
-    in
-    let* () =
-      with_label __LOC__ @@ fun () -> Boolean.Assert.is_true is_target_ledger
-    in
+    let target_ledger, _ = l.ledger in
     let out : Zeko_stmt.var =
       { source_ledger
       ; target_ledger
