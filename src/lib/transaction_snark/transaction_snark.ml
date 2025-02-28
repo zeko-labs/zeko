@@ -1746,19 +1746,21 @@ module Make_str (A : Wire_types.Concrete) = struct
             let set_supply_increase t supply_increase =
               { t with supply_increase }
 
-            let first_pass_ledger { first_pass_ledger; _ } = first_pass_ledger
+            (* ZEKO NOTE: These aren't used by Zeko. *)
 
-            let second_pass_ledger { second_pass_ledger; _ } =
+            let _first_pass_ledger { first_pass_ledger; _ } = first_pass_ledger
+
+            let _second_pass_ledger { second_pass_ledger; _ } =
               second_pass_ledger
 
-            let set_first_pass_ledger ~should_update t ledger =
+            let _set_first_pass_ledger ~should_update t ledger =
               { t with
                 first_pass_ledger =
                   Ledger.if_ should_update ~then_:ledger
                     ~else_:t.first_pass_ledger
               }
 
-            let set_second_pass_ledger ~should_update t ledger =
+            let _set_second_pass_ledger ~should_update t ledger =
               { t with
                 second_pass_ledger =
                   Ledger.if_ should_update ~then_:ledger

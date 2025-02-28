@@ -902,6 +902,9 @@ module type Inputs_intf = sig
   module Global_state : sig
     type t
 
+    (* ZEKO NOTE: We don't use these,
+       because we don't have passes. *)
+    (*
     val first_pass_ledger : t -> Ledger.t
 
     val set_first_pass_ledger : should_update:Bool.t -> t -> Ledger.t -> t
@@ -909,6 +912,7 @@ module type Inputs_intf = sig
     val second_pass_ledger : t -> Ledger.t
 
     val set_second_pass_ledger : should_update:Bool.t -> t -> Ledger.t -> t
+    *)
 
     val fee_excess : t -> Amount.Signed.t
 
@@ -1132,11 +1136,13 @@ module Make (Inputs : Inputs_intf) = struct
     in
     let local_state =
       { local_state with
-        ledger =
-          Inputs.Ledger.if_ is_start'
-            ~then_:(Inputs.Global_state.first_pass_ledger global_state)
-            ~else_:local_state.ledger
-      ; will_succeed
+        (* ZEKO NOTE: We don't have passes.
+           ledger =
+             Inputs.Ledger.if_ is_start'
+               ~then_:(Inputs.Global_state.first_pass_ledger global_state)
+               ~else_:local_state.ledger
+        *)
+        will_succeed
       }
     in
     (* ZEKO NOTE: For Zeko we don't allow taking fees from failed transactions *)
@@ -1913,22 +1919,24 @@ module Make (Inputs : Inputs_intf) = struct
        and set the local ledger to be the second pass ledger in preparation for
        the children.
     *)
-    let local_state, global_state =
-      let is_fee_payer = is_start' in
-      let global_state =
-        Global_state.set_first_pass_ledger ~should_update:is_fee_payer
-          global_state local_state.ledger
-      in
-      let local_state =
-        { local_state with
-          ledger =
-            Inputs.Ledger.if_ is_fee_payer
-              ~then_:(Global_state.second_pass_ledger global_state)
-              ~else_:local_state.ledger
-        }
-      in
-      (local_state, global_state)
-    in
+    (* ZEKO NOTE: We don't have passes.
+       let local_state, global_state =
+         let is_fee_payer = is_start' in
+         let global_state =
+           Global_state.set_first_pass_ledger ~should_update:is_fee_payer
+             global_state local_state.ledger
+         in
+         let local_state =
+           { local_state with
+             ledger =
+               Inputs.Ledger.if_ is_fee_payer
+                 ~then_:(Global_state.second_pass_ledger global_state)
+                 ~else_:local_state.ledger
+           }
+         in
+         (local_state, global_state)
+       in
+    *)
     (* If this is the last account update, and [will_succeed] is false, then
        [success] must also be false.
     *)
@@ -1951,8 +1959,11 @@ module Make (Inputs : Inputs_intf) = struct
              ~then_:new_global_supply_increase
              ~else_:(Global_state.supply_increase global_state) )
       in
-      Global_state.set_second_pass_ledger
-        ~should_update:is_successful_last_party global_state local_state.ledger
+      (* ZEKO NOTE: We don't have passes
+         Global_state.set_second_pass_ledger
+           ~should_update:is_successful_last_party global_state local_state.ledger
+      *)
+      global_state
     in
     let local_state =
       (* Make sure to reset the local_state at the end of a transaction.
@@ -1969,11 +1980,13 @@ module Make (Inputs : Inputs_intf) = struct
          - supply_increase = Amount.Signed.zero
       *)
       { local_state with
-        ledger =
-          Inputs.Ledger.if_ is_last_account_update
-            ~then_:(Inputs.Ledger.empty ~depth:0 ())
-            ~else_:local_state.ledger
-      ; success =
+        (* ZEKO NOTE: We don't have passes.
+           ledger =
+             Inputs.Ledger.if_ is_last_account_update
+               ~then_:(Inputs.Ledger.empty ~depth:0 ())
+               ~else_:local_state.ledger
+        *)
+        success =
           Bool.if_ is_last_account_update ~then_:Bool.true_
             ~else_:local_state.success
       ; account_update_index =
