@@ -197,12 +197,8 @@ let _outer =
       }
 
     let Compile_simple.
-          [ _signed_command
-          ; _zkapp_single
-          ; zkapp_double
-          ; _zkapp_proved
-          ; _merge
-          ] =
+          [ _signed_command; _zkapp_single; zkapp_double; _zkapp_proved; merge ]
+        =
       Txn_rules.provers
 
     let constraint_constants : Genesis_constants.Constraint_constants.t =
@@ -438,8 +434,7 @@ let _outer =
         | 34, hash ->
             [ (34, hash) ]
         | height, hash ->
-            (height, hash)
-            :: go (height + 1, Mina_base.Ledger_hash.merge ~height hash hash)
+            (height, hash) :: go (height + 1, acc_set_merge hash hash)
       in
       go (0, base)
 
@@ -449,29 +444,30 @@ let _outer =
 
     let max = Field.negate Field.one
 
-    let base_left = hash_entry { key = Field.zero; next_key = max }
-
     let base_right = hash_entry { key = max; next_key = max }
+
+    let acc_set_implied_root init path =
+      List.fold path ~init ~f:(fun acc -> function
+        | `Left right ->
+            acc_set_merge acc right
+        | `Right left ->
+            acc_set_merge left acc )
 
     (* FIXME: add entry for fee payer acc and inner acc *)
     let source_acc_set =
-      let init = acc_set_merge base_left base_right in
-      List.fold (List.drop acc_set_intermediate_ledger_hashes 1) ~init
-        ~f:(fun acc (_, right_side) -> acc_set_merge acc right_side)
-      |> to_account_set
+      hash_entry { key = Field.zero; next_key = max }
+      |> Fn.flip acc_set_implied_root
+           ( `Left base_right
+           :: ( List.drop acc_set_intermediate_ledger_hashes 1
+              |> List.map ~f:(fun (_, right) -> `Left right) ) )
+
+    let () = printf !"source_acc_set:      %{sexp: Field.t}\n" source_acc_set
 
     let () = assert (List.length acc_set_intermediate_ledger_hashes = 35)
 
     let account_set_least_path : Account_set.Path.t =
       { hash_other = base_right; is_right = false }
       :: ( List.drop acc_set_intermediate_ledger_hashes 1
-         |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
-                { hash_other; is_right = false } ) )
-
-    let account_set_new_path : Account_set.Path.t =
-      { hash_other = Field.zero; is_right = false }
-      :: { hash_other = acc_set_merge base_left base_right; is_right = true }
-      :: ( List.drop acc_set_intermediate_ledger_hashes 2
          |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
                 { hash_other; is_right = false } ) )
 
@@ -492,7 +488,7 @@ let _outer =
               ; account_update_index = Mina_numbers.Index.zero
               }
           ; sequencer = point_of_string_even "1991991991"
-          ; source_acc_set
+          ; source_acc_set = to_account_set source_acc_set
           ; witness =
               { stack_frame = Mina_base.Stack_frame.empty
               ; call_stack = []
@@ -544,7 +540,7 @@ let _outer =
           }
       }
 
-    let stmt, _proof =
+    let stmt0, proof0 =
       Promise.block_on_async_exn @@ fun () -> zkapp_double zkapp_double_witness
 
     let receipt_chain_hash =
@@ -578,7 +574,7 @@ let _outer =
 
     let sparse_source_ledger : Mina_ledger.Sparse_ledger.t =
       Mina_ledger.Sparse_ledger.of_root ~depth:constraint_constants.ledger_depth
-        stmt.target_ledger
+        stmt0.target_ledger
       |> fun x ->
       Mina_ledger.Sparse_ledger.add_path x path_inner (id_of old_inner_acc)
         old_inner_acc
@@ -591,17 +587,91 @@ let _outer =
 
     let () =
       printf "old full_transaction_commitment: %s\n"
-        (Field.to_string stmt.source_local_state.full_transaction_commitment) ;
+        (Field.to_string stmt0.source_local_state.full_transaction_commitment) ;
       printf "new full_transaction_commitment: %s\n"
-        (Field.to_string stmt.target_local_state.full_transaction_commitment)
+        (Field.to_string stmt0.target_local_state.full_transaction_commitment)
+
+    let token_id_new =
+      Mina_base.Account_id.derive_token_id ~owner:account_id_new
+      |> Mina_base.Token_id.to_field_unsafe
+
+    let account_set_new_path : Account_set.Path.t =
+      { hash_other = Field.zero; is_right = false }
+      :: { hash_other =
+             acc_set_merge
+               (hash_entry { key = Field.zero; next_key = token_id_new })
+               base_right
+         ; is_right = true
+         }
+      :: ( List.drop acc_set_intermediate_ledger_hashes 2
+         |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
+                { hash_other; is_right = false } ) )
+
+    let intermediate_acc_set =
+      hash_entry { key = Field.zero; next_key = token_id_new }
+      |> Fn.flip acc_set_implied_root
+           ( `Left base_right
+           :: ( List.drop acc_set_intermediate_ledger_hashes 1
+              |> List.map ~f:(fun (_, right) -> `Left right) ) )
+
+    let intermediate_acc_set' =
+      let second_left =
+        acc_set_merge
+          (hash_entry { key = Field.zero; next_key = token_id_new })
+          base_right
+      in
+      acc_set_implied_root Field.zero
+        ( `Left Field.zero :: `Right second_left
+        :: ( List.drop acc_set_intermediate_ledger_hashes 2
+           |> List.map ~f:(fun (_, right) -> `Left right) ) )
+
+    let to_field (Snark_params.Tick.Typ.Typ typ) x =
+      match typ.value_to_fields x with
+      | [| f |], _ ->
+          f
+      | _ ->
+          failwith "too big"
+
+    let () =
+      printf !"intermediate_acc_set:  %{sexp: Field.t}\n" intermediate_acc_set
+
+    let () =
+      printf !"intermediate_acc_set': %{sexp: Field.t}\n" intermediate_acc_set'
+
+    let () =
+      printf
+        !"intermediate_acc_set2: %{sexp: Field.t}\n"
+        (to_field Account_set.typ stmt0.target_acc_set)
+
+    let list_to_fun l =
+      let l = ref l in
+      fun () ->
+        match !l with
+        | [] ->
+            failwith "empty!"
+        | x :: xs ->
+            l := xs ;
+            x
+
+    let account_set_least_path' : Account_set.Path.t =
+      { hash_other = base_right; is_right = false }
+      :: { hash_other =
+             acc_set_merge
+               (hash_entry { key = token_id_new; next_key = max })
+               Field.zero
+         ; is_right = false
+         }
+      :: ( List.drop acc_set_intermediate_ledger_hashes 2
+         |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
+                { hash_other; is_right = false } ) )
 
     let zkapp_second_double_witness :
         Rule_zkapp_command.Zkapp_double_unproved_input.t =
       { base =
-          { source_ledger = stmt.target_ledger
-          ; source_local_state = stmt.target_local_state
+          { source_ledger = stmt0.target_ledger
+          ; source_local_state = stmt0.target_local_state
           ; sequencer = point_of_string_even "1991991991"
-          ; source_acc_set = stmt.target_acc_set
+          ; source_acc_set = stmt0.target_acc_set
           ; witness =
               { stack_frame =
                   { caller = Mina_base.Token_id.default
@@ -625,9 +695,13 @@ let _outer =
                   { get_account_set_x =
                       (fun () -> Mina_base.Token_id.of_field Field.zero)
                   ; get_account_set_z =
-                      (fun () ->
-                        Mina_base.Token_id.of_field (Field.negate Field.one) )
-                  ; get_account_set_x_path = (fun () -> account_set_least_path)
+                      list_to_fun
+                        [ Mina_base.Token_id.of_field (Field.negate Field.one)
+                        ; Mina_base.Token_id.of_field token_id_new
+                        ]
+                  ; get_account_set_x_path =
+                      list_to_fun
+                        [ account_set_least_path; account_set_least_path' ]
                   ; get_account_set_y_path = (fun () -> account_set_new_path)
                   }
               }
@@ -652,8 +726,18 @@ let _outer =
           }
       }
 
-    let _stmt, _proof =
+    let stmt1, proof1 =
       Promise.block_on_async_exn
       @@ fun () -> zkapp_double zkapp_second_double_witness
+
+    let _stmt, _proof =
+      Promise.block_on_async_exn
+      @@ fun () ->
+      merge
+        { left = stmt0
+        ; left_proof = proof0
+        ; right = stmt1
+        ; right_proof = proof1
+        }
   end in
   ()
