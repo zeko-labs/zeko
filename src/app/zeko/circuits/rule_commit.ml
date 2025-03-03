@@ -38,8 +38,7 @@ module Verify_both_ases = struct
     }
 
   include
-    ( val Compile_simple.compile ~override_wrap_domain:`N1
-            ~name:"Verify_both_ases" ~branches:[ rule ]
+    ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
             ~out_typ:Typ.(Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
             () )
 
