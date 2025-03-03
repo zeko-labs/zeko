@@ -32,7 +32,7 @@ module Local_state = struct
     ; excess : Currency.Amount.Signed.t
     ; account_update_index : Account_update_index.t
     }
-  [@@deriving snarky]
+  [@@deriving snarky, yojson]
 
   let dummy : var =
     { stack_frame_digest =
@@ -60,7 +60,7 @@ module Zeko_stmt = struct
     ; source_local_state : Local_state.t
     ; target_local_state : Local_state.t
     }
-  [@@deriving snarky]
+  [@@deriving snarky, yojson]
 end
 
 let constraint_constants : Genesis_constants.Constraint_constants.t =
