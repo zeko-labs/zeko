@@ -1308,6 +1308,8 @@ module Make (L : Ledger_intf.S) :
       module Signed = struct
         include Signed
 
+        let display x = sexp_of_t x |> Sexp.to_string_hum
+
         let if_ = value_if
 
         (* Correctness of these functions hinges on the fact that zero is
