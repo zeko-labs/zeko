@@ -9,6 +9,7 @@
   yojson
   cohttp
   cohttp-async
-  async_kernel)
+  async_kernel
+  mina_base)
  (preprocess
   (pps ppx_jane ppx_mina ppx_version)))

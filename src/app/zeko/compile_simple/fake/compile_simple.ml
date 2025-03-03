@@ -5,6 +5,12 @@ open Snark_params.Tick
 module Proof = struct
   type t = Proof of Field.t (* hash of vk and public input *)
   [@@deriving yojson]
+
+  let to_pickles _ =
+    let open Pickles_types in
+    Pickles.Proof.dummy Nat.N2.n Nat.N2.n Nat.N2.n ~domain_log2:15
+
+  let of_pickles _ = Proof Field.one
 end
 
 (* TODO: this should be hash of circuit *)
@@ -27,6 +33,12 @@ module Verification_key = struct
   let hash (Vk x) = x
 
   let hash_var (Var x) = x
+
+  let of_pickles _ = Vk Field.one
+
+  let to_pickles _ = Pickles.Side_loaded.Verification_key.dummy
+
+  let var_of_pickles _ = Var (Field.Var.constant Field.one)
 end
 
 let force_tag _ = Promise.return ()

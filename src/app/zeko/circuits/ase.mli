@@ -48,13 +48,8 @@ module With_length : sig
        val get_iterations : int
      end)
     -> sig
-<<<<<<< HEAD
     type original_stmt_t := Stmt.t
 
-    module Init = Stmt
-
-=======
->>>>>>> 6310f464fd (Implement folding of actions in ase)
     module Stmt : sig
       type t =
         { source : Inputs.Action_state.With_length.t
@@ -74,7 +69,6 @@ module With_length : sig
       -> var
       -> (Stmt.var * tag_var Compile_simple.prev) Checked.t
 
-<<<<<<< HEAD
     val make :
          proof_source:original_stmt_t
       -> proof_target:original_stmt_t
@@ -83,10 +77,7 @@ module With_length : sig
       -> field list
       -> t
 
-    val prove : Init.t -> field list -> t Promise.t
-=======
     val fold : Init.t -> field list -> t Promise.t
->>>>>>> 6310f464fd (Implement folding of actions in ase)
   end
 end
 
@@ -151,6 +142,14 @@ module Without_length : sig
          ?check:Zeko_util.Boolean.var
       -> var
       -> (Stmt.var * tag_var Compile_simple.prev) Checked.t
+
+    val make :
+         proof_source:field
+      -> proof_target:field
+      -> ?proof:Proof.t
+      -> field
+      -> field list
+      -> t
 
     val fold : Init.t -> field list -> t Promise.t
   end

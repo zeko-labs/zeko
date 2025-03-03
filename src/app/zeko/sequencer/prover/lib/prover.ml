@@ -46,7 +46,7 @@ let dummy_sok =
 
 module Account_set_witness = struct
   type t =
-    { hash : Zeko_transaction_snark.Account_set.t
+    { hash : Account_set.t
     ; x : Token_id.t list
     ; x_path : Ledger.Path.t list
     ; y_path : Ledger.Path.t list
@@ -89,14 +89,14 @@ module Account_set_witness = struct
     | _ ->
         Error "Account_set_witness.of_yojson"
 
-  let to_functions t : Zeko_transaction_snark.update_acc_set_witness =
+  let to_functions t : Txn_state.update_acc_set_witness =
     let mina_path_to_zeko_path path =
-      let open Zeko_transaction_snark.Account_set in
+      let open Account_set in
       List.map path ~f:(function
-        | `Left hash ->
-            ({ PathStep.hash; is_left = true } : PathStep.t)
-        | `Right hash ->
-            ({ PathStep.hash; is_left = false } : PathStep.t) )
+        | `Left hash_other ->
+            ({ PathStep.hash_other; is_right = false } : PathStep.t)
+        | `Right hash_other ->
+            ({ PathStep.hash_other; is_right = true } : PathStep.t) )
     in
     let i = ref 0 in
     { get_account_set_x = (fun () -> List.nth_exn t.x !i)
@@ -122,8 +122,8 @@ module Input = struct
         ( Ledger_hash.t
         * Ledger_hash.t
         * Ledger_hash.t
-        * Zeko_transaction_snark.Local_state.t
-        * Zeko_transaction_snark.Local_state.t
+        * Txn_state.Local_state.t
+        * Txn_state.Local_state.t
         * Currency.Fee.Signed.t
         * Currency.Amount.t
         * Transaction_snark.Zkapp_command_segment.Witness.t
@@ -134,8 +134,8 @@ module Input = struct
         ( Ledger_hash.t
         * Ledger_hash.t
         * Ledger_hash.t
-        * Zeko_transaction_snark.Local_state.t
-        * Zeko_transaction_snark.Local_state.t
+        * Txn_state.Local_state.t
+        * Txn_state.Local_state.t
         * Currency.Fee.Signed.t
         * Currency.Amount.t
         * Transaction_snark.Zkapp_command_segment.Witness.t
@@ -147,8 +147,8 @@ module Input = struct
         ( Ledger_hash.t
         * Ledger_hash.t
         * Ledger_hash.t
-        * Zeko_transaction_snark.Local_state.t
-        * Zeko_transaction_snark.Local_state.t
+        * Txn_state.Local_state.t
+        * Txn_state.Local_state.t
         * Currency.Fee.Signed.t
         * Currency.Amount.t
         * Transaction_snark.Zkapp_command_segment.Witness.t
@@ -158,14 +158,14 @@ module Input = struct
         * bool
         * Account_set_witness.t )
     | Txn_snark_merge of
-        ( Zeko_transaction_snark.Zeko_stmt.t
+        ( Txn_state.Zeko_stmt.t
         * Compile_simple.Proof.t
-        * Zeko_transaction_snark.Zeko_stmt.t
+        * Txn_state.Zeko_stmt.t
         * Compile_simple.Proof.t )
     | Inner_sync of
         (Public_key.Compressed.t * (Field.t list * Ase.With_length.Stmt.t))
     | Outer_commit of
-        ( Zeko_transaction_snark.T.t
+        ( (Txn_state.Zeko_stmt.t * Compile_simple.Proof.t)
         * Public_key.Compressed.t
         * Field.t list
         * Field.t list
@@ -179,14 +179,9 @@ end
 module Output = struct
   type t =
     | Pong
-    | Submit_deposit of Zeko_util.call_forest_tree
-    | Submit_withdrawal of Zeko_util.call_forest_tree
-    | Process_deposit of Zeko_util.call_forest
-    | Process_withdrawal of Zeko_util.call_forest
-    | Outer_step of Zeko_util.call_forest_tree
-    | Inner_step of Zeko_util.call_forest_tree
     | Zeko_transaction_snark of
         (Zeko_transaction_snark.Zeko_stmt.t * Compile_simple.Proof.t)
+    | Zeko_transaction_snark of (Txn_state.Zeko_stmt.t * Compile_simple.Proof.t)
     | Call_forest_tree of call_forest_tree
   [@@deriving yojson]
 end
@@ -196,10 +191,11 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
       return Output.Pong
   | Txn_snark_single_signed_command
       (source_ledger, sequencer, command, sparse_ledger, account_set_witness) ->
-      let open Zeko_transaction_snark in
       let handler = unstage @@ Sparse_ledger.handler sparse_ledger in
-      let Compile_simple.[ single_signed_command; _; _; _; _ ] = provers in
-      let input : Base_input.t =
+      let Compile_simple.[ single_signed_command; _; _; _; _ ] =
+        Txn_rules.provers
+      in
+      let input : Rule_signed_command.Base_input.t =
         { source_ledger
         ; source_acc_set = Account_set_witness.hash account_set_witness
         ; sequencer
@@ -213,7 +209,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         }
       in
       let%map stmt, proof =
-        time ~logger "Zeko_transaction_snark.single_signed_command"
+        time ~logger "Txn_rules.single_signed_command"
           (single_signed_command input |> Promise.to_deferred)
       in
       Output.Zeko_transaction_snark (stmt, proof)
@@ -229,28 +225,30 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
       , sequencer
       , shift_action_state
       , account_set_witness ) ->
-      let open Zeko_transaction_snark in
       let Compile_simple.[ _; single_unproved_zkapp_command; _; _; _ ] =
-        provers
+        Txn_rules.provers
       in
-      let input : Zkapp_single_unproved_input.t =
+      let input : Rule_zkapp_command.Zkapp_single_unproved_input.t =
         { base =
             { source_ledger
-            ; target_ledger
-            ; connecting_ledger
             ; source_local_state
-            ; target_local_state
-            ; fee_excess
-            ; supply_decrease
             ; witness =
-                { txn_snark_witness
+                { stack_frame = txn_snark_witness.local_state_init.stack_frame
+                ; call_stack = txn_snark_witness.local_state_init.call_stack
+                ; source_ledger_sparse =
+                    txn_snark_witness.global_first_pass_ledger
                 ; update_acc_set_witness =
                     Account_set_witness.to_functions account_set_witness
                 }
             ; sequencer
             ; source_acc_set = Account_set_witness.hash account_set_witness
             }
-        ; shift_action_state
+        ; first =
+            { account_updates = txn_snark_witness.start_zkapp_command
+            ; memo_hash
+            ; account_updates_data
+            ; shift_action_state
+            }
         }
       in
       let%map stmt, proof =
