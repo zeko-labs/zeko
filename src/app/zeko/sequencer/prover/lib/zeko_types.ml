@@ -491,13 +491,10 @@ module Inner_sync = struct
       { public_key : Public_key.Compressed.t; vk_hash : F.t; ase : Ase_inst.t }
 
     type serializable =
-      { public_key : Public_key.Compressed.t
-      ; vk_hash : F.t
-      ; ase : Ase_inst.serializable
-      }
+      { public_key : Public_key.Compressed.t; ase : Ase_inst.serializable }
     [@@deriving yojson]
 
-    let of_serializable ({ public_key; vk_hash; ase } : serializable) : t =
+    let of_serializable ({ public_key; ase } : serializable) ~vk_hash : t =
       { public_key; vk_hash; ase = Ase_inst.of_serializable ase }
   end
 end
