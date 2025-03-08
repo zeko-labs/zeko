@@ -51,18 +51,13 @@ module Make_folder (System : sig
   val extend_option_iterations : int
 end) =
 struct
-  type out_t =
-    { proof : Compile_simple.Proof.t option
-    ; source : System.Stmt.t
-    ; target : System.Stmt.t
-    }
-  [@@deriving yojson]
+  type out_t = Compile_simple.Proof.t option * System.Stmt.t [@@deriving yojson]
 
   let fold ~source ~elems : out_t Promise.t =
     match elems with
     | [] ->
         (* No need for folding, everything goes to excess *)
-        Promise.return { proof = None; source; target = source }
+        Promise.return (None, source)
     | elems_to_prove ->
         (* Need to fold *)
         let leaf_prover, (leaf_elems, rest) =
@@ -95,7 +90,7 @@ struct
               extend_rest rest acc
         in
         let%bind.Promise trans, proof = extend_rest rest leaf in
-        Promise.return { proof = Some proof; source; target = trans.target }
+        Promise.return (Some proof, trans.target)
 end
 
 module Folder_with_length = Make_folder (Ase.With_length)
@@ -205,12 +200,14 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         (mktree au (Compile_simple.Proof.to_pickles proof))
   | Ase (With_length (source, elems)) ->
       let%map snark =
-        Folder_with_length.fold ~source ~elems |> Promise.to_deferred
+        time ~logger "Folder_with_length.fold"
+          (Folder_with_length.fold ~source ~elems |> Promise.to_deferred)
       in
       Output.(Ase (With_length snark))
   | Ase (Without_length (source, elems)) ->
       let%map snark =
-        Folder_without_length.fold ~source ~elems |> Promise.to_deferred
+        time ~logger "Folder_without_length.fold"
+          (Folder_without_length.fold ~source ~elems |> Promise.to_deferred)
       in
       Output.(Ase (Without_length snark))
   | Verify_both_ases (outer, inner) ->
