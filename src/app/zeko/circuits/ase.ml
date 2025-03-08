@@ -6,8 +6,7 @@ open Zeko_util
 
 module M_with_length = struct
   module Stmt = struct
-    type t = { action_state : F.t; length : Checked32.t }
-    [@@deriving snarky, yojson]
+    type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
   end
 
   module Elem = F
@@ -112,14 +111,6 @@ module With_length = struct
       (({ source; target } : Stmt.var), verifier)
 
     let make = Made_2.make
-
-    let fold (source : Init.t) actions =
-      Made_2.fold ~source ~init_arg:source ~elems:actions
-        ~step_state:(fun acc action ->
-          { action_state =
-              Mina_base.Zkapp_account.Actions.push_hash acc.action_state action
-          ; length = Checked32.succ acc.length
-          } )
   end
 end
 
@@ -159,10 +150,5 @@ module Without_length = struct
       (({ source; target } : Stmt.var), verifier)
 
     let make = Made_2.make
-
-    let fold (source : Init.t) actions =
-      Made_2.fold ~source ~init_arg:source ~elems:actions
-        ~step_state:(fun acc action ->
-          Mina_base.Zkapp_account.Actions.push_hash acc action )
   end
 end

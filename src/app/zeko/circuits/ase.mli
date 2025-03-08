@@ -5,8 +5,7 @@ open Zeko_util
 
 module With_length : sig
   module Stmt : sig
-    type t = { action_state : F.t; length : Checked32.t }
-    [@@deriving snarky, yojson]
+    type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
   end
 
   module Init = Stmt
@@ -76,8 +75,6 @@ module With_length : sig
       -> original_stmt_t
       -> field list
       -> t
-
-    val fold : Init.t -> field list -> t Promise.t
   end
 end
 
@@ -150,7 +147,5 @@ module Without_length : sig
       -> field
       -> field list
       -> t
-
-    val fold : Init.t -> field list -> t Promise.t
   end
 end

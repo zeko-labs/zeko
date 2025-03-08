@@ -10,7 +10,7 @@ let push_events_checked state actions =
       Zkapp_account.Actions.push_events_checked state actions )
 
 module type Action_state_type = sig
-  include SnarkType
+  type t = F.t [@@deriving snarky]
 
   val empty : t
 
@@ -27,7 +27,7 @@ module type Action_state_type = sig
 
     type without_length_var := var
 
-    include SnarkType
+    type t = { state : F.t; length : Checked32.t } [@@deriving snarky]
 
     val empty : t
 
