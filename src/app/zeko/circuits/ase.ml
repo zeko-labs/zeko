@@ -111,6 +111,8 @@ module With_length = struct
       (({ source; target } : Stmt.var), verifier)
 
     let make = Made_2.make
+
+    let get_iterations = get_iterations
   end
 end
 
@@ -150,5 +152,7 @@ module Without_length = struct
       (({ source; target } : Stmt.var), verifier)
 
     let make = Made_2.make
+
+    let get_iterations = get_iterations
   end
 end

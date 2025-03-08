@@ -420,6 +420,8 @@ module Ase = struct
       -> Ase_state.t
       -> field list
       -> t
+
+    val get_iterations : int
   end
 
   module Make_serializable_ase (Inputs : sig
@@ -440,6 +442,7 @@ module Ase = struct
   end) =
   struct
     open Inputs
+    include Ase_inst
 
     type t = Ase_inst.t
 

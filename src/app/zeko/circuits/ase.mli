@@ -75,6 +75,8 @@ module With_length : sig
       -> original_stmt_t
       -> field list
       -> t
+
+    val get_iterations : int
   end
 end
 
@@ -147,5 +149,7 @@ module Without_length : sig
       -> field
       -> field list
       -> t
+
+    val get_iterations : int
   end
 end
