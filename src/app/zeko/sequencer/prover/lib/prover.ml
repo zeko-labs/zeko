@@ -1,25 +1,8 @@
 open Core_kernel
 open Async
 open Mina_base
-open Mina_ledger
-open Signature_lib
-module Sparse_imt = Indexed_merkle_tree.Sparse_indexed_merkle_tree
 open Zeko_circuits
-module Field = Snark_params.Tick.Field
-
-type call_forest =
-  ( Account_update.t
-  , Zkapp_command.Digest.Account_update.t
-  , Zkapp_command.Digest.Forest.t )
-  Zkapp_command.Call_forest.t
-[@@deriving yojson]
-
-type call_forest_tree =
-  ( Account_update.t
-  , Zkapp_command.Digest.Account_update.t
-  , Zkapp_command.Digest.Forest.t )
-  Zkapp_command.Call_forest.Tree.t
-[@@deriving yojson]
+open Zeko_types
 
 let mktree (account_update, account_update_digest, calls) proof =
   let account_update : Account_update.t =
@@ -39,446 +22,220 @@ let time ~logger label (d : 'a Deferred.t) =
     (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-let dummy_sok =
-  Sok_message.digest
-  @@ Sok_message.create ~fee:Currency.Fee.zero
-       ~prover:(Public_key.compress (Keypair.create ()).public_key)
+module Make_folder (System : sig
+  module Stmt : sig
+    type t [@@deriving yojson]
+  end
 
-module Account_set_witness = struct
-  type t =
-    { hash : Account_set.t
-    ; x : Token_id.t list
-    ; x_path : Ledger.Path.t list
-    ; y_path : Ledger.Path.t list
-    ; z : Token_id.t list
+  type trans = { source : Stmt.t; target : Stmt.t }
+
+  val leaf : F.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
+
+  val leaf_option :
+    F.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
+
+  val extend :
+       F.t list * (trans * Compile_simple.Proof.t)
+    -> (trans * Compile_simple.Proof.t) Promise.t
+
+  val extend_option :
+       F.t list * (trans * Compile_simple.Proof.t)
+    -> (trans * Compile_simple.Proof.t) Promise.t
+
+  val leaf_iterations : int
+
+  val leaf_option_iterations : int
+
+  val extend_iterations : int
+
+  val extend_option_iterations : int
+end) =
+struct
+  type out_t =
+    { proof : Compile_simple.Proof.t option
+    ; source : System.Stmt.t
+    ; target : System.Stmt.t
     }
-  [@@deriving sexp, fields]
+  [@@deriving yojson]
 
-  let empty imt =
-    { hash = Sparse_imt.merkle_root imt
-    ; x = []
-    ; x_path = []
-    ; y_path = []
-    ; z = []
-    }
-
-  let add t
-      ((x, x_path, y, y_path, z) :
-        [ `X of Token_id.t ]
-        * [ `X_path of Ledger.Path.t ]
-        * [ `Y of Token_id.t ]
-        * [ `Y_path of [ `Left of Field.t | `Right of Field.t ] list ]
-        * [ `Z of Token_id.t ] ) =
-    let x = match x with `X x -> x in
-    let x_path = match x_path with `X_path path -> path in
-    let y_path = match y_path with `Y_path path -> path in
-    let z = match z with `Z z -> z in
-    { t with
-      x = x :: t.x
-    ; x_path = x_path :: t.x_path
-    ; y_path = y_path :: t.y_path
-    ; z = z :: t.z
-    }
-
-  let to_yojson t = `String (Sexp.to_string @@ sexp_of_t t)
-
-  let of_yojson = function
-    | `String s -> (
-        try Ok (t_of_sexp @@ Sexp.of_string s)
-        with _ -> Error "Account_set_witness.of_yojson" )
-    | _ ->
-        Error "Account_set_witness.of_yojson"
-
-  let to_functions t : Txn_state.update_acc_set_witness =
-    let mina_path_to_zeko_path path =
-      let open Account_set in
-      List.map path ~f:(function
-        | `Left hash_other ->
-            ({ PathStep.hash_other; is_right = false } : PathStep.t)
-        | `Right hash_other ->
-            ({ PathStep.hash_other; is_right = true } : PathStep.t) )
-    in
-    let i = ref 0 in
-    { get_account_set_x = (fun () -> List.nth_exn t.x !i)
-    ; get_account_set_z = (fun () -> List.nth_exn t.z !i)
-    ; get_account_set_x_path =
-        (fun () -> List.nth_exn t.x_path !i |> mina_path_to_zeko_path)
-    ; get_account_set_y_path =
-        (fun () -> List.nth_exn t.y_path !i |> mina_path_to_zeko_path)
-    }
+  let fold ~source ~elems : out_t Promise.t =
+    match elems with
+    | [] ->
+        (* No need for folding, everything goes to excess *)
+        Promise.return { proof = None; source; target = source }
+    | elems_to_prove ->
+        (* Need to fold *)
+        let leaf_prover, (leaf_elems, rest) =
+          if List.length elems_to_prove > System.leaf_iterations then
+            (* Full leaf *)
+            (System.leaf, List.split_n elems_to_prove System.leaf_iterations)
+          else
+            (* Partial leaf *)
+            ( System.leaf_option
+            , List.split_n elems_to_prove System.leaf_option_iterations )
+        in
+        let%bind.Promise leaf = leaf_prover (leaf_elems, source) in
+        let rec extend_rest elems_to_prove acc =
+          match elems_to_prove with
+          | [] ->
+              Promise.return acc
+          | elems_to_prove ->
+              let extend_prover, (extend_elems, rest) =
+                if List.length elems_to_prove > System.extend_iterations then
+                  (* Full node *)
+                  ( System.extend
+                  , List.split_n elems_to_prove System.extend_iterations )
+                else
+                  (* Partial node *)
+                  ( System.extend_option
+                  , List.split_n elems_to_prove System.extend_option_iterations
+                  )
+              in
+              let%bind.Promise acc = extend_prover (extend_elems, acc) in
+              extend_rest rest acc
+        in
+        let%bind.Promise trans, proof = extend_rest rest leaf in
+        Promise.return { proof = Some proof; source; target = trans.target }
 end
+
+module Folder_with_length = Make_folder (Ase.With_length)
+module Folder_without_length = Make_folder (Ase.Without_length)
 
 (* Unfortunately yojson doesn't support GADTs so it can't be one type, or maybe I'm just bad *)
 module Input = struct
+  module Txn_snark = struct
+    type t =
+      | Signed_command of Base_input.serializable
+      | Zkapp_command of Command_witness.Zkapp_command_segment.t
+      | Merge of Merge_input.t
+    [@@deriving yojson]
+  end
+
+  module Ase = struct
+    type t =
+      | With_length of (Ase.With_length.Stmt.t * F.t list)
+      | Without_length of (Ase.Without_length.Stmt.t * F.t list)
+    [@@deriving yojson]
+  end
+
   type t =
     | Ping
-    | Txn_snark_single_signed_command of
-        ( Ledger_hash.t
-        * Zeko_util.Even_PC.t
-        * Signed_command.t
-        * Sparse_ledger.t
-        * Account_set_witness.t )
-    | Txn_snark_single_unproved_zkapp_command of
-        ( Ledger_hash.t
-        * Ledger_hash.t
-        * Ledger_hash.t
-        * Txn_state.Local_state.t
-        * Txn_state.Local_state.t
-        * Currency.Fee.Signed.t
-        * Currency.Amount.t
-        * Transaction_snark.Zkapp_command_segment.Witness.t
-        * Zeko_util.Even_PC.t
-        * bool
-        * Account_set_witness.t )
-    | Txn_snark_double_unproved_zkapp_command of
-        ( Ledger_hash.t
-        * Ledger_hash.t
-        * Ledger_hash.t
-        * Txn_state.Local_state.t
-        * Txn_state.Local_state.t
-        * Currency.Fee.Signed.t
-        * Currency.Amount.t
-        * Transaction_snark.Zkapp_command_segment.Witness.t
-        * Zeko_util.Even_PC.t
-        * bool
-        * bool
-        * Account_set_witness.t )
-    | Txn_snark_single_proved_zkapp_command of
-        ( Ledger_hash.t
-        * Ledger_hash.t
-        * Ledger_hash.t
-        * Txn_state.Local_state.t
-        * Txn_state.Local_state.t
-        * Currency.Fee.Signed.t
-        * Currency.Amount.t
-        * Transaction_snark.Zkapp_command_segment.Witness.t
-        * Zeko_util.Even_PC.t
-        * Pickles.Side_loaded.Verification_key.t
-        * Compile_simple.Proof.t
-        * bool
-        * Account_set_witness.t )
-    | Txn_snark_merge of
-        ( Txn_state.Zeko_stmt.t
-        * Compile_simple.Proof.t
-        * Txn_state.Zeko_stmt.t
-        * Compile_simple.Proof.t )
-    | Inner_sync of
-        (Public_key.Compressed.t * (Field.t list * Ase.With_length.Stmt.t))
-    | Outer_commit of
-        ( (Txn_state.Zeko_stmt.t * Compile_simple.Proof.t)
-        * Public_key.Compressed.t
-        * Field.t list
-        * Field.t list
-        * Sparse_ledger.t
-        * Sparse_ledger.t
-        * Signature.t
-        * Public_key.Compressed.t )
+    | Txn_snark of Txn_snark.t
+    | Ase of Ase.t
+    | Inner_sync of Inner_sync.Witness.serializable
+    | Verify_both_ases of
+        ( Outer_commit.Ase_outer_inst.serializable
+        * Outer_commit.Ase_inner_inst.serializable )
+    | Outer_commit of Outer_commit.Witness.serializable
   [@@deriving yojson]
 end
 
 module Output = struct
+  module Ase = struct
+    type t =
+      | With_length of Folder_with_length.out_t
+      | Without_length of Folder_without_length.out_t
+    [@@deriving yojson]
+  end
+
   type t =
     | Pong
-    | Zeko_transaction_snark of
-        (Zeko_transaction_snark.Zeko_stmt.t * Compile_simple.Proof.t)
-    | Zeko_transaction_snark of (Txn_state.Zeko_stmt.t * Compile_simple.Proof.t)
-    | Call_forest_tree of call_forest_tree
+    | Txn_snark of (Zeko_stmt.t * Compile_simple.Proof.t)
+    | Ase of Ase.t
+    | Verify_both_ases of Outer_commit.Verify_both_ases.serializable
+    | Call_forest_tree of
+        ( Account_update.t
+        , Zkapp_command.Digest.Account_update.t
+        , Zkapp_command.Digest.Forest.t )
+        Zkapp_command.Call_forest.Tree.t
   [@@deriving yojson]
 end
 
 let prove ~logger : Input.t -> Output.t Deferred.t = function
   | Ping ->
       return Output.Pong
-  | Txn_snark_single_signed_command
-      (source_ledger, sequencer, command, sparse_ledger, account_set_witness) ->
-      let handler = unstage @@ Sparse_ledger.handler sparse_ledger in
-      let Compile_simple.[ single_signed_command; _; _; _; _ ] =
-        Txn_rules.provers
-      in
-      let input : Rule_signed_command.Base_input.t =
-        { source_ledger
-        ; source_acc_set = Account_set_witness.hash account_set_witness
-        ; sequencer
-        ; transaction =
-            Mina_transaction.Transaction_union.of_transaction (Command command)
-        ; witness =
-            { ledger_path_handler = handler
-            ; update_acc_set_witness =
-                Account_set_witness.to_functions account_set_witness
-            }
-        }
-      in
+  | Txn_snark (Signed_command input) ->
+      let Compile_simple.[ prove; _; _; _; _ ] = Txn_rules.provers in
       let%map stmt, proof =
         time ~logger "Txn_rules.single_signed_command"
-          (single_signed_command input |> Promise.to_deferred)
+          (prove (Base_input.of_serializable input) |> Promise.to_deferred)
       in
-      Output.Zeko_transaction_snark (stmt, proof)
-  | Txn_snark_single_unproved_zkapp_command
-      ( source_ledger
-      , target_ledger
-      , connecting_ledger
-      , source_local_state
-      , target_local_state
-      , fee_excess
-      , supply_decrease
-      , txn_snark_witness
-      , sequencer
-      , shift_action_state
-      , account_set_witness ) ->
-      let Compile_simple.[ _; single_unproved_zkapp_command; _; _; _ ] =
-        Txn_rules.provers
-      in
-      let input : Rule_zkapp_command.Zkapp_single_unproved_input.t =
-        { base =
-            { source_ledger
-            ; source_local_state
-            ; witness =
-                { stack_frame = txn_snark_witness.local_state_init.stack_frame
-                ; call_stack = txn_snark_witness.local_state_init.call_stack
-                ; source_ledger_sparse =
-                    txn_snark_witness.global_first_pass_ledger
-                ; update_acc_set_witness =
-                    Account_set_witness.to_functions account_set_witness
-                }
-            ; sequencer
-            ; source_acc_set = Account_set_witness.hash account_set_witness
-            }
-        ; first =
-            { account_updates = txn_snark_witness.start_zkapp_command
-            ; memo_hash
-            ; account_updates_data
-            ; shift_action_state
-            }
-        }
-      in
+      Output.Txn_snark (stmt, proof)
+  | Txn_snark (Zkapp_command (Single_unproved input)) ->
+      let Compile_simple.[ _; prove; _; _; _ ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Zeko_transaction_snark.single_unproved_zkapp_command"
-          (single_unproved_zkapp_command input |> Promise.to_deferred)
+        time ~logger "Txn_rules.single_unproved_zkapp_command"
+          (prove input |> Promise.to_deferred)
       in
-      Output.Zeko_transaction_snark (stmt, proof)
-  | Txn_snark_double_unproved_zkapp_command
-      ( source_ledger
-      , target_ledger
-      , connecting_ledger
-      , source_local_state
-      , target_local_state
-      , fee_excess
-      , supply_decrease
-      , txn_snark_witness
-      , sequencer
-      , shift_action_state_first
-      , shift_action_state_second
-      , account_set_witness ) ->
-      let open Zeko_transaction_snark in
-      let Compile_simple.[ _; _; double_unproved_zkapp_command; _; _ ] =
-        provers
-      in
-      let input : Zkapp_double_unproved_input.t =
-        { base =
-            { source_ledger
-            ; target_ledger
-            ; connecting_ledger
-            ; source_local_state
-            ; target_local_state
-            ; fee_excess
-            ; supply_decrease
-            ; witness =
-                { txn_snark_witness
-                ; update_acc_set_witness =
-                    Account_set_witness.to_functions account_set_witness
-                }
-            ; sequencer
-            ; source_acc_set = Account_set_witness.hash account_set_witness
-            }
-        ; shift_action_state_first
-        ; shift_action_state_second
-        }
-      in
+      Output.Txn_snark (stmt, proof)
+  | Txn_snark (Zkapp_command (Double_unproved input)) ->
+      let Compile_simple.[ _; _; prove; _; _ ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Zeko_transaction_snark.double_unproved_zkapp_command"
-          (double_unproved_zkapp_command input |> Promise.to_deferred)
+        time ~logger "Txn_rules.double_unproved_zkapp_command"
+          (prove input |> Promise.to_deferred)
       in
-      Output.Zeko_transaction_snark (stmt, proof)
-  | Txn_snark_single_proved_zkapp_command
-      ( source_ledger
-      , target_ledger
-      , connecting_ledger
-      , source_local_state
-      , target_local_state
-      , fee_excess
-      , supply_decrease
-      , txn_snark_witness
-      , sequencer
-      , zkapp_vk
-      , zkapp_proof
-      , shift_action_state
-      , account_set_witness ) ->
-      let open Zeko_transaction_snark in
-      let Compile_simple.[ _; _; _; single_proved_zkapp_command; _ ] =
-        provers
-      in
-      let input : Zkapp_single_proved_input.t =
-        { base =
-            { source_ledger
-            ; target_ledger
-            ; connecting_ledger
-            ; source_local_state
-            ; target_local_state
-            ; fee_excess
-            ; supply_decrease
-            ; witness =
-                { txn_snark_witness
-                ; update_acc_set_witness =
-                    Account_set_witness.to_functions account_set_witness
-                }
-            ; sequencer
-            ; source_acc_set = Account_set_witness.hash account_set_witness
-            }
-        ; zkapp_vk
-        ; zkapp_proof
-        ; shift_action_state
-        }
-      in
+      Output.Txn_snark (stmt, proof)
+  | Txn_snark (Zkapp_command (Single_proved input)) ->
+      let Compile_simple.[ _; _; _; prove; _ ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Zeko_transaction_snark.single_proved_zkapp_command"
-          (single_proved_zkapp_command input |> Promise.to_deferred)
+        time ~logger "Txn_rules.single_proved_zkapp_command"
+          (prove input |> Promise.to_deferred)
       in
-      Output.Zeko_transaction_snark (stmt, proof)
-  | Txn_snark_merge (left_stmt, left_proof, right_stmt, right_proof) ->
-      let open Zeko_transaction_snark in
-      let Compile_simple.[ _; _; _; _; merge ] = provers in
-      let input : Merge_input.t =
-        { left = { stmt = left_stmt; proof = left_proof }
-        ; right = { stmt = right_stmt; proof = right_proof }
-        }
-      in
+      Output.Txn_snark (stmt, proof)
+  | Txn_snark (Merge input) ->
+      let Compile_simple.[ _; _; _; _; prove ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Zeko_transaction_snark.merge"
-          (merge input |> Promise.to_deferred)
+        time ~logger "Txn_rules.merge" (prove input |> Promise.to_deferred)
       in
-      Output.Zeko_transaction_snark (stmt, proof)
-  | Inner_sync (public_key, ase) ->
-      let open Inner_rules in
-      let Compile_simple.[ inner_sync; _ ] = provers in
-      let%bind vk =
+      Output.Txn_snark (stmt, proof)
+  | Inner_sync input ->
+      let Compile_simple.[ prove; _ ] = Inner_rules.provers in
+      let%bind vk_hash =
         Compile_simple.Verification_key.of_tag Inner_rules.tag
         |> Promise.to_deferred
-      in
-      let%bind ase =
-        Rule_inner_sync.Ase_inst.fold (snd ase) (fst ase) |> Promise.to_deferred
-      in
-      let input =
-        ( { public_key
-          ; vk_hash =
-              Zkapp_account.digest_vk
-                (Compile_simple.Verification_key.to_pickles vk)
-          ; ase
-          }
-          : Rule_inner_sync.Witness.t )
+        >>| Fn.compose Zkapp_account.digest_vk
+              Compile_simple.Verification_key.to_pickles
       in
       let%map (a, au), proof =
         time ~logger "Inner_rules.inner_sync"
-          (inner_sync input |> Promise.to_deferred)
+          ( prove (Inner_sync.Witness.of_serializable ~vk_hash input)
+          |> Promise.to_deferred )
       in
       Output.Call_forest_tree
         (mktree au (Compile_simple.Proof.to_pickles proof))
-  | Outer_commit
-      ( txn_snark
-      , public_key
-      , outer_ase_fields
-      , inner_ase_fields
-      , old_inner_ledger
-      , new_inner_ledger
-      , da_signature
-      , da_key ) ->
-      let open Outer_rules in
-      let Compile_simple.[ commit; _; _ ] = provers in
-      let%bind vk =
+  | Ase (With_length (source, elems)) ->
+      let%map snark =
+        Folder_with_length.fold ~source ~elems |> Promise.to_deferred
+      in
+      Output.(Ase (With_length snark))
+  | Ase (Without_length (source, elems)) ->
+      let%map snark =
+        Folder_without_length.fold ~source ~elems |> Promise.to_deferred
+      in
+      Output.(Ase (Without_length snark))
+  | Verify_both_ases (outer, inner) ->
+      let Compile_simple.[ prove ] = Rule_commit.Verify_both_ases.provers in
+      let%map stmt, proof =
+        time ~logger "Rule_commit.verify_both_ases"
+          ( prove
+              Outer_commit.
+                ( Ase_outer_inst.of_serializable outer
+                , Ase_inner_inst.of_serializable inner )
+          |> Promise.to_deferred )
+      in
+      Output.Verify_both_ases (stmt, proof)
+  | Outer_commit input ->
+      let Compile_simple.[ prove; _; _ ] = Outer_rules.provers in
+      let%bind vk_hash =
         Compile_simple.Verification_key.of_tag Outer_rules.tag
         |> Promise.to_deferred
-      in
-      let old_inner_acc =
-        Mina_ledger.Sparse_ledger.get_exn old_inner_ledger
-          Zeko_constants.inner_account_index
-      in
-      let old_inner_acc_path =
-        List.map ~f:(function
-          | `Left _ ->
-              ( { right_side = Field.zero }
-                : Outer_rules.Rule_commit_inst.PathElt.t )
-          | `Right _ ->
-              ( { right_side = Field.one }
-                : Outer_rules.Rule_commit_inst.PathElt.t ) )
-        @@ Mina_ledger.Sparse_ledger.path_exn old_inner_ledger
-             Zeko_constants.inner_account_index
-      in
-      let new_inner_acc =
-        Mina_ledger.Sparse_ledger.get_exn new_inner_ledger
-          Zeko_constants.inner_account_index
-      in
-      let new_inner_acc_path =
-        List.map ~f:(function
-          | `Left _ ->
-              ( { right_side = Field.zero }
-                : Outer_rules.Rule_commit_inst.PathElt.t )
-          | `Right _ ->
-              ( { right_side = Field.one }
-                : Outer_rules.Rule_commit_inst.PathElt.t ) )
-        @@ Mina_ledger.Sparse_ledger.path_exn new_inner_ledger
-             Zeko_constants.inner_account_index
-      in
-      let%bind outer_ase =
-        let ({ outer_action_state } : Rollup_state.Inner_state.t) =
-          Rollup_state.Inner_state.value_of_app_state
-            (Option.value_exn new_inner_acc.zkapp).app_state
-        in
-        let action_state =
-          Rollup_state.Outer_action_state.With_length.raw outer_action_state
-        in
-        Rule_commit.Ase_outer_inst.fold action_state outer_ase_fields
-        |> Promise.to_deferred
-      in
-      let%bind inner_ase =
-        let ({ outer_action_state } : Rollup_state.Inner_state.t) =
-          Rollup_state.Inner_state.value_of_app_state
-            (Option.value_exn old_inner_acc.zkapp).app_state
-        in
-        let action_state : Ase.With_length.Stmt.t =
-          Rollup_state.Outer_action_state.With_length.
-            { action_state = raw outer_action_state
-            ; length = length outer_action_state
-            }
-        in
-        Rule_commit.Ase_inner_inst.fold action_state inner_ase_fields
-        |> Promise.to_deferred
-      in
-      let%bind verify_both_ases =
-        let Compile_simple.[ prove ] = Rule_commit.Verify_both_ases.provers in
-        let%map out, proof =
-          prove (outer_ase, inner_ase) |> Promise.to_deferred
-        in
-        Rule_commit.Verify_both_ases.make_unchecked ~proof out
-      in
-      let input =
-        ( { txn_snark =
-              Zeko_transaction_snark.make_unchecked ~proof:txn_snark.proof
-                txn_snark.stmt
-          ; public_key
-          ; vk_hash =
-              Zkapp_account.digest_vk
-                (Compile_simple.Verification_key.to_pickles vk)
-          ; verify_both_ases
-          ; old_inner_acc
-          ; old_inner_acc_path
-          ; new_inner_acc
-          ; new_inner_acc_path
-          ; da_signature
-          ; da_key
-          }
-          : Outer_rules.Rule_commit_inst.Witness.t )
+        >>| Fn.compose Zkapp_account.digest_vk
+              Compile_simple.Verification_key.to_pickles
       in
       let%map (a, au), proof =
-        time ~logger "Outer_rules.commit" (commit input |> Promise.to_deferred)
+        time ~logger "Outer_rules.commit"
+          ( prove (Outer_commit.Witness.of_serializable ~vk_hash input)
+          |> Promise.to_deferred )
       in
       Output.Call_forest_tree
         (mktree au (Compile_simple.Proof.to_pickles proof))
