@@ -308,53 +308,5 @@ struct
           { source = proof_source; target = proof_target }
       in
       ({ init_arg; t; excess } : t)
-
-    let fold ~source ~init_arg ~elems ~step_state =
-      let elems_to_prove, excess =
-        let i = ref 0 in
-        let l = List.length elems in
-        List.split_while elems ~f:(fun _ ->
-            let r = !i < l - get_iterations in
-            i := !i + 1 ;
-            r )
-      in
-      match elems_to_prove with
-      | [] ->
-          (* No need for folding, everything goes to excess *)
-          let proof_target = List.fold excess ~init:source ~f:step_state in
-          Promise.return
-            (make ?proof:None ~proof_source:source ~proof_target init_arg excess)
-      | elems_to_prove ->
-          (* Need to fold *)
-          let leaf_prover, (leaf_elems, rest) =
-            match List.length elems_to_prove with
-            | full_leaf when full_leaf > leaf_iterations ->
-                (leaf, List.split_n elems_to_prove leaf_iterations)
-            | _incomplete_leaf ->
-                (leaf_option, List.split_n elems_to_prove leaf_option_iterations)
-          in
-          let%bind.Promise leaf = leaf_prover (leaf_elems, source) in
-          let rec extend_rest elems_to_prove acc =
-            match elems_to_prove with
-            | [] ->
-                Promise.return acc
-            | elems_to_prove ->
-                let extend_prover, (extend_elems, rest) =
-                  match List.length elems_to_prove with
-                  | full_extend when full_extend > extend_iterations ->
-                      (extend, List.split_n elems_to_prove extend_iterations)
-                  | _incomplete_extend ->
-                      ( extend_option
-                      , List.split_n elems_to_prove extend_option_iterations )
-                in
-                let%bind.Promise acc = extend_prover (extend_elems, acc) in
-                extend_rest rest acc
-          in
-          let%bind.Promise trans, proof = extend_rest rest leaf in
-          let proof_target =
-            List.fold excess ~init:trans.target ~f:step_state
-          in
-          Promise.return
-            (make ~proof ~proof_source:source ~proof_target init_arg excess)
   end
 end

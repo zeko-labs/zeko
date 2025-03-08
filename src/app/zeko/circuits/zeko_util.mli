@@ -44,7 +44,7 @@ val var_to_hash :
   init:string -> ('var, 'value) Typ.t -> 'var -> Field.Var.t Checked.t
 
 module F : sig
-  type t = Pasta_bindings.Fp.t [@@deriving yojson, sexp]
+  type t = Pasta_bindings.Fp.t [@@deriving sexp]
 
   type var = Field.Var.t
 
@@ -163,7 +163,7 @@ module Slot_span : sig
 end
 
 module Slot_range : sig
-  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky, yojson]
+  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky]
 
   module Checked : sig
     val to_valid_while :
@@ -193,7 +193,7 @@ val push_actions_var :
 val token_owner_id : Account_id.t option -> Token_id.t
 
 module Even_PC : sig
-  type t = { public_key : F.t } [@@deriving snarky, yojson]
+  type t = { public_key : F.t } [@@deriving snarky]
 
   val create_exn : Signature_lib.Public_key.Compressed.t -> t
 

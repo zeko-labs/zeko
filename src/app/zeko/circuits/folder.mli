@@ -116,12 +116,5 @@ end)
       -> t
 
     val get_iterations : int
-
-    val fold :
-         source:Stmt.t
-      -> init_arg:Init.t
-      -> elems:Elem.t list
-      -> step_state:(Stmt.t -> Elem.t -> Stmt.t)
-      -> t Promise.t
   end
 end
