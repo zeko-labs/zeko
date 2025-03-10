@@ -169,7 +169,6 @@ let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                 Error err )
       in
       Ledger.commit ledger ;
-
       let update_acc_set_witness =
         let fee_payer = Signed_command.fee_payer command in
         let receiver = Signed_command.receiver command in
@@ -381,19 +380,49 @@ let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                   (Transaction_status.Failure.Collection.to_yojson failures) ) )
       in
       Ledger.commit ledger ;
-      (* TODO: here pair up unproved witnesses *)
       let witnesses =
         List.map witnesses ~f:(fun (aid, incomplete_witness) ->
-            let _, witness =
-              Indexed_merkle_tree.Db.get_or_create_entry_exn imt
-                (Account_id.derive_token_id ~owner:aid)
-            in
             let imt_hash = Indexed_merkle_tree.Db.merkle_root imt in
             let imt_witness =
-              Acc_set_witness.(add empty witness |> of_serializable)
+              let _, w =
+                Indexed_merkle_tree.Db.get_or_create_entry_exn imt
+                  (Account_id.derive_token_id ~owner:aid)
+              in
+              Acc_set_witness.(add empty w |> of_serializable)
             in
             incomplete_witness ~imt_hash ~imt_witness )
       in
+      let rec pair_unproved :
+             Command_witness.Zkapp_command_segment.t list
+          -> Command_witness.Zkapp_command_segment.t list = function
+        | [] ->
+            []
+        | Single_unproved { base; first }
+          :: Single_unproved
+               { base = { witness = { update_acc_set_witness = second_imt; _ } }
+               ; first = second
+               }
+             :: rest ->
+            let w =
+              Zkapp_double_unproved_input.
+                { base =
+                    { base with
+                      witness =
+                        { base.witness with
+                          update_acc_set_witness =
+                            Acc_set_witness.join
+                              base.witness.update_acc_set_witness second_imt
+                        }
+                    }
+                ; first
+                ; second
+                }
+            in
+            Double_unproved w :: pair_unproved rest
+        | hd :: tl ->
+            hd :: pair_unproved tl
+      in
+      let witnesses = pair_unproved witnesses in
       Ok (Command_witness.Zkapp_command witnesses)
   | Signed_command _ ->
       Or_error.error_string "Invalid command"

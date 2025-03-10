@@ -141,6 +141,16 @@ module Acc_set_witness = struct
     ; y_path = t.y_path @ [ mina_path_to_zeko_path y_path ]
     ; z = t.z @ [ z ]
     }
+
+  let join t1 t2 =
+    let t1 = to_serializable t1 in
+    let t2 = to_serializable t2 in
+    of_serializable
+      { x = t1.x @ t2.x
+      ; x_path = t1.x_path @ t2.x_path
+      ; y_path = t1.y_path @ t2.y_path
+      ; z = t1.z @ t2.z
+      }
 end
 
 module Zkapp_rule_input_witness = struct
