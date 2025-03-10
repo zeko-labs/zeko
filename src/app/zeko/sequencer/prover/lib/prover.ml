@@ -101,7 +101,7 @@ module Input = struct
   module Txn_snark = struct
     type t =
       | Signed_command of Base_input.serializable
-      | Zkapp_command of Command_witness.Zkapp_command_segment.t
+      | Zkapp_command of Txn_snark_witness.Zkapp_command_segment.t
       | Merge of Merge_input.t
     [@@deriving yojson]
   end

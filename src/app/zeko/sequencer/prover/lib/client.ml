@@ -103,7 +103,7 @@ let transaction_snark ?proving_timeout t input =
   send ?proving_timeout t (Prover.Input.Txn_snark input)
   >>| function
   | Prover.Output.Txn_snark snark ->
-      Txn_snark.of_serializable snark
+      snark
   | _ ->
       failwith "Unexpected response from prover"
 
