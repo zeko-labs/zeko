@@ -20,6 +20,31 @@ module type S = sig
 
   type location
 
+  module Inputs :
+    Zkapp_command_logic.Inputs_intf
+      with type Account.t = Account.t
+       and type Account_update.t = Account_update.t
+       and type Account_update.call_forest = Zkapp_call_forest.t
+       and type Account_update.transaction_commitment =
+        Snark_params.Tick.Field.t
+       and type Field.t = Snark_params.Tick.Field.t
+       and type Bool.t = bool
+       and type Bool.failure_status = Transaction_status.Failure.t option
+       and type Bool.failure_status_tbl =
+        Transaction_status.Failure.Collection.t
+       and type Ledger.t = ledger
+       and type Global_slot_since_genesis.t = Global_slot_since_genesis.t
+       and type Protocol_state_precondition.t =
+        Zkapp_precondition.Protocol_state.t
+       and type Valid_while_precondition.t =
+        Global_slot_since_genesis.t Zkapp_precondition.Closed_interval.t
+        Zkapp_basic.Or_ignore.t
+       and type Stack_frame.t = Stack_frame.value
+       and type Call_stack.t = Stack_frame.value list
+       and type Amount.Signed.t = Currency.Amount.Signed.t
+       and type Index.t = Unsigned.uint32
+       and type Token_id.t = Token_id.t
+
   val transaction_of_applied :
     Transaction_applied.t -> Transaction.t With_status.t
 
