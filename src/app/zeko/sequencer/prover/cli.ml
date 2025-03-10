@@ -1,4 +1,3 @@
-open Core
 open Async
 open Signature_lib
 open Cli_lib

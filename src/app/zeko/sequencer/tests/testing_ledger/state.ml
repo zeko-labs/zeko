@@ -10,23 +10,26 @@ module Ledger = Mina_ledger.Ledger
 let logger = Logger.create ()
 
 module Constants = struct
-  let constraint_constants = Genesis_constants.Compiled.constraint_constants
-
-  let genesis_constants = Genesis_constants.Compiled.genesis_constants
+  let constraint_constants = Zeko_constants.constraint_constants
 
   let consensus_constants =
-    Consensus.Constants.create ~constraint_constants
-      ~protocol_constants:genesis_constants.protocol
-
-  let state_body =
-    let compile_time_genesis =
-      Mina_state.Genesis_protocol_state.t
-        ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-        ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-        ~constraint_constants ~consensus_constants
-        ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+    let protocol_constants : Genesis_constants.Protocol.t =
+      { k = 1
+      ; slots_per_epoch = 1000
+      ; slots_per_sub_window = 1
+      ; grace_period_slots = 1
+      ; delta = 1
+      ; genesis_state_timestamp = Int64.one
+      }
     in
-    Mina_state.Protocol_state.body compile_time_genesis.data
+    Consensus.Constants.create ~constraint_constants ~protocol_constants
+
+  let compile_time_genesis =
+    Mina_state.Genesis_protocol_state.t
+      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+      ~constraint_constants ~consensus_constants
+      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
 end
 
 type t =
@@ -50,7 +53,9 @@ let apply_command t ~command =
     Ledger.apply_transaction_first_pass
       ~constraint_constants:Constants.constraint_constants
       ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-      ~txn_state_view:(Mina_state.Protocol_state.Body.view Constants.state_body)
+      ~txn_state_view:
+        (Mina_state.Protocol_state.Body.view
+           Constants.compile_time_genesis.data.body )
       l (Command command)
   in
   let%bind.Result txn_applied =
