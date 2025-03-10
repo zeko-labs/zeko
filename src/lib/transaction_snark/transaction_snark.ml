@@ -1334,8 +1334,6 @@ module Make_str (A : Wire_types.Concrete) = struct
 
             let add_flagged x y =
               run_checked (Amount.Signed.Checked.add_flagged x y)
-
-            let display _ = ""
           end
 
           let if_ b ~then_ ~else_ =
