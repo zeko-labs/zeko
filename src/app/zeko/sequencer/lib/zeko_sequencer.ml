@@ -5,8 +5,7 @@ open Async_kernel
 open Mina_base
 open Mina_ledger
 open Signature_lib
-module Imt_db = Indexed_merkle_tree.Db
-module Sparse_imt = Indexed_merkle_tree.Sparse_indexed_merkle_tree
+open Zeko_prover.Zeko_types
 module C = Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
@@ -37,36 +36,19 @@ module Sequencer = struct
          ~prover:(Public_key.compress keypair.public_key)
 
   module Merger = struct
-    module Command_witness = struct
-      type t =
-        | Signed_command of
-            Sparse_ledger.t
-            * Signed_command.t
-            * Transaction_snark.Statement.With_sok.t
-            * Zeko_prover.Prover.Account_set_witness.t
-        | Zkapp_command of
-            ( Transaction_witness.Zkapp_command_segment_witness.t
-            * Transaction_snark.Zkapp_command_segment.Basic.t
-            * Mina_state.Snarked_ledger_state.With_sok.t
-            * Zeko_prover.Prover.Account_set_witness.t )
-            list
-            * Zkapp_command.t
-      [@@deriving yojson]
-    end
-
     module Context = struct
       module State = struct
         type t =
           { mutable previous_committed_ledger : Sparse_ledger.t option
           ; mutable previous_committed_ledger_hash : Ledger_hash.t option
-          ; mutable commands : Command_witness.t array ref list
+          ; mutable witnesses : Txn_snark_witness.t list
           }
         [@@deriving yojson]
 
         let create () =
           { previous_committed_ledger = None
           ; previous_committed_ledger_hash = None
-          ; commands = []
+          ; witnesses = []
           }
       end
 
@@ -91,7 +73,7 @@ module Sequencer = struct
         match Db.get kvdb with Some state -> state | None -> State.create ()
 
       let committed t ledger =
-        t.state.commands <- List.tl_exn t.state.commands ;
+        t.state.commands <- List.tl_exn t.state.witnesses ;
         t.state.previous_committed_ledger <- Some ledger ;
         t.state.previous_committed_ledger_hash <-
           Some (Sparse_ledger.merkle_root ledger) ;
@@ -103,39 +85,36 @@ module Sequencer = struct
           Some (Sparse_ledger.merkle_root ledger) ;
         save_state t
 
-      let add_command t command =
-        let arr = List.last_exn t.state.commands in
-        arr := Array.append !arr [| command |] ;
+      let add_witness t witness =
+        let arr = List.last_exn t.state.witnesses in
+        arr := Array.append !arr [| witness |] ;
         save_state t
 
       let created_new_tree t =
-        t.state.commands <- t.state.commands @ [ ref [||] ] ;
+        t.state.witnesses <- t.state.witnesses @ [ ref [||] ] ;
         save_state t
     end
 
     module Merge = struct
-      type t = C.Zeko_transaction_snark.T.t
+      type t = Txn_snark.serializable
 
-      let process ({ provers; _ } : Context.t) a b =
-        Zeko_prover.Client.transaction_snark_of_merge provers ~left:a ~right:b
+      let process ({ provers; _ } : Context.t) ((left, left_proof) : t)
+          ((right, right_proof) : t) =
+        Zeko_prover.Client.transaction_snark provers
+          (Merge { left; left_proof; right; right_proof })
     end
 
     module Base = struct
-      type t = Command_witness.t [@@deriving yojson]
+      type t = Txn_snark_witness.t [@@deriving yojson]
 
-      let process (ctx : Context.t) command_witness =
-        Context.add_command ctx command_witness ;
-        let sequencer_pk =
-          C.Zeko_util.Even_PC.create_exn
-          @@ Public_key.compress ctx.config.signer.public_key
-        in
-        match command_witness with
-        | Command_witness.Zkapp_command (witnesses, zkapp_command) ->
-            Zeko_prover.Client.transaction_snark_of_zkapp_command ctx.provers
-              ~witnesses ~sequencer_pk
-        | Command_witness.Signed_command (l, c, s, imt) ->
-            Zeko_prover.Client.transaction_snark_of_signed_command ctx.provers
-              ~sequencer_pk ~witness:(l, c, s, imt)
+      let process (ctx : Context.t) witness =
+        Context.add_witness ctx witness ;
+        match witness with
+        | Zkapp_command segment ->
+            Zeko_prover.Client.transaction_snark ctx.provers
+              (Zkapp_command segment)
+        | Signed_command w ->
+            Zeko_prover.Client.transaction_snark ctx.provers (Signed_command w)
     end
 
     module Commit = struct
@@ -189,17 +168,17 @@ module Sequencer = struct
     module P = Parallel_merger.Make (Context) (Merge) (Base) (Commit)
 
     let requeue_after_restart t (ctx : Context.t) =
-      let commands_to_requeue =
-        ctx.state.commands
+      let witnesses_to_requeue =
+        ctx.state.witnesses
         |> List.map ~f:(fun arr -> Array.to_list !arr)
         |> List.join
       in
       (* Adding jobs will repopulate the list *)
       assert (phys_equal (P.current_tree t) None) ;
-      ctx.state.commands <- [] ;
-      printf "Requeueing %d commands\n%!" (List.length commands_to_requeue) ;
-      List.iter commands_to_requeue ~f:(fun command ->
-          don't_wait_for @@ P.add_job t ctx ~data:command )
+      ctx.state.witnesses <- [] ;
+      printf "Requeueing %d commands\n%!" (List.length witnesses_to_requeue) ;
+      List.iter witnesses_to_requeue ~f:(fun witness ->
+          don't_wait_for @@ P.add_job t ctx ~data:witness )
   end
 
   module State_hashes = struct
@@ -212,7 +191,7 @@ module Sequencer = struct
 
   type t =
     { db : L.Db.t
-    ; imt : Imt_db.t
+    ; imt : Indexed_merkle_tree.Db.t
     ; logger : Logger.t
     ; archive : Archive.t
     ; config : Config.t
@@ -253,102 +232,6 @@ module Sequencer = struct
       ; committed_ledger_hash = Field.zero
       }
 
-  (** Apply user command to the ledger without checking the validity of the command *)
-  let apply_user_command_without_check l imt archive command ~global_slot
-      ~state_body =
-    let accounts_referenced = User_command.accounts_referenced command in
-
-    let source_imt =
-      List.map accounts_referenced ~f:(fun id ->
-          Account_id.derive_token_id ~owner:id )
-      |> Sparse_imt.of_db_subset_exn imt
-    in
-    let first_pass_ledger =
-      Sparse_ledger.of_ledger_subset_exn l accounts_referenced
-    in
-    let%bind.Result partialy_applied_txn =
-      L.apply_transaction_first_pass ~constraint_constants ~global_slot
-        ~txn_state_view:(Mina_state.Protocol_state.Body.view state_body)
-        l (Command command)
-    in
-
-    let second_pass_ledger =
-      Sparse_ledger.of_ledger_subset_exn l accounts_referenced
-    in
-    let%map.Result txn_applied =
-      let%bind.Result txn_applied =
-        L.apply_transaction_second_pass l partialy_applied_txn
-      in
-      match
-        Mina_transaction_logic.Transaction_applied.transaction_status
-          txn_applied
-      with
-      | Failed failure ->
-          Error
-            ( Error.of_string @@ Yojson.Safe.to_string
-            @@ Transaction_status.Failure.Collection.to_yojson failure )
-      | Applied ->
-          Ok txn_applied
-    in
-
-    let target_ledger_hash = L.merkle_root l in
-
-    L.Mask.Attached.commit l ;
-
-    (* Create entries in Indexed Merkle Tree *)
-    Mina_transaction_logic.Transaction_applied.new_accounts txn_applied
-    |> List.iter ~f:(fun aid ->
-           match
-             Imt_db.get_or_create_entry_exn imt
-               (Account_id.derive_token_id ~owner:aid)
-           with
-           | `Existed, _ ->
-               printf
-                 !"Warning: Account %{sexp: Account_id.t} already existed\n%!"
-                 aid
-           | `Added, _ ->
-               () ) ;
-
-    (* Add events and actions to the memory *)
-    let () =
-      match command with
-      | Signed_command _ ->
-          ()
-      | Zkapp_command zkapp_command ->
-          Zkapp_command.(
-            Call_forest.iteri (account_updates zkapp_command)
-              ~f:(fun _ update ->
-                let account =
-                  let account_id =
-                    Account_id.create
-                      (Account_update.public_key update)
-                      (Account_update.token_id update)
-                  in
-                  let location =
-                    L.location_of_account l account_id
-                    |> Option.value_exn ~message:"No location"
-                  in
-                  L.get l location |> Option.value_exn ~message:"No account"
-                in
-                Archive.add_account_update archive update account
-                  (Some
-                     Archive.Transaction_info.
-                       { status = Applied
-                       ; hash =
-                           Mina_transaction.Transaction_hash.hash_command
-                             (Zkapp_command zkapp_command)
-                       ; memo = Zkapp_command.memo zkapp_command
-                       ; authorization_kind =
-                           Account_update.Body.authorization_kind
-                           @@ Account_update.body update
-                       } ) ))
-    in
-    ( first_pass_ledger
-    , second_pass_ledger
-    , txn_applied
-    , target_ledger_hash
-    , source_imt )
-
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
       (command : User_command.t) =
@@ -373,10 +256,6 @@ module Sequencer = struct
 
           (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
           let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
-          let state_body =
-            Mina_state.Protocol_state.body
-              Zeko_constants.compile_time_genesis_state
-          in
           let l = L.of_database t.db in
 
           let%bind.Deferred.Result () =
@@ -408,14 +287,15 @@ module Sequencer = struct
                   return (Error e)
           in
 
-          let%bind.Deferred.Result ( first_pass_ledger
-                                   , second_pass_ledger
-                                   , txn_applied
-                                   , target_ledger_hash
-                                   , source_imt ) =
+          let%bind.Deferred.Result source_ledger, witnesses =
+            let sequencer_pk =
+              Even_PC.create_exn
+              @@ Public_key.compress t.config.signer.public_key
+            in
             return
-              (apply_user_command_without_check l t.imt t.archive command
-                 ~global_slot ~state_body )
+              (Zeko_transaction_logic.apply_user_command_unchecked ~sequencer_pk
+                 ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
+                 ~constraint_constants ~global_slot l t.imt t.archive command )
           in
 
           (* Post transaction to the DA layer *)
@@ -434,7 +314,7 @@ module Sequencer = struct
           in
           let diff =
             Da_layer.Diff.create
-              ~source_ledger_hash:(Sparse_ledger.merkle_root first_pass_ledger)
+              ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
               ~changed_accounts
               ~command_with_action_step_flags:
                 (Some
@@ -447,123 +327,10 @@ module Sequencer = struct
                          |> List.map ~f:(fun _ -> true) ) )
           in
           Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
-            ~ledger_openings:first_pass_ledger ~diff ~target_ledger_hash ;
+            ~ledger_openings:source_ledger ~diff
+            ~target_ledger_hash:(Ledger.Db.merkle_root t.db) ;
 
-          let pc : Transaction_snark.Pending_coinbase_stack_state.t =
-            (* No coinbase to add to the stack. *)
-            let stack_with_state global_slot =
-              Pending_coinbase.Stack.push_state
-                (Mina_state.Protocol_state.Body.hash state_body)
-                global_slot Pending_coinbase.Stack.empty
-            in
-            { source = stack_with_state global_slot
-            ; target = stack_with_state global_slot
-            }
-          in
-
-          return
-          @@
-          match command with
-          | Signed_command signed_command ->
-              let source_ledger_hash =
-                Sparse_ledger.merkle_root first_pass_ledger
-              in
-              let (statement : Transaction_snark.Statement.With_sok.t) =
-                Transaction_snark.Statement.Poly.with_empty_local_state
-                  ~source_first_pass_ledger:source_ledger_hash
-                  ~target_first_pass_ledger:target_ledger_hash
-                  ~source_second_pass_ledger:target_ledger_hash
-                  ~target_second_pass_ledger:target_ledger_hash
-                  ~connecting_ledger_left:target_ledger_hash
-                  ~connecting_ledger_right:target_ledger_hash ~sok_digest
-                  ~fee_excess:
-                    ( Mina_transaction.Transaction.fee_excess (Command command)
-                    |> Or_error.ok_exn )
-                  ~supply_increase:
-                    ( Mina_transaction_logic.Transaction_applied.supply_increase
-                        ~constraint_constants txn_applied
-                    |> Or_error.ok_exn )
-                  ~pending_coinbase_stack_state:pc
-              in
-              let _, account_set_witness =
-                Mina_transaction_logic.Transaction_applied.new_accounts
-                  txn_applied
-                |> List.fold
-                     ~init:
-                       ( source_imt
-                       , Zeko_prover.Prover.Account_set_witness.empty source_imt
-                       )
-                     ~f:(fun (imt, witness) aid ->
-                       let imt, w =
-                         Sparse_imt.get_or_create_entry_exn imt
-                           (Account_id.derive_token_id ~owner:aid)
-                       in
-                       ( imt
-                       , Zeko_prover.Prover.Account_set_witness.add witness w )
-                       )
-              in
-              Result.return
-                ( txn_applied
-                , Merger.Command_witness.Signed_command
-                    ( first_pass_ledger
-                    , signed_command
-                    , statement
-                    , account_set_witness ) )
-          | Zkapp_command zkapp_command ->
-              let witnesses =
-                Transaction_snark.zkapp_command_witnesses_exn
-                  ~constraint_constants ~global_slot ~state_body
-                  ~fee_excess:
-                    ( Currency.Amount.Signed.of_unsigned
-                    @@ Currency.Amount.of_fee (Zkapp_command.fee zkapp_command)
-                    )
-                  [ ( `Pending_coinbase_init_stack Pending_coinbase.Stack.empty
-                    , `Pending_coinbase_of_statement pc
-                    , `Sparse_ledger first_pass_ledger
-                    , `Sparse_ledger second_pass_ledger
-                    , `Connecting_ledger_hash
-                        (Sparse_ledger.merkle_root second_pass_ledger)
-                    , zkapp_command )
-                  ]
-              in
-              let witnesses =
-                List.map witnesses ~f:(fun (witness, spec, txn_snark) ->
-                    let account_updates =
-                      Zkapp_command.Call_forest.to_account_updates
-                        witness.local_state_init.stack_frame.calls
-                    in
-                    let aids =
-                      match (spec, account_updates) with
-                      | Proved, first :: _ | Opt_signed, first :: _ ->
-                          [ Account_update.account_id first ]
-                      | Opt_signed_opt_signed, first :: second :: _ ->
-                          [ Account_update.account_id first
-                          ; Account_update.account_id second
-                          ]
-                      | _ ->
-                          failwith "Failed to pop stack frame based on spec"
-                    in
-                    let _, account_set_witness =
-                      List.fold aids
-                        ~init:
-                          ( source_imt
-                          , Zeko_prover.Prover.Account_set_witness.empty
-                              source_imt )
-                        ~f:(fun (imt, witness) aid ->
-                          let imt, w =
-                            Sparse_imt.get_or_create_entry_exn imt
-                              (Account_id.derive_token_id ~owner:aid)
-                          in
-                          ( imt
-                          , Zeko_prover.Prover.Account_set_witness.add witness w
-                          ) )
-                    in
-                    (witness, spec, txn_snark, account_set_witness) )
-              in
-              Result.return
-                ( txn_applied
-                , Merger.Command_witness.Zkapp_command (witnesses, zkapp_command)
-                ) )
+          return (Ok witnesses) )
 
   let update_inner_account t =
     let old_deposits_state, old_deposits_length =
@@ -590,14 +357,15 @@ module Sequencer = struct
     else
       let%bind inner_account_update =
         Zeko_prover.Client.inner_sync t.snark_q.provers
-          ~public_key:(failwith "Not implemented: near 123456789?")
-          ~ase:
-            ( List.map processed_new_actions ~f:Account_update.Actions.hash
-            , ( C.Rollup_state.Outer_action_state.With_length.
-                  { action_state = old_deposits_state
-                  ; length = old_deposits_length
-                  }
-                : C.Ase.With_length.Stmt.t ) )
+          ~public_key:Zeko_constants.inner_public_key
+          ~ase_elms:
+            (List.map processed_new_actions ~f:Account_update.Actions.hash)
+          ~ase_source:
+            ( C.Rollup_state.Outer_action_state.With_length.
+                { action_state = old_deposits_state
+                ; length = old_deposits_length
+                }
+              : C.Ase.With_length.Stmt.t )
       in
       let fee = Currency.Fee.of_mina_int_exn 0 in
       let command : Zkapp_command.t =
@@ -617,29 +385,20 @@ module Sequencer = struct
         ; memo = Signed_command_memo.empty
         }
       in
-      let%bind command_witness =
+      let%bind witnesses =
         match%bind
           (* Skip validity check because dummy fee payer triggers invalid public key error *)
           apply_user_command t ~skip_validity_check:true (Zkapp_command command)
         with
-        | Ok (status, witness) -> (
-            match
-              Mina_transaction_logic.Transaction_applied.transaction_status
-                status
-            with
-            | Applied ->
-                return witness
-            | Failed failure ->
-                failwithf
-                  !"Failed to apply inner account update \
-                    %{sexp:Transaction_status.Failure.Collection.t}"
-                  failure () )
+        | Ok witness ->
+            return witness
         | Error e ->
             Error.raise e
       in
       let () =
-        don't_wait_for
-        @@ Merger.P.add_job t.merger t.merger_ctx ~data:command_witness
+        List.iter witnesses ~f:(fun witness ->
+            don't_wait_for
+            @@ Merger.P.add_job t.merger t.merger_ctx ~data:witness )
       in
       return (old_deposits_state, processed_pointer)
 
@@ -683,6 +442,14 @@ module Sequencer = struct
     printf "Init root: %s\n%!" Ledger_hash.(to_decimal_string (get_root t)) ;
 
     (* apply diffs from DA layer *)
+    let%bind diffs =
+      Da_layer.Client.get_diffs_chain ~logger ~config:da_config
+        ~source_ledger_hash:`Genesis ~target_ledger_hash:committed_ledger_hash
+      |> Deferred.map ~f:Or_error.ok_exn
+    in
+    let sequencer_pk =
+      Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
+    in
     let%bind () =
       Da_layer.Client.map_diffs ~logger ~config:da_config
         ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
@@ -713,7 +480,7 @@ module Sequencer = struct
               List.iter changed_accounts ~f:(fun (_, account) ->
                   let aid = Account.identifier account in
                   let _w =
-                    Imt_db.get_or_create_entry_exn t.imt
+                    Indexed_merkle_tree.Db.get_or_create_entry_exn t.imt
                       (Account_id.derive_token_id ~owner:aid)
                   in
                   () ) ;
@@ -722,16 +489,13 @@ module Sequencer = struct
               (* Apply command *)
               let mask = L.of_database t.db in
               let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
-              let state_body =
-                Mina_state.Protocol_state.body
-                  Zeko_constants.compile_time_genesis_state
-              in
-              let _, _, _, _, _ =
-                apply_user_command_without_check mask t.imt t.archive command
-                  ~global_slot ~state_body
+              let _, _ =
+                Zeko_transaction_logic.apply_user_command_unchecked
+                  ~sequencer_pk ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
+                  ~constraint_constants ~global_slot mask t.imt t.archive
+                  command
                 |> Or_error.ok_exn
               in
-              L.Mask.Attached.commit mask ;
               return () )
       >>| Or_error.ok_exn >>| ignore
     in
@@ -760,7 +524,7 @@ module Sequencer = struct
         ~depth:constraint_constants.ledger_depth ()
     in
     let imt =
-      Imt_db.create ?directory_name:imt_dir
+      Indexed_merkle_tree.Db.create ?directory_name:imt_dir
         ~depth:constraint_constants.ledger_depth ()
     in
     let config =
@@ -825,6 +589,27 @@ end
 
 let%test_module "Sequencer tests" =
   ( module struct
+    let constraint_constants = Zeko_constants.constraint_constants
+
+    let compile_time_genesis =
+      let consensus_constants =
+        let protocol_constants : Genesis_constants.Protocol.t =
+          { k = 1
+          ; slots_per_epoch = 1000
+          ; slots_per_sub_window = 1
+          ; grace_period_slots = 1
+          ; delta = 1
+          ; genesis_state_timestamp = Int64.one
+          }
+        in
+        Consensus.Constants.create ~constraint_constants ~protocol_constants
+      in
+      Mina_state.Genesis_protocol_state.t
+        ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+        ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+        ~constraint_constants ~consensus_constants
+        ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+
     let start_time = Time.now ()
 
     let () = Base.Backtrace.elide := false
@@ -906,10 +691,20 @@ let%test_module "Sequencer tests" =
         List.iter genesis_accounts ~f:(fun (aid, acc) ->
             L.create_new_account_exn ephemeral_ledger aid acc ) ;
         let account_set_hash =
-          Sparse_imt.create_from_tids ~depth:constraint_constants.ledger_depth
-            (List.map genesis_accounts ~f:(fun (aid, _) ->
-                 Account_id.derive_token_id ~owner:aid ) )
-          |> Sparse_imt.merkle_root
+          let db =
+            Indexed_merkle_tree.Db.create
+              ~depth:constraint_constants.ledger_depth ()
+          in
+          let tids =
+            List.map genesis_accounts ~f:(fun (aid, _) ->
+                Account_id.derive_token_id ~owner:aid )
+          in
+          List.iter tids ~f:(fun tid ->
+              let _, _ =
+                Indexed_merkle_tree.Db.get_or_create_entry_exn db tid
+              in
+              () ) ;
+          Indexed_merkle_tree.Db.merkle_root db
         in
 
         (* Post genesis batch *)
@@ -1065,11 +860,8 @@ let%test_module "Sequencer tests" =
                                   ~global_slot:
                                     Mina_numbers.Global_slot_since_genesis.zero
                                   ~state_view:
-                                    Mina_state.Protocol_state.(
-                                      Body.view
-                                      @@ body
-                                           Zeko_constants
-                                           .compile_time_genesis_state)
+                                    (Mina_state.Protocol_state.Body.view
+                                       compile_time_genesis.data.body )
                               with
                             | Ok (applied, _) ->
                                 [%test_eq: Transaction_status.t]
@@ -1101,22 +893,17 @@ let%test_module "Sequencer tests" =
                             apply_user_command sequencer (Signed_command command)
                       in
 
-                      let txn_applied, command_witness =
+                      let witnesses =
                         match result with
                         | Ok result ->
                             result
                         | Error e ->
                             Error.raise e
                       in
-                      don't_wait_for
-                      @@ Merger.P.add_job sequencer.merger sequencer.merger_ctx
-                           ~data:command_witness ;
-
-                      let status =
-                        Mina_transaction_logic.Transaction_applied
-                        .transaction_status txn_applied
-                      in
-                      [%test_eq: Transaction_status.t] status Applied )
+                      List.iter witnesses ~f:(fun witness ->
+                          don't_wait_for
+                          @@ Merger.P.add_job sequencer.merger
+                               sequencer.merger_ctx ~data:witness ) )
                 in
 
                 let target_ledger_hash = get_root sequencer in
@@ -1170,11 +957,8 @@ let%test_module "Sequencer tests" =
                                 ~global_slot:
                                   Mina_numbers.Global_slot_since_genesis.zero
                                 ~state_view:
-                                  Mina_state.Protocol_state.(
-                                    Body.view
-                                    @@ body
-                                         Zeko_constants
-                                         .compile_time_genesis_state)
+                                  (Mina_state.Protocol_state.Body.view
+                                     compile_time_genesis.data.body )
                             with
                           | Ok _ ->
                               ()
@@ -1204,22 +988,18 @@ let%test_module "Sequencer tests" =
                           apply_user_command sequencer (Signed_command command)
                     in
 
-                    let txn_applied, command_witness =
+                    let witnesses =
                       match result with
                       | Ok result ->
                           result
                       | Error e ->
                           Error.raise e
                     in
-                    don't_wait_for
-                    @@ Merger.P.add_job sequencer.merger sequencer.merger_ctx
-                         ~data:command_witness ;
 
-                    let status =
-                      Mina_transaction_logic.Transaction_applied
-                      .transaction_status txn_applied
-                    in
-                    [%test_eq: Transaction_status.t] status Applied )
+                    List.iter witnesses ~f:(fun witness ->
+                        don't_wait_for
+                        @@ Merger.P.add_job sequencer.merger
+                             sequencer.merger_ctx ~data:witness ) )
               in
 
               let target_ledger_hash = get_root sequencer in

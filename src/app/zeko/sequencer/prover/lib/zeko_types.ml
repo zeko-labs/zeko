@@ -175,6 +175,8 @@ module Zkapp_rule_input_witness = struct
 end
 
 module Even_PC = struct
+  include Zeko_util.Even_PC
+
   type t = Zeko_util.Even_PC.t = { public_key : F.t } [@@deriving yojson]
 end
 
@@ -312,7 +314,7 @@ module Base_input = struct
     }
 end
 
-module Command_witness = struct
+module Txn_snark_witness = struct
   module Zkapp_command_segment = struct
     type t =
       | Single_unproved of Zkapp_single_unproved_input.t
@@ -323,7 +325,7 @@ module Command_witness = struct
 
   type t =
     | Signed_command of Base_input.serializable
-    | Zkapp_command of Zkapp_command_segment.t list
+    | Zkapp_command of Zkapp_command_segment.t
   [@@deriving yojson]
 end
 

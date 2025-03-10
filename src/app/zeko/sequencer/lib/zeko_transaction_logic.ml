@@ -183,15 +183,18 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
   match status with
   | Applied ->
       Ok
-        Base_input.
-          { source_ledger = Sparse_ledger.merkle_root source_ledger
-          ; source_acc_set = source_imt
-          ; sequencer = sequencer_pk
-          ; transaction = command
-          ; witness =
-              Base_witness.
-                { ledger_path_handler = source_ledger; update_acc_set_witness }
-          }
+        ( source_ledger
+        , Base_input.
+            { source_ledger = Sparse_ledger.merkle_root source_ledger
+            ; source_acc_set = source_imt
+            ; sequencer = sequencer_pk
+            ; transaction = command
+            ; witness =
+                Base_witness.
+                  { ledger_path_handler = source_ledger
+                  ; update_acc_set_witness
+                  }
+            } )
   | Failed failures ->
       Or_error.error_string
         (sprintf "Transaction failed: %s"
@@ -199,10 +202,16 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
               (Transaction_status.Failure.Collection.to_yojson failures) ) )
 
 let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
-    ~global_slot ledger imt (command : Zkapp_command.t) =
+    ~global_slot ledger imt archive (command : Zkapp_command.t) =
   let hash_local_state l =
     Zkapp_command_logic.Local_state.
       { l with call_stack = Inputs.Call_stack.with_hash l.call_stack }
+  in
+  let source_ledger =
+    let accounts_referenced =
+      User_command.accounts_referenced (Zkapp_command command)
+    in
+    Sparse_ledger.of_ledger_subset_exn ledger accounts_referenced
   in
   let state : Inputs.Global_state.t * _ Zkapp_command_logic.Local_state.t =
     let open Inputs in
@@ -229,13 +238,12 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
   let witnesses =
     let l = hash_local_state (snd state) in
     let account_id = Zkapp_command.fee_payer command in
-    let source_ledger = Ledger.merkle_root ledger in
     [ ( account_id
       , fun ~imt_hash ~imt_witness ->
-          Command_witness.Zkapp_command_segment.Single_unproved
+          Txn_snark_witness.Zkapp_command_segment.Single_unproved
             Zkapp_single_unproved_input.
               { base =
-                  { source_ledger
+                  { source_ledger = Sparse_ledger.merkle_root source_ledger
                   ; source_local_state = Inputs.Local_state.to_zeko l
                   ; sequencer = sequencer_pk
                   ; source_acc_set = imt_hash
@@ -244,9 +252,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                        Zkapp_rule_input_witness.
                          { stack_frame = l.stack_frame
                          ; call_stack = Inputs.Call_stack.with_hash l.call_stack
-                         ; source_ledger_sparse =
-                             Sparse_ledger.of_ledger_subset_exn ledger
-                               [ account_id ]
+                         ; source_ledger_sparse = source_ledger
                          ; update_acc_set_witness = imt_witness
                          } )
                   }
@@ -321,7 +327,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
             | None_given | Signature _ ->
                 Ok
                   (fun ~imt_hash ~imt_witness ->
-                    Command_witness.Zkapp_command_segment.Single_unproved
+                    Txn_snark_witness.Zkapp_command_segment.Single_unproved
                       Zkapp_single_unproved_input.
                         { base = incomplete_base ~imt_hash ~imt_witness
                         ; first = empty_start_data
@@ -339,7 +345,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                 in
                 Ok
                   (fun ~imt_hash ~imt_witness ->
-                    Command_witness.Zkapp_command_segment.Single_proved
+                    Txn_snark_witness.Zkapp_command_segment.Single_proved
                       Zkapp_single_proved_input.
                         { base = incomplete_base ~imt_hash ~imt_witness
                         ; first = empty_start_data
@@ -380,8 +386,8 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
         incomplete_witness ~imt_hash ~imt_witness )
   in
   let rec pair_unproved :
-         Command_witness.Zkapp_command_segment.t list
-      -> Command_witness.Zkapp_command_segment.t list = function
+         Txn_snark_witness.Zkapp_command_segment.t list
+      -> Txn_snark_witness.Zkapp_command_segment.t list = function
     | [] ->
         []
     | Single_unproved { base; first }
@@ -410,22 +416,54 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
         hd :: pair_unproved tl
   in
   let witnesses = pair_unproved witnesses in
-  Ok witnesses
+
+  (* Add events and actions to the memory *)
+  let () =
+    Zkapp_command.(
+      Call_forest.iteri (account_updates command) ~f:(fun _ update ->
+          let account =
+            let account_id =
+              Account_id.create
+                (Account_update.public_key update)
+                (Account_update.token_id update)
+            in
+            let location =
+              Ledger.location_of_account ledger account_id
+              |> Option.value_exn
+                   ~message:"Internal error, account should be present"
+            in
+            Ledger.get ledger location
+            |> Option.value_exn
+                 ~message:"Internal error, account should be present"
+          in
+          Archive.add_account_update archive update account
+            (Some
+               Archive.Transaction_info.
+                 { status = Applied
+                 ; hash =
+                     Mina_transaction.Transaction_hash.hash_command
+                       (Zkapp_command command)
+                 ; memo = Zkapp_command.memo command
+                 ; authorization_kind =
+                     Account_update.Body.authorization_kind update.body
+                 } ) ))
+  in
+  Ok (source_ledger, witnesses)
 
 let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
-    ~global_slot ledger imt (command : User_command.t) =
+    ~global_slot ledger imt archive (command : User_command.t) =
   match command with
   | Signed_command ({ payload = { body = Payment _; _ }; _ } as command) ->
-      let%map.Result w =
+      let%map.Result source_ledger, w =
         apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
           ~global_slot ledger imt command
       in
-      Command_witness.Signed_command w
+      (source_ledger, [ Txn_snark_witness.Signed_command w ])
   | Zkapp_command command ->
-      let%map.Result w =
+      let%map.Result source_ledger, w =
         apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env
-          ~constraint_constants ~global_slot ledger imt command
+          ~constraint_constants ~global_slot ledger imt archive command
       in
-      Command_witness.Zkapp_command w
+      (source_ledger, List.map w ~f:(fun w -> Txn_snark_witness.Zkapp_command w))
   | Signed_command _ ->
       Or_error.error_string "Invalid signed command, we allow only payments"
