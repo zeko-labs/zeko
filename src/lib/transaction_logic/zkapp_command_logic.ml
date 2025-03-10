@@ -96,8 +96,6 @@ module type Amount_intf = sig
     val add_flagged : t -> t -> t * [ `Overflow of bool ]
 
     val of_unsigned : unsigned -> t
-
-    val display : t -> string
   end
 
   val zero : t
@@ -1251,7 +1249,6 @@ module Make (Inputs : Inputs_intf) = struct
         (Account_update.token_id account_update)
         (a, inclusion_proof)
     in
-    print_endline @@ Inputs.Bool.display ~label:"account_is_new" account_is_new ;
     (* delegate to public key if new account using default token *)
     let a =
       let self_delegate =
@@ -1411,12 +1408,6 @@ module Make (Inputs : Inputs_intf) = struct
         let open Amount.Signed in
         add_flagged balance_change neg_creation_fee
       in
-
-      printf "balance_change: %s\n" (Amount.Signed.display balance_change) ;
-      printf "neg_creation_fee: %s\n" (Amount.Signed.display neg_creation_fee) ;
-      printf "balance_change_for_creation: %s\n"
-        (Amount.Signed.display balance_change_for_creation) ;
-
       let pay_creation_fee =
         Bool.(account_is_new &&& implicit_account_creation_fee)
       in
@@ -1425,15 +1416,6 @@ module Make (Inputs : Inputs_intf) = struct
         Amount.Signed.if_ pay_creation_fee ~then_:balance_change_for_creation
           ~else_:balance_change
       in
-
-      print_endline
-      @@ Inputs.Bool.display ~label:"pay_creation_fee" pay_creation_fee ;
-      print_endline
-      @@ Inputs.Bool.display ~label:"balance_change"
-           (Amount.Signed.is_neg balance_change) ;
-      print_endline
-      @@ Inputs.Bool.display ~label:"creation_overflow" creation_overflow ;
-
       let local_state =
         Local_state.add_check local_state Amount_insufficient_to_create_account
           Bool.(
