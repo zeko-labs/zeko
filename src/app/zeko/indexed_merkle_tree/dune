@@ -5,11 +5,7 @@
   zeko_constants
   ;; mina ;;
   mina_base
-  mina_base.import
   mina_ledger
-  merkle_ledger
-  rocksdb
-  sparse_ledger_lib
   ;; opam libraries ;;
   core_kernel)
  (preprocess

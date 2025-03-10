@@ -1,13 +1,6 @@
 (library
  (name zeko_constants)
- (libraries
-  mina_base
-  snark_params
-  signature_lib
-  consensus
-  mina_state
-  genesis_ledger
-  staged_ledger_diff)
+ (libraries mina_base signature_lib snark_params genesis_constants currency)
  (inline_tests)
  (instrumentation
   (backend bisect_ppx))
