@@ -3,8 +3,6 @@
  (inline_tests)
  (libraries
   ;; mina ;;
-  mina_base
-  mina_base.import
   mina_ledger
   ;; opam libraries ;;
   core_kernel))

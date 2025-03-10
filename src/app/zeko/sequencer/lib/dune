@@ -53,7 +53,6 @@
   random_oracle
   random_oracle_input
   init
-  cli_lib
   ;; opam libraries ;;
   base_quickcheck
   uri

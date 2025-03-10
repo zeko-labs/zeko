@@ -92,9 +92,6 @@ struct
                 Typ.(
                   Ase_outer_inst.Stmt.typ * Ase_outer_with_length_inst.Stmt.typ)
               () )
-
-    (* FIXME: remove for lazy compilation *)
-    let () = Promise.block_on_async_exn (fun () -> Compile_simple.force_tag tag)
   end
 
   module Check_accepted_params = struct
@@ -137,9 +134,6 @@ struct
                   Check_accepted.Definition.Stmt.typ
                   * Ase_outer_with_length_inst.Stmt.typ)
               () )
-
-    (* FIXME: remove for lazy compilation *)
-    let () = Promise.block_on_async_exn (fun () -> Compile_simple.force_tag tag)
   end
 
   module Witness = struct

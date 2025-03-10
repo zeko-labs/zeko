@@ -4,12 +4,12 @@
   zeko_circuits
   indexed_merkle_tree
   zeko_constants
-  mina_lib
+  ;; mina ;;
+  mina_base
   mina_ledger
-  yojson
+  ;; opam ;;
   cohttp
   cohttp-async
-  async_kernel
-  mina_base)
+  async_kernel)
  (preprocess
   (pps ppx_jane ppx_mina ppx_version)))
