@@ -6,6 +6,25 @@ open Mina_ledger
 
 let constraint_constants = Zeko_constants.constraint_constants
 
+let compile_time_genesis =
+  let consensus_constants =
+    let protocol_constants : Genesis_constants.Protocol.t =
+      { k = 1
+      ; slots_per_epoch = 1000
+      ; slots_per_sub_window = 1
+      ; grace_period_slots = 1
+      ; delta = 1
+      ; genesis_state_timestamp = Int64.one
+      }
+    in
+    Consensus.Constants.create ~constraint_constants ~protocol_constants
+  in
+  Mina_state.Genesis_protocol_state.t
+    ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+    ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+    ~constraint_constants ~consensus_constants
+    ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+
 let rec rmrf path =
   match Sys.is_directory path with
   | true ->
@@ -14,8 +33,6 @@ let rec rmrf path =
       Sys.rmdir path
   | false ->
       Sys.remove path
-
-let compile_time_genesis_state = Zeko_constants.compile_time_genesis_state
 
 let time ~logger label (d : 'a Deferred.t) =
   let start = Time.now () in
@@ -71,7 +88,7 @@ let sync_archive ~(state : State.t) ~hash =
       ~target_ledger_hash:hash
   in
   Ledger.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
-      let protocol_state = ref compile_time_genesis_state in
+      let protocol_state = ref compile_time_genesis.data in
       Deferred.List.iter diffs ~f:(fun diff ->
           match
             Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
@@ -92,8 +109,8 @@ let sync_archive ~(state : State.t) ~hash =
                      (Ledger.apply_transaction_first_pass ~constraint_constants
                         ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
                         ~txn_state_view:
-                          Mina_state.Protocol_state.(
-                            Body.view @@ body compile_time_genesis_state)
+                          (Mina_state.Protocol_state.Body.view
+                             compile_time_genesis.data.body )
                         ledger (Command command) )
                      (Ledger.apply_transaction_second_pass ledger)
               in

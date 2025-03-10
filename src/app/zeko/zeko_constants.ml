@@ -15,30 +15,6 @@ let constraint_constants : Genesis_constants.Constraint_constants.t =
   ; fork = None
   }
 
-let protocol_constants : Genesis_constants.Protocol.t =
-  { k = 1
-  ; slots_per_epoch = 1000
-  ; slots_per_sub_window = 1
-  ; grace_period_slots = 1
-  ; delta = 1
-  ; genesis_state_timestamp = Int64.one
-  }
-
-let consensus_constants =
-  Consensus.Constants.create ~constraint_constants ~protocol_constants
-
-let genesis_constants = Genesis_constants.Compiled.genesis_constants
-
-let compile_time_genesis_state =
-  let compile_time_genesis =
-    Mina_state.Genesis_protocol_state.t
-      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-      ~constraint_constants ~consensus_constants
-      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-  in
-  compile_time_genesis.data
-
 let inner_public_key =
   let pk =
     Snark_params.Tick.Inner_curve.(

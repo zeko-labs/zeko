@@ -64,8 +64,8 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
         match initial_state with
         | `None ->
             ( ledger
-            , Indexed_merkle_tree.Sparse_indexed_merkle_tree.(
-                create_from_tids ~depth:constraint_constants.ledger_depth []
+            , Indexed_merkle_tree.Db.(
+                create ~depth:constraint_constants.ledger_depth ()
                 |> merkle_root) )
         | `Test_accounts test_accounts_path ->
             let accounts =
@@ -76,10 +76,18 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
                   Account_id.derive_token_id ~owner:aid )
             in
             let imt_hash =
-              Indexed_merkle_tree.Sparse_indexed_merkle_tree.(
-                create_from_tids ~depth:constraint_constants.ledger_depth tids
-                |> merkle_root)
+              let db =
+                Indexed_merkle_tree.Db.create
+                  ~depth:constraint_constants.ledger_depth ()
+              in
+              List.iter tids ~f:(fun tid ->
+                  let _, _ =
+                    Indexed_merkle_tree.Db.get_or_create_entry_exn db tid
+                  in
+                  () ) ;
+              Indexed_merkle_tree.Db.merkle_root db
             in
+
             let ledger =
               List.fold ~init:ledger accounts
                 ~f:(fun ledger (account_id, account) ->

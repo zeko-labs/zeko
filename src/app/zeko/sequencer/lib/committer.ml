@@ -4,6 +4,7 @@ open Mina_base
 open Signature_lib
 open Mina_ledger
 open Zeko_circuits
+open Zeko_prover.Zeko_types
 module Field = Snark_params.Tick.Field
 
 module Commit_witness = struct
@@ -13,7 +14,7 @@ module Commit_witness = struct
     ; old_deposits_pointer : Frozen_ledger_hash.t
     ; processed_deposits_pointer : Frozen_ledger_hash.t
     ; signatures : Signature.t list
-    ; txn_snark : Zeko_transaction_snark.T.t
+    ; txn_snark : Txn_snark.serializable
     }
   [@@deriving yojson]
 end
