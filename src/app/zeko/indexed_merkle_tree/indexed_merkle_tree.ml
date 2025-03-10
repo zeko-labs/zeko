@@ -119,32 +119,42 @@ module Inputs = struct
   module Storage_locations = Storage_locations
 end
 
-module type Indexed_merkle_tree_intf = sig
-  include
-    Merkle_ledger.Intf.Ledger.DATABASE
-      with module Location = Location_at_depth
-      with module Addr = Location_at_depth.Addr
-      with type root_hash := Ledger_hash.t
-       and type hash := Ledger_hash.t
-       and type key := Public_key.Compressed.t
-       and type token_id := Token_id.t
-       and type token_id_set := Token_id.Set.t
-       and type account := Entry.t
-       and type account_id_set := Account_id.Set.t
-       and type account_id := Account_id.t
-       and type zeko_kvdb := Kvdb.t
+module type Ledger_db_intf =
+  Merkle_ledger.Intf.Ledger.DATABASE
+    with module Location = Location_at_depth
+    with module Addr = Location_at_depth.Addr
+    with type root_hash := Ledger_hash.t
+     and type hash := Ledger_hash.t
+     and type key := Public_key.Compressed.t
+     and type token_id := Token_id.t
+     and type token_id_set := Token_id.Set.t
+     and type account := Entry.t
+     and type account_id_set := Account_id.Set.t
+     and type account_id := Account_id.t
+     and type zeko_kvdb := Kvdb.t
+
+module type Database_intf = sig
+  type t
+
+  type index = int
+
+  module Path : Merkle_path.S with type hash := Ledger_hash.t
+
+  val merkle_root : t -> Hash.t
+
+  val create : ?directory_name:string -> depth:index -> unit -> t
 
   val get_or_create_entry_exn :
        t
     -> Token_id.t
     -> [> `Added | `Existed ]
-       * ( [> `X of Token_id.t ]
-         * [> `X_path of path ]
-         * [> `Y of Token_id.t ]
-         * [> `Y_path of path ]
-         * [> `Z of Token_id.t ] )
+       * ( [ `X of Token_id.t ]
+         * [ `X_path of Path.t ]
+         * [ `Y of Token_id.t ]
+         * [ `Y_path of Path.t ]
+         * [ `Z of Token_id.t ] )
 
-  val find_lower_entry_aid : t -> Token_id.t -> Token_id.t option
+  val find_lower_entry_tid : t -> Token_id.t -> Token_id.t option
 end
 
 let lowest_key = Token_id.of_field Field.zero
@@ -162,7 +172,7 @@ let base_entries =
   ; (Account_id.with_empty_key highest_key, highest_entry)
   ]
 
-module Db : Indexed_merkle_tree_intf = struct
+module Db : Database_intf = struct
   include Database.Make (Inputs)
 
   module Db_error = struct
@@ -221,7 +231,7 @@ module Db : Indexed_merkle_tree_intf = struct
            Db_error.Malformed_database "Failed to parse prev location" )
     |> Db_error.ok_exn
 
-  let find_lower_entry_aid t tid =
+  let find_lower_entry_tid t tid =
     let lower_entry_location = find_lower_entry_location_exn t tid in
     get t lower_entry_location
     |> Option.map ~f:(fun entry -> Entry.(entry.value))
@@ -272,192 +282,4 @@ module Db : Indexed_merkle_tree_intf = struct
           , `Z new_entry.value_next ) )
     | Error e ->
         Error.raise e
-end
-
-module Null = Null_ledger.Make (Inputs)
-
-module Any_ledger :
-  Merkle_ledger.Intf.Ledger.ANY
-    with module Location = Location_at_depth
-    with type account := Entry.t
-     and type key := Public_key.Compressed.t
-     and type token_id := Token_id.t
-     and type token_id_set := Token_id.Set.t
-     and type account_id := Account_id.t
-     and type account_id_set := Account_id.Set.t
-     and type hash := Hash.t =
-  Merkle_ledger.Any_ledger.Make_base (Inputs)
-
-module Mask :
-  Merkle_mask.Masking_merkle_tree_intf.S
-    with module Location = Location_at_depth
-     and module Attached.Addr = Location_at_depth.Addr
-    with type account := Entry.t
-     and type key := Public_key.Compressed.t
-     and type token_id := Token_id.t
-     and type token_id_set := Token_id.Set.t
-     and type account_id := Account_id.t
-     and type account_id_set := Account_id.Set.t
-     and type hash := Hash.t
-     and type location := Location_at_depth.t
-     and type parent := Any_ledger.M.t =
-Merkle_mask.Masking_merkle_tree.Make (struct
-  include Inputs
-  module Base = Any_ledger.M
-end)
-
-module Maskable :
-  Merkle_mask.Maskable_merkle_tree_intf.S
-    with module Location = Location_at_depth
-    with module Addr = Location_at_depth.Addr
-    with type account := Entry.t
-     and type key := Public_key.Compressed.t
-     and type token_id := Token_id.t
-     and type token_id_set := Token_id.Set.t
-     and type account_id := Account_id.t
-     and type account_id_set := Account_id.Set.t
-     and type hash := Hash.t
-     and type root_hash := Hash.t
-     and type unattached_mask := Mask.t
-     and type attached_mask := Mask.Attached.t
-     and type accumulated_t := Mask.accumulated_t
-     and type t := Any_ledger.M.t =
-Merkle_mask.Maskable_merkle_tree.Make (struct
-  include Inputs
-  module Base = Any_ledger.M
-  module Mask = Mask
-
-  let mask_to_base m = Any_ledger.cast (module Mask.Attached) m
-end)
-
-include Mask.Attached
-
-let create_ephemeral_with_base ~depth () =
-  let maskable = Null.create ~depth () in
-  let casted = Any_ledger.cast (module Null) maskable in
-  let mask = Mask.create ~depth () in
-  (casted, Maskable.register_mask casted mask)
-
-let create_ephemeral ~depth () =
-  let _base, mask = create_ephemeral_with_base ~depth () in
-  List.iter base_entries ~f:(fun (aid, entry) ->
-      let _ignore = get_or_create_account mask aid entry |> Or_error.ok_exn in
-      () ) ;
-  mask
-
-module Sparse_indexed_merkle_tree = struct
-  include Sparse_ledger_lib.Sparse_ledger.Make (Hash) (Account_id) (Entry)
-
-  let of_db_root (db : Db.t) = of_hash ~depth:(Db.depth db) (Db.merkle_root db)
-
-  let of_db_subset_exn_impl ~path_query ~path_add (db : Db.t)
-      (tids : Token_id.t list) =
-    (*** [iterate_n ~f init n] returns [[f init, f (f init), ..]] of size [n] *)
-    let iterate_n ~f =
-      let rec impl prev = function
-        | 0 ->
-            []
-        | n ->
-            let r = f prev in
-            r :: impl r (n - 1)
-      in
-      impl
-    in
-    let lower_entries =
-      List.map tids ~f:(fun tid -> Db.find_lower_entry_aid db tid)
-      |> List.filter_opt
-    in
-    let tids = List.concat [ lower_entries; tids ] in
-    let locations =
-      Db.location_of_account_batch db
-        (List.map tids ~f:Account_id.with_empty_key)
-    in
-    let non_empty_locations = List.filter_map locations ~f:snd in
-    let num_new_accounts =
-      List.length locations - List.length non_empty_locations
-    in
-    let entries = Db.get_batch db non_empty_locations in
-    let empty_paths, non_empty_paths =
-      let next_location_exn loc = Option.value_exn (Db.Location.next loc) in
-      let empty_address =
-        Db.Addr.of_directions
-        @@ List.init (Db.depth db) ~f:(Fn.const Direction.Left)
-      in
-      let empty_locations =
-        if num_new_accounts = 0 then []
-        else
-          let first_loc =
-            Option.value_map ~f:next_location_exn
-              ~default:(Db.Location.Account empty_address) (Db.last_filled db)
-          in
-          first_loc
-          :: iterate_n ~f:next_location_exn first_loc (num_new_accounts - 1)
-      in
-      let paths = path_query db (empty_locations @ non_empty_locations) in
-      List.split_n paths num_new_accounts
-    in
-    let process_location sl key = function
-      | Some _, (_, Some entry) :: accs, path :: ne_paths, epaths ->
-          (path_add sl path key entry, accs, ne_paths, epaths)
-      | None, accs, ne_paths, path :: epaths ->
-          ( path_add sl path key Entry.Stable.Latest.empty
-          , accs
-          , ne_paths
-          , epaths )
-      | Some _, (_, None) :: _, _, _ ->
-          failwith
-            "of_ledger_subset_exn: account not found for location returned by \
-             location_of_account_batch"
-      | _ ->
-          failwith "of_ledger_subset_exn: mismatched lengths"
-    in
-    let sl, _, _, _ =
-      List.fold locations
-        ~init:(of_db_root db, entries, non_empty_paths, empty_paths)
-        ~f:(fun (sl, accs, ne_paths, epaths) (key, mloc) ->
-          process_location sl key (mloc, accs, ne_paths, epaths) )
-    in
-    Debug_assert.debug_assert (fun () ->
-        [%test_eq: Ledger_hash.t] (Db.merkle_root db)
-          ((merkle_root sl :> Random_oracle.Digest.t) |> Ledger_hash.of_hash) ) ;
-    sl
-
-  let of_db_subset_exn =
-    of_db_subset_exn_impl ~path_query:Db.wide_merkle_path_batch
-      ~path_add:add_wide_path_unsafe
-
-  let find_lower_entry t tid =
-    let result = ref None in
-    iteri t ~f:(fun i entry ->
-        if
-          Token_id.equal entry.value_next tid
-          && not
-               (Hash.equal (Entry.data_hash entry)
-                  (Entry.data_hash Entry.Stable.Latest.empty) )
-        then result := Some (i, entry) ) ;
-    !result
-
-  let get_or_create_entry_exn t tid =
-    let lower_entry_location, lower_entry =
-      find_lower_entry t tid |> Option.value_exn
-    in
-    let lower_entry = { lower_entry with value_next = tid } in
-    let t = set_exn t lower_entry_location lower_entry in
-    let new_entry_location = find_index_exn t (Account_id.with_empty_key tid) in
-    let new_entry =
-      { Entry.value = tid; value_next = lower_entry.value_next }
-    in
-    ( set_exn t new_entry_location new_entry
-    , ( `X lower_entry.value
-      , `X_path (path_exn t lower_entry_location)
-      , `Y new_entry.value
-      , `Y_path (path_exn t new_entry_location)
-      , `Z new_entry.value_next ) )
-
-  let create_from_tids ~depth tids =
-    let db = Db.create ~depth () in
-    let sparse = of_db_subset_exn db tids in
-    List.fold tids ~init:sparse ~f:(fun sparse tid ->
-        let sparse, _ = get_or_create_entry_exn sparse tid in
-        sparse )
 end

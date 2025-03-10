@@ -115,7 +115,7 @@ module Acc_set_witness = struct
     | Error e ->
         Error e
 
-  let empty imt = { x = []; x_path = []; y_path = []; z = [] }
+  let empty = { x = []; x_path = []; y_path = []; z = [] }
 
   let add t
       ((x, x_path, y, y_path, z) :
