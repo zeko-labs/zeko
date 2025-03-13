@@ -11,3 +11,18 @@
  (preprocess
   (pps ppx_jane ppx_mina))
  (modules cli))
+
+(executable
+ (name cli_fake)
+ (libraries
+  zeko_prover
+  compile_simple_fake
+  ;; mina ;;
+  mina_base
+  signature_lib
+  ;; opam ;;
+  async
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_jane ppx_mina))
+ (modules cli_fake))
