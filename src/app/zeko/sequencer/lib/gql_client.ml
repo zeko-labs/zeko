@@ -278,9 +278,15 @@ let fetch_committed_state uri pk =
     end
   in
   let%map result = Graphql_client.query_json_exn q uri in
-  Yojson.Safe.Util.(
-    result |> member "account" |> member "zkappState" |> index 0 |> to_string)
-  |> Frozen_ledger_hash.of_decimal_string
+  let open Zeko_circuits.Rollup_state in
+  let ({ ledger_hash; _ } : Outer_state.t) =
+    Yojson.Safe.Util.(
+      result |> member "account" |> member "zkappState" |> to_list
+      |> List.map ~f:to_string
+      |> List.map ~f:Field.of_string
+      |> Zkapp_state.V.of_list_exn |> Outer_state.value_of_app_state)
+  in
+  ledger_hash
 
 let infer_committed_state uri ~zkapp_pk ~signer_pk =
   let%bind committed_state = fetch_committed_state uri zkapp_pk

@@ -27,7 +27,6 @@ let print_time label (d : 'a Deferred.t) =
   printf "%s: %s\n%!" label (Time.Span.to_string_hum t) ;
   return x
 
-(* Finds the account_id's account update and returns the 0th state update *)
 let get_state_transition pk command =
   let account_id = Account_id.create pk Token_id.default in
   let%bind.Option account_update =
@@ -38,16 +37,17 @@ let get_state_transition pk command =
            |> Account_id.equal account_id )
   in
   let body = Account_update.body account_update in
-  let zeroth l = List.nth_exn l 0 in
+  (* Use the Rollup_state.Outer_state.t to determine which is ledger hash *)
+  let third l = List.nth_exn l 2 in
   let source =
     body |> Account_update.Body.preconditions
     |> Account_update.Preconditions.account |> Zkapp_precondition.Account.state
-    |> Zkapp_state.V.to_list |> zeroth |> Zkapp_basic.Or_ignore.to_option
+    |> Zkapp_state.V.to_list |> third |> Zkapp_basic.Or_ignore.to_option
     |> Option.value ~default:Field.zero
   in
   let target =
     body |> Account_update.Body.update |> Account_update.Update.app_state
-    |> Zkapp_state.V.to_list |> zeroth |> Zkapp_basic.Set_or_keep.to_option
+    |> Zkapp_state.V.to_list |> third |> Zkapp_basic.Set_or_keep.to_option
     |> Option.value ~default:Field.zero
   in
   Some (source, target)
