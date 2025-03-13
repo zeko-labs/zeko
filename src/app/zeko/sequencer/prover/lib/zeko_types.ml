@@ -74,20 +74,6 @@ module Acc_set_witness = struct
     }
   [@@deriving yojson]
 
-  let to_serializable
-      ({ get_account_set_x
-       ; get_account_set_z
-       ; get_account_set_x_path
-       ; get_account_set_y_path
-       } :
-        t ) : serializable =
-    let rec fun_to_list f = try f () :: fun_to_list f with _ -> [] in
-    { x = fun_to_list get_account_set_x
-    ; z = fun_to_list get_account_set_z
-    ; x_path = fun_to_list get_account_set_x_path
-    ; y_path = fun_to_list get_account_set_y_path
-    }
-
   let of_serializable ({ x; z; x_path; y_path } : serializable) : t =
     let list_to_fun l =
       let l = ref l in
@@ -105,20 +91,10 @@ module Acc_set_witness = struct
     ; get_account_set_y_path = list_to_fun y_path
     }
 
-  let to_yojson : t -> Yojson.Safe.t =
-    Fn.compose serializable_to_yojson to_serializable
-
-  let of_yojson json : t Ppx_deriving_yojson_runtime.error_or =
-    match serializable_of_yojson json with
-    | Ok as_list ->
-        Ok (of_serializable as_list)
-    | Error e ->
-        Error e
-
   let empty = { x = []; x_path = []; y_path = []; z = [] }
 
   let add t
-      ((x, x_path, y, y_path, z) :
+      ((x, x_path, _, y_path, z) :
         [ `X of Token_id.t ]
         * [ `X_path of Ledger.Path.t ]
         * [ `Y of Token_id.t ]
@@ -143,14 +119,11 @@ module Acc_set_witness = struct
     }
 
   let join t1 t2 =
-    let t1 = to_serializable t1 in
-    let t2 = to_serializable t2 in
-    of_serializable
-      { x = t1.x @ t2.x
-      ; x_path = t1.x_path @ t2.x_path
-      ; y_path = t1.y_path @ t2.y_path
-      ; z = t1.z @ t2.z
-      }
+    { x = t1.x @ t2.x
+    ; x_path = t1.x_path @ t2.x_path
+    ; y_path = t1.y_path @ t2.y_path
+    ; z = t1.z @ t2.z
+    }
 end
 
 module Zkapp_rule_input_witness = struct
@@ -171,7 +144,35 @@ module Zkapp_rule_input_witness = struct
     ; source_ledger_sparse : Mina_ledger.Sparse_ledger.t
     ; update_acc_set_witness : Acc_set_witness.t
     }
+
+  type serializable =
+    { stack_frame :
+        ( Token_id.Stable.V2.t
+        , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
+        Stack_frame.Stable.V1.t
+    ; call_stack :
+        ( ( ( Token_id.Stable.V2.t
+            , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
+            Stack_frame.Stable.V1.t
+          , Stack_frame.Digest.Stable.V1.t )
+          With_hash.t
+        , Call_stack_digest.Stable.V1.t )
+        With_stack_hash.Stable.V1.t
+        list
+    ; source_ledger_sparse : Mina_ledger.Sparse_ledger.t
+    ; update_acc_set_witness : Acc_set_witness.serializable
+    }
   [@@deriving yojson]
+
+  let of_serializable
+      ({ stack_frame; call_stack; source_ledger_sparse; update_acc_set_witness } :
+        serializable ) : t =
+    { stack_frame
+    ; call_stack
+    ; source_ledger_sparse
+    ; update_acc_set_witness =
+        Acc_set_witness.of_serializable update_acc_set_witness
+    }
 end
 
 module Even_PC = struct
@@ -200,7 +201,25 @@ module Zkapp_rule_input = struct
     ; source_acc_set : Account_set.t
     ; witness : Zkapp_rule_input_witness.t
     }
+
+  type serializable =
+    { source_ledger : Ledger_hash.t
+    ; source_local_state : Local_state.t
+    ; sequencer : Even_PC.t
+    ; source_acc_set : Account_set.t
+    ; witness : Zkapp_rule_input_witness.serializable
+    }
   [@@deriving yojson]
+
+  let of_serializable
+      ({ source_ledger; source_local_state; sequencer; source_acc_set; witness } :
+        serializable ) : t =
+    { source_ledger
+    ; source_local_state
+    ; sequencer
+    ; source_acc_set
+    ; witness = Zkapp_rule_input_witness.of_serializable witness
+    }
 end
 
 module Per_account_update = struct
@@ -235,13 +254,29 @@ module Zkapp_single_proved_input = struct
     ; zkapp_proof : Proof.t
     ; first : Per_account_update.t
     }
+
+  type serializable =
+    { base : Zkapp_rule_input.serializable
+    ; vk : Verification_key.t
+    ; zkapp_proof : Proof.t
+    ; first : Per_account_update.t
+    }
   [@@deriving yojson]
+
+  let of_serializable ({ base; vk; zkapp_proof; first } : serializable) : t =
+    { base = Zkapp_rule_input.of_serializable base; vk; zkapp_proof; first }
 end
 
 module Zkapp_single_unproved_input = struct
   type t = Rule_zkapp_command.Zkapp_single_unproved_input.t =
     { base : Zkapp_rule_input.t; first : Per_account_update.t }
+
+  type serializable =
+    { base : Zkapp_rule_input.serializable; first : Per_account_update.t }
   [@@deriving yojson]
+
+  let of_serializable ({ base; first } : serializable) : t =
+    { base = Zkapp_rule_input.of_serializable base; first }
 end
 
 module Zkapp_double_unproved_input = struct
@@ -250,7 +285,16 @@ module Zkapp_double_unproved_input = struct
     ; first : Per_account_update.t
     ; second : Per_account_update.t
     }
+
+  type serializable =
+    { base : Zkapp_rule_input.serializable
+    ; first : Per_account_update.t
+    ; second : Per_account_update.t
+    }
   [@@deriving yojson]
+
+  let of_serializable ({ base; first; second } : serializable) : t =
+    { base = Zkapp_rule_input.of_serializable base; first; second }
 end
 
 module Sparse_ledger_handler = struct
@@ -317,9 +361,9 @@ end
 module Txn_snark_witness = struct
   module Zkapp_command_segment = struct
     type t =
-      | Single_unproved of Zkapp_single_unproved_input.t
-      | Double_unproved of Zkapp_double_unproved_input.t
-      | Single_proved of Zkapp_single_proved_input.t
+      | Single_unproved of Zkapp_single_unproved_input.serializable
+      | Double_unproved of Zkapp_double_unproved_input.serializable
+      | Single_proved of Zkapp_single_proved_input.serializable
     [@@deriving yojson]
   end
 

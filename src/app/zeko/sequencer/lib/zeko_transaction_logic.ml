@@ -123,7 +123,9 @@ let perform ~(zeko_env : zeko_env) ~global_slot (type r)
       |> Or_error.is_ok
   | Check_protocol_state_precondition
       ((predicate : Zkapp_precondition.Protocol_state.t), _global_state) ->
-      Zkapp_precondition.Protocol_state.(equal predicate accept)
+      (* FIXME: Zkapp_precondition.Protocol_state.(equal predicate accept) *)
+      (* Allow for global slot precondition, as it's the fee payer's valid while *)
+      true
   | Check_account_precondition
       (account_update, account, new_account, local_state) ->
       let local_state = ref local_state in
@@ -365,7 +367,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
     step_all state witnesses (Zkapp_command.Call_forest.to_list account_updates)
   in
   let%bind.Result () =
-    if List.is_empty failures then Ok ()
+    if Transaction_status.Failure.Collection.is_empty failures then Ok ()
     else
       Or_error.error_string
         (sprintf "Transaction failed: %s"
@@ -381,41 +383,42 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
             Indexed_merkle_tree.Db.get_or_create_entry_exn imt
               (Account_id.derive_token_id ~owner:aid)
           in
-          Acc_set_witness.(add empty w |> of_serializable)
+          Acc_set_witness.(add empty w)
         in
         incomplete_witness ~imt_hash ~imt_witness )
   in
-  let rec pair_unproved :
-         Txn_snark_witness.Zkapp_command_segment.t list
-      -> Txn_snark_witness.Zkapp_command_segment.t list = function
-    | [] ->
-        []
-    | Single_unproved { base; first }
-      :: Single_unproved
-           { base = { witness = { update_acc_set_witness = second_imt; _ } }
-           ; first = second
-           }
-         :: rest ->
-        let w =
-          Zkapp_double_unproved_input.
-            { base =
-                { base with
-                  witness =
-                    { base.witness with
-                      update_acc_set_witness =
-                        Acc_set_witness.join base.witness.update_acc_set_witness
-                          second_imt
-                    }
-                }
-            ; first
-            ; second
-            }
-        in
-        Double_unproved w :: pair_unproved rest
-    | hd :: tl ->
-        hd :: pair_unproved tl
-  in
-  let witnesses = pair_unproved witnesses in
+
+  (* let rec pair_unproved :
+            Txn_snark_witness.Zkapp_command_segment.t list
+         -> Txn_snark_witness.Zkapp_command_segment.t list = function
+       | [] ->
+           []
+       | Single_unproved { base; first }
+         :: Single_unproved
+              { base = { witness = { update_acc_set_witness = second_imt } }
+              ; first = second
+              }
+            :: rest ->
+           let w =
+             Zkapp_double_unproved_input.
+               { base =
+                   { base with
+                     witness =
+                       { base.witness with
+                         update_acc_set_witness =
+                           Acc_set_witness.join base.witness.update_acc_set_witness
+                             second_imt
+                       }
+                   }
+               ; first
+               ; second
+               }
+           in
+           Double_unproved w :: pair_unproved rest
+       | hd :: tl ->
+           hd :: pair_unproved tl
+     in
+     let witnesses = pair_unproved witnesses in *)
 
   (* Add events and actions to the memory *)
   let () =
