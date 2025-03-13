@@ -88,7 +88,13 @@ module Hash = struct
 
       let to_base58_check = Ledger_hash.to_base58_check
 
-      let merge = Ledger_hash.merge
+      let merge ~height:_ (h1 : t) (h2 : t) =
+        Random_oracle.hash
+          ~init:
+            (Hash_prefix_create.salt
+               Zeko_constants.indexed_merkle_tree_merge_salt )
+          [| (h1 :> Field.t); (h2 :> Field.t) |]
+        |> Ledger_hash.of_hash
 
       let hash_account = Entry.data_hash
 
