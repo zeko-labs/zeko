@@ -28,3 +28,5 @@ let inner_account_id =
 let inner_account_index = 0
 
 let indexed_merkle_tree_salt = "indexed merkle tree entry hash"
+
+let indexed_merkle_tree_merge_salt = "indexed merkle tree"
