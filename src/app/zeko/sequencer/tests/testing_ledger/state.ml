@@ -64,9 +64,23 @@ let apply_command t ~command =
 
   Ledger.Mask.Attached.commit l ;
 
+  let txn_hash =
+    Transaction_hash.to_base58_check @@ Transaction_hash.hash_command command
+  in
+  Hashtbl.add_exn t.commands ~key:txn_hash
+    ~data:
+      ( command
+      , Mina_transaction_logic.Transaction_applied.transaction_status
+          txn_applied ) ;
+
+  let status =
+    Mina_transaction_logic.Transaction_applied.transaction_status txn_applied
+  in
+  printf !"Applied command: %{sexp: Transaction_status.t\n}\n%!" status ;
+
   let () =
-    match command with
-    | Zkapp_command zkapp_command ->
+    match (status, command) with
+    | Applied, Zkapp_command zkapp_command ->
         Zkapp_command.(
           Call_forest.iteri (account_updates zkapp_command) ~f:(fun _ update ->
               let account =
@@ -94,22 +108,9 @@ let apply_command t ~command =
                          Account_update.Body.authorization_kind
                          @@ Account_update.body update
                      } ) ))
-    | Signed_command _ ->
+    | _ ->
         ()
   in
-
-  let txn_hash =
-    Transaction_hash.to_base58_check @@ Transaction_hash.hash_command command
-  in
-  Hashtbl.add_exn t.commands ~key:txn_hash
-    ~data:
-      ( command
-      , Mina_transaction_logic.Transaction_applied.transaction_status
-          txn_applied ) ;
-
-  print_endline @@ "applied zkapp command: " ^ txn_hash ^ " "
-  ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
-  @@ Mina_transaction_logic.Transaction_applied.transaction_status txn_applied ;
 
   Ok ()
 

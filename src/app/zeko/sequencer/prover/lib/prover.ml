@@ -160,21 +160,24 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
       let Compile_simple.[ _; prove; _; _; _ ] = Txn_rules.provers in
       let%map stmt, proof =
         time ~logger "Txn_rules.single_unproved_zkapp_command"
-          (prove input |> Promise.to_deferred)
+          ( prove (Zkapp_single_unproved_input.of_serializable input)
+          |> Promise.to_deferred )
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Double_unproved input)) ->
       let Compile_simple.[ _; _; prove; _; _ ] = Txn_rules.provers in
       let%map stmt, proof =
         time ~logger "Txn_rules.double_unproved_zkapp_command"
-          (prove input |> Promise.to_deferred)
+          ( prove (Zkapp_double_unproved_input.of_serializable input)
+          |> Promise.to_deferred )
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Single_proved input)) ->
       let Compile_simple.[ _; _; _; prove; _ ] = Txn_rules.provers in
       let%map stmt, proof =
         time ~logger "Txn_rules.single_proved_zkapp_command"
-          (prove input |> Promise.to_deferred)
+          ( prove (Zkapp_single_proved_input.of_serializable input)
+          |> Promise.to_deferred )
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Merge input) ->
@@ -259,7 +262,9 @@ let run ~logger ~port =
                             return
                               (Yojson.Safe.to_string @@ Output.to_yojson output)
                         | Error e ->
-                            return (Exn.to_string e) )
+                            let err = Exn.to_string e in
+                            [%log error] "Error proving: %s" err ;
+                            return err )
                     | Error e ->
                         return e )
                >>| Writer.write_line w
