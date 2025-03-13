@@ -814,7 +814,7 @@ module Make (L : Ledger_intf.S) :
       if should_update then L.apply_mask t.first_pass_ledger ~masked:ledger ;
       t
 
-    let second_pass_ledger { second_pass_ledger; _ } =
+    let _second_pass_ledger { second_pass_ledger; _ } =
       L.create_masked second_pass_ledger
 
     let _set_second_pass_ledger ~should_update t ledger =
@@ -1683,7 +1683,7 @@ module Make (L : Ledger_intf.S) :
     let initial_state :
         Inputs.Global_state.t * _ Zkapp_command_logic.Local_state.t =
       ( { protocol_state = state_view
-        ; first_pass_ledger = ledger
+        ; first_pass_ledger = L.empty ~depth:0 ()
         ; second_pass_ledger =
             (* We stub out the second_pass_ledger initially, and then poke the
                correct value in place after the first pass is finished.
@@ -1703,7 +1703,9 @@ module Make (L : Ledger_intf.S) :
         ; full_transaction_commitment = Inputs.Transaction_commitment.empty
         ; excess = Currency.Amount.(Signed.of_unsigned zero)
         ; supply_increase = Currency.Amount.(Signed.of_unsigned zero)
-        ; ledger = L.empty ~depth:0 ()
+        ; ledger
+          (* ; ledger = L.empty ~depth:0 () *)
+          (* ZEKO NOTE: by removing 2 pass logic this is the ledger being used in first pass *)
         ; success = true
         ; account_update_index = Inputs.Index.zero
         ; failure_status_tbl = []
@@ -1819,18 +1821,20 @@ module Make (L : Ledger_intf.S) :
     *)
     let global_state = { c.global_state with second_pass_ledger = ledger } in
     let local_state =
-      if List.is_empty c.local_state.stack_frame.Stack_frame.calls then
-        (* Don't mess with the local state; we've already finished the
-           transaction after the fee payer.
-        *)
-        c.local_state
-      else
-        (* Install the ledger that should already be in the local state, but
-           may not be in some situations depending on who the caller is.
-        *)
-        { c.local_state with
-          ledger = Global_state.second_pass_ledger global_state
-        }
+      (* if List.is_empty c.local_state.stack_frame.Stack_frame.calls then
+           (* Don't mess with the local state; we've already finished the
+              transaction after the fee payer.
+           *)
+           c.local_state
+         else
+           (* Install the ledger that should already be in the local state, but
+              may not be in some situations depending on who the caller is.
+           *)
+           { c.local_state with
+             ledger = Global_state.second_pass_ledger global_state
+           } *)
+      (* ZEKO NOTE: we are not using passes *)
+      c.local_state
     in
     let start = (global_state, local_state) in
     match step_all (f init start) start with
