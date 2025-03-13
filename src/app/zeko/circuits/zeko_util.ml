@@ -90,6 +90,13 @@ let value_to_init_state typ x = value_to_state (fun f -> f) Field.zero typ x
 let value_to_app_state typ x =
   value_to_state (fun f -> Set_or_keep.Set f) Set_or_keep.Keep typ x
 
+let value_of_state (typ : ('var, 'value) Typ.t) (x : field Zkapp_state.V.t) :
+    'value =
+  let (Typ typ) = typ in
+  typ.value_of_fields
+    ( Zkapp_state.V.to_list x |> Array.of_list
+    , typ.constraint_system_auxiliary () )
+
 let var_to_precondition_fine =
   var_to_state_generic_fine
     ( module struct

@@ -238,6 +238,8 @@ module Outer_state = struct
     ]
 
   let value_to_app_state t = Zeko_util.value_to_app_state typ t
+
+  let value_of_app_state state = Zeko_util.value_of_state typ state
 end
 
 module Outer_action = struct
