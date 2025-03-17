@@ -32,7 +32,13 @@ let run_node =
        in
        fun () ->
          let signer =
-           if testing_mode then Private_key.(create () |> to_base58_check)
+           if testing_mode then
+             let rec create_even_signer () =
+               let signer = Keypair.create () in
+               let compressed = Public_key.compress signer.public_key in
+               if compressed.is_odd then create_even_signer () else signer
+             in
+             (create_even_signer ()).private_key |> Private_key.to_base58_check
            else Sys.getenv_exn "MINA_PRIVATE_KEY"
          in
          let logger = Logger.create () in

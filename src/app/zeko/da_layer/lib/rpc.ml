@@ -14,9 +14,14 @@ module Post_diff = struct
       [@@deriving bin_io_unversioned]
     end
 
-    let t : (Query.t, Signature.t) Rpc.Rpc.t =
+    module Response = struct
+      type t = Public_key.Compressed.Stable.V1.t * Signature.Stable.V1.t
+      [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Query.t, Response.t) Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Post_diff" ~version:1 ~bin_query:Query.bin_t
-        ~bin_response:Signature.Stable.V1.bin_t
+        ~bin_response:Response.bin_t
   end
 end
 
@@ -82,10 +87,15 @@ end
 module Get_signature = struct
   module V1 = struct
     module Response = struct
-      type t = Signature.Stable.V1.t option [@@deriving bin_io_unversioned]
+      type t =
+        (Public_key.Compressed.Stable.V1.t * Signature.Stable.V1.t) option
+      [@@deriving bin_io_unversioned]
     end
 
-    let t : (Ledger_hash.t, Signature.t option) Rpc.Rpc.t =
+    let t :
+        ( Ledger_hash.t
+        , (Public_key.Compressed.t * Signature.t) option )
+        Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Get_signature" ~version:1
         ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
   end
