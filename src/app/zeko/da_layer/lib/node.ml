@@ -281,7 +281,8 @@ let implementations t =
           (fun () { ledger_openings; diff } ->
             match post_diff t ~ledger_openings ~diff with
             | Ok signature ->
-                Async.return signature
+                let pk = Public_key.compress t.signer.public_key in
+                Async.return (pk, signature)
             | Error e ->
                 let logger = t.logger in
                 [%log warn] "Error posting diff: $error"
@@ -313,7 +314,9 @@ let implementations t =
             Async.return @@ Public_key.compress @@ t.signer.public_key )
       ; (* Get_signature *)
         Async.Rpc.Rpc.implement Rpc.Get_signature.V1.t (fun () query ->
-            Async.return @@ get_signature t ~ledger_hash:query )
+            let pk = Public_key.compress t.signer.public_key in
+            let signature = get_signature t ~ledger_hash:query in
+            Async.return (Option.map signature ~f:(fun s -> (pk, s))) )
       ; (* Get_ledger_hashes_chain *)
         Async.Rpc.Rpc.implement Rpc.Get_ledger_hashes_chain.V1.t
           (fun () query -> Async.return @@ get_ledger_hashes_chain t query)

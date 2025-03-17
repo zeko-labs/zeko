@@ -28,7 +28,7 @@ dune exec ./tests/testing_ledger/run.exe -- --db-dir l1_db
 # Run da node
 dune exec ../da_layer/cli.exe -- run-node --port 8555 --random-sk
 
-# Run provers
+# Run provers (replace `cli_fake` with `cli` to run real provers)
 dune exec ./prover/cli_fake.exe -- run-server --port 9990
 dune exec ./prover/cli_fake.exe -- run-server --port 9991
 

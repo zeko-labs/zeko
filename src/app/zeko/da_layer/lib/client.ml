@@ -2,6 +2,7 @@ open Core_kernel
 open Async_kernel
 open Mina_base
 open Mina_ledger
+open Signature_lib
 module Field = Snark_params.Tick.Field
 
 (* FIXME: Don't use Mina_compile_config.For_tests.t *)
@@ -132,7 +133,9 @@ module Sequencer = struct
     ; quorum : int
           (** The amount of signatures needed when distributing diff *)
     ; q : unit Async.Sequencer.t  (** Queue of diffs to be distributed *)
-    ; mutable signatures : Signature.t list Deferred.t Ledger_hash.Map.t
+    ; mutable signatures :
+        (Public_key.Compressed.t * Signature.t) list Deferred.t
+        Ledger_hash.Map.t
           (** Mapping of [target_ledger_hash] to list of deferred signatures *)
     ; mutable last_distributed_diff : Ledger_hash.t option
           (** [target_ledger_hash] of last processed diff in queue *)
