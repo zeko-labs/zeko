@@ -13,7 +13,7 @@ module Commit_witness = struct
     ; new_inner_ledger : Sparse_ledger.t
     ; old_deposits_pointer : Frozen_ledger_hash.t
     ; processed_deposits_pointer : Frozen_ledger_hash.t
-    ; signatures : Signature.t list
+    ; signatures : (Public_key.Compressed.t * Signature.t) list
     ; txn_snark : Txn_snark.serializable
     }
   [@@deriving yojson]
@@ -129,10 +129,11 @@ let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
     >>| List.map ~f:Account_update.Actions.hash
   in
   let%bind account_update =
+    let da_key, da_signature = List.hd_exn signatures in
     Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
       ~public_key:zkapp_pk ~new_actions ~unprocessed_actions ~old_inner_ledger
-      ~new_inner_ledger ~da_signature:(List.hd_exn signatures)
-      ~da_key:(failwith "Not implemented")
+      ~new_inner_ledger ~da_signature
+      ~da_key:(Even_PC.create_exn da_key)
   in
   let command : Zkapp_command.t =
     { fee_payer =
