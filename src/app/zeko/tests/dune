@@ -19,6 +19,16 @@
  )
 
 (executable
+ (name property_prove_test)
+ (libraries zeko_circuits compile_simple_fake)
+ (instrumentation
+  (backend bisect_ppx))
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
+ (modules property_prove_test)
+ )
+
+(executable
  (name transfers)
  (libraries zeko_circuits graphql_lib)
  (instrumentation
