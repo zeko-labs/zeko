@@ -98,7 +98,7 @@ module Hash = struct
 
       let hash_account = Entry.data_hash
 
-      let empty_account = hash_account Entry.Stable.Latest.empty
+      let empty_account = Field.zero
     end
   end]
 
