@@ -173,7 +173,10 @@ let create_new_block t =
       | Ok () ->
           ()
       | Error err ->
-          printf "Failed to apply command: %s\n%!" (Error.to_string_hum err) ) ;
+          printf "Failed to apply command %s: %s\n%!"
+            ( Transaction_hash.to_base58_check
+            @@ Transaction_hash.hash_command command )
+            (Error.to_string_hum err) ) ;
   t.pool <- create_pool ()
 
 let create ~block_period ~db_dir () =
