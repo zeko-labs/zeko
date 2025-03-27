@@ -1,6 +1,7 @@
 open Core_kernel
 open Async
 open Mina_base
+open Signature_lib
 module Field = Snark_params.Tick.Field
 
 let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
@@ -63,3 +64,63 @@ let get_inner_deposits_state_exn l =
     |> Rollup_state.Inner_state.value_of_app_state
   in
   outer_action_state
+
+let sign_zkapp_command (command : Zkapp_command.t) (signers : Keypair.t list) :
+    Zkapp_command.t =
+  let full_commitment =
+    Zkapp_command.Transaction_commitment.create_complete
+      (Zkapp_command.commitment command)
+      ~memo_hash:(Signed_command_memo.hash command.memo)
+      ~fee_payer_hash:
+        (Zkapp_command.Digest.Account_update.create
+           (Account_update.of_fee_payer command.fee_payer) )
+  in
+  let sign_raw (pk : Public_key.Compressed.t) msg =
+    match
+      List.find signers ~f:(fun kp ->
+          Public_key.Compressed.equal (Public_key.compress kp.public_key) pk )
+    with
+    | Some kp ->
+        Signature_lib.Schnorr.Chunked.sign
+          ~signature_kind:Mina_signature_kind.Testnet kp.private_key
+          (Random_oracle.Input.Chunked.field msg)
+    | None ->
+        failwithf "key not found: %s\n"
+          (Public_key.Compressed.to_base58_check pk)
+          ()
+  in
+  let rec sign_tree
+      (tree :
+        ( Account_update.t
+        , Zkapp_command.Digest.Account_update.t
+        , Zkapp_command.Digest.Forest.t )
+        Zkapp_command.Call_forest.Tree.t ) =
+    { tree with
+      account_update =
+        { tree.account_update with
+          authorization =
+            ( match tree.account_update.body.authorization_kind with
+            | Signature ->
+                assert tree.account_update.body.use_full_commitment ;
+                Signature
+                  (sign_raw tree.account_update.body.public_key full_commitment)
+            | _ ->
+                tree.account_update.authorization )
+        }
+    ; calls = sign_forest tree.calls
+    }
+  and sign_forest forest =
+    List.map ~f:(fun tree -> { tree with elt = sign_tree tree.elt }) forest
+  in
+  { command with
+    fee_payer =
+      { command.fee_payer with
+        authorization =
+          ( if
+            Public_key.Compressed.(
+              equal empty command.fee_payer.body.public_key)
+          then command.fee_payer.authorization
+          else sign_raw command.fee_payer.body.public_key full_commitment )
+      }
+  ; account_updates = sign_forest command.account_updates
+  }
