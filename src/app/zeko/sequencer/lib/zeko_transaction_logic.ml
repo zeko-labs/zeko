@@ -420,38 +420,6 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
            hd :: pair_unproved tl
      in
      let witnesses = pair_unproved witnesses in *)
-
-  (* Add events and actions to the memory *)
-  let () =
-    Zkapp_command.(
-      Call_forest.iteri (account_updates command) ~f:(fun _ update ->
-          let account =
-            let account_id =
-              Account_id.create
-                (Account_update.public_key update)
-                (Account_update.token_id update)
-            in
-            let location =
-              Ledger.location_of_account ledger account_id
-              |> Option.value_exn
-                   ~message:"Internal error, account should be present"
-            in
-            Ledger.get ledger location
-            |> Option.value_exn
-                 ~message:"Internal error, account should be present"
-          in
-          Archive.add_account_update archive update account
-            (Some
-               Archive.Transaction_info.
-                 { status = Applied
-                 ; hash =
-                     Mina_transaction.Transaction_hash.hash_command
-                       (Zkapp_command command)
-                 ; memo = Zkapp_command.memo command
-                 ; authorization_kind =
-                     Account_update.Body.authorization_kind update.body
-                 } ) ))
-  in
   Ok (source_ledger, witnesses)
 
 let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants

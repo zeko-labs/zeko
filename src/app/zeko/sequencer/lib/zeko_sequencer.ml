@@ -1,4 +1,3 @@
-open Base
 open Core_kernel
 open Async
 open Async_kernel
@@ -232,6 +231,41 @@ module Sequencer = struct
       ; committed_ledger_hash = Field.zero
       }
 
+  let apply_events_and_actions t command =
+    let ledger = L.of_database t.db in
+    Zkapp_command.(Call_forest.to_list (account_updates command))
+    |> List.map ~f:(fun update ->
+           let%bind.Result account =
+             match
+               let account_id =
+                 Account_id.create
+                   (Account_update.public_key update)
+                   (Account_update.token_id update)
+               in
+               let%bind.Option location =
+                 Ledger.location_of_account ledger account_id
+               in
+               Ledger.get ledger location
+             with
+             | Some acc ->
+                 Ok acc
+             | None ->
+                 Error (Error.of_string "Account not present in the db")
+           in
+           Ok
+             (Archive.add_account_update t.archive update account
+                (Some
+                   Archive.Transaction_info.
+                     { status = Applied
+                     ; hash =
+                         Mina_transaction.Transaction_hash.hash_command
+                           (Zkapp_command command)
+                     ; memo = Zkapp_command.memo command
+                     ; authorization_kind =
+                         Account_update.Body.authorization_kind update.body
+                     } ) ) )
+    |> Or_error.combine_errors |> Result.map ~f:ignore
+
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
       (command : User_command.t) =
@@ -296,6 +330,14 @@ module Sequencer = struct
               (Zeko_transaction_logic.apply_user_command_unchecked ~sequencer_pk
                  ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
                  ~constraint_constants ~global_slot l t.imt t.archive command )
+          in
+
+          let%bind.Deferred.Result () =
+            match command with
+            | Signed_command _ ->
+                return (Ok ( (* Signed command has no events nor actions *) ))
+            | Zkapp_command command ->
+                return (apply_events_and_actions t command)
           in
 
           (* Post transaction to the DA layer *)
@@ -447,9 +489,6 @@ module Sequencer = struct
         ~source_ledger_hash:`Genesis ~target_ledger_hash:committed_ledger_hash
       |> Deferred.map ~f:Or_error.ok_exn
     in
-    let sequencer_pk =
-      Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
-    in
     let%bind () =
       Da_layer.Client.map_diffs ~logger ~config:da_config
         ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
@@ -463,40 +502,41 @@ module Sequencer = struct
             (Ledger_hash.to_decimal_string
                (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) )
             (Float.of_int current_chunk /. Float.of_int chunks_length *. 100.0) ;
-          match
-            Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
-          with
-          | None ->
-              (* Apply accounts diff *)
-              let mask = L.of_database t.db in
-              let changed_accounts =
-                Da_layer.Diff.Stable.Latest.changed_accounts diff
+          (* Apply accounts diff *)
+          let mask = L.of_database t.db in
+          let changed_accounts =
+            Da_layer.Diff.Stable.Latest.changed_accounts diff
+          in
+          List.iter changed_accounts ~f:(fun (index, account) ->
+              L.set_at_index_exn mask index account ) ;
+          L.Mask.Attached.commit mask ;
+
+          (* Add to Indexed Merkle Tree *)
+          List.iter changed_accounts ~f:(fun (_, account) ->
+              let aid = Account.identifier account in
+              let _w =
+                Indexed_merkle_tree.Db.get_or_create_entry_exn t.imt
+                  (Account_id.derive_token_id ~owner:aid)
               in
-              printf "Setting %d accounts\n%!" (List.length changed_accounts) ;
-              List.iter changed_accounts ~f:(fun (index, account) ->
-                  L.set_at_index_exn mask index account ) ;
-              L.Mask.Attached.commit mask ;
-              (* Add to Indexed Merkle Tree *)
-              List.iter changed_accounts ~f:(fun (_, account) ->
-                  let aid = Account.identifier account in
-                  let _w =
-                    Indexed_merkle_tree.Db.get_or_create_entry_exn t.imt
-                      (Account_id.derive_token_id ~owner:aid)
-                  in
-                  () ) ;
-              return ()
-          | Some (command, _) ->
-              (* Apply command *)
-              let mask = L.of_database t.db in
-              let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
-              let _, _ =
-                Zeko_transaction_logic.apply_user_command_unchecked
-                  ~sequencer_pk ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
-                  ~constraint_constants ~global_slot mask t.imt t.archive
-                  command
-                |> Or_error.ok_exn
-              in
-              return () )
+              () ) ;
+
+          (* Add events and actions *)
+          let result =
+            match
+              Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
+            with
+            | Some (Zkapp_command command, _) ->
+                apply_events_and_actions t command
+            | _ ->
+                Ok ( (* No events nor actions to add *) )
+          in
+          return
+            ( match result with
+            | Ok () ->
+                ()
+            | Error e ->
+                printf "Warning: Failed to add events and actions: %s\n%!"
+                  (Error.to_string_hum e) ) )
       >>| Or_error.ok_exn >>| ignore
     in
 
