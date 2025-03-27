@@ -1904,8 +1904,12 @@ module Make (L : Ledger_intf.S) :
           then valid_result
           else
             Or_error.error_string
-              "Zkapp_command application failed but new accounts created or \
-               some of the other account_update updates applied"
+              (sprintf
+                 "Zkapp_command application failed but new accounts created or \
+                  some of the other account_update updates applied %s"
+                 ( Yojson.Safe.to_string
+                 @@ Transaction_status.Failure.Collection.to_yojson
+                      failure_status_tbl ) )
 
   let apply_zkapp_command_second_pass ?zeko_env ledger c :
       Transaction_applied.Zkapp_command_applied.t Or_error.t =
