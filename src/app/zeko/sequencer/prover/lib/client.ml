@@ -184,11 +184,10 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
     let inner_acc_path =
       Sparse_ledger.path_exn ledger Zeko_constants.inner_account_index
       |> List.map ~f:(function
-           | `Left _ ->
-               ( { right_side = Field.zero }
-                 : Outer_rules.Rule_commit_inst.PathElt.t )
-           | `Right _ ->
-               { right_side = Field.one } )
+           | `Left hash ->
+               ({ right_side = hash } : Outer_rules.Rule_commit_inst.PathElt.t)
+           | `Right hash ->
+               failwith "The inner account is supposed to be left most" )
     in
     (inner_acc, inner_acc_path)
   in

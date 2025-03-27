@@ -226,7 +226,7 @@ let get_diff ~logger ~config ~ledger_hash =
 (** Distribute diff of initial accounts *)
 let distribute_genesis_diff ~logger ~config ~ledger =
   let%bind account_ids =
-    Ledger.accounts ledger |> Deferred.map ~f:Account_id.Set.to_list
+    Ledger.to_list ledger >>| List.map ~f:Account.identifier
   in
   let changed_accounts =
     List.map account_ids ~f:(fun aid ->
