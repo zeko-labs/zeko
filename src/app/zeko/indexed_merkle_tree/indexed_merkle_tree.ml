@@ -98,8 +98,7 @@ module Hash = struct
 
       let hash_account = Entry.data_hash
 
-      let empty_account =
-        Ledger_hash.of_digest (Lazy.force Account.empty_digest)
+      let empty_account = hash_account Entry.Stable.Latest.empty
     end
   end]
 
@@ -153,7 +152,7 @@ module type Database_intf = sig
   val get_or_create_entry_exn :
        t
     -> Token_id.t
-    -> [> `Added | `Existed ]
+    -> [ `Added | `Existed ]
        * ( [ `X of Token_id.t ]
          * [ `X_path of Path.t ]
          * [ `Y of Token_id.t ]
@@ -161,6 +160,8 @@ module type Database_intf = sig
          * [ `Z of Token_id.t ] )
 
   val find_lower_entry_tid : t -> Token_id.t -> Token_id.t option
+
+  val num_entries : t -> int
 end
 
 let lowest_key = Token_id.of_field Field.zero
@@ -190,11 +191,11 @@ module Db : Database_intf = struct
       | Malformed_database of string
     [@@deriving sexp]
 
-    let ok_exn = function
-      | Ok x ->
-          x
-      | Error e ->
-          raise (Exn.create_s ([%sexp_of: t] e))
+    let to_exn e = Exn.create_s ([%sexp_of: t] e)
+
+    let raise e = raise (to_exn e)
+
+    let ok_exn = function Ok x -> x | Error e -> raise e
   end
 
   let get_raw t location =
@@ -214,7 +215,18 @@ module Db : Database_intf = struct
                !"%{sexp: Public_key.Compressed.t}!%{sexp: Token_id.t}"
                (Account_id.public_key account_id)
                (Account_id.token_id account_id) ) )
+
+    let get mdb key =
+      match get_generic mdb (build_location key) with
+      | None ->
+          Error Db_error.Account_location_not_found
+      | Some location_bin ->
+          Location.parse ~ledger_depth:(depth mdb) location_bin
+          |> Result.map_error ~f:(fun () ->
+                 Db_error.Malformed_database "Invalid location" )
   end
+
+  let num_entries = num_accounts
 
   let find_lower_entry_location_exn t tid =
     if Token_id.equal lowest_key tid then
@@ -260,32 +272,53 @@ module Db : Database_intf = struct
 
   let get_or_create_entry_exn t tid =
     let lower_entry_location = find_lower_entry_location_exn t tid in
+    let x_path = merkle_path t lower_entry_location in
     let lower_entry =
       get t lower_entry_location
       |> Result.of_option
            ~error:(Db_error.Malformed_database "Could not find lower entry")
       |> Db_error.ok_exn
     in
-    let new_entry =
-      { Entry.value = tid; value_next = lower_entry.value_next }
-    in
-    match get_or_create_account t (Account_id.with_empty_key tid) new_entry with
-    | Ok (`Existed, new_location) ->
+    match lower_entry.value_next with
+    | tid' when Token_id.equal tid' tid ->
+        let new_location =
+          Account_location.get t (Account_id.with_empty_key tid)
+          |> Db_error.ok_exn
+        in
+        let new_entry =
+          get t new_location
+          |> Result.of_option
+               ~error:(Db_error.Malformed_database "Could not find new entry")
+          |> Db_error.ok_exn
+        in
+        assert (
+          Token_id.(lower_entry.value < new_entry.value)
+          && Token_id.(new_entry.value < new_entry.value_next) ) ;
         ( `Existed
         , ( `X lower_entry.value
-          , `X_path (merkle_path t lower_entry_location)
+          , `X_path x_path
           , `Y new_entry.value
           , `Y_path (merkle_path t new_location)
           , `Z new_entry.value_next ) )
-    | Ok (`Added, new_location) ->
-        let lower_entry = { lower_entry with value_next = tid } in
-        set t lower_entry_location lower_entry ;
-        ( `Added
-        , ( `X lower_entry.value
-          , `X_path (merkle_path t lower_entry_location)
-          , `Y new_entry.value
-          , `Y_path (merkle_path t new_location)
-          , `Z new_entry.value_next ) )
-    | Error e ->
-        Error.raise e
+    | z -> (
+        let new_entry = { Entry.value = tid; value_next = z } in
+        match
+          get_or_create_account t (Account_id.with_empty_key tid) new_entry
+        with
+        | Ok (`Existed, _) ->
+            Db_error.(raise (Malformed_database "Entry should've not existed"))
+        | Error e ->
+            Error.raise e
+        | Ok (`Added, new_location) ->
+            let lower_entry = { lower_entry with value_next = tid } in
+            set t lower_entry_location lower_entry ;
+            assert (
+              Token_id.(lower_entry.value < new_entry.value)
+              && Token_id.(new_entry.value < new_entry.value_next) ) ;
+            ( `Added
+            , ( `X lower_entry.value
+              , `X_path x_path
+              , `Y new_entry.value
+              , `Y_path (merkle_path t new_location)
+              , `Z new_entry.value_next ) ) )
 end

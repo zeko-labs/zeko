@@ -4,6 +4,8 @@ open Zeko_util
 module Make (Inputs : sig
   module Key : SnarkType
 
+  val zero_var : Key.var
+
   val assert_x_less_than_y_less_than_z :
     x:Key.var -> y:Key.var -> z:Key.var -> unit Checked.t
 
@@ -57,7 +59,7 @@ struct
     let* root = implied_root { key = x; next_key = z } path_x in
     let* root_intermediate = implied_root { key = x; next_key = y } path_x in
     let* root_intermediate' =
-      implied_root_raw Field.(constant typ zero) path_y
+      implied_root Entry.{ key = zero_var; next_key = zero_var } path_y
     in
     let* root_intermediate =
       match check with
@@ -71,12 +73,12 @@ struct
       assert_equal ~label:__LOC__ F.typ root_intermediate root_intermediate'
     in
     let* root_new = implied_root { key = y; next_key = z } path_y in
-    let* root_new =
+    let* root =
       match check with
       | Some check ->
-          if_ check ~typ:F.typ ~then_:root_new ~else_:root
+          if_ check ~typ:F.typ ~then_:root ~else_:root_new
       | None ->
-          Checked.return root_new
+          Checked.return root
     in
     Checked.return (`Before_adding_y root, `After_adding_y root_new)
 end
