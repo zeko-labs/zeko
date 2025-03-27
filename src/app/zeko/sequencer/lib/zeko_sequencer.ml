@@ -502,6 +502,8 @@ module Sequencer = struct
 
     let current_root = get_root t in
     printf "Current root: %s\n%!" Ledger_hash.(to_decimal_string current_root) ;
+    printf "IMT root: %s\n%!"
+      (Ledger_hash.to_decimal_string @@ Indexed_merkle_tree.Db.merkle_root t.imt) ;
 
     if not @@ Ledger_hash.equal current_root committed_ledger_hash then
       print_endline "Ledger mismatch" ;
