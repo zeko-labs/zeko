@@ -320,6 +320,8 @@ include Indexed_merkle_tree.Make (struct
     let typ = Token_id.typ
   end
 
+  let zero_var : Key.var = Token_id.Checked.of_field Field.(Var.constant zero)
+
   let assert_x_less_than_y_less_than_z ~(x : Key.var) ~(y : Key.var)
       ~(z : Key.var) =
     (* pretty sure of_field is supposed to be of_field_unsafe, and to_field_unsafe is supposed to be to_field *)

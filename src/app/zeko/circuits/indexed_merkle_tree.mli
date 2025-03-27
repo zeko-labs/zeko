@@ -20,6 +20,8 @@ open Zeko_util
 module Make (Inputs : sig
   module Key : SnarkType
 
+  val zero_var : Key.var
+
   val assert_x_less_than_y_less_than_z :
     x:Key.var -> y:Key.var -> z:Key.var -> unit Checked.t
 
