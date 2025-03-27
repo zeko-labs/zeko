@@ -173,7 +173,7 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
     let fee_payer = Signed_command.fee_payer command in
     let receiver = Signed_command.receiver command in
     let tids =
-      List.map [ fee_payer; fee_payer; receiver ] ~f:(fun owner ->
+      List.map [ fee_payer; receiver; fee_payer ] ~f:(fun owner ->
           Account_id.derive_token_id ~owner )
     in
     List.fold tids ~init:Acc_set_witness.empty ~f:(fun acc tid ->
@@ -235,9 +235,9 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
       ; will_succeed = true
       } )
   in
-  let account_updates = Zkapp_command.all_account_updates command in
+  let all_account_updates = Zkapp_command.all_account_updates command in
   let perform eff = perform ~zeko_env:zeko_dummy_env ~global_slot eff in
-  let witnesses =
+  let witnesses_rev =
     let l = hash_local_state (snd state) in
     let account_id = Zkapp_command.fee_payer command in
     [ ( account_id
@@ -259,113 +259,113 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                          } )
                   }
               ; first =
-                  (let account_updates =
-                     Zkapp_command.all_account_updates command
-                   in
-                   Per_account_update.
-                     { account_updates =
-                         Zkapp_command.Call_forest.hash account_updates
-                     ; account_updates_data = account_updates
-                     ; memo_hash =
-                         Signed_command_memo.hash @@ Zkapp_command.memo command
-                     ; shift_action_state =
-                         (* This should come from env, but would ruin later *)
-                         true
-                     } )
+                  Per_account_update.
+                    { account_updates =
+                        Zkapp_command.Call_forest.hash all_account_updates
+                    ; account_updates_data = all_account_updates
+                    ; memo_hash =
+                        Signed_command_memo.hash @@ Zkapp_command.memo command
+                    ; shift_action_state =
+                        (* This should come from env, but would ruin later *)
+                        true
+                    }
               } )
     ]
   in
   let%bind.Result state =
     Or_error.try_with (fun () ->
         Logic.start ~constraint_constants
-          { account_updates
+          { account_updates = all_account_updates
           ; memo_hash = Signed_command_memo.hash command.memo
           ; will_succeed = true
           }
           { perform } state )
   in
-  let rec step_all (g, l) witnesses = function
+  let rec step_all state witnesses_rev = function
     | [] ->
-        Or_error.error_string "Internal error: empty account_updates"
-    | account_update :: rest ->
+        let l = snd state in
         if
           List.is_empty
             Zkapp_command_logic.Local_state.(l.stack_frame.Stack_frame.calls)
-        then Ok (l.failure_status_tbl, witnesses)
-        else
-          let account_id = Account_update.account_id account_update in
-          let%bind.Result w =
-            let incomplete_base ~imt_hash ~imt_witness =
-              let l = hash_local_state (snd state) in
-              Zkapp_rule_input.
-                { source_ledger = Ledger.merkle_root ledger
-                ; source_local_state = Inputs.Local_state.to_zeko l
-                ; sequencer = sequencer_pk
-                ; source_acc_set = imt_hash
-                ; witness =
-                    (let l = snd state in
-                     Zkapp_rule_input_witness.
-                       { stack_frame = l.stack_frame
-                       ; call_stack = Inputs.Call_stack.with_hash l.call_stack
-                       ; source_ledger_sparse =
-                           Sparse_ledger.of_ledger_subset_exn ledger
-                             [ account_id ]
-                       ; update_acc_set_witness = imt_witness
-                       } )
-                }
-            in
-            let empty_start_data =
-              Per_account_update.
-                { account_updates_data =
-                    Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
-                ; memo_hash = Field.zero
-                ; account_updates =
-                    Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
-                    |> Mina_base.Zkapp_command.Call_forest.hash
-                ; shift_action_state = true
-                }
-            in
-            match Account_update.authorization account_update with
-            | None_given | Signature _ ->
-                Ok
-                  (fun ~imt_hash ~imt_witness ->
-                    Txn_snark_witness.Zkapp_command_segment.Single_unproved
-                      Zkapp_single_unproved_input.
-                        { base = incomplete_base ~imt_hash ~imt_witness
-                        ; first = empty_start_data
-                        } )
-            | Proof proof ->
-                let%bind.Result vk =
-                  (let%bind.Option loc =
-                     Ledger.location_of_account ledger account_id
-                   in
-                   let%bind.Option acc = Ledger.get ledger loc in
-                   let%bind.Option zkapp = Account.zkapp acc in
-                   zkapp.verification_key )
-                  |> Result.of_option
-                       ~error:(Error.of_string "No verification key")
-                in
-                Ok
-                  (fun ~imt_hash ~imt_witness ->
-                    Txn_snark_witness.Zkapp_command_segment.Single_proved
-                      Zkapp_single_proved_input.
-                        { base = incomplete_base ~imt_hash ~imt_witness
-                        ; first = empty_start_data
-                        ; vk =
-                            Compile_simple.Verification_key.of_pickles vk.data
-                        ; zkapp_proof = Compile_simple.Proof.of_pickles proof
-                        } )
+        then Ok (l.failure_status_tbl, witnesses_rev)
+        else Or_error.error_string "Internal error: empty account_updates"
+    | account_update :: rest ->
+        let account_id = Account_update.account_id account_update in
+        let%bind.Result w =
+          let source_ledger_sparse =
+            Sparse_ledger.of_ledger_subset_exn ledger [ account_id ]
           in
-          let witnesses = (account_id, w) :: witnesses in
-          let%bind.Result state =
-            Or_error.try_with (fun () ->
-                Logic.step ~constraint_constants { perform } (g, l) )
+          let l = hash_local_state (snd state) in
+          let incomplete_base ~imt_hash ~imt_witness =
+            Zkapp_rule_input.
+              { source_ledger = Sparse_ledger.merkle_root source_ledger_sparse
+              ; source_local_state = Inputs.Local_state.to_zeko l
+              ; sequencer = sequencer_pk
+              ; source_acc_set = imt_hash
+              ; witness =
+                  (let l = snd state in
+                   Zkapp_rule_input_witness.
+                     { stack_frame = l.stack_frame
+                     ; call_stack = Inputs.Call_stack.with_hash l.call_stack
+                     ; source_ledger_sparse
+                     ; update_acc_set_witness = imt_witness
+                     } )
+              }
           in
-          step_all state witnesses rest
+          let empty_start_data =
+            Per_account_update.
+              { account_updates_data =
+                  Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              ; memo_hash = Field.zero
+              ; account_updates =
+                  Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+                  |> Mina_base.Zkapp_command.Call_forest.hash
+              ; shift_action_state = true
+              }
+          in
+          match Account_update.authorization account_update with
+          | None_given | Signature _ ->
+              Ok
+                (fun ~imt_hash ~imt_witness ->
+                  Txn_snark_witness.Zkapp_command_segment.Single_unproved
+                    Zkapp_single_unproved_input.
+                      { base = incomplete_base ~imt_hash ~imt_witness
+                      ; first = empty_start_data
+                      } )
+          | Proof proof ->
+              let%bind.Result vk =
+                (let%bind.Option loc =
+                   Ledger.location_of_account ledger account_id
+                 in
+                 let%bind.Option acc = Ledger.get ledger loc in
+                 let%bind.Option zkapp = Account.zkapp acc in
+                 zkapp.verification_key )
+                |> Result.of_option
+                     ~error:(Error.of_string "No verification key")
+              in
+              Ok
+                (fun ~imt_hash ~imt_witness ->
+                  Txn_snark_witness.Zkapp_command_segment.Single_proved
+                    Zkapp_single_proved_input.
+                      { base = incomplete_base ~imt_hash ~imt_witness
+                      ; first = empty_start_data
+                      ; vk = Compile_simple.Verification_key.of_pickles vk.data
+                      ; zkapp_proof = Compile_simple.Proof.of_pickles proof
+                      } )
+        in
+        let witnesses_rev = (account_id, w) :: witnesses_rev in
+        let%bind.Result state =
+          Or_error.try_with (fun () ->
+              Logic.step ~constraint_constants { perform } state )
+        in
+        step_all state witnesses_rev rest
   in
-  let%bind.Result failures, witnesses =
-    step_all state witnesses (Zkapp_command.Call_forest.to_list account_updates)
+  let%bind.Result failures, witnesses_rev =
+    step_all state witnesses_rev
+      (Zkapp_command.Call_forest.to_list
+         (Zkapp_command.account_updates command) )
   in
+  let witnesses = List.rev witnesses_rev in
   let%bind.Result () =
     if Transaction_status.Failure.Collection.is_empty failures then Ok ()
     else
@@ -375,6 +375,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
               (Transaction_status.Failure.Collection.to_yojson failures) ) )
   in
   Ledger.commit ledger ;
+
   let witnesses =
     List.map witnesses ~f:(fun (aid, incomplete_witness) ->
         let imt_hash = Indexed_merkle_tree.Db.merkle_root imt in
