@@ -30,3 +30,5 @@ let inner_account_index = 0
 let indexed_merkle_tree_salt = "indexed merkle tree entry hash"
 
 let indexed_merkle_tree_merge_salt = "indexed merkle tree"
+
+let da_layer_check_salt = "zeko da layer check"

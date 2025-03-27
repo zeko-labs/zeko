@@ -87,7 +87,10 @@ let post_diff t ~ledger_openings ~diff =
 
   (* 5 *)
   let message =
-    Random_oracle.Input.Chunked.field_elements [| target_ledger_hash |]
+    Random_oracle.Input.Chunked.field
+    @@ Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         [| target_ledger_hash |]
   in
   let signature = Schnorr.Chunked.sign t.signer.private_key message in
 
@@ -232,7 +235,12 @@ let sync t ~node_location ~ledger_hash =
 
 let get_signature t ~ledger_hash =
   let%bind.Option _diff = Db.get_diff t.db ~ledger_hash in
-  let message = Random_oracle.Input.Chunked.field_elements [| ledger_hash |] in
+  let message =
+    Random_oracle.Input.Chunked.field
+    @@ Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         [| ledger_hash |]
+  in
   Some (Schnorr.Chunked.sign t.signer.private_key message)
 
 let get_ledger_hashes_chain t
