@@ -267,15 +267,20 @@ struct
       let dummy_filler = dummy_elem
     end)
 
-    type t = { init_arg : Init.t; t : System.t; excess : Elems.t }
+    type t =
+      { init_arg : Init.t
+      ; t : System.t
+      ; excess : Elems.t
+      ; proof_must_verify : Boolean.t
+      }
     [@@deriving snarky]
 
     let%snarkydef_ get_full ?(check : Boolean.var option)
-        ({ init_arg; t; excess } : var) =
+        ({ init_arg; t; excess; proof_must_verify } : var) =
       (* We get the supposed source from the initialization of the state machine. *)
       let* source = init ~check init_arg in
       let* { source = proof_source; target = proof_target }, verify_proof =
-        System.get ?check t
+        System.get ~check:proof_must_verify t
       in
       let* source =
         assert_equal_safer ~label:__LOC__ Stmt.typ source proof_source
@@ -302,6 +307,6 @@ struct
         System.make_unchecked ?proof
           { source = proof_source; target = proof_target }
       in
-      ({ init_arg; t; excess } : t)
+      ({ init_arg; t; excess; proof_must_verify = Option.is_some proof } : t)
   end
 end
