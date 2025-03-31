@@ -1,4 +1,3 @@
-open Async
 open Async_kernel
 open Core_kernel
 open Mina_base

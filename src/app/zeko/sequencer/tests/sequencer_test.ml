@@ -8,34 +8,9 @@ open Sequencer
 
 let constraint_constants = Zeko_constants.constraint_constants
 
-let compile_time_genesis =
-  let consensus_constants =
-    let protocol_constants : Genesis_constants.Protocol.t =
-      { k = 1
-      ; slots_per_epoch = 1000
-      ; slots_per_sub_window = 1
-      ; grace_period_slots = 1
-      ; delta = 1
-      ; genesis_state_timestamp = Int64.one
-      }
-    in
-    Consensus.Constants.create ~constraint_constants ~protocol_constants
-  in
-  Mina_state.Genesis_protocol_state.t
-    ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-    ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-    ~constraint_constants ~consensus_constants
-    ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-
 let start_time = Time.now ()
 
 let logger = Logger.create ()
-
-module T = Transaction_snark.Make (struct
-  let constraint_constants = Zeko_constants.constraint_constants
-
-  let proof_level = Genesis_constants.Proof_level.Full
-end)
 
 let number_of_transactions = 5
 
@@ -221,7 +196,7 @@ let () =
 
       (* First commit *)
       run (fun () ->
-          let%bind _ = commit sequencer in
+          let%bind () = commit sequencer in
           let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
           let%bind () = Executor.wait_to_finish sequencer.merger_ctx.executor in
           let%bind committed_ledger_hash =
@@ -275,7 +250,7 @@ let () =
       (* Second commit *)
       let final_ledger_hash =
         run (fun () ->
-            let%bind _ = commit sequencer in
+            let%bind () = commit sequencer in
             let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
             let%bind () =
               Executor.wait_to_finish sequencer.merger_ctx.executor
@@ -309,7 +284,7 @@ let () =
 let () =
   print_endline "Started test 'dummy signature should fail'" ;
   Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ())
-    ~f:(fun { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer } ->
+    ~f:(fun { specs; sequencer; _ } ->
       let dummy_signature_command : Zkapp_command.t =
         let command =
           Mina_transaction_logic.For_tests.account_update_send
@@ -482,7 +457,7 @@ let () =
 
        (* Commit should process first 2 deposits *)
        run (fun () ->
-           let%bind _ = commit sequencer in
+           let%bind () = commit sequencer in
            let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
            let%bind () =
              Executor.wait_to_finish sequencer.merger_ctx.executor
@@ -526,7 +501,7 @@ let () =
 
        (* Commit should process remaining deposits *)
        run (fun () ->
-           let%bind _ = commit sequencer in
+           let%bind () = commit sequencer in
            let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
            let%bind () =
              Executor.wait_to_finish sequencer.merger_ctx.executor

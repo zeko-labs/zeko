@@ -3,7 +3,6 @@ open Async
 open Mina_base
 open Signature_lib
 open Mina_ledger
-open Zeko_circuits
 open Zeko_prover.Zeko_types
 module Field = Snark_params.Tick.Field
 

@@ -1,7 +1,5 @@
 open Async
-open Signature_lib
 open Cli_lib
-module Server = Zeko_prover.Prover
 
 let run_server =
   ( "run-server"
