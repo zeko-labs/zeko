@@ -179,6 +179,9 @@ module Even_PC = struct
   include Zeko_util.Even_PC
 
   type t = Zeko_util.Even_PC.t = { public_key : F.t } [@@deriving yojson]
+
+  let to_pc { public_key } : Public_key.Compressed.t =
+    { x = public_key; is_odd = false }
 end
 
 module Local_state = struct
@@ -337,11 +340,16 @@ module Base_input = struct
     ; witness : Base_witness.t
     }
 
+  type transaction_union =
+    | Command of Signed_command.t
+    | Fee_transfer of Fee_transfer.t
+  [@@deriving yojson]
+
   type serializable =
     { source_ledger : Ledger_hash.t
     ; source_acc_set : Account_set.t
     ; sequencer : Even_PC.t
-    ; transaction : Signed_command.t
+    ; transaction : transaction_union
     ; witness : Base_witness.serializable
     }
   [@@deriving yojson]
@@ -353,7 +361,12 @@ module Base_input = struct
     ; source_acc_set
     ; sequencer
     ; transaction =
-        Mina_transaction.Transaction_union.of_transaction (Command transaction)
+        Mina_transaction.Transaction_union.of_transaction
+          ( match transaction with
+          | Command c ->
+              Command c
+          | Fee_transfer c ->
+              Fee_transfer c )
     ; witness = Base_witness.of_serializable witness
     }
 end
