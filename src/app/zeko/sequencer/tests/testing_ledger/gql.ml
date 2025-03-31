@@ -1527,18 +1527,18 @@ module Mutations = struct
           Transaction_hash.hash_command
             (Signed_command (Signed_command.forget_check command))
         in
-        let%bind.Deferred.Result status =
+        let%bind.Deferred.Result () =
           match
             State.add_command_to_pool t ~command:(Signed_command command)
           with
           | `Applied ->
               printf "Applied with hash %s\n%!"
                 (Transaction_hash.to_base58_check hash) ;
-              return (Ok Types.Command_status.Applied)
+              return (Ok ())
           | `Enqueued ->
               printf "Enqueued with hash %s\n%!"
                 (Transaction_hash.to_base58_check hash) ;
-              return (Ok Types.Command_status.Enqueued)
+              return (Ok ())
           | `Failed err ->
               printf "Failed with hash %s, error: %s\n%!"
                 (Transaction_hash.to_base58_check hash)

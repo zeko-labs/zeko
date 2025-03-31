@@ -190,7 +190,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         >>| Fn.compose Zkapp_account.digest_vk
               Compile_simple.Verification_key.to_pickles
       in
-      let%map (a, au), proof =
+      let%map (_stmt, au), proof =
         time ~logger "Inner_rules.inner_sync"
           ( prove (Inner_sync.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
@@ -228,7 +228,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         >>| Fn.compose Zkapp_account.digest_vk
               Compile_simple.Verification_key.to_pickles
       in
-      let%map (a, au), proof =
+      let%map (_stmt, au), proof =
         time ~logger "Outer_rules.commit"
           ( prove (Outer_commit.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )

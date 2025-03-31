@@ -58,7 +58,7 @@ module Sequencer = struct
           type _ t = Context_state : (unit * State.t) t
 
           let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
-           fun pair_type key ->
+           fun pair_type _ ->
             match pair_type with
             | Context_state ->
                 Bigstring.of_string "context_state"
@@ -348,7 +348,7 @@ module Sequencer = struct
             return
               (Zeko_transaction_logic.apply_user_command_unchecked ~sequencer_pk
                  ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
-                 ~constraint_constants ~global_slot l t.imt t.archive command )
+                 ~constraint_constants ~global_slot l t.imt command )
           in
 
           let%bind.Deferred.Result () =
@@ -462,10 +462,7 @@ module Sequencer = struct
           ~ase_elms:
             (List.map processed_new_actions ~f:Account_update.Actions.hash)
           ~ase_source:
-            ( C.Rollup_state.Outer_action_state.With_length.
-                { action_state = old_deposits_state
-                ; length = old_deposits_length
-                }
+            ( { action_state = old_deposits_state; length = old_deposits_length }
               : C.Ase.With_length.Stmt.t )
       in
       let fee = Currency.Fee.of_mina_int_exn 0 in
@@ -650,7 +647,7 @@ module Sequencer = struct
       ; archive = Archive.create ~kvdb:(L.Db.zeko_kvdb db)
       ; config
       ; da_client
-      ; snark_q = Snark_queue.create ~config ~provers
+      ; snark_q = Snark_queue.create ~provers
       ; merger = Merger.P.create ()
       ; merger_ctx =
           { provers

@@ -1,5 +1,4 @@
 open Async
-open Signature_lib
 
 let run_server =
   ( "run-server"

@@ -69,6 +69,7 @@ module Inputs = struct
          ; full_transaction_commitment
          ; excess
          ; account_update_index
+         ; _
          } :
           ( Mina_base.Stack_frame.value
           , ( ( ( Token_id.t
@@ -122,7 +123,7 @@ let perform ~(zeko_env : zeko_env) ~global_slot (type r)
       Zkapp_precondition.Valid_while.check valid_while global_slot
       |> Or_error.is_ok
   | Check_protocol_state_precondition
-      ((predicate : Zkapp_precondition.Protocol_state.t), _global_state) ->
+      ((_predicate : Zkapp_precondition.Protocol_state.t), _global_state) ->
       (* FIXME: Zkapp_precondition.Protocol_state.(equal predicate accept) *)
       (* Allow for global slot precondition, as it's the fee payer's valid while *)
       true
@@ -152,17 +153,15 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
     Sparse_ledger.of_ledger_subset_exn ledger accounts_referenced
   in
   let source_imt = Indexed_merkle_tree.Db.merkle_root imt in
-  let%bind.Result status, new_accounts =
+  let%bind.Result status =
     Or_error.try_with_join (fun () ->
         match
           Ledger.apply_user_command_unchecked ~constraint_constants
             ~txn_global_slot:global_slot ledger command
         with
-        | Ok
-            { common = { user_command = { status; _ }; _ }
-            ; body = Payment { new_accounts }
-            } ->
-            Ok (status, new_accounts)
+        | Ok { common = { user_command = { status; _ }; _ }; body = Payment _ }
+          ->
+            Ok status
         | Ok _ ->
             failwith "Internal error: it should be payment"
         | Error err ->
@@ -205,7 +204,7 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
         } )
 
 let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
-    ~global_slot ledger imt archive (command : Zkapp_command.t) =
+    ~global_slot ledger imt (command : Zkapp_command.t) =
   let hash_local_state l =
     Zkapp_command_logic.Local_state.
       { l with call_stack = Inputs.Call_stack.with_hash l.call_stack }
@@ -237,7 +236,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
       } )
   in
   let all_account_updates = Zkapp_command.all_account_updates command in
-  let perform eff = perform ~zeko_env:zeko_dummy_env ~global_slot eff in
+  let perform eff = perform ~zeko_env ~global_slot eff in
   let witnesses_rev =
     let l = hash_local_state (snd state) in
     let account_id = Zkapp_command.fee_payer command in
@@ -424,7 +423,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
   Ok (source_ledger, witnesses)
 
 let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
-    ~global_slot ledger imt archive (command : User_command.t) =
+    ~global_slot ledger imt (command : User_command.t) =
   match command with
   | Signed_command ({ payload = { body = Payment _; _ }; _ } as command) ->
       let%map.Result source_ledger, w =
@@ -435,7 +434,7 @@ let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
   | Zkapp_command command ->
       let%map.Result source_ledger, w =
         apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env
-          ~constraint_constants ~global_slot ledger imt archive command
+          ~constraint_constants ~global_slot ledger imt command
       in
       (source_ledger, List.map w ~f:(fun w -> Txn_snark_witness.Zkapp_command w))
   | Signed_command _ ->
@@ -466,14 +465,14 @@ let apply_fee_transfer_unchecked ~(receiver_pk : Even_PC.t) ~fee
     Sparse_ledger.of_ledger_subset_exn ledger accounts_referenced
   in
   let source_imt = Indexed_merkle_tree.Db.merkle_root imt in
-  let%bind.Result status, new_accounts =
+  let%bind.Result status =
     Or_error.try_with_join (fun () ->
         match
           Ledger.apply_fee_transfer ~constraint_constants
             ~txn_global_slot:global_slot ledger command
         with
-        | Ok { fee_transfer = { status; _ }; new_accounts } ->
-            Ok (status, new_accounts)
+        | Ok { fee_transfer = { status; _ }; _ } ->
+            Ok status
         | Error err ->
             Error err )
   in

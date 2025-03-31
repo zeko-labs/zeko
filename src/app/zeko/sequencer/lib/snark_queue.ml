@@ -8,7 +8,7 @@ type t =
   ; provers : Zeko_prover.Client.State.t
   }
 
-let create ~config ~provers =
+let create ~provers =
   { q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
   ; transfers_memory =
       Transfer.Transfers_memory.create ~lifetime:Float.(60. * 10.)
