@@ -168,6 +168,16 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
         | Error err ->
             Error err )
   in
+  let%bind.Result () =
+    match status with
+    | Applied ->
+        Ok ()
+    | Failed failures ->
+        Or_error.error_string
+          (sprintf "Transaction failed: %s"
+             (Yojson.Safe.pretty_to_string
+                (Transaction_status.Failure.Collection.to_yojson failures) ) )
+  in
   Ledger.commit ledger ;
   let update_acc_set_witness =
     let fee_payer = Signed_command.fee_payer command in
@@ -182,26 +192,17 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
         in
         Acc_set_witness.add acc witness )
   in
-  match status with
-  | Applied ->
-      Ok
-        ( source_ledger
-        , Base_input.
-            { source_ledger = Sparse_ledger.merkle_root source_ledger
-            ; source_acc_set = source_imt
-            ; sequencer = sequencer_pk
-            ; transaction = command
-            ; witness =
-                Base_witness.
-                  { ledger_path_handler = source_ledger
-                  ; update_acc_set_witness
-                  }
-            } )
-  | Failed failures ->
-      Or_error.error_string
-        (sprintf "Transaction failed: %s"
-           (Yojson.Safe.pretty_to_string
-              (Transaction_status.Failure.Collection.to_yojson failures) ) )
+  Ok
+    ( source_ledger
+    , Base_input.
+        { source_ledger = Sparse_ledger.merkle_root source_ledger
+        ; source_acc_set = source_imt
+        ; sequencer = sequencer_pk
+        ; transaction = Command command
+        ; witness =
+            Base_witness.
+              { ledger_path_handler = source_ledger; update_acc_set_witness }
+        } )
 
 let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
     ~global_slot ledger imt archive (command : Zkapp_command.t) =
@@ -439,3 +440,77 @@ let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
       (source_ledger, List.map w ~f:(fun w -> Txn_snark_witness.Zkapp_command w))
   | Signed_command _ ->
       Or_error.error_string "Invalid signed command, we allow only payments"
+
+let apply_fee_transfer_unchecked ~(receiver_pk : Even_PC.t) ~fee
+    ~constraint_constants ~global_slot ledger imt =
+  (* If the account is new, the current implementation of Indexed Merkle tree doesn't work with 2 new same accounts,
+     therefore add inner account as second receiver with 0 fee. *)
+  let command =
+    Fee_transfer.of_singles
+      (`Two
+        ( Fee_transfer.Single.create
+            ~receiver_pk:(Even_PC.to_pc receiver_pk)
+            ~fee ~fee_token:Token_id.default
+        , Fee_transfer.Single.create
+            ~receiver_pk:Zeko_constants.inner_public_key ~fee:Currency.Fee.zero
+            ~fee_token:Token_id.default ) )
+    |> Or_error.ok_exn
+  in
+  let receiver_aid =
+    Account_id.create (Even_PC.to_pc receiver_pk) Token_id.default
+  in
+  let source_ledger =
+    let accounts_referenced =
+      [ Zeko_constants.inner_account_id; receiver_aid ]
+    in
+    Sparse_ledger.of_ledger_subset_exn ledger accounts_referenced
+  in
+  let source_imt = Indexed_merkle_tree.Db.merkle_root imt in
+  let%bind.Result status, new_accounts =
+    Or_error.try_with_join (fun () ->
+        match
+          Ledger.apply_fee_transfer ~constraint_constants
+            ~txn_global_slot:global_slot ledger command
+        with
+        | Ok { fee_transfer = { status; _ }; new_accounts } ->
+            Ok (status, new_accounts)
+        | Error err ->
+            Error err )
+  in
+  let%bind.Result () =
+    match status with
+    | Applied ->
+        Ok ()
+    | Failed failures ->
+        Or_error.error_string
+          (sprintf "Fee transfer failed: %s"
+             (Yojson.Safe.pretty_to_string
+                (Transaction_status.Failure.Collection.to_yojson failures) ) )
+  in
+  Ledger.commit ledger ;
+  let update_acc_set_witness =
+    let tids =
+      List.map
+        [ Zeko_constants.inner_account_id
+        ; receiver_aid
+        ; Zeko_constants.inner_account_id
+        ] ~f:(fun owner -> Account_id.derive_token_id ~owner)
+    in
+    List.fold tids ~init:Acc_set_witness.empty ~f:(fun acc tid ->
+        let _, witness =
+          Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
+        in
+        Acc_set_witness.add acc witness )
+  in
+  Ok
+    ( source_ledger
+    , Txn_snark_witness.Signed_command
+        Base_input.
+          { source_ledger = Sparse_ledger.merkle_root source_ledger
+          ; source_acc_set = source_imt
+          ; sequencer = receiver_pk
+          ; transaction = Fee_transfer command
+          ; witness =
+              Base_witness.
+                { ledger_path_handler = source_ledger; update_acc_set_witness }
+          } )

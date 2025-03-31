@@ -41,6 +41,7 @@ module Sequencer = struct
           { mutable previous_committed_ledger : Sparse_ledger.t option
           ; mutable previous_committed_ledger_hash : Ledger_hash.t option
           ; mutable witnesses : Txn_snark_witness.t list
+          ; mutable fee_excess : Currency.Fee.t
           }
         [@@deriving yojson]
 
@@ -48,6 +49,7 @@ module Sequencer = struct
           { previous_committed_ledger = None
           ; previous_committed_ledger_hash = None
           ; witnesses = []
+          ; fee_excess = Currency.Fee.zero
           }
       end
 
@@ -102,15 +104,26 @@ module Sequencer = struct
         | None ->
             State.create ()
 
-      let reset_state t ledger =
+      let reset_state_after_commit t ledger =
         t.state.witnesses <- [] ;
         t.state.previous_committed_ledger <- Some ledger ;
         t.state.previous_committed_ledger_hash <-
           Some (Sparse_ledger.merkle_root ledger) ;
+        t.state.fee_excess <- Currency.Fee.zero ;
         save_state t
 
       let add_witness t w =
         t.state.witnesses <- t.state.witnesses @ [ w ] ;
+        save_state t
+
+      let add_fee_excess t fee_excess =
+        t.state.fee_excess <-
+          Currency.Fee.add t.state.fee_excess fee_excess
+          |> Option.value_exn ~message:"Fee excess overflow" ;
+        save_state t
+
+      let reset_fee_excess t =
+        t.state.fee_excess <- Currency.Fee.zero ;
         save_state t
     end
 
@@ -178,7 +191,7 @@ module Sequencer = struct
             ~archive_uri:config.archive_uri commit_witness
         in
         let%bind () = Executor.send_zkapp_command executor command in
-        Context.reset_state ctx new_inner_ledger ;
+        Context.reset_state_after_commit ctx new_inner_ledger ;
         return ()
     end
 
@@ -296,6 +309,8 @@ module Sequencer = struct
             else Ok ()
           in
 
+          (* TODO: Check if fee is sufficient *)
+
           (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
           let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
           let l = L.of_database t.db in
@@ -344,6 +359,9 @@ module Sequencer = struct
                 return (apply_events_and_actions t command)
           in
 
+          (* Accumulate fee *)
+          Merger.Context.add_fee_excess t.merger_ctx (User_command.fee command) ;
+
           (* Post transaction to the DA layer *)
           let changed_accounts =
             let account_ids =
@@ -377,6 +395,43 @@ module Sequencer = struct
             ~target_ledger_hash:(Ledger.Db.merkle_root t.db) ;
 
           return (Ok witnesses) )
+
+  let apply_fee_transfer t =
+    let fee = t.merger_ctx.state.fee_excess in
+    let receiver_pk =
+      Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
+    in
+    let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+    let ledger = L.of_database t.db in
+    let%bind.Result source_ledger, witness =
+      Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk ~fee
+        ~constraint_constants ~global_slot ledger t.imt
+    in
+
+    Merger.Context.reset_fee_excess t.merger_ctx ;
+
+    (* Post transaction to the DA layer *)
+    let changed_accounts =
+      let account_ids =
+        [ Account_id.of_public_key t.config.signer.public_key ]
+      in
+      List.map account_ids ~f:(fun id ->
+          let index = L.index_of_account_exn ledger id in
+          (index, L.get_at_index_exn ledger index) )
+    in
+    let diff =
+      (* FIXME: add fee transfer command to DA *)
+      Da_layer.Diff.create
+        ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
+        ~changed_accounts ~command_with_action_step_flags:None
+    in
+    Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
+      ~ledger_openings:source_ledger ~diff
+      ~target_ledger_hash:(Ledger.Db.merkle_root t.db) ;
+
+    don't_wait_for @@ Merger.P.add_job t.merger t.merger_ctx ~data:witness ;
+
+    Ok ()
 
   let update_inner_account t =
     let old_deposits_state, old_deposits_length =
@@ -449,6 +504,7 @@ module Sequencer = struct
       return (old_deposits_state, processed_pointer)
 
   let commit t =
+    apply_fee_transfer t |> Or_error.ok_exn ;
     let%bind old_deposits_pointer, processed_pointer = update_inner_account t in
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
@@ -549,7 +605,7 @@ module Sequencer = struct
         L.(of_database t.db)
         [ Zeko_constants.inner_account_id ]
     in
-    Merger.Context.reset_state t.merger_ctx sparse_ledger ;
+    Merger.Context.reset_state_after_commit t.merger_ctx sparse_ledger ;
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
