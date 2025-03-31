@@ -1,6 +1,5 @@
 open Async
 open Core_kernel
-open Mina_base
 open Mina_ledger
 open Zeko_circuits
 open Zeko_types
@@ -176,7 +175,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
       |> List.map ~f:(function
            | `Left hash ->
                ({ right_side = hash } : Outer_rules.Rule_commit_inst.PathElt.t)
-           | `Right hash ->
+           | `Right _ ->
                failwith "The inner account is supposed to be left most" )
     in
     (inner_acc, inner_acc_path)
@@ -238,16 +237,16 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
   | _ ->
       failwith "Unexpected response from prover"
 
-let submit_deposit ?proving_timeout t ~outer_pk ~deposit =
+let submit_deposit ?proving_timeout:_ _t ~outer_pk:_ ~deposit:_ =
   failwith "Not implemented"
 
-let submit_withdrawal ?proving_timeout t ~withdrawal =
+let submit_withdrawal ?proving_timeout:_ _t ~withdrawal:_ =
   failwith "Not implemented"
 
-let process_deposit ?proving_timeout t ~is_new ~pointer ~before ~after ~deposit
-    =
+let process_deposit ?proving_timeout:_ _t ~is_new:_ ~pointer:_ ~before:_
+    ~after:_ ~deposit:_ =
   failwith "Not implemented"
 
-let process_withdrawal ?proving_timeout t ~outer_pk ~is_new ~pointer ~before
-    ~after ~withdrawal =
+let process_withdrawal ?proving_timeout:_ _t ~outer_pk:_ ~is_new:_ ~pointer:_
+    ~before:_ ~after:_ ~withdrawal:_ =
   failwith "Not implemented"

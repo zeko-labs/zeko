@@ -1891,7 +1891,7 @@ module Queries = struct
 end
 
 module Subscriptions = struct
-  open Schema
+  (* open Schema *)
 
   let commands = []
 end
