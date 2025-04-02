@@ -3,9 +3,13 @@ open Core_kernel
 open Mina_base
 open Mina_lib
 open Mina_ledger
+open Mina_transaction_logic
 open Cli_lib
 
 let constraint_constants = Genesis_constants.Compiled.constraint_constants
+
+(* FIXME: Don't use Mina_compile_config.For_tests.t *)
+let compile_config = Mina_compile_config.For_unit_tests.t
 
 let rec rmrf path =
   match Sys.is_directory path with
@@ -130,18 +134,17 @@ let sync_archive (t : t) ~hash =
           let new_protocol_state, diff =
             Archive_lib.Diff.Builder.zeko_transaction_added
               ~constraint_constants
-              ~accounts_created:
-                (Ledger.Transaction_applied.new_accounts txn_applied)
+              ~accounts_created:(Transaction_applied.new_accounts txn_applied)
               ~new_state_hash:(Ledger.merkle_root ledger)
               ~protocol_state:t.state.protocol_state ~ledger
-              ~txn:(Ledger.Transaction_applied.transaction txn_applied)
+              ~txn:(Transaction_applied.transaction_with_status txn_applied)
               ~dummy_fee_payer:Zkapps_rollup.inner_public_key
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
           State.set_protocol_state t.state (Ledger.Db.zeko_kvdb t.db)
             new_protocol_state ;
           match%bind
-            Archive_client.dispatch ~logger t.archive_uri
+            Archive_client.dispatch ~logger ~compile_config t.archive_uri
               (Archive_lib.Diff.Transition_frontier diff)
           with
           | Ok () ->

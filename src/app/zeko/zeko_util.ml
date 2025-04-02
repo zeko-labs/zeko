@@ -29,4 +29,4 @@ let progress_bar ?(width = 30) progress =
     | Some "bar" | Some _ | None ->
         Printf.printf "\r[%s] %.0f%%%!" bar (progress *. 100.0)
   in
-  if Float.(progress >= 1.0) then Printf.printf "\n%!"
+  if progress >= 1.0 then Printf.printf "\n%!"
