@@ -69,7 +69,7 @@ module Sequencer = struct
       { q : unit Throttle.t
       ; config : Config.t
       ; transfers_memory : Transfers_memory.t
-      ; provers : Zeko_prover.Client.State.t
+      ; provers : Zeko_prover.Client.t
       }
 
     let create ~config ~provers =
@@ -173,9 +173,8 @@ module Sequencer = struct
     let prove_signed_command provers ~sparse_ledger ~user_command_in_block
         ~statement =
       let%bind txn_snark =
-        Utils.print_time "Transaction_snark.of_signed_command"
-          (Zeko_prover.Client.transaction_snark_of_signed_command provers
-             ~statement ~user_command_in_block ~sparse_ledger )
+        Zeko_prover.Client.transaction_snark_of_signed_command provers
+          ~statement ~user_command_in_block ~sparse_ledger
       in
       wrap provers txn_snark
 
@@ -186,23 +185,18 @@ module Sequencer = struct
             failwith "No witnesses"
         | (witness, spec, statement) :: rest ->
             let%bind p1 =
-              Utils.print_time "Transaction_snark.of_zkapp_command_segment"
-                (Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
-                   provers ~statement ~witness ~spec )
+              Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
+                provers ~statement ~witness ~spec
             in
             Deferred.List.fold ~init:p1 rest
               ~f:(fun acc (witness, spec, statement) ->
                 let%bind prev = return acc in
                 let%bind curr =
-                  Utils.print_time "Transaction_snark.of_zkapp_command_segment"
-                    (Zeko_prover.Client
-                     .transaction_snark_of_zkapp_command_segment provers
-                       ~statement ~witness ~spec )
+                  Zeko_prover.Client.transaction_snark_of_zkapp_command_segment
+                    provers ~statement ~witness ~spec
                 in
                 let%bind merged =
-                  Utils.print_time "Transaction_snark.merge"
-                    (Zeko_prover.Client.transaction_snark_merge provers curr
-                       prev )
+                  Zeko_prover.Client.transaction_snark_merge provers curr prev
                 in
                 return merged )
       in
@@ -213,7 +207,7 @@ module Sequencer = struct
         type t =
           { mutable previous_committed_ledger : Sparse_ledger.t option
           ; mutable previous_committed_ledger_hash : Ledger_hash.t option
-          ; mutable commands : Command_witness.t list
+          ; mutable commands : Command_witness.t array ref list
           }
         [@@deriving yojson]
 
@@ -224,40 +218,14 @@ module Sequencer = struct
           }
       end
 
-      module Db = struct
-        module Key_value = struct
-          type _ t = Context_state : (unit * State.t) t
+      module Db = Kvdb_base.Make_singleton (struct
+        type t = State.t [@@deriving yojson]
 
-          let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
-           fun pair_type key ->
-            match pair_type with
-            | Context_state ->
-                Bigstring.of_string "context_state"
-
-          let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
-           fun pair_type value ->
-            match pair_type with
-            | Context_state ->
-                Bigstring.of_string @@ Yojson.Safe.to_string
-                @@ State.to_yojson value
-
-          let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
-            let ok_exn x =
-              let open Ppx_deriving_yojson_runtime.Result in
-              match x with Ok x -> x | Error e -> failwith e
-            in
-            fun pair_type data ->
-              match pair_type with
-              | Context_state ->
-                  ok_exn @@ State.of_yojson @@ Yojson.Safe.from_string
-                  @@ Bigstring.to_string data
-        end
-
-        include Kvdb_base.Make (Key_value)
-      end
+        let key = "context_state"
+      end)
 
       type t =
-        { provers : Zeko_prover.Client.State.t
+        { provers : Zeko_prover.Client.t
         ; da_client : Da_layer.Client.Sequencer.t
         ; executor : Executor.t
         ; config : Config.t
@@ -265,25 +233,31 @@ module Sequencer = struct
         ; state : State.t
         }
 
-      let save_state t =
-        Db.set t.kvdb Db.Key_value.Context_state ~key:() ~data:t.state
+      let save_state t = Db.set t.kvdb ~data:t.state
 
       let load_state kvdb =
-        match Db.get kvdb Db.Key_value.Context_state ~key:() with
-        | Some state ->
-            state
-        | None ->
-            State.create ()
+        match Db.get kvdb with Some state -> state | None -> State.create ()
 
-      let reset_state t ledger =
-        t.state.commands <- [] ;
+      let committed t ledger =
+        t.state.commands <- List.tl_exn t.state.commands ;
+        t.state.previous_committed_ledger <- Some ledger ;
+        t.state.previous_committed_ledger_hash <-
+          Some (Sparse_ledger.merkle_root ledger) ;
+        save_state t
+
+      let set_last_committed_ledger t ledger =
         t.state.previous_committed_ledger <- Some ledger ;
         t.state.previous_committed_ledger_hash <-
           Some (Sparse_ledger.merkle_root ledger) ;
         save_state t
 
       let add_command t command =
-        t.state.commands <- t.state.commands @ [ command ] ;
+        let arr = List.last_exn t.state.commands in
+        arr := Array.append !arr [| command |] ;
+        save_state t
+
+      let created_new_tree t =
+        t.state.commands <- t.state.commands @ [ ref [||] ] ;
         save_state t
     end
 
@@ -330,13 +304,15 @@ module Sequencer = struct
         let%bind signatures =
           Da_layer.Client.Sequencer.get_signatures da_client
             ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
-          |> Deferred.map ~f:(fun x -> Option.value_exn x)
+          |> Deferred.map ~f:(fun x ->
+                 Option.value_exn x ~message:"No signatures" )
         in
         printf "Received %d signatures from da layer\n%!"
           (List.length signatures) ;
 
         let old_inner_ledger =
           Option.value_exn state.previous_committed_ledger
+            ~message:"No previous committed ledger"
         in
         let commit_witness : Committer.Commit_witness.t =
           { old_inner_ledger
@@ -356,15 +332,20 @@ module Sequencer = struct
             ~archive_uri:config.archive_uri commit_witness
         in
         let%bind () = Executor.send_zkapp_command executor command in
-        Context.reset_state ctx new_inner_ledger ;
+        Context.committed ctx new_inner_ledger ;
         return ()
     end
 
     module P = Parallel_merger.Make (Context) (Merge) (Base) (Commit)
 
     let requeue_after_restart t (ctx : Context.t) =
-      let commands_to_requeue = ctx.state.commands in
+      let commands_to_requeue =
+        ctx.state.commands
+        |> List.map ~f:(fun arr -> Array.to_list !arr)
+        |> List.join
+      in
       (* Adding jobs will repopulate the list *)
+      assert (phys_equal (P.current_tree t) None) ;
       ctx.state.commands <- [] ;
       printf "Requeueing %d commands\n%!" (List.length commands_to_requeue) ;
       List.iter commands_to_requeue ~f:(fun command ->
@@ -499,9 +480,10 @@ module Sequencer = struct
                       (Account_update.token_id update)
                   in
                   let location =
-                    L.location_of_account l account_id |> Option.value_exn
+                    L.location_of_account l account_id
+                    |> Option.value_exn ~message:"No location"
                   in
-                  L.get l location |> Option.value_exn
+                  L.get l location |> Option.value_exn ~message:"No account"
                 in
                 Archive.add_account_update archive update account
                   (Some
@@ -532,10 +514,15 @@ module Sequencer = struct
     else
       Throttle.enqueue t.apply_q (fun () ->
           let%bind.Deferred.Result () =
+            let weight = User_command.weight command in
             return
             @@
-            if Merger.P.number_of_wip_jobs t.merger >= t.config.max_pool_size
-            then Error (Error.of_string "Maximum pool size reached, try later")
+            if
+              Zeko_prover.Client.queue_size t.merger_ctx.provers + weight
+              > t.config.max_pool_size
+            then
+              Error
+                (Error.of_string "Maximum proof queue size reached, try later")
             else Ok ()
           in
 
@@ -559,7 +546,11 @@ module Sequencer = struct
                      command
               in
               match%bind
-                Verifier.verify_command { data = verifiable; status = Applied }
+                try_with (fun () ->
+                    Verifier.verify_command
+                      { data = verifiable; status = Applied } )
+                >>| Result.map_error ~f:Error.of_exn
+                >>| Result.join
               with
               | Ok (`Valid _) ->
                   return (Ok ())
@@ -635,6 +626,7 @@ module Sequencer = struct
                 { Transaction_protocol_state.Poly.transaction =
                     Signed_command.check_only_for_signature signed_command
                     |> Option.value_exn
+                         ~message:"check_only_for_signature failed"
                 ; block_data = state_body
                 ; global_slot
                 }
@@ -784,6 +776,7 @@ module Sequencer = struct
           don't_wait_for @@ Deferred.ignore_m @@ commit t )
 
   let bootstrap ~logger ({ config; _ } as t) da_config =
+    print_endline "Bootstrapping" ;
     let%bind committed_ledger_hash =
       Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
         ~signer_pk:(Public_key.compress config.signer.public_key)
@@ -794,17 +787,19 @@ module Sequencer = struct
     printf "Init root: %s\n%!" Ledger_hash.(to_decimal_string (get_root t)) ;
 
     (* apply diffs from DA layer *)
-    let%bind diffs =
-      Da_layer.Client.get_diffs_chain ~logger ~config:da_config
-        ~source_ledger_hash:`Genesis ~target_ledger_hash:committed_ledger_hash
-      |> Deferred.map ~f:Or_error.ok_exn
-    in
     let%bind () =
-      Deferred.List.iter ~how:`Sequential diffs ~f:(fun diff ->
+      Da_layer.Client.map_diffs ~logger ~config:da_config
+        ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
+        ~target_ledger_hash:committed_ledger_hash
+        ~f:(fun ~current_chunk ~chunks_length diff ->
           assert (
             Ledger_hash.equal
               (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
               (get_root t) ) ;
+          [%log info] "Applying diff with hash %s, progress: %.0f%%"
+            (Ledger_hash.to_decimal_string
+               (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) )
+            (Float.of_int current_chunk /. Float.of_int chunks_length *. 100.0) ;
           match
             Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
           with
@@ -834,6 +829,7 @@ module Sequencer = struct
               t.analytics_state <- analytics_state ;
               L.Mask.Attached.commit mask ;
               return () )
+      >>| Or_error.ok_exn >>| ignore
     in
 
     let current_root = get_root t in
@@ -847,12 +843,14 @@ module Sequencer = struct
         L.(of_database t.db)
         [ Zkapps_rollup.inner_account_id ]
     in
-    Merger.Context.reset_state t.merger_ctx sparse_ledger ;
+    Merger.Context.set_last_committed_ledger t.merger_ctx sparse_ledger ;
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
       ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~network_id
       ~deposit_delay_blocks ~provers =
+    print_endline "Precomputing srs" ;
+    Pickles.Side_loaded.srs_precomputation () ;
     let db =
       L.Db.create ?directory_name:db_dir
         ~depth:constraint_constants.ledger_depth ()
@@ -876,7 +874,7 @@ module Sequencer = struct
     in
     let kvdb = L.Db.zeko_kvdb db in
     let provers =
-      Zeko_prover.Client.State.create
+      Zeko_prover.Client.create
         (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
     in
     let executor = Executor.create ~l1_uri:config.l1_uri ~signer ~kvdb () in
@@ -912,15 +910,8 @@ module Sequencer = struct
         ~archive_uri:config.archive_uri
     in
     let%bind () =
-      match%bind
-        Da_layer.Client.sync_nodes ~logger ~config:da_config
-          ~depth:constraint_constants.ledger_depth
-          ~target_ledger_hash:(get_root t)
-      with
-      | Ok _ ->
-          return ()
-      | Error e ->
-          Error.raise e
+      Da_layer.Client.check_synced_nodes ~logger ~config:da_config
+        ~target_ledger_hash:(get_root t)
     in
     return t
 end
