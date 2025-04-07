@@ -10,6 +10,7 @@ let constraint_constants = Zeko_constants.constraint_constants
 
 (* FIXME: Don't use Mina_compile_config.For_tests.t *)
 let compile_config = Mina_compile_config.For_unit_tests.t
+
 let compile_time_genesis =
   let consensus_constants =
     let protocol_constants : Genesis_constants.Protocol.t =
@@ -64,7 +65,7 @@ module State = struct
     | Some state ->
         state
     | None ->
-        { protocol_state = compile_time_genesis_state }
+        { protocol_state = compile_time_genesis.data }
 
   let set_protocol_state t kvdb protocol_state =
     t.protocol_state <- protocol_state ;
@@ -129,7 +130,7 @@ let sync_archive (t : t) ~hash =
                     ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
                     ~txn_state_view:
                       Mina_state.Protocol_state.(
-                        Body.view @@ body compile_time_genesis_state)
+                        Body.view @@ body compile_time_genesis.data)
                     ledger (Command command) )
                  (Ledger.apply_transaction_second_pass ledger)
           in
@@ -141,7 +142,7 @@ let sync_archive (t : t) ~hash =
               ~new_state_hash:(Ledger.merkle_root ledger)
               ~protocol_state:t.state.protocol_state ~ledger
               ~txn:(Transaction_applied.transaction_with_status txn_applied)
-              ~dummy_fee_payer:Zkapps_rollup.inner_public_key
+              ~dummy_fee_payer:Zeko_constants.inner_public_key
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
           State.set_protocol_state t.state (Ledger.Db.zeko_kvdb t.db)
@@ -149,11 +150,6 @@ let sync_archive (t : t) ~hash =
           match%bind
             Archive_client.dispatch ~logger ~compile_config t.archive_uri
               (Archive_lib.Diff.Transition_frontier diff)
-  Ledger.with_ledger ~depth:constraint_constants.ledger_depth ~f:(fun ledger ->
-      let protocol_state = ref compile_time_genesis.data in
-      Deferred.List.iter diffs ~f:(fun diff ->
-          match
-            Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
           with
           | Ok () ->
               [%log info]

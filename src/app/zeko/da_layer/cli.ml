@@ -107,7 +107,7 @@ let sync_node =
              let progress =
                Float.of_int current_chunk /. Float.of_int chunks_length
              in
-             Zeko_util.progress_bar progress ;
+             printf "Progress: %.2f%%\n%!" (progress *. 100.0) ;
              let diff = Da_layer.Diff.drop_time diff in
              let ledger_openings = Da_layer.Client.get_openings ~diff ~ledger in
              match%bind

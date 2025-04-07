@@ -32,19 +32,21 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) provers =
         don't_wait_for
         @@ Throttle.enqueue q (fun (connection_ref, _) ->
                match%bind !connection_ref with
-               | Error _ ->
-                   return ()
+               | Error err ->
+                   printf "Error pinging prover: %s\n%!"
+                     (Error.to_string_hum err) ;
+                   ping_loop ()
                | Ok (_, r, w) ->
                    let () =
                      Prover.Input.to_yojson Prover.Input.Ping
                      |> Yojson.Safe.to_string |> Writer.write_line w
                    in
-                   let%map _result =
+                   let%bind _result =
                      Reader.really_read_line
                        ~wait_time:(Time.Span.of_sec ping_timeout)
                        r
                    in
-                   () ) )
+                   ping_loop () ) )
   in
   don't_wait_for @@ ping_loop () ;
   { q }
@@ -53,7 +55,7 @@ let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
 (* Get the reference of next available prover.
    If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
-let rec send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
+let send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
     (input : Prover.Input.t) : Prover.Output.t Deferred.t =
   Throttle.enqueue t.q (fun (connection_ref, where_to_connect) ->
       let rec go ~attempts =
