@@ -37,8 +37,6 @@ module Verification_key = struct
   let of_pickles _ = Vk Field.one
 
   let to_pickles _ = Pickles.Side_loaded.Verification_key.dummy
-
-  let var_of_pickles _ = Var (Field.Var.constant Field.one)
 end
 
 let force_tag _ = Promise.return ()

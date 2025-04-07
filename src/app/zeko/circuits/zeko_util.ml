@@ -119,7 +119,7 @@ let var_to_app_state_fine =
 
 (** To be used with deriving snarky, a simple field *)
 module F = struct
-  type t = Field.t [@@deriving sexp]
+  type t = Field.t
 
   type var = Field.Var.t
 

@@ -25,8 +25,6 @@ module Verification_key = struct
 
   let to_pickles x = x
 
-  let var_of_pickles x = x
-
   let of_tag (Tag tag) = of_compiled_promise tag
 
   let hash x =

@@ -8,8 +8,6 @@ module With_length : sig
     type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
   end
 
-  module Init = Stmt
-
   type trans = { source : Stmt.t; target : Stmt.t }
 
   val leaf : field list * Stmt.t -> (trans * Proof.t) Promise.t
@@ -82,7 +80,6 @@ end
 
 module Without_length : sig
   module Stmt = F
-  module Init = Stmt
 
   type trans = { source : field; target : field }
 
