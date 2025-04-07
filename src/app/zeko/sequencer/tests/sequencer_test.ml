@@ -23,7 +23,7 @@ let da_config = Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555" ]
 
 let provers =
   [ Host_and_port.create ~host:"localhost" ~port:9990
-    (* ; Host_and_port.create ~host:"localhost" ~port:9991 *)
+  ; Host_and_port.create ~host:"localhost" ~port:9991
   ]
 
 let run = Thread_safe.block_on_async_exn
@@ -178,7 +178,6 @@ let () =
                         in
                         apply_user_command sequencer (Signed_command command)
                   in
-
                   let witnesses =
                     match result with
                     | Ok result ->

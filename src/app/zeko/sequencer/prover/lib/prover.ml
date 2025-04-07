@@ -13,9 +13,16 @@ let mktree (account_update, account_update_digest, calls) proof =
 
 let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
-let time ~logger label (d : 'a Deferred.t) =
+let time ?fake_proving_time ~logger label (d : 'a Deferred.t) =
   [%log info] "Starting %s%!" label ;
   let start = Time.now () in
+  let%bind () =
+    match fake_proving_time with
+    | None ->
+        Deferred.unit
+    | Some fake_proving_time ->
+        after fake_proving_time
+  in
   let%bind x = d in
   let stop = Time.now () in
   [%log info] "%s: %s\n%!" label
@@ -146,21 +153,22 @@ module Output = struct
   [@@deriving yojson]
 end
 
-let prove ~logger : Input.t -> Output.t Deferred.t = function
+let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
   | Ping ->
       let%bind () = time ~logger "Pong" Deferred.unit in
       return Output.Pong
   | Txn_snark (Signed_command input) ->
       let Compile_simple.[ prove; _; _; _; _ ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Txn_rules.single_signed_command"
+        time ?fake_proving_time ~logger "Txn_rules.single_signed_command"
           (prove (Base_input.of_serializable input) |> Promise.to_deferred)
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Single_unproved input)) ->
       let Compile_simple.[ _; prove; _; _; _ ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Txn_rules.single_unproved_zkapp_command"
+        time ?fake_proving_time ~logger
+          "Txn_rules.single_unproved_zkapp_command"
           ( prove (Zkapp_single_unproved_input.of_serializable input)
           |> Promise.to_deferred )
       in
@@ -168,7 +176,8 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
   | Txn_snark (Zkapp_command (Double_unproved input)) ->
       let Compile_simple.[ _; _; prove; _; _ ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Txn_rules.double_unproved_zkapp_command"
+        time ?fake_proving_time ~logger
+          "Txn_rules.double_unproved_zkapp_command"
           ( prove (Zkapp_double_unproved_input.of_serializable input)
           |> Promise.to_deferred )
       in
@@ -176,7 +185,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
   | Txn_snark (Zkapp_command (Single_proved input)) ->
       let Compile_simple.[ _; _; _; prove; _ ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Txn_rules.single_proved_zkapp_command"
+        time ?fake_proving_time ~logger "Txn_rules.single_proved_zkapp_command"
           ( prove (Zkapp_single_proved_input.of_serializable input)
           |> Promise.to_deferred )
       in
@@ -184,7 +193,8 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
   | Txn_snark (Merge input) ->
       let Compile_simple.[ _; _; _; _; prove ] = Txn_rules.provers in
       let%map stmt, proof =
-        time ~logger "Txn_rules.merge" (prove input |> Promise.to_deferred)
+        time ?fake_proving_time ~logger "Txn_rules.merge"
+          (prove input |> Promise.to_deferred)
       in
       Output.Txn_snark (stmt, proof)
   | Inner_sync input ->
@@ -196,7 +206,7 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
               Compile_simple.Verification_key.to_pickles
       in
       let%map (_stmt, au), proof =
-        time ~logger "Inner_rules.inner_sync"
+        time ?fake_proving_time ~logger "Inner_rules.inner_sync"
           ( prove (Inner_sync.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
       in
@@ -204,20 +214,20 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
         (mktree au (Compile_simple.Proof.to_pickles proof))
   | Ase (With_length (source, elems)) ->
       let%map snark =
-        time ~logger "Folder_with_length.fold"
+        time ?fake_proving_time ~logger "Folder_with_length.fold"
           (Folder_with_length.fold ~source ~elems |> Promise.to_deferred)
       in
       Output.(Ase (With_length snark))
   | Ase (Without_length (source, elems)) ->
       let%map snark =
-        time ~logger "Folder_without_length.fold"
+        time ?fake_proving_time ~logger "Folder_without_length.fold"
           (Folder_without_length.fold ~source ~elems |> Promise.to_deferred)
       in
       Output.(Ase (Without_length snark))
   | Verify_both_ases (outer, inner) ->
       let Compile_simple.[ prove ] = Rule_commit.Verify_both_ases.provers in
       let%map stmt, proof =
-        time ~logger "Rule_commit.verify_both_ases"
+        time ?fake_proving_time ~logger "Rule_commit.verify_both_ases"
           ( prove
               Outer_commit.
                 ( Ase_outer_inst.of_serializable outer
@@ -234,14 +244,14 @@ let prove ~logger : Input.t -> Output.t Deferred.t = function
               Compile_simple.Verification_key.to_pickles
       in
       let%map (_stmt, au), proof =
-        time ~logger "Outer_rules.commit"
+        time ?fake_proving_time ~logger "Outer_rules.commit"
           ( prove (Outer_commit.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
       in
       Output.Call_forest_tree
         (mktree au (Compile_simple.Proof.to_pickles proof))
 
-let run ~logger ~port =
+let run ?fake_proving_time ~logger ~port () =
   ignore
   @@ Tcp.Server.create (Tcp.Where_to_listen.of_port port)
        ~on_handler_error:`Ignore (fun s r w ->
@@ -258,7 +268,10 @@ let run ~logger ~port =
                |> Input.of_yojson
                |> (function
                     | Ok input -> (
-                        match%bind try_with (fun () -> prove ~logger input) with
+                        match%bind
+                          try_with (fun () ->
+                              prove ?fake_proving_time ~logger input )
+                        with
                         | Ok output ->
                             return
                               (Yojson.Safe.to_string @@ Output.to_yojson output)
