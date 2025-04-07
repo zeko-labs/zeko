@@ -780,17 +780,19 @@ module Make (L : Ledger_intf.S) :
       ; block_global_slot : Global_slot_since_genesis.t
       }
 
-    let first_pass_ledger { first_pass_ledger; _ } =
+    (* ZEKO NOTE: These are unused by Zeko. *)
+
+    let _first_pass_ledger { first_pass_ledger; _ } =
       L.create_masked first_pass_ledger
 
-    let set_first_pass_ledger ~should_update t ledger =
+    let _set_first_pass_ledger ~should_update t ledger =
       if should_update then L.apply_mask t.first_pass_ledger ~masked:ledger ;
       t
 
     let second_pass_ledger { second_pass_ledger; _ } =
       L.create_masked second_pass_ledger
 
-    let set_second_pass_ledger ~should_update t ledger =
+    let _set_second_pass_ledger ~should_update t ledger =
       if should_update then L.apply_mask t.second_pass_ledger ~masked:ledger ;
       t
 

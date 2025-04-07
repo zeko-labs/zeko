@@ -54,14 +54,14 @@ struct
   module Ase_outer_inst = Ase.Without_length.Make (struct
     module Action_state = Rollup_state.Outer_action_state
 
-    let get_iterations = Int.pow 2 14
+    let get_iterations = Int.pow 2 10
   end)
 
   (** Used to prove that the synchronized outer action state is a predecessor of the current one. *)
   module Ase_outer_with_length_inst = Ase.With_length.Make (struct
     module Action_state = Rollup_state.Outer_action_state
 
-    let get_iterations = Int.pow 2 14
+    let get_iterations = Int.pow 2 10
   end)
 
   (** Exists to circumvent limit. *)
@@ -95,7 +95,7 @@ struct
   end
 
   module Check_accepted_params = struct
-    let get_iterations = Int.pow 2 8
+    let get_iterations = Int.pow 2 7
   end
 
   module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)
@@ -127,7 +127,8 @@ struct
       }
 
     include
-      ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
+      ( val Compile_simple.compile ~name:"Verify_check_accepted_and_ase"
+              ~wrap_domain:`N15 ~branches:[ rule ]
               ~out_typ:
                 Typ.(
                   Check_accepted.Definition.Stmt.typ

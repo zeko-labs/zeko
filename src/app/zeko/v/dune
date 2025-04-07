@@ -1,0 +1,23 @@
+(env
+ (_
+  (flags (:standard -w @a-42-40-44-70-45-41))))
+
+(library
+ (name v)
+ (libraries
+  ;; opam libraries
+  core_kernel
+  pickles
+  snark_params)
+ (inline_tests)
+ (instrumentation
+  (backend bisect_ppx))
+ (preprocess
+  (pps
+   ppx_deriving.show
+   ppx_deriving_snarky
+   ppx_mina
+   ppx_jane
+   ppx_compare
+   h_list.ppx))
+ (modules v))

@@ -45,18 +45,14 @@ module With_length : sig
        val get_iterations : int
      end)
     -> sig
+    type original_stmt_t := Stmt.t
+
     module Stmt : sig
       type t =
         { source : Inputs.Action_state.With_length.t
         ; target : Inputs.Action_state.With_length.t
         }
-
-      type var =
-        { source : Inputs.Action_state.With_length.var
-        ; target : Inputs.Action_state.With_length.var
-        }
-
-      val typ : (var, t) Typ.t
+      [@@deriving snarky]
     end
 
     type t
@@ -69,6 +65,14 @@ module With_length : sig
          ?check:Zeko_util.Boolean.var
       -> var
       -> (Stmt.var * tag_var Compile_simple.prev) Checked.t
+
+    val make :
+         proof_source:original_stmt_t
+      -> proof_target:original_stmt_t
+      -> ?proof:Proof.t
+      -> original_stmt_t
+      -> field list
+      -> t
   end
 end
 
@@ -132,5 +136,13 @@ module Without_length : sig
          ?check:Zeko_util.Boolean.var
       -> var
       -> (Stmt.var * tag_var Compile_simple.prev) Checked.t
+
+    val make :
+         proof_source:field
+      -> proof_target:field
+      -> ?proof:Proof.t
+      -> field
+      -> field list
+      -> t
   end
 end

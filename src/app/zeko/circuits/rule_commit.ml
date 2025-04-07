@@ -10,14 +10,14 @@ open Checked.Let_syntax
 module Ase_outer_inst = Ase.Without_length.Make (struct
   module Action_state = Outer_action_state
 
-  let get_iterations = Int.pow 2 14
+  let get_iterations = Int.pow 2 10
 end)
 
 (** Used to prove the length of the inner action state as stored on the outer account. *)
 module Ase_inner_inst = Ase.With_length.Make (struct
   module Action_state = Inner_action_state
 
-  let get_iterations = Int.pow 2 14
+  let get_iterations = Int.pow 2 10
 end)
 
 (** Proves both Ase_outer_inst and Ase_inner_inst, to circumvent limitation of two recursive proof verifications per proof. *)
@@ -68,8 +68,7 @@ struct
 
   module Witness = struct
     type t =
-      { txn_snark : Zeko_transaction_snark.t
-            (** The ledger transition we are performing. *)
+      { txn_snark : Txn_rules.t  (** The ledger transition we are performing. *)
       ; public_key : PC.t  (** Our public key on the L2 *)
       ; vk_hash : F.t  (** Our vk hash *)
       ; verify_both_ases : Verify_both_ases.t
@@ -78,7 +77,7 @@ struct
       ; new_inner_acc : Account.t
       ; new_inner_acc_path : Path.t
       ; da_signature : Signature_lib.Schnorr.Chunked.Signature.t
-      ; da_key : PC.t
+      ; da_key : Even_PC.t
       }
     [@@deriving snarky]
   end
@@ -127,22 +126,22 @@ struct
            ; source_local_state
            ; target_local_state
            ; sequencer
-           ; fee_excess
+           ; accumulated_fees
            ; slot_range
            ; source_acc_set
            ; target_acc_set
            }
          , verify_txn_snark ) =
-      Zeko_transaction_snark.get txn_snark
+      Txn_rules.get txn_snark
     in
 
     (* The local states must be empty, ensuring that there is no incomplete zkapp transaction being committed. *)
     let* () =
-      Zeko_transaction_snark.Local_state.(
+      Txn_state.Local_state.(
         assert_equal ~label:__LOC__ typ source_local_state dummy)
     in
     let* () =
-      Zeko_transaction_snark.Local_state.(
+      Txn_state.Local_state.(
         assert_equal ~label:__LOC__ typ target_local_state dummy)
     in
 
@@ -151,7 +150,7 @@ struct
       (* TODO: Is this correct? *)
       let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
       let* da_key_uncompressed =
-        Signature_lib.Public_key.decompress_var da_key
+        Even_PC.to_pc_var da_key |> Signature_lib.Public_key.decompress_var
       in
       let* payload =
         make_checked (fun () ->
@@ -165,10 +164,11 @@ struct
         (Random_oracle.Input.Chunked.field payload)
     in
 
-    (* Sequencer must take fees. *)
+    (* Sequencer must take fees. A non-zero magnitude would
+       either mean printing or burning L2 MINA. *)
     let* () =
       Currency.Amount.(
-        Signed.Checked.magnitude fee_excess
+        Signed.Checked.magnitude accumulated_fees
         >>= assert_equal ~label:__LOC__ typ (constant typ zero))
     in
 
@@ -338,7 +338,7 @@ struct
                 ; paused = Some Boolean.false_ (* We must not be paused. *)
                 ; pause_key =
                     None (* We don't care about who can pause the rollup. *)
-                ; da_key = None
+                ; da_key = Some da_key
                 ; acc_set = Some source_acc_set
                 }
               |> var_to_precondition_fine
@@ -387,7 +387,7 @@ struct
 
   let rule : _ Compile_simple.branch =
     { branch_name = "Rollup step"
-    ; tags = Two_tags (Zeko_transaction_snark.tag, Verify_both_ases.tag)
+    ; tags = Two_tags (Txn_rules.tag, Verify_both_ases.tag)
     ; main
     }
 end

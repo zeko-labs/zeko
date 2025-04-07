@@ -45,3 +45,5 @@ let map ~f = function
       Circuit_mode
   | Proving_mode x ->
       Proving_mode (f x)
+
+let return x = Proving_mode x

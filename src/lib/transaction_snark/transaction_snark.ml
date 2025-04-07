@@ -703,6 +703,8 @@ module Make_str (A : Wire_types.Concrete) = struct
               commitment ~memo_hash ~fee_payer_hash:account_update.hash
         end
 
+        let zeko_transaction_commitment_type_eq = Type_equal.T
+
         module Bool = struct
           type t = Boolean.var
 
@@ -1083,6 +1085,8 @@ module Make_str (A : Wire_types.Concrete) = struct
 
         module Call_forest = Zkapp_call_forest.Checked
 
+        let zeko_call_forest_type_eq = Type_equal.T
+
         module Stack_frame = struct
           type frame = (Token_id.Checked.t, Call_forest.t) Stack_frame.t
 
@@ -1410,6 +1414,30 @@ module Make_str (A : Wire_types.Concrete) = struct
         | _ ->
             respond Unhandled
 
+      type zeko_stack_frame_t =
+        ( (Token_id.Checked.t, Zkapp_call_forest.Checked.t) Stack_frame.t
+        , Stack_frame.Digest.Checked.t Lazy.t )
+        With_hash.t
+
+      let zeko_stack_frame_unhash = Inputs.Stack_frame.unhash
+
+      type zeko_call_stack_t =
+        ( ( ( ( Token_id.Stable.V2.t
+              , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
+              Stack_frame.Stable.V1.t
+            , Stack_frame.Digest.Stable.V1.t )
+            With_hash.t
+          , Call_stack_digest.Stable.V1.t )
+          With_stack_hash.Stable.V1.t
+          list
+          Prover_value.t
+        , Call_stack_digest.Checked.t )
+        With_hash.t
+
+      type zeko_call_forest_t = Zkapp_call_forest.Checked.t
+
+      type zeko_transaction_commitment_t = Tick.Field.Var.t
+
       module Single (I : Single_inputs) = struct
         open I
 
@@ -1718,19 +1746,21 @@ module Make_str (A : Wire_types.Concrete) = struct
             let set_supply_increase t supply_increase =
               { t with supply_increase }
 
-            let first_pass_ledger { first_pass_ledger; _ } = first_pass_ledger
+            (* ZEKO NOTE: These aren't used by Zeko. *)
 
-            let second_pass_ledger { second_pass_ledger; _ } =
+            let _first_pass_ledger { first_pass_ledger; _ } = first_pass_ledger
+
+            let _second_pass_ledger { second_pass_ledger; _ } =
               second_pass_ledger
 
-            let set_first_pass_ledger ~should_update t ledger =
+            let _set_first_pass_ledger ~should_update t ledger =
               { t with
                 first_pass_ledger =
                   Ledger.if_ should_update ~then_:ledger
                     ~else_:t.first_pass_ledger
               }
 
-            let set_second_pass_ledger ~should_update t ledger =
+            let _set_second_pass_ledger ~should_update t ledger =
               { t with
                 second_pass_ledger =
                   Ledger.if_ should_update ~then_:ledger
@@ -1855,23 +1885,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                 Boolean.Assert.all
                   [ correct_coinbase_target_stack; valid_init_state ] ) )
 
-      type stack_frame =
-        ( (Token_id.Checked.t, Zkapp_call_forest.Checked.t) Stack_frame.t
-        , Stack_frame.Digest.Checked.t lazy_t )
-        With_hash.t
-
-      type call_stack =
-        ( ( (Inputs.Call_stack.Value.frame, Stack_frame.Digest.t) With_hash.t
-          , Call_stack_digest.t )
-          With_stack_hash.t
-          list
-          Prover_value.t
-        , Call_stack_digest.Checked.t )
-        With_hash.t
-
-      type length = Inputs.Index.t
-
-      let main ?(witness : Witness.t option) ?zeko_handler (spec : Spec.t)
+      let main ?(witness : Witness.t option) (spec : Spec.t)
           ~constraint_constants (statement : Statement.With_sok.var) =
         let open Impl in
         run_checked (dummy_constraints ()) ;
@@ -1958,15 +1972,6 @@ module Make_str (A : Wire_types.Concrete) = struct
 
                 let set_must_verify x = must_verify := x
               end) in
-              let handler : _ Mina_transaction_logic.Zkapp_command_logic.handler
-                  =
-                match zeko_handler with
-                | Some handler ->
-                    handler
-                | None ->
-                    { perform = S.perform }
-              in
-
               let finish v =
                 let open Mina_transaction_logic.Zkapp_command_logic.Start_data in
                 let ps =
@@ -2010,7 +2015,8 @@ module Make_str (A : Wire_types.Concrete) = struct
                               `Yes start_data
                           | `Compute_in_circuit ->
                               `Compute start_data )
-                        handler acc )
+                        S.{ perform }
+                        acc )
                 in
                 (global_state, local_state)
               in
@@ -2018,7 +2024,9 @@ module Make_str (A : Wire_types.Concrete) = struct
                 match account_update_spec.is_start with
                 | `No ->
                     let global_state, local_state =
-                      S.apply ~constraint_constants ~is_start:`No handler acc
+                      S.apply ~constraint_constants ~is_start:`No
+                        S.{ perform }
+                        acc
                     in
                     (global_state, local_state)
                 | `Compute_in_circuit ->
@@ -2052,8 +2060,6 @@ module Make_str (A : Wire_types.Concrete) = struct
               in
               acc' )
         in
-        (* ZEKO NOTE: We do not accept failure. *)
-        with_label __LOC__ (fun () -> Boolean.Assert.is_true local.success) ;
         let local_state_ledger =
           (* The actual output ledger may differ from the one generated by
              transaction logic, because we handle failures differently between

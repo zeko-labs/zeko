@@ -23,7 +23,7 @@ struct
   let typ = F.typ
 
   module PathStep = struct
-    type t = { hash : F.t; is_left : Boolean.t } [@@deriving snarky]
+    type t = { hash_other : F.t; is_right : Boolean.t } [@@deriving snarky]
   end
 
   module Path =
@@ -35,10 +35,14 @@ struct
 
   let hash_entry = var_to_hash ~init:"indexed merkle tree entry hash" Entry.typ
 
+  (* TODO: consider different salt per level. *)
   let implied_root_raw (init : F.var) (path : Path.var) : F.var Checked.t =
-    Checked.List.fold path ~init ~f:(fun acc { hash; is_left } ->
-        let* left = if_ is_left ~typ:F.typ ~then_:hash ~else_:acc in
-        let* right = if_ is_left ~typ:F.typ ~then_:acc ~else_:hash in
+    Checked.List.fold path ~init ~f:(fun acc { hash_other; is_right } ->
+        let* left, right =
+          if_ is_right
+            ~typ:Typ.(F.typ * F.typ)
+            ~then_:(hash_other, acc) ~else_:(acc, hash_other)
+        in
         var_to_hash ~init:"indexed merkle tree" Typ.(F.typ * F.typ) (left, right) )
 
   let implied_root (entry : Entry.var) (path : Path.var) : F.var Checked.t =
@@ -54,17 +58,24 @@ struct
     let* root_intermediate' =
       implied_root_raw Field.(constant typ zero) path_y
     in
-    let* root_intermediate' =
+    let* root_intermediate =
       match check with
       | Some check ->
-          if_ check ~typ:F.typ ~then_:root_intermediate'
-            ~else_:root_intermediate
+          if_ check ~typ:F.typ ~then_:root_intermediate
+            ~else_:root_intermediate'
       | None ->
-          Checked.return root_intermediate'
+          Checked.return root_intermediate
     in
     let* () =
       assert_equal ~label:__LOC__ F.typ root_intermediate root_intermediate'
     in
     let* root_new = implied_root { key = y; next_key = z } path_y in
+    let* root_new =
+      match check with
+      | Some check ->
+          if_ check ~typ:F.typ ~then_:root_new ~else_:root
+      | None ->
+          Checked.return root_new
+    in
     Checked.return (`Before_adding_y root, `After_adding_y root_new)
 end
