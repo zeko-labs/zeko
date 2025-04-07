@@ -26,8 +26,7 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) provers =
   let connections = List.map provers ~f:(fun x -> (ref (try_connect x), x)) in
   let q = Throttle.create_with ~continue_on_error:true connections in
   (* Start pinging *)
-  let rec ping_loop () =
-    let%map () = after (Time.Span.of_sec ping_interval) in
+  let ping_loop () =
     List.iter connections ~f:(fun _ ->
         don't_wait_for
         @@ Throttle.enqueue q (fun (connection_ref, _) ->
@@ -35,7 +34,7 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) provers =
                | Error err ->
                    printf "Error pinging prover: %s\n%!"
                      (Error.to_string_hum err) ;
-                   ping_loop ()
+                   return ()
                | Ok (_, r, w) ->
                    let () =
                      Prover.Input.to_yojson Prover.Input.Ping
@@ -46,9 +45,9 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) provers =
                        ~wait_time:(Time.Span.of_sec ping_timeout)
                        r
                    in
-                   ping_loop () ) )
+                   return () ) )
   in
-  don't_wait_for @@ ping_loop () ;
+  every ~continue_on_error:true (Time.Span.of_sec ping_interval) ping_loop ;
   { q }
 
 let queue_size t = Throttle.num_jobs_waiting_to_start t.q
