@@ -14,7 +14,7 @@ let mktree (account_update, account_update_digest, calls) proof =
 let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 let time ~logger label (d : 'a Deferred.t) =
-  [%log info] "Starting %s\n%!" label ;
+  [%log info] "Starting %s%!" label ;
   let start = Time.now () in
   let%bind x = d in
   let stop = Time.now () in
@@ -148,6 +148,7 @@ end
 
 let prove ~logger : Input.t -> Output.t Deferred.t = function
   | Ping ->
+      let%bind () = time ~logger "Pong" Deferred.unit in
       return Output.Pong
   | Txn_snark (Signed_command input) ->
       let Compile_simple.[ prove; _; _; _; _ ] = Txn_rules.provers in

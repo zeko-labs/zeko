@@ -4,6 +4,7 @@
   zeko_prover
   ;; mina ;;
   mina_base
+  cli_lib
   signature_lib
   ;; opam ;;
   async
@@ -19,6 +20,7 @@
   compile_simple_fake
   ;; mina ;;
   mina_base
+  cli_lib
   signature_lib
   ;; opam ;;
   async

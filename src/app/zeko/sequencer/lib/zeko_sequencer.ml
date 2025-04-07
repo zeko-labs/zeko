@@ -40,7 +40,7 @@ module Sequencer = struct
         type t =
           { mutable previous_committed_ledger : Sparse_ledger.t option
           ; mutable previous_committed_ledger_hash : Ledger_hash.t option
-          ; mutable witnesses : Txn_snark_witness.t list
+          ; mutable witnesses : Txn_snark_witness.t array ref list
           ; mutable fee_excess : Currency.Fee.t
           }
         [@@deriving yojson]
@@ -150,7 +150,7 @@ module Sequencer = struct
         in
         printf "Received %d signatures from da layer\n%!"
           (List.length signatures) ;
-
+        assert (List.length signatures > 0) ;
         let old_inner_ledger =
           Option.value_exn state.previous_committed_ledger
             ~message:"No previous committed ledger"
@@ -537,11 +537,6 @@ module Sequencer = struct
     printf "Init root: %s\n%!" Ledger_hash.(to_decimal_string (get_root t)) ;
 
     (* apply diffs from DA layer *)
-    let%bind diffs =
-      Da_layer.Client.get_diffs_chain ~logger ~config:da_config
-        ~source_ledger_hash:`Genesis ~target_ledger_hash:committed_ledger_hash
-      |> Deferred.map ~f:Or_error.ok_exn
-    in
     let%bind () =
       Da_layer.Client.map_diffs ~logger ~config:da_config
         ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis

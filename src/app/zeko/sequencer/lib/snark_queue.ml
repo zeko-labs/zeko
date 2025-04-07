@@ -5,7 +5,7 @@ open Mina_base
 type t =
   { q : unit Throttle.t
   ; transfers_memory : Transfer.Transfers_memory.t
-  ; provers : Zeko_prover.Client.State.t
+  ; provers : Zeko_prover.Client.t
   }
 
 let create ~provers =

@@ -224,7 +224,7 @@ let sync t ~node_location ~ledger_hash =
     ~source_ledger_hash:`Genesis ~target_ledger_hash:ledger_hash
     ~f:(fun ~current_chunk ~chunks_length diff ->
       let progress = Float.of_int current_chunk /. Float.of_int chunks_length in
-      Zeko_util.progress_bar progress ;
+      printf "Progress: %.2f%%\n%!" (progress *. 100.0) ;
       let diff = Diff.drop_time diff in
       let ledger_openings = Client.get_openings ~diff ~ledger in
       match post_diff t ~diff ~ledger_openings with
