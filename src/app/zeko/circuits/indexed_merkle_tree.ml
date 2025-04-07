@@ -16,7 +16,7 @@ struct
     type t = { key : Key.t; next_key : Key.t } [@@deriving snarky]
   end
 
-  type t = F.t [@@deriving sexp]
+  type t = F.t
 
   type var = F.var
 

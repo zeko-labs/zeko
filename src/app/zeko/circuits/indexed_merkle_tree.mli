@@ -27,7 +27,7 @@ module Make (Inputs : sig
 end) : sig
   open Inputs
 
-  type t = F.t [@@deriving sexp]
+  type t = F.t
 
   type var
 

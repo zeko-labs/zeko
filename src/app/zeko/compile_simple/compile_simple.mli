@@ -21,8 +21,6 @@ module Verification_key : sig
 
   val to_pickles : t -> Pickles.Side_loaded.Verification_key.t
 
-  val var_of_pickles : Pickles.Side_loaded.Verification_key.Checked.t -> var
-
   val of_tag : 'tag_var tag -> t Promise.t
 
   val hash : t -> Snark_params.Tick.Field.t
