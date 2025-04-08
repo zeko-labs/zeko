@@ -23,8 +23,24 @@ module Z = struct
     ; access = Proof
     }
 
+  let either_permissions : Permissions.t =
+    { edit_state = Either
+    ; send = Either
+    ; receive = None
+    ; set_delegate = Either
+    ; set_permissions = Either
+    ; set_verification_key = (Either, Mina_numbers.Txn_version.current)
+    ; set_zkapp_uri = Either
+    ; edit_action_state = Either
+    ; set_token_symbol = Either
+    ; increment_nonce = Either
+    ; set_voting_for = Either
+    ; set_timing = Either
+    ; access = Either
+    }
+
   module Inner = struct
-    let initial_account () =
+    let initial_account ?(fake = false) () =
       let%bind vk =
         Compile_simple.Verification_key.of_tag Inner_rules.tag
         |> Promise.to_deferred
@@ -34,7 +50,9 @@ module Z = struct
           public_key = Zeko_constants.inner_public_key
         ; balance = Currency.Balance.max_int
         ; permissions =
-            { proof_permissions with access = Permissions.Auth_required.None }
+            { (if fake then either_permissions else proof_permissions) with
+              access = Permissions.Auth_required.None
+            }
         ; zkapp =
             Some
               { Zkapp_account.default with
@@ -49,7 +67,8 @@ module Z = struct
   end
 
   module Outer = struct
-    let unsafe_deploy ~pause_key ~ledger_hash ~sequencer ~da_key ~acc_set =
+    let unsafe_deploy ~pause_key ~ledger_hash ~sequencer ~da_key ~acc_set
+        ?(fake = false) () =
       let%bind vk =
         Compile_simple.Verification_key.of_tag Outer_rules.tag
         |> Promise.to_deferred
@@ -73,28 +92,29 @@ module Z = struct
             Set
               (Verification_key_wire.Stable.Latest.M.of_binable
                  (Compile_simple.Verification_key.to_pickles vk) )
-        ; permissions = Set proof_permissions
+        ; permissions =
+            Set (if fake then either_permissions else proof_permissions)
         }
 
-    let deploy_exn (l : L.t) =
+    let deploy_exn (l : L.t) ~fake =
       if
         not
           (Public_key.Compressed.equal Zeko_constants.inner_public_key
              (L.get_at_index_exn l 0).public_key )
       then failwith "zeko outer deploy: ledger invalid"
       else () ;
-      unsafe_deploy ~ledger_hash:(L.merkle_root l)
+      unsafe_deploy ~ledger_hash:(L.merkle_root l) ~fake
   end
 end
 
-let deploy_command_exn ~(signer : Keypair.t) ~(fee : Currency.Fee.t)
-    ~(nonce : Account.Nonce.t) ~(zkapp : Keypair.t) ~(initial_ledger : L.t)
-    ~account_set_hash
-    ~(constraint_constants : Genesis_constants.Constraint_constants.t)
-    ~pause_key ~sequencer ~da_key =
+let deploy_command_exn ?signature_kind ~(signer : Keypair.t)
+    ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~(zkapp : Keypair.t)
+    ~(initial_ledger : L.t) ~account_set_hash
+    ~(account_creation_fee : Currency.Fee.t) ~pause_key ~sequencer ~da_key
+    ?(fake = false) () =
   let%bind update =
     Z.Outer.deploy_exn ~pause_key ~sequencer ~da_key ~acc_set:account_set_hash
-      initial_ledger
+      ~fake initial_ledger ()
   in
   let zkapp_update =
     { body =
@@ -114,8 +134,8 @@ let deploy_command_exn ~(signer : Keypair.t) ~(fee : Currency.Fee.t)
           public_key = Public_key.compress signer.public_key
         ; balance_change =
             Currency.Amount.(
-              constraint_constants.account_creation_fee |> of_fee
-              |> Signed.of_unsigned |> Signed.negate)
+              account_creation_fee |> of_fee |> Signed.of_unsigned
+              |> Signed.negate)
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
@@ -133,45 +153,14 @@ let deploy_command_exn ~(signer : Keypair.t) ~(fee : Currency.Fee.t)
         ; authorization = Signature.dummy
         }
     ; account_updates =
-        Zkapp_command.Call_forest.accumulate_hashes'
+        Zkapp_command.Call_forest.accumulate_hashes
+          ~hash_account_update:
+            (Zkapp_command.Call_forest.Digest.Account_update.create
+               ?chain:signature_kind )
         @@ Zkapp_command.Call_forest.of_account_updates
              ~account_update_depth:(fun _ -> 0)
              [ zkapp_update; sender_update ]
     ; memo = Signed_command_memo.empty
     }
   in
-  let full_commitment =
-    Zkapp_command.Transaction_commitment.create_complete
-      (Zkapp_command.commitment command)
-      ~memo_hash:(Signed_command_memo.hash command.memo)
-      ~fee_payer_hash:
-        (Zkapp_command.Digest.Account_update.create
-           (Account_update.of_fee_payer command.fee_payer) )
-  in
-  let sender_signature =
-    Schnorr.Chunked.sign ~signature_kind:Mina_signature_kind.Testnet
-      signer.private_key
-      (Random_oracle.Input.Chunked.field full_commitment)
-  in
-  let zkapp_signature =
-    Schnorr.Chunked.sign ~signature_kind:Mina_signature_kind.Testnet
-      zkapp.private_key
-      (Random_oracle.Input.Chunked.field full_commitment)
-  in
-  return
-    { command with
-      fee_payer = { command.fee_payer with authorization = sender_signature }
-    ; account_updates =
-        Zkapp_command.Call_forest.accumulate_hashes
-          ~hash_account_update:(fun p ->
-            Zkapp_command.Digest.Account_update.create p )
-        @@ Zkapp_command.Call_forest.of_account_updates
-             ~account_update_depth:(fun _ -> 0)
-             [ { zkapp_update with
-                 authorization = Control.Signature zkapp_signature
-               }
-             ; { sender_update with
-                 authorization = Control.Signature sender_signature
-               }
-             ]
-    }
+  return (Utils.sign_zkapp_command ?signature_kind command [ zkapp; signer ])

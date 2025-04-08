@@ -5,6 +5,7 @@ open Signature_lib
 open Sequencer_lib
 open Zeko_sequencer
 open Sequencer
+open Zeko_types
 
 let constraint_constants = Zeko_constants.constraint_constants
 
@@ -111,14 +112,13 @@ module Sequencer_test_spec = struct
     (* Deploy *)
     run (fun () ->
         let sequencer_pk =
-          Public_key.compress signer.public_key
-          |> C.Zeko_util.Even_PC.create_exn
+          Public_key.compress signer.public_key |> Even_PC.create_exn
         in
         let%bind da_key =
           Da_layer.Client.Rpc.get_node_public_key ~logger
             ~node_location:(List.hd_exn da_config.nodes)
             ()
-          >>| Or_error.ok_exn >>| C.Zeko_util.Even_PC.create_exn
+          >>| Or_error.ok_exn >>| Even_PC.create_exn
         in
         ( print_endline
         @@ Public_key.(
@@ -129,9 +129,10 @@ module Sequencer_test_spec = struct
         let%bind command =
           Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
             ~fee:(Currency.Fee.of_mina_int_exn 1)
-            ~nonce ~initial_ledger:ephemeral_ledger ~constraint_constants
+            ~nonce ~initial_ledger:ephemeral_ledger
+            ~account_creation_fee:constraint_constants.account_creation_fee
             ~account_set_hash ~pause_key:sequencer_pk ~sequencer:sequencer_pk
-            ~da_key
+            ~da_key ()
         in
         let%bind _ = Gql_client.send_zkapp gql_uri command in
         let%bind _created = Gql_client.For_tests.create_new_block gql_uri in

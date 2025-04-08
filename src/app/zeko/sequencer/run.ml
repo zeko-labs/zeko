@@ -81,7 +81,7 @@ let () =
          ~doc:"string Directory to store the Ledger database"
      and imt_dir =
        flag "--imt-dir"
-         (optional_with_default "db" string)
+         (optional_with_default "imt_db" string)
          ~doc:"string Directory to store the Indexed Merkle Tree database"
      and network_id =
        flag "--network-id"

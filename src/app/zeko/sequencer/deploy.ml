@@ -5,7 +5,7 @@ open Mina_ledger
 open Signature_lib
 module L = Ledger
 
-let constraint_constants = Genesis_constants.Compiled.constraint_constants
+let constraint_constants = Zeko_constants.constraint_constants
 
 module Test_accounts = struct
   type t = { pk : string; balance : int64 } [@@deriving yojson]
@@ -36,7 +36,7 @@ module Test_accounts = struct
 end
 
 let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
-    () =
+    ~network ~account_creation_fee ~fake () =
   let logger = Logger.create () in
   let sender_keypair =
     Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
@@ -53,9 +53,9 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
           (Public_key.compress sender_keypair.public_key)
       in
       let%bind initial_inner_account =
-        Sequencer_lib.Deploy.Z.Inner.initial_account ()
+        Sequencer_lib.Deploy.Z.Inner.initial_account ~fake ()
       in
-      let ledger, imt_hash =
+      let%bind ledger, imt_hash =
         let ledger =
           L.create_ephemeral ~depth:constraint_constants.ledger_depth ()
         in
@@ -63,10 +63,11 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
           initial_inner_account ;
         match initial_state with
         | `None ->
-            ( ledger
-            , Indexed_merkle_tree.Db.(
-                create ~depth:constraint_constants.ledger_depth ()
-                |> merkle_root) )
+            return
+              ( ledger
+              , Indexed_merkle_tree.Db.(
+                  create ~depth:constraint_constants.ledger_depth ()
+                  |> merkle_root) )
         | `Test_accounts test_accounts_path ->
             let accounts =
               Test_accounts.parse_accounts_exn ~test_accounts_path
@@ -76,57 +77,83 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
                   Account_id.derive_token_id ~owner:aid )
             in
             let imt_hash =
-              let db =
+              let imt =
                 Indexed_merkle_tree.Db.create
                   ~depth:constraint_constants.ledger_depth ()
               in
               List.iter tids ~f:(fun tid ->
                   let _, _ =
-                    Indexed_merkle_tree.Db.get_or_create_entry_exn db tid
+                    Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
                   in
                   () ) ;
-              Indexed_merkle_tree.Db.merkle_root db
+              Indexed_merkle_tree.Db.merkle_root imt
             in
-
             let ledger =
               List.fold ~init:ledger accounts
                 ~f:(fun ledger (account_id, account) ->
                   L.create_new_account_exn ledger account_id account ;
                   ledger )
             in
-            (ledger, imt_hash)
+            return (ledger, imt_hash)
         | `Db_dir (db_dir, imt_dir) ->
-            let imt_hash =
-              Indexed_merkle_tree.Db.(
-                create ~directory_name:imt_dir
-                  ~depth:constraint_constants.ledger_depth ()
-                |> merkle_root)
-            in
-            let db =
+            let ledger =
               L.of_database
               @@ L.Db.create ~directory_name:db_dir
                    ~depth:constraint_constants.ledger_depth ()
             in
-            (db, imt_hash)
+            let%bind imt_hash =
+              match imt_dir with
+              | Some imt_dir ->
+                  return
+                    Indexed_merkle_tree.Db.(
+                      create ~directory_name:imt_dir
+                        ~depth:constraint_constants.ledger_depth ()
+                      |> merkle_root)
+              | None ->
+                  printf "Creating imt\n%!" ;
+                  let imt =
+                    Indexed_merkle_tree.Db.create
+                      ~depth:constraint_constants.ledger_depth ()
+                  in
+                  let%bind tids =
+                    L.to_list ledger
+                    >>| List.map ~f:Account.identifier
+                    >>| List.map ~f:(fun aid ->
+                            Account_id.derive_token_id ~owner:aid )
+                  in
+                  List.iter tids ~f:(fun tid ->
+                      let _, _ =
+                        Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
+                      in
+                      () ) ;
+                  let imt_hash = Indexed_merkle_tree.Db.merkle_root imt in
+                  printf "Imt hash: %s\n%!"
+                    (Ledger_hash.to_base58_check imt_hash) ;
+                  return imt_hash
+            in
+            return (ledger, imt_hash)
       in
       let%bind command =
-        Sequencer_lib.Deploy.deploy_command_exn ~signer:sender_keypair
-          ~zkapp:zkapp_keypair
+        Sequencer_lib.Deploy.deploy_command_exn ~signature_kind:network
+          ~signer:sender_keypair ~zkapp:zkapp_keypair
           ~fee:(Currency.Fee.of_mina_int_exn 1)
-          ~nonce ~constraint_constants ~initial_ledger:ledger
+          ~nonce ~account_creation_fee ~initial_ledger:ledger
           ~account_set_hash:imt_hash ~pause_key ~sequencer:sequencer_key ~da_key
+          ~fake ()
       in
 
       (* Post genesis batch *)
       let%bind () =
-        let config = Da_layer.Client.Config.{ nodes = da_nodes } in
-        match%bind
-          Da_layer.Client.distribute_genesis_diff ~logger ~config ~ledger
-        with
-        | Ok _ ->
-            return ()
-        | Error e ->
-            Error.raise e
+        if List.length da_nodes = 0 then return ()
+        else
+          let config = Da_layer.Client.Config.{ nodes = da_nodes } in
+          match%bind
+            Da_layer.Client.distribute_genesis_diff ~logger ~config ~ledger
+          with
+          | Ok _ ->
+              return ()
+          | Error e ->
+              Error.raise e
       in
 
       (* Deploy contract *)
@@ -161,7 +188,12 @@ let () =
           flag "--pause-key" (required string) ~doc:"string Pause key"
         and sequencer_key =
           flag "--sequencer-key" (required string) ~doc:"string Sequencer key"
-        and da_key = flag "--da-key" (required string) ~doc:"string Da key" in
+        and da_key = flag "--da-key" (required string) ~doc:"string Da key"
+        and network = flag "--network" (optional string) ~doc:"string Network"
+        and account_creation_fee =
+          flag "--account-creation-fee" (required string)
+            ~doc:"float Account creation fee in mina"
+        and fake = flag "--fake" no_arg ~doc:"bool Fake mode" in
         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
         let da_nodes =
           List.mapi da_nodes ~f:(fun i uri ->
@@ -174,11 +206,11 @@ let () =
           match (test_accounts_path, init_db_dir, init_imt_dir) with
           | Some _, Some _, _ | Some _, _, Some _ ->
               failwith "Cannot specify both test accounts and initial db"
-          | None, Some _, None | None, None, Some _ ->
-              failwith "Cannot specify only one of db and imt"
+          | None, None, Some _ ->
+              failwith "Cannot specify only imt"
           | Some test_accounts_path, None, None ->
               `Test_accounts test_accounts_path
-          | None, Some init_db_dir, Some init_imt_dir ->
+          | None, Some init_db_dir, init_imt_dir ->
               `Db_dir (init_db_dir, init_imt_dir)
           | None, None, None ->
               `None
@@ -186,14 +218,33 @@ let () =
 
         let string_to_even_pc x =
           Public_key.Compressed.of_base58_check_exn x
-          |> Zeko_circuits.Zeko_util.Even_PC.create_exn
+          |> Zeko_types.Even_PC.create |> Or_error.ok
         in
-        let pause_key = string_to_even_pc pause_key in
-        let sequencer_key = string_to_even_pc sequencer_key in
-        let da_key = string_to_even_pc da_key in
-
+        let da_key =
+          string_to_even_pc da_key |> Option.value_exn ~message:"DA key odd"
+        in
+        let pause_key =
+          string_to_even_pc pause_key
+          |> Option.value_exn ~message:"Pause key odd"
+        in
+        let sequencer_key =
+          string_to_even_pc sequencer_key
+          |> Option.value_exn ~message:"Sequencer key odd"
+        in
+        let network =
+          match network with
+          | None | Some "testnet" ->
+              Mina_signature_kind.Testnet
+          | Some "mainnet" ->
+              Mainnet
+          | Some network ->
+              Other_network network
+        in
+        let account_creation_fee =
+          Currency.Fee.of_mina_string_exn account_creation_fee
+        in
         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
         in
         run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key
-          ~da_key )
+          ~da_key ~network ~account_creation_fee ~fake )
