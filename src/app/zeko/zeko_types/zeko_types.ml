@@ -180,6 +180,18 @@ module Even_PC = struct
 
   type t = Zeko_util.Even_PC.t = { public_key : F.t } [@@deriving yojson]
 
+  let create (public_key : Signature_lib.Public_key.Compressed.t) =
+    if public_key.is_odd then Error (Error.of_string "Odd public key")
+    else Ok ({ public_key = public_key.x } : t)
+
+  let create_exn (public_key : Signature_lib.Public_key.Compressed.t) =
+    match create public_key with Ok pc -> pc | Error e -> Error.raise e
+
+  let rec generate_even_signer () =
+    let signer = Keypair.create () in
+    let compressed = Public_key.compress signer.public_key in
+    if compressed.is_odd then generate_even_signer () else signer
+
   let to_pc { public_key } : Public_key.Compressed.t =
     { x = public_key; is_odd = false }
 end

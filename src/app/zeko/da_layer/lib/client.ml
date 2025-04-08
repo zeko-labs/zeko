@@ -249,6 +249,7 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
         return (Ok (interval :: next_intervals))
   in
   let%bind.Deferred.Result intervals =
+    printf "Fetching intervals from da layer\n%!" ;
     get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
   in
   return

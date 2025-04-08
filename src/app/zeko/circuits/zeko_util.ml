@@ -417,10 +417,6 @@ let token_owner_id : Account_id.t option -> Token_id.t = function
 module Even_PC = struct
   type t = { public_key : F.t } [@@deriving snarky]
 
-  let create_exn (public_key : Signature_lib.Public_key.Compressed.t) =
-    if public_key.is_odd then failwith "Odd public key"
-    else ({ public_key = public_key.x } : t)
-
   let to_pc_var { public_key } : Signature_lib.Public_key.Compressed.var =
     { x = public_key; is_odd = Boolean.false_ }
 end

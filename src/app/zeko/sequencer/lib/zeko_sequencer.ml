@@ -4,7 +4,7 @@ open Async_kernel
 open Mina_base
 open Mina_ledger
 open Signature_lib
-open Zeko_prover.Zeko_types
+open Zeko_types
 module C = Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
@@ -527,12 +527,12 @@ module Sequencer = struct
 
   let bootstrap ~logger ({ config; _ } as t) da_config =
     print_endline "Bootstrapping" ;
-    let%bind committed_ledger_hash =
+    let%bind commited_ledger_hash =
       Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
         ~signer_pk:(Public_key.compress config.signer.public_key)
     in
-    printf "Fetched root: %s\n%!"
-      Ledger_hash.(to_decimal_string committed_ledger_hash) ;
+    printf "Fetched commited root: %s\n%!"
+      Ledger_hash.(to_decimal_string commited_ledger_hash) ;
 
     printf "Init root: %s\n%!" Ledger_hash.(to_decimal_string (get_root t)) ;
 
@@ -540,7 +540,7 @@ module Sequencer = struct
     let%bind () =
       Da_layer.Client.map_diffs ~logger ~config:da_config
         ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
-        ~target_ledger_hash:committed_ledger_hash
+        ~target_ledger_hash:commited_ledger_hash
         ~f:(fun ~current_chunk ~chunks_length diff ->
           assert (
             Ledger_hash.equal
@@ -593,7 +593,7 @@ module Sequencer = struct
     printf "IMT root: %s\n%!"
       (Ledger_hash.to_decimal_string @@ Indexed_merkle_tree.Db.merkle_root t.imt) ;
 
-    if not @@ Ledger_hash.equal current_root committed_ledger_hash then
+    if not @@ Ledger_hash.equal current_root commited_ledger_hash then
       print_endline "Ledger mismatch" ;
 
     let sparse_ledger =

@@ -3,7 +3,7 @@ open Async
 open Mina_base
 open Signature_lib
 open Mina_ledger
-open Zeko_prover.Zeko_types
+open Zeko_types
 module Field = Snark_params.Tick.Field
 
 module Commit_witness = struct

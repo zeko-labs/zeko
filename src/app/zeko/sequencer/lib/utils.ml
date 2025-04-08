@@ -65,14 +65,14 @@ let get_inner_deposits_state_exn l =
   in
   outer_action_state
 
-let sign_zkapp_command (command : Zkapp_command.t) (signers : Keypair.t list) :
-    Zkapp_command.t =
+let sign_zkapp_command ?signature_kind (command : Zkapp_command.t)
+    (signers : Keypair.t list) : Zkapp_command.t =
   let full_commitment =
     Zkapp_command.Transaction_commitment.create_complete
       (Zkapp_command.commitment command)
       ~memo_hash:(Signed_command_memo.hash command.memo)
       ~fee_payer_hash:
-        (Zkapp_command.Digest.Account_update.create
+        (Zkapp_command.Digest.Account_update.create ?chain:signature_kind
            (Account_update.of_fee_payer command.fee_payer) )
   in
   let sign_raw (pk : Public_key.Compressed.t) msg =
@@ -81,8 +81,7 @@ let sign_zkapp_command (command : Zkapp_command.t) (signers : Keypair.t list) :
           Public_key.Compressed.equal (Public_key.compress kp.public_key) pk )
     with
     | Some kp ->
-        Signature_lib.Schnorr.Chunked.sign
-          ~signature_kind:Mina_signature_kind.Testnet kp.private_key
+        Signature_lib.Schnorr.Chunked.sign ?signature_kind kp.private_key
           (Random_oracle.Input.Chunked.field msg)
     | None ->
         failwithf "key not found: %s\n"

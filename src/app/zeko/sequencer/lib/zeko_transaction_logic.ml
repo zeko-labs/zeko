@@ -2,7 +2,7 @@ open Core_kernel
 open Mina_base
 open Mina_ledger
 open Mina_transaction_logic
-open Zeko_prover.Zeko_types
+open Zeko_types
 module Field = Snark_params.Tick.Field
 
 module Inputs = struct
