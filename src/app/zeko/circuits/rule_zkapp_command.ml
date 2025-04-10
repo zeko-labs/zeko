@@ -45,14 +45,13 @@ open struct
           (* We always return true because failure doesn't happen here but in the commit rule. *)
           Boolean.true_
       | Check_protocol_state_precondition
-          ( (_protocol_state_predicate :
+          ( (protocol_state_predicate :
               Zkapp_precondition.Protocol_state.Checked.t )
           , _global_state ) ->
-          (* FIXME: Allow for global slot precondition, as it's the fee payer's valid while *)
-          (* Run.run_checked
-             Zkapp_precondition.Protocol_state.(
-               assert_equal ~label:__LOC__ typ protocol_state_predicate
-                 (constant typ accept)) ; *)
+          Run.run_checked
+            Zkapp_precondition.Protocol_state.(
+              assert_equal ~label:__LOC__ typ protocol_state_predicate
+                (constant typ accept)) ;
           Boolean.true_
       | Check_account_precondition
           ( ({ account_update; _ } : Zkapp_call_forest.Checked.account_update)

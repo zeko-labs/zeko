@@ -32,13 +32,6 @@ val var_to_app_state_fine :
   -> Field.Var.t Zkapp_basic.Set_or_keep.Checked.t
      Pickles_types.Vector.Vector_8.t
 
-val value_to_init_state : ('a, 'b) Typ.t -> 'b -> field Zkapp_state.V.t
-
-val value_to_app_state :
-  ('a, 'b) Typ.t -> 'b -> field Zkapp_basic.Set_or_keep.t Zkapp_state.V.t
-
-val value_of_state : ('var, 'value) Typ.t -> field Zkapp_state.V.t -> 'value
-
 val var_to_actions :
   ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t
 

@@ -10,26 +10,23 @@ module Ledger = Mina_ledger.Ledger
 let logger = Logger.create ()
 
 module Constants = struct
-  let constraint_constants = Zeko_constants.constraint_constants
+  let constraint_constants = Genesis_constants.Compiled.constraint_constants
+
+  let genesis_constants = Genesis_constants.Compiled.genesis_constants
 
   let consensus_constants =
-    let protocol_constants : Genesis_constants.Protocol.t =
-      { k = 1
-      ; slots_per_epoch = 1000
-      ; slots_per_sub_window = 1
-      ; grace_period_slots = 1
-      ; delta = 1
-      ; genesis_state_timestamp = Int64.one
-      }
-    in
-    Consensus.Constants.create ~constraint_constants ~protocol_constants
+    Consensus.Constants.create ~constraint_constants
+      ~protocol_constants:genesis_constants.protocol
 
-  let compile_time_genesis =
-    Mina_state.Genesis_protocol_state.t
-      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-      ~constraint_constants ~consensus_constants
-      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+  let state_body =
+    let compile_time_genesis =
+      Mina_state.Genesis_protocol_state.t
+        ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+        ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+        ~constraint_constants ~consensus_constants
+        ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+    in
+    Mina_state.Protocol_state.body compile_time_genesis.data
 end
 
 type t =
@@ -53,9 +50,7 @@ let apply_command t ~command =
     Ledger.apply_transaction_first_pass
       ~constraint_constants:Constants.constraint_constants
       ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-      ~txn_state_view:
-        (Mina_state.Protocol_state.Body.view
-           Constants.compile_time_genesis.data.body )
+      ~txn_state_view:(Mina_state.Protocol_state.Body.view Constants.state_body)
       l (Command command)
   in
   let%bind.Result txn_applied =
@@ -64,23 +59,9 @@ let apply_command t ~command =
 
   Ledger.Mask.Attached.commit l ;
 
-  let txn_hash =
-    Transaction_hash.to_base58_check @@ Transaction_hash.hash_command command
-  in
-  Hashtbl.add_exn t.commands ~key:txn_hash
-    ~data:
-      ( command
-      , Mina_transaction_logic.Transaction_applied.transaction_status
-          txn_applied ) ;
-
-  let status =
-    Mina_transaction_logic.Transaction_applied.transaction_status txn_applied
-  in
-  printf !"Applied command: %{sexp: Transaction_status.t\n}\n%!" status ;
-
   let () =
-    match (status, command) with
-    | Applied, Zkapp_command zkapp_command ->
+    match command with
+    | Zkapp_command zkapp_command ->
         Zkapp_command.(
           Call_forest.iteri (account_updates zkapp_command) ~f:(fun _ update ->
               let account =
@@ -108,9 +89,22 @@ let apply_command t ~command =
                          Account_update.Body.authorization_kind
                          @@ Account_update.body update
                      } ) ))
-    | _ ->
+    | Signed_command _ ->
         ()
   in
+
+  let txn_hash =
+    Transaction_hash.to_base58_check @@ Transaction_hash.hash_command command
+  in
+  Hashtbl.add_exn t.commands ~key:txn_hash
+    ~data:
+      ( command
+      , Mina_transaction_logic.Transaction_applied.transaction_status
+          txn_applied ) ;
+
+  print_endline @@ "applied zkapp command: " ^ txn_hash ^ " "
+  ^ Yojson.Safe.pretty_to_string @@ Transaction_status.to_yojson
+  @@ Mina_transaction_logic.Transaction_applied.transaction_status txn_applied ;
 
   Ok ()
 
@@ -173,10 +167,7 @@ let create_new_block t =
       | Ok () ->
           ()
       | Error err ->
-          printf "Failed to apply command %s: %s\n%!"
-            ( Transaction_hash.to_base58_check
-            @@ Transaction_hash.hash_command command )
-            (Error.to_string_hum err) ) ;
+          printf "Failed to apply command: %s\n%!" (Error.to_string_hum err) ) ;
   t.pool <- create_pool ()
 
 let create ~block_period ~db_dir () =

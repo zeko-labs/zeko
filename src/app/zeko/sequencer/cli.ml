@@ -1,8 +1,7 @@
 open Core
 open Async
-open Mina_base
 open Sequencer_lib
-open Signature_lib
+open Mina_base
 module Sequencer = Zeko_sequencer.Sequencer
 
 let printf = Core.printf
@@ -60,17 +59,5 @@ let committer =
       ~summary:"Script to manually send commiting transactions to L1"
       [ list; get ] )
 
-let generate_even_key =
-  ( "generate-even-key"
-  , Command.basic ~summary:"Generate a private key with an even public key"
-      (Command_unix.Param.return (fun () ->
-           let keypair = Zeko_types.Even_PC.generate_even_signer () in
-           printf "Private key: %s\n"
-             (Private_key.to_base58_check keypair.private_key) ;
-           printf "Public key: %s\n"
-             ( Public_key.compress keypair.public_key
-             |> Public_key.Compressed.to_base58_check ) ) ) )
-
 let () =
-  Command.group ~summary:"Sequencer CLI" [ committer; generate_even_key ]
-  |> Command_unix.run
+  Command.group ~summary:"Sequencer CLI" [ committer ] |> Command_unix.run

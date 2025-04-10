@@ -5,13 +5,7 @@ open Checked.Let_syntax
 
 type self_width = Pickles_types.Nat.N2.n
 
-module Proof = struct
-  include Pickles.Side_loaded.Proof
-
-  let to_pickles x = x
-
-  let of_pickles x = x
-end
+module Proof = Pickles.Side_loaded.Proof
 
 type 'var tag =
   | Tag : ('var, 'value, self_width, 'height) Pickles.Tag.t -> 'var tag
@@ -20,10 +14,6 @@ module Verification_key = struct
   include Pickles.Side_loaded.Verification_key
 
   type var = Checked.t
-
-  let of_pickles x = x
-
-  let to_pickles x = x
 
   let of_tag (Tag tag) = of_compiled_promise tag
 

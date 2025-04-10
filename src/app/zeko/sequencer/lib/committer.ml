@@ -3,7 +3,6 @@ open Async
 open Mina_base
 open Signature_lib
 open Mina_ledger
-open Zeko_types
 module Field = Snark_params.Tick.Field
 
 module Commit_witness = struct
@@ -12,8 +11,8 @@ module Commit_witness = struct
     ; new_inner_ledger : Sparse_ledger.t
     ; old_deposits_pointer : Frozen_ledger_hash.t
     ; processed_deposits_pointer : Frozen_ledger_hash.t
-    ; signatures : (Public_key.Compressed.t * Signature.t) list
-    ; txn_snark : Txn_snark.serializable
+    ; signatures : Signature.t list
+    ; last_snark : Zkapps_rollup.t
     }
   [@@deriving yojson]
 end
@@ -112,27 +111,27 @@ let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
      ; old_deposits_pointer
      ; processed_deposits_pointer
      ; signatures
-     ; txn_snark
+     ; last_snark
      } :
       Commit_witness.t ) =
-  let%bind new_actions =
-    Gql_client.fetch_actions archive_uri ~from_action_state:old_deposits_pointer
+  (* FIXME: pass this check into circuit *)
+  assert (List.length signatures <> 0) ;
+  let%bind new_deposits =
+    Gql_client.fetch_transfers archive_uri
+      ~from_action_state:old_deposits_pointer
       ~end_action_state:processed_deposits_pointer zkapp_pk
-    >>| List.map ~f:fst >>| List.rev
-    >>| List.map ~f:Account_update.Actions.hash
+    |> Deferred.map ~f:(List.map ~f:fst)
   in
-  let%bind unprocessed_actions =
-    Gql_client.fetch_actions archive_uri
+  let%bind unprocessed_deposits =
+    Gql_client.fetch_transfers archive_uri
       ~from_action_state:processed_deposits_pointer zkapp_pk
-    >>| List.map ~f:fst >>| List.rev
-    >>| List.map ~f:Account_update.Actions.hash
+    |> Deferred.map ~f:(List.map ~f:fst)
   in
   let%bind account_update =
-    let da_key, da_signature = List.hd_exn signatures in
-    Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
-      ~public_key:zkapp_pk ~new_actions ~unprocessed_actions ~old_inner_ledger
-      ~new_inner_ledger ~da_signature
-      ~da_key:(Even_PC.create_exn da_key)
+    Zeko_prover.Client.outer_step ~proving_timeout:30. provers ~last:last_snark
+      ~outer_public_key:zkapp_pk ~new_deposits:(List.rev new_deposits)
+      ~unprocessed_deposits:(List.rev unprocessed_deposits)
+      ~old_inner_ledger ~new_inner_ledger
   in
   let command : Zkapp_command.t =
     { fee_payer =

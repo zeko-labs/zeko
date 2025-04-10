@@ -33,8 +33,7 @@ struct
         let length = height
       end)
 
-  let hash_entry =
-    var_to_hash ~init:Zeko_constants.indexed_merkle_tree_salt Entry.typ
+  let hash_entry = var_to_hash ~init:"indexed merkle tree entry hash" Entry.typ
 
   (* TODO: consider different salt per level. *)
   let implied_root_raw (init : F.var) (path : Path.var) : F.var Checked.t =
@@ -71,12 +70,12 @@ struct
       assert_equal ~label:__LOC__ F.typ root_intermediate root_intermediate'
     in
     let* root_new = implied_root { key = y; next_key = z } path_y in
-    let* root =
+    let* root_new =
       match check with
       | Some check ->
-          if_ check ~typ:F.typ ~then_:root ~else_:root_new
+          if_ check ~typ:F.typ ~then_:root_new ~else_:root
       | None ->
-          Checked.return root
+          Checked.return root_new
     in
     Checked.return (`Before_adding_y root, `After_adding_y root_new)
 end

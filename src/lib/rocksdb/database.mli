@@ -53,8 +53,6 @@ val fold_until :
   -> finish:('a -> 'b)
   -> 'b
 
-val prev_key : t -> key:Bigstring.t -> Bigstring.t
-
 module Batch : sig
   type t = Rocks.WriteBatch.t
 

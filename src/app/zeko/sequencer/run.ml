@@ -7,8 +7,8 @@ module Graphql_cohttp_async =
 module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-    ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~network_id
-    ~deposit_delay_blocks ~provers () =
+    ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks
+    ~provers () =
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
@@ -17,9 +17,9 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
         Sequencer.create ~logger:(Logger.create ()) ~zkapp_pk ~max_pool_size
-          ~da_config ~da_quorum ~db_dir:(Some db_dir) ~imt_dir:(Some imt_dir)
-          ~l1_uri ~archive_uri ~commitment_period_sec:commitment_period
-          ~network_id ~deposit_delay_blocks
+          ~da_config ~da_quorum ~db_dir:(Some db_dir) ~l1_uri ~archive_uri
+          ~commitment_period_sec:commitment_period ~network_id
+          ~deposit_delay_blocks
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
@@ -78,11 +78,7 @@ let () =
      and db_dir =
        flag "--db-dir"
          (optional_with_default "db" string)
-         ~doc:"string Directory to store the Ledger database"
-     and imt_dir =
-       flag "--imt-dir"
-         (optional_with_default "imt_db" string)
-         ~doc:"string Directory to store the Indexed Merkle Tree database"
+         ~doc:"string Directory to store the database"
      and network_id =
        flag "--network-id"
          (optional_with_default "testnet" string)
@@ -103,6 +99,6 @@ let () =
      in
      let provers = List.map provers ~f:Host_and_port.of_string in
      run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-       ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~network_id
-       ~deposit_delay_blocks ~provers )
+       ~db_dir ~l1_uri ~archive_uri ~signer ~network_id ~deposit_delay_blocks
+       ~provers )
   |> Command_unix.run
