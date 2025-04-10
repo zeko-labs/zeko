@@ -363,11 +363,13 @@ let
         buildPhase = ''
           dune build --display=short \
             src/app/zeko/sequencer/run.exe \
+            src/app/zeko/sequencer/run_fake.exe \
             src/app/zeko/sequencer/deploy.exe \
             src/app/zeko/sequencer/cli.exe \
             src/app/zeko/sequencer/archive_relay/run.exe \
             src/app/zeko/sequencer/tests/testing_ledger/run.exe \
             src/app/zeko/sequencer/prover/cli.exe \
+            src/app/zeko/sequencer/prover/cli_fake.exe \
             src/app/zeko/da_layer/cli.exe \
             src/app/logproc/logproc.exe \
             src/app/cli/src/mina.exe \
@@ -427,10 +429,12 @@ let
           cp src/app/missing_blocks_auditor/missing_blocks_auditor.exe $archive/bin/mina-missing-blocks-auditor
           cp src/app/replayer/replayer.exe $archive/bin/mina-replayer
           cp src/app/zeko/sequencer/run.exe $zeko/bin/zeko-run
+          cp src/app/zeko/sequencer/run_fake.exe $zeko/bin/zeko-run-fake
           cp src/app/zeko/sequencer/deploy.exe $zeko/bin/zeko-deploy
           cp src/app/zeko/sequencer/cli.exe $zeko/bin/zeko-cli
           cp src/app/zeko/sequencer/tests/testing_ledger/run.exe $localnet/bin/mina-localnet
           cp src/app/zeko/sequencer/prover/cli.exe $zeko/bin/zeko-prover
+          cp src/app/zeko/sequencer/prover/cli_fake.exe $zeko/bin/zeko-prover-fake
           cp src/app/zeko/da_layer/cli.exe $zeko_da/bin/zeko-da
           cp src/app/zeko/sequencer/archive_relay/run.exe $zeko_archive_relay/bin/zeko-archive-relay
           cp -R _doc/_html $out/share/doc/html
