@@ -1,3 +1,4 @@
+open Core_kernel
 open Mina_base
 open Signature_lib
 module Field = Snark_params.Tick.Run.Field
@@ -32,3 +33,11 @@ let indexed_merkle_tree_salt = "indexed merkle tree entry hash"
 let indexed_merkle_tree_merge_salt = "indexed merkle tree"
 
 let da_layer_check_salt = "zeko da layer check"
+
+module Max_excess_actions = struct
+  let inner_sync = Int.pow 2 10
+
+  let commit_inner = Int.pow 2 10
+
+  let commit_outer = Int.pow 2 10
+end

@@ -501,8 +501,6 @@ module Ase = struct
       -> Ase_state.t
       -> field list
       -> t
-
-    val get_iterations : int
   end
 
   module Make_serializable_ase (Inputs : sig

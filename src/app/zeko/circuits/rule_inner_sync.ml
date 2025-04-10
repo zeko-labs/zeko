@@ -1,4 +1,3 @@
-open Core_kernel
 open Rollup_state
 open Zeko_util
 open Snark_params.Tick
@@ -6,7 +5,7 @@ open Snark_params.Tick
 module Ase_inst = Ase.With_length.Make (struct
   module Action_state = Outer_action_state
 
-  let get_iterations = Int.pow 2 10
+  let get_iterations = Zeko_constants.Max_excess_actions.inner_sync
 end)
 
 module Witness = struct

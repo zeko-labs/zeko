@@ -144,7 +144,7 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
   let%bind ase =
     let%map proof, target, excess =
       ase t ~source:ase_source ~elems:ase_elms
-        ~max_excess:Inner_sync.Ase_inst.get_iterations ase_with_length
+        ~max_excess:Zeko_constants.Max_excess_actions.inner_sync ase_with_length
     in
     Inner_sync.Ase_inst.
       { proof; proof_target = target; init = ase_source; excess }
@@ -197,7 +197,8 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
     in
     let%map proof, target, excess =
       ase t ~source:action_state ~elems:new_actions
-        ~max_excess:Outer_commit.Ase_inner_inst.get_iterations ase_with_length
+        ~max_excess:Zeko_constants.Max_excess_actions.commit_inner
+        ase_with_length
     in
     Outer_commit.Ase_inner_inst.
       { proof; proof_target = target; init = action_state; excess }
@@ -212,7 +213,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
     in
     let%map proof, target, excess =
       ase t ~source:action_state ~elems:unprocessed_actions
-        ~max_excess:Outer_commit.Ase_outer_inst.get_iterations
+        ~max_excess:Zeko_constants.Max_excess_actions.commit_outer
         ase_without_length
     in
     Outer_commit.Ase_outer_inst.
