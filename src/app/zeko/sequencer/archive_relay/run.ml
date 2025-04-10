@@ -6,29 +6,10 @@ open Mina_ledger
 open Mina_transaction_logic
 open Cli_lib
 
-let constraint_constants = Zeko_constants.constraint_constants
+let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 (* FIXME: Don't use Mina_compile_config.For_tests.t *)
 let compile_config = Mina_compile_config.For_unit_tests.t
-
-let compile_time_genesis =
-  let consensus_constants =
-    let protocol_constants : Genesis_constants.Protocol.t =
-      { k = 1
-      ; slots_per_epoch = 1000
-      ; slots_per_sub_window = 1
-      ; grace_period_slots = 1
-      ; delta = 1
-      ; genesis_state_timestamp = Int64.one
-      }
-    in
-    Consensus.Constants.create ~constraint_constants ~protocol_constants
-  in
-  Mina_state.Genesis_protocol_state.t
-    ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-    ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-    ~constraint_constants ~consensus_constants
-    ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
 
 let rec rmrf path =
   match Sys.is_directory path with
@@ -38,6 +19,21 @@ let rec rmrf path =
       Sys.rmdir path
   | false ->
       Sys.remove path
+
+let compile_time_genesis_state =
+  let genesis_constants = Genesis_constants.Compiled.genesis_constants in
+  let consensus_constants =
+    Consensus.Constants.create ~constraint_constants
+      ~protocol_constants:genesis_constants.protocol
+  in
+  let compile_time_genesis =
+    Mina_state.Genesis_protocol_state.t
+      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+      ~constraint_constants ~consensus_constants
+      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+  in
+  compile_time_genesis.data
 
 let time ~logger label (d : 'a Deferred.t) =
   let start = Time.now () in
@@ -65,7 +61,7 @@ module State = struct
     | Some state ->
         state
     | None ->
-        { protocol_state = compile_time_genesis.data }
+        { protocol_state = compile_time_genesis_state }
 
   let set_protocol_state t kvdb protocol_state =
     t.protocol_state <- protocol_state ;
@@ -130,7 +126,7 @@ let sync_archive (t : t) ~hash =
                     ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
                     ~txn_state_view:
                       Mina_state.Protocol_state.(
-                        Body.view @@ body compile_time_genesis.data)
+                        Body.view @@ body compile_time_genesis_state)
                     ledger (Command command) )
                  (Ledger.apply_transaction_second_pass ledger)
           in
@@ -142,7 +138,7 @@ let sync_archive (t : t) ~hash =
               ~new_state_hash:(Ledger.merkle_root ledger)
               ~protocol_state:t.state.protocol_state ~ledger
               ~txn:(Transaction_applied.transaction_with_status txn_applied)
-              ~dummy_fee_payer:Zeko_constants.inner_public_key
+              ~dummy_fee_payer:Zkapps_rollup.inner_public_key
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
           State.set_protocol_state t.state (Ledger.Db.zeko_kvdb t.db)

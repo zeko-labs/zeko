@@ -1523,35 +1523,26 @@ module Mutations = struct
               | None ->
                   return (Error "Signature verification failed") )
         in
-        let hash =
-          Transaction_hash.hash_command
-            (Signed_command (Signed_command.forget_check command))
-        in
-        let%bind.Deferred.Result () =
+        let%bind.Deferred.Result status =
           match
             State.add_command_to_pool t ~command:(Signed_command command)
           with
           | `Applied ->
-              printf "Applied with hash %s\n%!"
-                (Transaction_hash.to_base58_check hash) ;
-              return (Ok ())
+              return (Ok Types.Command_status.Applied)
           | `Enqueued ->
-              printf "Enqueued with hash %s\n%!"
-                (Transaction_hash.to_base58_check hash) ;
-              return (Ok ())
+              return (Ok Types.Command_status.Enqueued)
           | `Failed err ->
-              printf "Failed with hash %s, error: %s\n%!"
-                (Transaction_hash.to_base58_check hash)
-                (Error.to_string_hum err) ;
               return (Error (Error.to_string_hum err))
         in
+        let command = Signed_command.forget_check command in
         let cmd =
-          let command = Signed_command.forget_check command in
           { Types.User_command.With_status.data = command; status = Applied }
         in
         let cmd_with_hash =
           Types.User_command.With_status.map cmd ~f:(fun cmd ->
-              { With_hash.data = cmd; hash } )
+              { With_hash.data = cmd
+              ; hash = Transaction_hash.hash_command (Signed_command cmd)
+              } )
         in
         Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash) )
 

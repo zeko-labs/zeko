@@ -3,14 +3,14 @@
  (inline_tests)
  (libraries
   kvdb_base
-  zeko_constants
+  zkapps_rollup
   ;; mina ;;
   mina_base
+  mina_base.import
   mina_ledger
   signature_lib
-  snark_params
-  mina_compile_config
   daemon_rpcs
+  cli_lib
   ;; opam libraries ;;
   core
   core_kernel

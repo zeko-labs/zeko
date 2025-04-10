@@ -8,11 +8,11 @@ module Make (Context : sig
 
   val created_new_tree : t -> unit
 end) (Merge : sig
-  type t
+  type t [@@deriving yojson]
 
   val process : Context.t -> t -> t -> t Deferred.t
 end) (Base : sig
-  type t
+  type t [@@deriving yojson]
 
   val process : Context.t -> t -> Merge.t Deferred.t
 end) (Commit : sig
@@ -22,16 +22,17 @@ end) (Commit : sig
 end) =
 struct
   module Available_job = struct
-    type t = Base of Base.t | Merge of Merge.t * Merge.t
+    type t = Base of Base.t | Merge of Merge.t * Merge.t [@@deriving yojson]
   end
 
   (* Finished job will be always of type `Merge.t` *)
   module Finished_job = struct
-    type t = Merge.t
+    type t = Merge.t [@@deriving yojson]
   end
 
   module Job_status = struct
     type t = Todo of Available_job.t | Done of Finished_job.t
+    [@@deriving yojson]
   end
 
   module With_id = struct
@@ -55,6 +56,7 @@ struct
       ; ready_to_commit : unit Ivar.t
             (** All jobs are done and ready to commit *)
       }
+    [@@deriving yojson]
 
     let create () =
       { jobs = []
@@ -167,7 +169,9 @@ struct
     let is_empty t = List.is_empty t.jobs
   end
 
-  type t = { mutable trees : Tree.t list }
+  type t = { mutable trees : Tree.t list } [@@deriving yojson]
+
+  let pp t = Core.printf "%s\n%!" (Yojson.Safe.pretty_to_string @@ to_yojson t)
 
   let create () = { trees = [] }
 
