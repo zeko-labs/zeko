@@ -10,7 +10,7 @@ let push_events_checked state actions =
       Zkapp_account.Actions.push_events_checked state actions )
 
 module type Action_state_type = sig
-  include SnarkType
+  type t = F.t [@@deriving snarky]
 
   val empty : t
 
@@ -27,7 +27,7 @@ module type Action_state_type = sig
 
     type without_length_var := var
 
-    include SnarkType
+    type t = { state : F.t; length : Checked32.t } [@@deriving snarky]
 
     val empty : t
 
@@ -141,6 +141,8 @@ module Inner_state = struct
         Outer_action_state.With_length.unsafe_value_of_fields ~state ~length
     }
 
+  let value_to_init_state t = Zeko_util.value_to_init_state typ t
+
   type fine = { outer_action_state : Outer_action_state.With_length.fine }
 
   (* NB! This will warn you if add a field to `t` without fixing it here.
@@ -234,6 +236,10 @@ module Outer_state = struct
     ; Whole (Even_PC.typ, da_key)
     ; Whole (Account_set.typ, acc_set)
     ]
+
+  let value_to_app_state t = Zeko_util.value_to_app_state typ t
+
+  let value_of_app_state state = Zeko_util.value_of_state typ state
 end
 
 module Outer_action = struct

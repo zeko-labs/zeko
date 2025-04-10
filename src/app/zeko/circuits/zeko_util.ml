@@ -74,6 +74,29 @@ let var_to_state_generic_fine :
       assert (List.length r' = 8) ;
       Zkapp_state.V.of_list_exn r'
 
+let value_to_state (some : field -> 'option) (none : 'option)
+    (typ : ('var, 'value) Typ.t) (x : 'value) : 'option Zkapp_state.V.t =
+  let (Typ typ) = typ in
+  let fields, _aux = typ.value_to_fields x in
+  assert (Array.length fields <= 8) ;
+  let missing = 8 - Array.length fields in
+  Zkapp_state.V.of_list_exn
+  @@ List.append
+       (List.map ~f:(fun f -> some f) @@ Array.to_list fields)
+       (List.init missing ~f:(fun _ -> none))
+
+let value_to_init_state typ x = value_to_state (fun f -> f) Field.zero typ x
+
+let value_to_app_state typ x =
+  value_to_state (fun f -> Set_or_keep.Set f) Set_or_keep.Keep typ x
+
+let value_of_state (typ : ('var, 'value) Typ.t) (x : field Zkapp_state.V.t) :
+    'value =
+  let (Typ typ) = typ in
+  typ.value_of_fields
+    ( Zkapp_state.V.to_list x |> Array.of_list
+    , typ.constraint_system_auxiliary () )
+
 let var_to_precondition_fine =
   var_to_state_generic_fine
     ( module struct
@@ -96,7 +119,7 @@ let var_to_app_state_fine =
 
 (** To be used with deriving snarky, a simple field *)
 module F = struct
-  type t = field
+  type t = Field.t
 
   type var = Field.Var.t
 

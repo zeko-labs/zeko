@@ -7,7 +7,6 @@ open Mina_base
 open Mina_transaction
 open Sexplib.Std
 open Snark_params
-open Key_value_database.Monad.Ident.Let_syntax
 
 let ok_exn x =
   let open Ppx_deriving_yojson_runtime.Result in

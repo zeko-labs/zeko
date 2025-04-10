@@ -27,7 +27,7 @@ module Make (Inputs : sig
 end) : sig
   open Inputs
 
-  type t
+  type t = F.t
 
   type var
 

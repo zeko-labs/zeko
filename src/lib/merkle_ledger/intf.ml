@@ -201,6 +201,8 @@ module type Key_value_database = sig
           -> ('a, 'b) Continue_or_stop.t )
     -> finish:('a -> 'b)
     -> 'b
+
+  val prev_key : t -> key:Bigstring.t -> Bigstring.t
 end
 
 module type Storage_locations = sig

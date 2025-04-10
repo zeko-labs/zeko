@@ -5,7 +5,7 @@ open Signature_lib
 module Rpc_def = Rpc
 open Async
 
-let constraint_constants = Genesis_constants.Compiled.constraint_constants
+let constraint_constants = Zeko_constants.constraint_constants
 
 type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
 
@@ -89,7 +89,10 @@ let post_diff t ~ledger_openings ~diff =
 
   (* 5 *)
   let message =
-    Random_oracle.Input.Chunked.field_elements [| target_ledger_hash |]
+    Random_oracle.Input.Chunked.field
+    @@ Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         [| target_ledger_hash |]
   in
   let signature = Schnorr.Chunked.sign t.signer.private_key message in
 
@@ -143,7 +146,7 @@ let post_diff t ~ledger_openings ~diff =
                   let account_id =
                     let aid = Account_update.account_id account_update in
                     if Public_key.Compressed.(Account_id.public_key aid = empty)
-                    then Zkapps_rollup.inner_account_id
+                    then Zeko_constants.inner_account_id
                     else aid
                   in
                   let%bind.Result old_receipt_chain_hash =
@@ -221,7 +224,7 @@ let sync t ~node_location ~ledger_hash =
     ~source_ledger_hash:`Genesis ~target_ledger_hash:ledger_hash
     ~f:(fun ~current_chunk ~chunks_length diff ->
       let progress = Float.of_int current_chunk /. Float.of_int chunks_length in
-      Zeko_util.progress_bar progress ;
+      printf "Progress: %.2f%%\n%!" (progress *. 100.0) ;
       let diff = Diff.drop_time diff in
       let ledger_openings = Client.get_openings ~diff ~ledger in
       match post_diff t ~diff ~ledger_openings with
@@ -237,7 +240,12 @@ let sync t ~node_location ~ledger_hash =
 
 let get_signature t ~ledger_hash =
   let%bind.Option _diff = Db.get_diff t.db ~ledger_hash in
-  let message = Random_oracle.Input.Chunked.field_elements [| ledger_hash |] in
+  let message =
+    Random_oracle.Input.Chunked.field
+    @@ Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         [| ledger_hash |]
+  in
   Some (Schnorr.Chunked.sign t.signer.private_key message)
 
 let get_ledger_hashes_chain t
@@ -276,7 +284,8 @@ let implementations t =
           (fun () { ledger_openings; diff } ->
             match post_diff t ~ledger_openings ~diff with
             | Ok signature ->
-                return signature
+                let pk = Public_key.compress t.signer.public_key in
+                return (pk, signature)
             | Error e ->
                 let logger = t.logger in
                 [%log warn] "Error posting diff: $error"
@@ -309,8 +318,10 @@ let implementations t =
         Rpc.Rpc.implement Rpc_def.Get_signer_public_key.V1.t (fun () () ->
             return @@ Public_key.compress @@ t.signer.public_key )
       ; (* Get_signature *)
-        Rpc.Rpc.implement Rpc_def.Get_signature.V1.t (fun () query ->
-            return @@ get_signature t ~ledger_hash:query )
+        Async.Rpc.Rpc.implement Rpc_def.Get_signature.V1.t (fun () query ->
+            let pk = Public_key.compress t.signer.public_key in
+            let signature = get_signature t ~ledger_hash:query in
+            return (Option.map signature ~f:(fun s -> (pk, s))) )
       ; (* Get_ledger_hashes_chain *)
         Rpc.Rpc.implement Rpc_def.Get_ledger_hashes_chain.V1.t (fun () query ->
             get_ledger_hashes_chain t query )

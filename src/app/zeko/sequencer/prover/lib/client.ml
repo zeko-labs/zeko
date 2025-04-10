@@ -1,5 +1,9 @@
 open Async
 open Core_kernel
+open Mina_ledger
+open Zeko_circuits
+open Zeko_types
+module Field = Snark_params.Tick.Field
 
 let try_connect where_to_connect =
   match%bind try_with (fun () -> Tcp.connect where_to_connect) with
@@ -22,34 +26,35 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) provers =
   let connections = List.map provers ~f:(fun x -> (ref (try_connect x), x)) in
   let q = Throttle.create_with ~continue_on_error:true connections in
   (* Start pinging *)
-  let rec ping_loop () =
-    let%map () = after (Time.Span.of_sec ping_interval) in
+  let ping_loop () =
     List.iter connections ~f:(fun _ ->
         don't_wait_for
         @@ Throttle.enqueue q (fun (connection_ref, _) ->
                match%bind !connection_ref with
-               | Error _ ->
+               | Error err ->
+                   printf "Error pinging prover: %s\n%!"
+                     (Error.to_string_hum err) ;
                    return ()
                | Ok (_, r, w) ->
                    let () =
                      Prover.Input.to_yojson Prover.Input.Ping
                      |> Yojson.Safe.to_string |> Writer.write_line w
                    in
-                   let%map _result =
+                   let%bind _result =
                      Reader.really_read_line
                        ~wait_time:(Time.Span.of_sec ping_timeout)
                        r
                    in
-                   () ) )
+                   return () ) )
   in
-  don't_wait_for @@ ping_loop () ;
+  every ~continue_on_error:true (Time.Span.of_sec ping_interval) ping_loop ;
   { q }
 
 let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
 (* Get the reference of next available prover.
    If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
-let rec send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
+let send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
     (input : Prover.Input.t) : Prover.Output.t Deferred.t =
   Throttle.enqueue t.q (fun (connection_ref, where_to_connect) ->
       let rec go ~attempts =
@@ -94,88 +99,155 @@ let rec send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
       in
       go ~attempts )
 
-let wrapper_wrap ?proving_timeout t ~txn_snark =
-  send ?proving_timeout t (Prover.Input.Wrapper_wrap txn_snark)
+let transaction_snark ?proving_timeout t input =
+  send ?proving_timeout t (Prover.Input.Txn_snark input)
   >>| function
-  | Prover.Output.Wrapper_wrap x -> x | _ -> failwith "Unexpected response"
-
-let wrapper_merge ?proving_timeout t a b =
-  send ?proving_timeout t (Prover.Input.Wrapper_merge (a, b))
-  >>| function
-  | Prover.Output.Wrapper_merge x -> x | _ -> failwith "Unexpected response"
-
-let transaction_snark_of_signed_command ?proving_timeout t ~statement
-    ~user_command_in_block ~sparse_ledger =
-  send ?proving_timeout t
-    (Prover.Input.Transaction_snark_of_signed_command
-       (statement, user_command_in_block, sparse_ledger) )
-  >>| function
-  | Prover.Output.Transaction_snark_of_signed_command x ->
-      x
+  | Prover.Output.Txn_snark snark ->
+      snark
   | _ ->
-      failwith "Unexpected response"
+      failwith "Unexpected response from prover"
 
-let transaction_snark_of_zkapp_command_segment ?proving_timeout t ~statement
-    ~witness ~spec =
-  send ?proving_timeout t
-    (Prover.Input.Transaction_snark_of_zkapp_command_segment
-       (statement, witness, spec) )
+let ase_with_length ?proving_timeout t input =
+  send ?proving_timeout t (Prover.Input.Ase (With_length input))
   >>| function
-  | Prover.Output.Transaction_snark_of_zkapp_command_segment x ->
-      x
+  | Prover.Output.Ase (With_length ase) ->
+      ase
   | _ ->
-      failwith "Unexpected response"
+      failwith "Unexpected response from prover"
 
-let transaction_snark_merge ?proving_timeout t a b =
-  send ?proving_timeout t (Prover.Input.Transaction_snark_merge (a, b))
+let ase_without_length ?proving_timeout t input =
+  send ?proving_timeout t (Prover.Input.Ase (Without_length input))
   >>| function
-  | Prover.Output.Transaction_snark_merge x ->
-      x
+  | Prover.Output.Ase (Without_length ase) ->
+      ase
   | _ ->
-      failwith "Unexpected response"
+      failwith "Unexpected response from prover"
 
-let submit_deposit ?proving_timeout t ~outer_pk ~deposit =
-  send ?proving_timeout t (Prover.Input.Submit_deposit (outer_pk, deposit))
-  >>| function
-  | Prover.Output.Submit_deposit x -> x | _ -> failwith "Unexpected response"
+let ase (type target) t ~source ~elems ~max_excess
+    (prover : _ -> _ -> (Compile_simple.Proof.t option * target) Deferred.t) =
+  let elems_to_prove, excess =
+    let i = ref 0 in
+    let l = List.length elems in
+    List.split_while elems ~f:(fun _ ->
+        let r = !i < l - max_excess in
+        i := !i + 1 ;
+        r )
+  in
+  match elems_to_prove with
+  | [] ->
+      return (None, source, excess)
+  | elems_to_prove ->
+      let%bind proof, target = prover t (source, elems_to_prove) in
+      return (proof, target, excess)
 
-let submit_withdrawal ?proving_timeout t ~withdrawal =
-  send ?proving_timeout t (Prover.Input.Submit_withdrawal withdrawal)
+let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
+  let%bind ase =
+    let%map proof, target, excess =
+      ase t ~source:ase_source ~elems:ase_elms
+        ~max_excess:Inner_sync.Ase_inst.get_iterations ase_with_length
+    in
+    Inner_sync.Ase_inst.
+      { proof; proof_target = target; init = ase_source; excess }
+  in
+  send ?proving_timeout t (Prover.Input.Inner_sync { public_key; ase })
   >>| function
-  | Prover.Output.Submit_withdrawal x -> x | _ -> failwith "Unexpected response"
-
-let process_deposit ?proving_timeout t ~is_new ~pointer ~before ~after ~deposit
-    =
-  send ?proving_timeout t
-    (Prover.Input.Process_deposit (is_new, pointer, before, after, deposit))
-  >>| function
-  | Prover.Output.Process_deposit x -> x | _ -> failwith "Unexpected response"
-
-let process_withdrawal ?proving_timeout t ~outer_pk ~is_new ~pointer ~before
-    ~after ~withdrawal =
-  send ?proving_timeout t
-    (Prover.Input.Process_withdrawal
-       (outer_pk, is_new, pointer, before, after, withdrawal) )
-  >>| function
-  | Prover.Output.Process_withdrawal x ->
-      x
+  | Prover.Output.Call_forest_tree tree ->
+      tree
   | _ ->
-      failwith "Unexpected response"
+      failwith "Unexpected response from prover"
 
-let outer_step ?proving_timeout t ~last ~outer_public_key ~new_deposits
-    ~unprocessed_deposits ~old_inner_ledger ~new_inner_ledger =
+let verify_both_ases ?proving_timeout t input =
+  send ?proving_timeout t (Prover.Input.Verify_both_ases input)
+  >>| function
+  | Prover.Output.Verify_both_ases snark ->
+      snark
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
+    ~unprocessed_actions ~old_inner_ledger ~new_inner_ledger ~da_signature
+    ~da_key =
+  let get_inner_acc ledger =
+    let inner_acc =
+      Sparse_ledger.get_exn ledger Zeko_constants.inner_account_index
+    in
+    let inner_acc_path =
+      Sparse_ledger.path_exn ledger Zeko_constants.inner_account_index
+      |> List.map ~f:(function
+           | `Left hash ->
+               ({ right_side = hash } : Outer_rules.Rule_commit_inst.PathElt.t)
+           | `Right _ ->
+               failwith "The inner account is supposed to be left most" )
+    in
+    (inner_acc, inner_acc_path)
+  in
+  let old_inner_acc, old_inner_acc_path = get_inner_acc old_inner_ledger in
+  let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
+
+  let%bind inner_ase =
+    let ({ outer_action_state } : Rollup_state.Inner_state.t) =
+      Rollup_state.Inner_state.value_of_app_state
+        (Option.value_exn old_inner_acc.zkapp).app_state
+    in
+    let action_state : Ase.With_length.Stmt.t =
+      Rollup_state.Outer_action_state.With_length.
+        { action_state = raw outer_action_state
+        ; length = length outer_action_state
+        }
+    in
+    let%map proof, target, excess =
+      ase t ~source:action_state ~elems:new_actions
+        ~max_excess:Outer_commit.Ase_inner_inst.get_iterations ase_with_length
+    in
+    Outer_commit.Ase_inner_inst.
+      { proof; proof_target = target; init = action_state; excess }
+  in
+  let%bind outer_ase =
+    let ({ outer_action_state } : Rollup_state.Inner_state.t) =
+      Rollup_state.Inner_state.value_of_app_state
+        (Option.value_exn new_inner_acc.zkapp).app_state
+    in
+    let action_state =
+      Rollup_state.Outer_action_state.With_length.raw outer_action_state
+    in
+    let%map proof, target, excess =
+      ase t ~source:action_state ~elems:unprocessed_actions
+        ~max_excess:Outer_commit.Ase_outer_inst.get_iterations
+        ase_without_length
+    in
+    Outer_commit.Ase_outer_inst.
+      { proof; proof_target = target; init = action_state; excess }
+  in
+  let%bind verify_both_ases = verify_both_ases t (outer_ase, inner_ase) in
+
   send ?proving_timeout t
-    (Prover.Input.Outer_step
-       ( last
-       , outer_public_key
-       , new_deposits
-       , unprocessed_deposits
-       , old_inner_ledger
-       , new_inner_ledger ) )
+    (Prover.Input.Outer_commit
+       { txn_snark
+       ; public_key
+       ; verify_both_ases
+       ; old_inner_acc
+       ; old_inner_acc_path
+       ; new_inner_acc
+       ; new_inner_acc_path
+       ; da_signature
+       ; da_key
+       } )
   >>| function
-  | Prover.Output.Outer_step x -> x | _ -> failwith "Unexpected response"
+  | Prover.Output.Call_forest_tree tree ->
+      tree
+  | _ ->
+      failwith "Unexpected response from prover"
 
-let inner_step ?proving_timeout t ~all_deposits =
-  send ?proving_timeout t (Prover.Input.Inner_step all_deposits)
-  >>| function
-  | Prover.Output.Inner_step x -> x | _ -> failwith "Unexpected response"
+let submit_deposit ?proving_timeout:_ _t ~outer_pk:_ ~deposit:_ =
+  failwith "Not implemented"
+
+let submit_withdrawal ?proving_timeout:_ _t ~withdrawal:_ =
+  failwith "Not implemented"
+
+let process_deposit ?proving_timeout:_ _t ~is_new:_ ~pointer:_ ~before:_
+    ~after:_ ~deposit:_ =
+  failwith "Not implemented"
+
+let process_withdrawal ?proving_timeout:_ _t ~outer_pk:_ ~is_new:_ ~pointer:_
+    ~before:_ ~after:_ ~withdrawal:_ =
+  failwith "Not implemented"

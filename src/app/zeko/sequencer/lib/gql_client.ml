@@ -55,7 +55,8 @@ let fetch_action_state uri pk =
     result |> member "account" |> member "actionState" |> index 0 |> to_string)
   |> Field.of_string
 
-let fetch_transfers uri ?from_action_state ?end_action_state pk =
+let fetch_actions uri ?from_action_state ?end_action_state pk :
+    (Account_update.Actions.t * int) list Deferred.t =
   let ok_exn = function
     | Ppx_deriving_yojson_runtime.Result.Ok x ->
         x
@@ -120,18 +121,8 @@ let fetch_transfers uri ?from_action_state ?end_action_state pk =
   List.map result.actions ~f:(fun { actionData; blockInfo } ->
       let block_height = blockInfo.height in
       List.map actionData ~f:(fun { data } ->
-          let amount = List.nth_exn data 0 in
-          let public_key_x = List.nth_exn data 1 in
-          let is_odd = List.nth_exn data 2 |> Int.of_string in
-          ( Zkapps_rollup.TR.
-              { amount = Currency.Amount.of_string amount
-              ; recipient =
-                  Signature_lib.Public_key.Compressed.
-                    { x = Field.of_string public_key_x
-                    ; is_odd = (match is_odd with 0 -> false | _ -> true)
-                    }
-              }
-          , block_height ) ) )
+          let fields = List.map data ~f:Field.of_string |> List.to_array in
+          ([ fields ], block_height) ) )
   |> List.join
   |>
   (* Drop the first transfer if it's not the initial state *)
@@ -287,9 +278,15 @@ let fetch_committed_state uri pk =
     end
   in
   let%map result = Graphql_client.query_json_exn q uri in
-  Yojson.Safe.Util.(
-    result |> member "account" |> member "zkappState" |> index 0 |> to_string)
-  |> Frozen_ledger_hash.of_decimal_string
+  let open Zeko_circuits.Rollup_state in
+  let ({ ledger_hash; _ } : Outer_state.t) =
+    Yojson.Safe.Util.(
+      result |> member "account" |> member "zkappState" |> to_list
+      |> List.map ~f:to_string
+      |> List.map ~f:Field.of_string
+      |> Zkapp_state.V.of_list_exn |> Outer_state.value_of_app_state)
+  in
+  ledger_hash
 
 let infer_committed_state uri ~zkapp_pk ~signer_pk =
   let%bind committed_state = fetch_committed_state uri zkapp_pk

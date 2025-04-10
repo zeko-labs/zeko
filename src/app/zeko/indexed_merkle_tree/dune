@@ -1,0 +1,19 @@
+(library
+ (name indexed_merkle_tree)
+ (inline_tests)
+ (libraries
+  zeko_constants
+  ;; mina ;;
+  mina_base
+  mina_ledger
+  ;; opam libraries ;;
+  core_kernel)
+ (preprocess
+  (pps
+   ppx_version
+   ppx_let
+   ppx_custom_printf
+   ppx_base
+   ppx_deriving_yojson
+   ppx_inline_test
+   ppx_assert)))

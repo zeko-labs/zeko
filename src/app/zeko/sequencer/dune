@@ -1,8 +1,3 @@
-(env
- (_
-  (flags
-   (-w -4-48))))
-
 (executable
  (name run)
  (libraries
@@ -27,10 +22,33 @@
  (modules run))
 
 (executable
+ (name run_fake)
+ (libraries
+  sequencer_lib
+  compile_simple_fake
+  ;; mina ;;
+  init
+  signature_lib
+  cli_lib
+  ;; opam libraries ;;
+  cohttp
+  cohttp-async
+  graphql
+  graphql-async
+  core
+  core_kernel
+  async_kernel
+  async
+  async_unix
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_jane))
+ (modules run_fake))
+
+(executable
  (name deploy)
  (libraries
   sequencer_lib
-  zkapps_rollup
   ;; mina ;;
   mina_base
   mina_numbers
@@ -64,6 +82,7 @@
  (name cli)
  (libraries
   sequencer_lib
+  compile_simple_fake
   ;; mina ;;
   init
   signature_lib
