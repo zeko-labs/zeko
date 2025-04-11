@@ -70,12 +70,12 @@ struct
       assert_equal ~label:__LOC__ F.typ root_intermediate root_intermediate'
     in
     let* root_new = implied_root { key = y; next_key = z } path_y in
-    let* root_new =
+    let* root =
       match check with
       | Some check ->
-          if_ check ~typ:F.typ ~then_:root_new ~else_:root
+          if_ check ~typ:F.typ ~then_:root ~else_:root_new
       | None ->
-          Checked.return root_new
+          Checked.return root
     in
     Checked.return (`Before_adding_y root, `After_adding_y root_new)
 end
