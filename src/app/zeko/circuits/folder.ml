@@ -53,19 +53,18 @@ struct
           exists Stmt.typ
             ~compute:
               (let+ length = V.get length in
-               (* there must be at least one element *)
-               (* TODO: maybe return source in this case? *)
-               assert (Int.(length > 0)) ;
-               As_prover.read Stmt.typ targets.(length - 1) )
+               As_prover.read Stmt.typ
+                 (if Int.(length > 0) then targets.(length - 1) else source) )
         in
         (* TODO: Do this with a runtime table in the future. *)
         let* equalities =
           Checked.List.map (Array.to_list targets)
             ~f:(var_equal Stmt.typ target)
         in
+        let* is_empty = var_equal Stmt.typ source target in
         let*| () =
           let open Boolean.Expr in
-          any equalities |> assert_
+          any (is_empty :: equalities) |> assert_
         in
         target
     | `End ->
