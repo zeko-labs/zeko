@@ -130,6 +130,7 @@ struct
            ; sequencer
            ; accumulated_fees
            ; slot_range = txn_snark_slot_range
+           ; global_slot_range
            ; source_acc_set
            ; target_acc_set
            }
@@ -324,8 +325,7 @@ struct
       }
     in
     let preconditions =
-      { default_account_update.preconditions with
-        account =
+      { Account_update.Preconditions.Checked.account =
           { default_account_update.preconditions.account with
             state =
               Outer_state.fine
@@ -360,6 +360,11 @@ struct
               (* Our action state must match *)
           }
       ; valid_while = Slot_range.Checked.to_valid_while slot_range
+      ; network =
+          { default_account_update.preconditions.network with
+            global_slot_since_genesis =
+              Slot_range.Checked.to_valid_while global_slot_range
+          }
       }
     in
     (* We submit an action that summarizes what we did. Used as a way to timestamp when actions were synchronized. *)

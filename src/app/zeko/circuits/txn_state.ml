@@ -57,6 +57,7 @@ module Zeko_stmt = struct
     ; sequencer : Even_PC.t
     ; accumulated_fees : Currency.Amount.Signed.t
     ; slot_range : Slot_range.t
+    ; global_slot_range : Slot_range.t
     ; source_local_state : Local_state.t
     ; target_local_state : Local_state.t
     }

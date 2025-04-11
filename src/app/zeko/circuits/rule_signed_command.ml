@@ -93,6 +93,7 @@ let main input =
     ; sequencer
     ; accumulated_fees = fee_excess
     ; slot_range = Slot_range.(constant typ infinite)
+    ; global_slot_range = Slot_range.(constant typ infinite)
     ; source_local_state = Local_state.dummy
     ; target_local_state = Local_state.dummy
     }

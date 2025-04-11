@@ -20,6 +20,7 @@ open struct
 
   let perform (type local_state) ~(shift_action_states : Boolean.var list)
       ~(set_slot_range : Slot_range.var -> unit)
+      ~(set_global_slot_range : Slot_range.var -> unit)
       ~(set_account_new : Account_id.var * Boolean.var Checked.t -> unit) =
     let shift_action_states = ref shift_action_states in
     fun (type r)
@@ -39,19 +40,25 @@ open struct
             Zkapp_basic.Or_ignore.Checked.data valid_while
           in
           (* NB: We don't need to check whether valid_while is Some, because even if it is
-             None, nothing will break.
+             None, nothing will break. It should be (minimum, maximum) in this case.
           *)
           set_slot_range { lower; upper } ;
           (* We always return true because failure doesn't happen here but in the commit rule. *)
           Boolean.true_
       | Check_protocol_state_precondition
-          ( (protocol_state_predicate :
+          ( ({ global_slot_since_genesis; _ } as protocol_state_predicate :
               Zkapp_precondition.Protocol_state.Checked.t )
           , _global_state ) ->
           Run.run_checked
             Zkapp_precondition.Protocol_state.(
               assert_equal ~label:__LOC__ typ protocol_state_predicate
-                (constant typ accept)) ;
+                { (constant typ accept) with global_slot_since_genesis }) ;
+          let ({ lower; upper } : _ Zkapp_precondition.Closed_interval.t) =
+            Zkapp_basic.Or_ignore.Checked.data global_slot_since_genesis
+          in
+          (* Same as above, if it's not set, it ought to be (minimum, maximum) according to
+             the typ. *)
+          set_global_slot_range { lower; upper } ;
           Boolean.true_
       | Check_account_precondition
           ( ({ account_update; _ } : Zkapp_call_forest.Checked.account_update)
@@ -200,10 +207,13 @@ open struct
 
       let block_global_slot _ = constant Slot.typ Slot.zero
     end in
-    let* ( (((((g, l), vks), must_verify_zkapp), zkapp_input), accounts_new)
+    let* ( ( (((((g, l), vks), must_verify_zkapp), zkapp_input), accounts_new)
+           , global_slot_ranges )
          , slot_ranges ) =
       accumulate
       @@ fun set_slot_range ->
+      accumulate
+      @@ fun set_global_slot_range ->
       accumulate
       @@ fun set_account_new ->
       accumulate
@@ -305,7 +315,8 @@ open struct
               { perform =
                   (fun x ->
                     perform ~shift_action_states:[ shift_action_state ]
-                      ~set_slot_range ~set_account_new x )
+                      ~set_slot_range ~set_global_slot_range ~set_account_new x
+                    )
               }
               (g, l)
           in
@@ -333,6 +344,14 @@ open struct
             fun y -> slot_range_intersection x y >>| fun x -> Some x )
       >>| Option.value ~default:Slot_range.(constant typ infinite)
     in
+    let* global_slot_range =
+      Checked.List.fold ~init:None global_slot_ranges ~f:(function
+        | None ->
+            fun x -> Checked.return (Some x)
+        | Some x ->
+            fun y -> slot_range_intersection x y >>| fun x -> Some x )
+      >>| Option.value ~default:Slot_range.(constant typ infinite)
+    in
     let target_ledger, _ = l.ledger in
     let out : Zeko_stmt.var =
       { source_ledger
@@ -340,6 +359,7 @@ open struct
       ; sequencer
       ; accumulated_fees = g.fee_excess
       ; slot_range
+      ; global_slot_range
       ; source_local_state
       ; target_local_state =
           { transaction_commitment = l.transaction_commitment
