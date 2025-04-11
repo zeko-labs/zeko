@@ -165,6 +165,9 @@ struct
 
     val typ : (var, t) Typ.t
 
+    (* TODO: maybe this should take a default output,
+       and not a check, such that if the underlying thing
+       isn't proven, we just get the default. *)
     val get : ?check:Boolean.var -> var -> (out_var * tag_var prev) Checked.t
 
     val make_unchecked : ?proof:proof -> out_t -> t
