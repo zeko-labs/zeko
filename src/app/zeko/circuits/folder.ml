@@ -61,10 +61,10 @@ struct
           Checked.List.map (Array.to_list targets)
             ~f:(var_equal Stmt.typ target)
         in
-        let* is_empty = var_equal Stmt.typ source target in
+        let* target_is_source = var_equal Stmt.typ source target in
         let*| () =
           let open Boolean.Expr in
-          any (is_empty :: equalities) |> assert_
+          any (target_is_source :: equalities) |> assert_
         in
         target
     | `End ->
