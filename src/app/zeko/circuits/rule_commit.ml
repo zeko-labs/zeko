@@ -78,6 +78,7 @@ struct
       ; new_inner_acc_path : Path.t
       ; da_signature : Signature_lib.Schnorr.Chunked.Signature.t
       ; da_key : Even_PC.t
+      ; slot_range : Slot_range.t
       }
     [@@deriving snarky]
   end
@@ -113,6 +114,7 @@ struct
           ; new_inner_acc_path
           ; da_signature
           ; da_key
+          ; slot_range
           } :
            Witness.var ) =
       exists ~compute:(V.get w) Witness.typ
@@ -127,7 +129,7 @@ struct
            ; target_local_state
            ; sequencer
            ; accumulated_fees
-           ; slot_range
+           ; slot_range = txn_snark_slot_range
            ; source_acc_set
            ; target_acc_set
            }
@@ -182,6 +184,16 @@ struct
             diff
             < constant
                 (Global_slot_span (Unsigned.UInt32.of_int max_valid_while_size))) )
+    in
+
+    (* Our slot range must be a subset of the txn snark slot range. *)
+    let* () =
+      assert_var __LOC__
+      @@ fun () -> Slot.Checked.(slot_range.lower >= txn_snark_slot_range.lower)
+    in
+    let* () =
+      assert_var __LOC__
+      @@ fun () -> Slot.Checked.(slot_range.upper <= txn_snark_slot_range.upper)
     in
 
     (* We check that the paths provided for the inner account are correct. *)
