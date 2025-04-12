@@ -64,12 +64,12 @@ let main input =
   let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
   let* (target_ledger, fee_excess, _supply_increase), accounts =
     accumulate
-    @@ fun set_account_new ->
+    @@ fun zeko_set_account_new ->
     Fn.flip handle_as_prover
       As_prover.(
         V.get witness >>| fun { ledger_path_handler; _ } -> ledger_path_handler)
     @@ fun () ->
-    Transaction_snark.Base.apply_tagged_transaction ~set_account_new
+    Transaction_snark.Base.apply_tagged_transaction ~zeko_set_account_new
       ~constraint_constants
       (module Shifted)
       source_ledger Slot.Checked.zero
