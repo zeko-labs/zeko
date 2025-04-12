@@ -122,3 +122,16 @@ let sub ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 =
   , slice_bigint r 176 88 |> of_ )
 
 let field_to_field3 f = ((slice f 0 88, slice f 88 88), slice f 176 88)
+
+let carry ~x0 ~x1 ~y0 ~y1 =
+  let ( let- ) x f = f (to_ x) in
+  let- x0 in
+  let- x1 in
+  let- y0 in
+  let- y1 in
+  let open Bignum_bigint in
+  let l = of_int 1 |> Fn.flip shift_left 88 in
+  let x = x0 + (x1 * l) in
+  let y = y0 + (y1 * l) in
+  let r = x - y in
+  shift_right r 176 |> of_

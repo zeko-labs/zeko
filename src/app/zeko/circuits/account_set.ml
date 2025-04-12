@@ -82,7 +82,7 @@ include Indexed_merkle_tree.Make (struct
              ; compact = Field.zero
              } )
       in
-      (v0p4, v0p5)
+      (v0p0, v0p1)
 
     module Range_check1 = struct
       type t = Zeko_as_prover.range_check1 =
@@ -209,6 +209,23 @@ include Indexed_merkle_tree.Make (struct
                ~y1:Field.zero ~y2:Field.zero
              |> As_prover.return )
       in
+      let* first_carry =
+        exists F.typ
+          ~compute:
+            (let- x0 in
+             let- x1 in
+             let- y0 in
+             let- y1 in
+             Zeko_as_prover.carry ~x0 ~x1 ~y0 ~y1 |> As_prover.return )
+      in
+      let* second_carry =
+        exists F.typ
+          ~compute:
+            (let- z0 in
+             let- z1 in
+             Zeko_as_prover.carry ~x0:z0 ~x1:z1 ~y0:Field.one ~y1:Field.zero
+             |> As_prover.return )
+      in
       let* () =
         add_plonk_constraint
           (ForeignFieldAdd
@@ -219,7 +236,7 @@ include Indexed_merkle_tree.Make (struct
              ; right_input_mi = y1
              ; right_input_hi = y2
              ; sign = Field.of_int (-1)
-             ; carry = Field.(constant typ zero)
+             ; carry = first_carry
              ; field_overflow = Field.(constant typ zero)
              ; foreign_field_modulus0 = Field.zero
              ; foreign_field_modulus1 = Field.zero
@@ -236,7 +253,7 @@ include Indexed_merkle_tree.Make (struct
              ; right_input_mi = Field.(constant typ zero)
              ; right_input_hi = Field.(constant typ zero)
              ; sign = Field.of_int (-1)
-             ; carry = Field.(constant typ zero)
+             ; carry = second_carry
              ; field_overflow = Field.(constant typ zero)
              ; foreign_field_modulus0 = Field.zero
              ; foreign_field_modulus1 = Field.zero
@@ -247,7 +264,7 @@ include Indexed_merkle_tree.Make (struct
         add_plonk_constraint
           (Raw { kind = Zero; values = [| w0; w1; w2 |]; coeffs = [||] })
       in
-      multi_range_check z0 z1 z2
+      multi_range_check w0 w1 w2
 
     let l =
       Bigint.of_bignum_bigint Bignum_bigint.(of_int 1 |> Fn.flip shift_left 88)
@@ -307,7 +324,7 @@ include Indexed_merkle_tree.Make (struct
         sub_then_dec
           ~dec:Field.(constant typ one)
           ~x0:(constant Field.typ fp0) ~x1:(constant Field.typ fp1)
-          ~x2:(constant Field.typ fp2) ~y0 ~y1 ~y2
+          ~x2:(constant Field.typ fp2) ~y0:x0 ~y1:x1 ~y2:x2
       in
       Checked.return ()
   end
