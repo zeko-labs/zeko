@@ -155,11 +155,17 @@ struct
       let* da_key_uncompressed =
         Even_PC.to_pc_var da_key |> Signature_lib.Public_key.decompress_var
       in
+      let input =
+        let open Random_oracle.Input.Chunked in
+        append
+          (Ledger_hash.var_to_field target_ledger |> field)
+          (Account_set.to_input_var target_acc_set)
+      in
       let* payload =
         make_checked (fun () ->
             Random_oracle.Checked.hash
               ~init:(Hash_prefix_create.salt "zeko da layer check")
-              [| Ledger_hash.var_to_field target_ledger |] )
+              (Random_oracle.Checked.pack_input input) )
       in
       Signature_lib.Schnorr.Chunked.Checked.assert_verifies
         (module Shifted)

@@ -78,4 +78,6 @@ struct
           Checked.return root
     in
     Checked.return (`Before_adding_y root, `After_adding_y root_new)
+
+  let to_input_var = Random_oracle.Input.Chunked.field
 end
