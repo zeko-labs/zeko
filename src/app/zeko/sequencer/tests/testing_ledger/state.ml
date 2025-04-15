@@ -39,6 +39,8 @@ type t =
   ; commands : (string, User_command.t * Transaction_status.t) Hashtbl.t
   ; mutable pool : Indexed_pool.t
   ; archive : Archive.t
+  ; signature_kind : Mina_signature_kind.t
+  ; disable_proofs : bool
   }
 
 let db t = t.db
@@ -179,7 +181,7 @@ let create_new_block t =
             (Error.to_string_hum err) ) ;
   t.pool <- create_pool ()
 
-let create ~block_period ~db_dir () =
+let create ~disable_proofs ~block_period ~db_dir ~signature_kind () =
   let db =
     Ledger.Db.create ~directory_name:db_dir
       ~depth:Constants.constraint_constants.ledger_depth ()
@@ -191,6 +193,8 @@ let create ~block_period ~db_dir () =
     ; commands = Hashtbl.create (module String)
     ; pool = create_pool ()
     ; archive = Sequencer_lib.Archive.create ~kvdb:(Ledger.Db.zeko_kvdb db)
+    ; signature_kind
+    ; disable_proofs
     }
   in
   match block_period with

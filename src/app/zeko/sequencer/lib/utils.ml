@@ -123,3 +123,16 @@ let sign_zkapp_command ?signature_kind (command : Zkapp_command.t)
       }
   ; account_updates = sign_forest command.account_updates
   }
+
+let rehash_forest ~chain =
+  Zkapp_command.Call_forest.accumulate_hashes
+    ~hash_account_update:
+      (Zkapp_command.Call_forest.Digest.Account_update.create ~chain)
+
+let signature_kind = function
+  | "mainnet" ->
+      Mina_signature_kind.Mainnet
+  | "testnet" ->
+      Mina_signature_kind.Testnet
+  | network_id ->
+      Mina_signature_kind.Other_network network_id

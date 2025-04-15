@@ -29,6 +29,10 @@ let run_node =
            ~doc:"Run in testing mode, the signer key will be generated randomly"
        and no_migrations =
          flag "--no-migrations" no_arg ~doc:"Do not run migrations"
+       and network_id =
+         flag "--network-id"
+           (optional_with_default "zeko" string)
+           ~doc:"string Network id to use as salt for applying receipts"
        in
        fun () ->
          let signer =
@@ -57,9 +61,18 @@ let run_node =
            | _ ->
                failwith "Both node-to-sync and hash-to-sync must be provided"
          in
+         let chain =
+           match network_id with
+           | "mainnet" ->
+               Mina_signature_kind.Mainnet
+           | "testnet" ->
+               Mina_signature_kind.Testnet
+           | network_id ->
+               Mina_signature_kind.Other_network network_id
+         in
          let%bind () =
            Deferred.ignore_m
-           @@ Da_layer.Node.create_server ~sync_arg ~logger ~port ~db_dir
+           @@ Da_layer.Node.create_server ~chain ~sync_arg ~logger ~port ~db_dir
                 ~signer_sk:signer ~no_migrations ()
          in
          [%log info] "Server started on port $port"

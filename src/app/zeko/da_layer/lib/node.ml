@@ -7,7 +7,12 @@ open Async
 
 let constraint_constants = Zeko_constants.constraint_constants
 
-type t = { db : Db.t; signer : Keypair.t; logger : Logger.t }
+type t =
+  { db : Db.t
+  ; signer : Keypair.t
+  ; logger : Logger.t
+  ; chain : Mina_signature_kind.t
+  }
 
 (** 1. Check that [root ledger_openings = diff.source_ledger_hash].
     2. Check that [diff.source_ledger_hash] is either in the databse or an empty ledger.
@@ -117,7 +122,7 @@ let post_diff t ~ledger_openings ~diff =
     | None ->
         Ok Account_id.Map.empty
     | Some (Signed_command command, _) ->
-        (* For command only the fee payer gets the receipt *)
+        (* For signed command only the fee payer gets the receipt *)
         let account_id = Signed_command.fee_payer command in
         let%bind.Result old_receipt_chain_hash =
           get_account's_receipt_chain_hash Account_id.Map.empty account_id
@@ -132,7 +137,7 @@ let post_diff t ~ledger_openings ~diff =
              ~data:new_receipt_chain_hash )
     | Some (Zkapp_command command, _) ->
         let _commitment, full_transaction_commitment =
-          Zkapp_command.get_transaction_commitments command
+          Zkapp_command.get_transaction_commitments ~chain:t.chain command
         in
         let%bind.Result _, acc =
           List.fold_result (Zkapp_command.all_account_updates_list command)
@@ -337,7 +342,8 @@ let implementations t =
                 Option.value_exn ~here:[%here] ~message:"Diff not found" diff ) )
       ]
 
-let create_server ~sync_arg ~port ~logger ~db_dir ~signer_sk ~no_migrations () =
+let create_server ~chain ~sync_arg ~port ~logger ~db_dir ~signer_sk
+    ~no_migrations () =
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
   in
@@ -347,6 +353,7 @@ let create_server ~sync_arg ~port ~logger ~db_dir ~signer_sk ~no_migrations () =
     ; signer =
         Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn signer_sk
     ; logger
+    ; chain
     }
   in
 

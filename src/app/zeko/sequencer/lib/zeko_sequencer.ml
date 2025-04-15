@@ -322,6 +322,7 @@ module Sequencer = struct
               match%bind
                 try_with (fun () ->
                     Verifier.verify_command
+                      ~signature_kind:(Utils.signature_kind t.config.network_id)
                       { data = verifiable; status = Applied } )
                 >>| Result.map_error ~f:Error.of_exn
                 >>| Result.join
@@ -605,8 +606,8 @@ module Sequencer = struct
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
-      ~da_quorum ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~network_id
-      ~deposit_delay_blocks ~provers =
+      ~da_quorum ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
+      ~l2_network_id ~deposit_delay_blocks ~provers =
     print_endline "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let db =
@@ -627,7 +628,7 @@ module Sequencer = struct
         ; archive_uri
         ; zkapp_pk
         ; signer
-        ; network_id
+        ; network_id = l2_network_id
         ; deposit_delay_blocks
         }
     in
@@ -640,7 +641,11 @@ module Sequencer = struct
       Zeko_prover.Client.create
         (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
     in
-    let executor = Executor.create ~l1_uri:config.l1_uri ~signer ~kvdb () in
+    let executor =
+      Executor.create ~l1_uri:config.l1_uri
+        ~signature_kind:(Utils.signature_kind l1_network_id)
+        ~signer ~kvdb ()
+    in
     let t =
       { db
       ; imt

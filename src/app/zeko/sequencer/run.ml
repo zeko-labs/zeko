@@ -7,7 +7,7 @@ module Graphql_cohttp_async =
 module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-    ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~network_id
+    ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~l1_network_id ~l2_network_id
     ~deposit_delay_blocks ~provers () =
   let zkapp_pk =
     Option.(
@@ -19,7 +19,7 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
         Sequencer.create ~logger:(Logger.create ()) ~zkapp_pk ~max_pool_size
           ~da_config ~da_quorum ~db_dir:(Some db_dir) ~imt_dir:(Some imt_dir)
           ~l1_uri ~archive_uri ~commitment_period_sec:commitment_period
-          ~network_id ~deposit_delay_blocks
+          ~l1_network_id ~l2_network_id ~deposit_delay_blocks
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
@@ -32,7 +32,7 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
   let graphql_callback =
     Graphql_cohttp_async.make_callback
       (fun ~with_seq_no:_ _req -> sequencer)
-      Gql.schema
+      (Gql.schema ~chain:(Utils.signature_kind l2_network_id))
   in
   let () =
     Cohttp_async.Server.create_expert
@@ -83,7 +83,11 @@ let () =
        flag "--imt-dir"
          (optional_with_default "imt_db" string)
          ~doc:"string Directory to store the Indexed Merkle Tree database"
-     and network_id =
+     and l1_network_id =
+       flag "--l1-network-id"
+         (optional_with_default "testnet" string)
+         ~doc:"string Network id"
+     and l2_network_id =
        flag "--network-id"
          (optional_with_default "testnet" string)
          ~doc:"string Network id"
@@ -103,6 +107,6 @@ let () =
      in
      let provers = List.map provers ~f:Host_and_port.of_string in
      run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-       ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~network_id
-       ~deposit_delay_blocks ~provers )
+       ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
+       ~l2_network_id ~deposit_delay_blocks ~provers )
   |> Command_unix.run

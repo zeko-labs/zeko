@@ -155,7 +155,6 @@ end
 
 let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
   | Ping ->
-      let%bind () = time ~logger "Pong" Deferred.unit in
       return Output.Pong
   | Txn_snark (Signed_command input) ->
       let Compile_simple.[ prove; _; _; _; _ ] = Txn_rules.provers in

@@ -179,9 +179,11 @@ module type S = sig
   end
 
   (** checks signature and keys *)
-  val check : t -> With_valid_signature.t option
+  val check :
+    ?signature_kind:Mina_signature_kind.t -> t -> With_valid_signature.t option
 
-  val check_only_for_signature : t -> With_valid_signature.t option
+  val check_only_for_signature :
+    ?signature_kind:Mina_signature_kind.t -> t -> With_valid_signature.t option
 
   val to_valid_unsafe :
        t

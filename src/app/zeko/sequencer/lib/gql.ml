@@ -1242,7 +1242,7 @@ module Types = struct
     module SendZkappInput = struct
       type input = Mina_base.Zkapp_command.t
 
-      let arg_typ =
+      let arg_typ ~chain =
         let conv
             (x :
               Mina_base.Zkapp_command.t
@@ -1251,12 +1251,12 @@ module Types = struct
           Obj.magic x
         in
         let arg_typ =
-          { arg_typ = Mina_base.Zkapp_command.arg_typ () |> conv
+          { arg_typ = Mina_base.Zkapp_command.arg_typ ~chain () |> conv
           ; to_json =
               (function
               | x ->
                   Yojson.Safe.to_basic
-                    (Mina_base.Zkapp_command.zkapp_command_to_json x) )
+                    (Mina_base.Zkapp_command.zkapp_command_to_json ~chain x) )
           }
         in
         obj "SendZkappInput" ~coerce:Fn.id
@@ -1644,11 +1644,14 @@ module Mutations = struct
             Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash)
         )
 
-  let send_zkapp =
+  let send_zkapp ~chain =
     io_field "sendZkapp" ~doc:"Send a zkApp transaction"
       ~typ:(non_null Types.Payload.send_zkapp)
       ~args:
-        Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
+        Arg.
+          [ arg "input"
+              ~typ:(non_null (Types.Input.SendZkappInput.arg_typ ~chain))
+          ]
       ~resolve:(fun { ctx = sequencer; _ } () zkapp_command ->
         match%bind
           Zeko_sequencer.apply_user_command sequencer
@@ -1701,8 +1704,12 @@ module Mutations = struct
              ~key ~claim ;
         return (Ok key) )
 
-  let commands =
-    [ send_payment; send_zkapp; prove_transfer_request; prove_transfer_claim ]
+  let commands ~chain =
+    [ send_payment
+    ; send_zkapp ~chain
+    ; prove_transfer_request
+    ; prove_transfer_claim
+    ]
 end
 
 module Queries = struct
@@ -1896,7 +1903,8 @@ module Subscriptions = struct
   let commands = []
 end
 
-let schema =
+let schema ~chain =
   Graphql_async.Schema.(
-    schema Queries.commands ~mutations:Mutations.commands
+    schema Queries.commands
+      ~mutations:(Mutations.commands ~chain)
       ~subscriptions:Subscriptions.commands)

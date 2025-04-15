@@ -27,6 +27,14 @@ let provers =
   ; Host_and_port.create ~host:"localhost" ~port:9991
   ]
 
+let l1_network_id = "testnet"
+
+let l1_signature_kind = Utils.signature_kind l1_network_id
+
+let l2_network_id = "zeko"
+
+let l2_signature_kind = Utils.signature_kind l2_network_id
+
 let run = Thread_safe.block_on_async_exn
 
 module Sequencer_test_spec = struct
@@ -42,7 +50,7 @@ module Sequencer_test_spec = struct
   let gen ?(delay_deposit = 0) () =
     let zkapp_keypair = Keypair.create () in
 
-    (* Create signer *)
+    print_endline "(* Create signer *)" ;
     let rec create_even_signer () =
       let signer = Keypair.create () in
       let compressed = Public_key.compress signer.public_key in
@@ -75,7 +83,7 @@ module Sequencer_test_spec = struct
          |> Array.to_list )
     in
 
-    (* Init ephemeral ledger *)
+    print_endline "(* Init ephemeral ledger *)" ;
     let ephemeral_ledger =
       L.create_ephemeral ~depth:constraint_constants.ledger_depth ()
     in
@@ -98,7 +106,7 @@ module Sequencer_test_spec = struct
     printf "Initial IMT hash: %s\n%!"
       (Ledger_hash.to_decimal_string account_set_hash) ;
 
-    (* Post genesis batch *)
+    print_endline "(* Post genesis batch *)" ;
     run (fun () ->
         match%bind
           Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
@@ -109,7 +117,7 @@ module Sequencer_test_spec = struct
         | Error e ->
             Error.raise e ) ;
 
-    (* Deploy *)
+    print_endline "(* Deploy zkapp *)" ;
     run (fun () ->
         let sequencer_pk =
           Public_key.compress signer.public_key |> Even_PC.create_exn
@@ -127,7 +135,8 @@ module Sequencer_test_spec = struct
           Gql_client.infer_nonce gql_uri (Public_key.compress signer.public_key)
         in
         let%bind command =
-          Deploy.deploy_command_exn ~signer ~zkapp:zkapp_keypair
+          Deploy.deploy_command_exn ~signature_kind:l1_signature_kind ~signer
+            ~zkapp:zkapp_keypair
             ~fee:(Currency.Fee.of_mina_int_exn 1)
             ~nonce ~initial_ledger:ephemeral_ledger
             ~account_creation_fee:constraint_constants.account_creation_fee
@@ -138,7 +147,7 @@ module Sequencer_test_spec = struct
         let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
         return () ) ;
 
-    (* Init sequencer *)
+    print_endline "(* Init sequencer *)" ;
     let sequencer =
       run (fun () ->
           Sequencer.create ~logger
@@ -146,8 +155,8 @@ module Sequencer_test_spec = struct
               Signature_lib.Public_key.(compress zkapp_keypair.public_key)
             ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:1
             ~db_dir:None ~imt_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
-            ~signer ~network_id:"testnet" ~deposit_delay_blocks:delay_deposit
-            ~provers )
+            ~signer ~l1_network_id ~l2_network_id
+            ~deposit_delay_blocks:delay_deposit ~provers )
     in
 
     Quickcheck.Generator.return
@@ -160,7 +169,7 @@ let () =
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; _ } ->
       let batch1, batch2 = List.split_n specs 3 in
 
-      (* Apply first batch *)
+      print_endline "(* Apply first batch *)" ;
       let () =
         run (fun () ->
             let%bind () =
@@ -170,13 +179,16 @@ let () =
                     | true ->
                         let command =
                           Mina_transaction_logic.For_tests.account_update_send
-                            spec
+                            ~chain:l2_signature_kind spec
                         in
+                        printf "Applying zkapp command\n%!" ;
                         apply_user_command sequencer (Zkapp_command command)
                     | false ->
                         let command =
-                          Mina_transaction_logic.For_tests.command_send spec
+                          Mina_transaction_logic.For_tests.command_send
+                            ~chain:l2_signature_kind spec
                         in
+                        printf "Applying signed command\n%!" ;
                         apply_user_command sequencer (Signed_command command)
                   in
                   let witnesses =
@@ -194,7 +206,7 @@ let () =
             return () )
       in
 
-      (* First commit *)
+      print_endline "(* First commit *)" ;
       run (fun () ->
           let%bind () = commit sequencer in
           let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
@@ -213,7 +225,7 @@ let () =
       (* The first commit is still in the pool *)
       Executor.refresh_nonce sequencer.merger_ctx.executor ;
 
-      (* Apply second batch *)
+      print_endline "(* Apply second batch *)" ;
       run (fun () ->
           let%bind () =
             Deferred.List.iteri batch2 ~f:(fun i spec ->
@@ -222,13 +234,16 @@ let () =
                   | true ->
                       let command =
                         Mina_transaction_logic.For_tests.account_update_send
-                          spec
+                          ~chain:l2_signature_kind spec
                       in
+                      printf "Applying zkapp command\n%!" ;
                       apply_user_command sequencer (Zkapp_command command)
                   | false ->
                       let command =
-                        Mina_transaction_logic.For_tests.command_send spec
+                        Mina_transaction_logic.For_tests.command_send
+                          ~chain:l2_signature_kind spec
                       in
+                      printf "Applying signed command\n%!" ;
                       apply_user_command sequencer (Signed_command command)
                 in
 
@@ -247,7 +262,7 @@ let () =
           in
           return () ) ;
 
-      (* Second commit *)
+      print_endline "(* Second commit *)" ;
       let final_ledger_hash =
         run (fun () ->
             let%bind () = commit sequencer in
@@ -266,7 +281,7 @@ let () =
             return target_ledger_hash )
       in
 
-      (* Try to bootstrap again *)
+      print_endline "(* Try to bootstrap again *)" ;
       run (fun () ->
           let%bind new_sequencer =
             Sequencer.create ~logger
@@ -274,7 +289,7 @@ let () =
                 Signature_lib.Public_key.(compress zkapp_keypair.public_key)
               ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
               ~da_quorum:1 ~db_dir:None ~imt_dir:None ~l1_uri:gql_uri
-              ~archive_uri:gql_uri ~signer ~network_id:"testnet"
+              ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
               ~deposit_delay_blocks:0 ~provers
           in
           return

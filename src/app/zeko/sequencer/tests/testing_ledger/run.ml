@@ -7,9 +7,12 @@ module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 
-let run ~port ~db_dir ~genesis_account ~block_period () =
+let run ~port ~db_dir ~genesis_account ~block_period ~network_id ~disable_proofs
+    =
   let t =
-    State.create ~db_dir
+    State.create
+      ~signature_kind:(Sequencer_lib.Utils.signature_kind network_id)
+      ~disable_proofs ~db_dir
       ~block_period:
         (Option.map block_period
            ~f:(Fn.compose Time_ns.Span.of_sec Int.to_float) )
@@ -33,7 +36,9 @@ let run ~port ~db_dir ~genesis_account ~block_period () =
     |> ignore ) ;
 
   let graphql_callback =
-    Graphql_cohttp_async.make_callback (fun ~with_seq_no:_ _req -> t) Gql.schema
+    Graphql_cohttp_async.make_callback
+      (fun ~with_seq_no:_ _req -> t)
+      (Gql.schema ~chain:(Sequencer_lib.Utils.signature_kind network_id))
   in
   let () =
     Cohttp_async.Server.create_expert
@@ -70,6 +75,13 @@ let () =
      and block_period =
        flag "--block-period" (optional int)
          ~doc:"int Optional block period in seconds"
+     and network_id =
+       flag "--network-id"
+         (optional_with_default "testnet" string)
+         ~doc:"string Network id"
+     and disable_proofs =
+       flag "--disable-proofs" no_arg ~doc:"bool Disable proofs"
      in
-     run ~port ~db_dir ~genesis_account ~block_period )
+     run ~port ~db_dir ~genesis_account ~block_period ~network_id
+       ~disable_proofs )
   |> Command_unix.run

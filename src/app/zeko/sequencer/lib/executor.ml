@@ -16,11 +16,13 @@ type t =
   ; max_attempts : int
   ; delay : Time_ns.Span.t
   ; kvdb : Mina_ledger.Ledger.Kvdb.t
+  ; signature_kind : Mina_signature_kind.t
   }
 
-let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce ~l1_uri
-    ~signer ~kvdb () =
+let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce
+    ~signature_kind ~l1_uri ~signer ~kvdb () =
   { l1_uri
+  ; signature_kind
   ; signer
   ; q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
   ; nonce
@@ -51,7 +53,10 @@ let process_command t (command : Zkapp_command.t) =
           }
       }
     in
-    let command = Utils.sign_zkapp_command command [ t.signer ] in
+    let command =
+      Utils.sign_zkapp_command ~signature_kind:t.signature_kind command
+        [ t.signer ]
+    in
     let err_to_string = function
       | `Failed_request err ->
           "Failed_request: " ^ err

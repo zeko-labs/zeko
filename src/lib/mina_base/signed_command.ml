@@ -446,10 +446,12 @@ module Make_str (_ : Wire_types.Concrete) = struct
         assert (Codable.For_tests.check_encoding (module Stable.Latest) ~equal t) )
 
   (* return type is `t option` here, interface coerces that to `With_valid_signature.t option` *)
-  let check t = Option.some_if (check_signature t && check_valid_keys t) t
+  let check ?signature_kind t =
+    Option.some_if (check_signature ?signature_kind t && check_valid_keys t) t
 
   (* return type is `t option` here, interface coerces that to `With_valid_signature.t option` *)
-  let check_only_for_signature t = Option.some_if (check_signature t) t
+  let check_only_for_signature ?signature_kind t =
+    Option.some_if (check_signature ?signature_kind t) t
 
   let forget_check t = t
 
