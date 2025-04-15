@@ -64,9 +64,8 @@
 (*END src/config/fork.mlh*)
 
 
-(*BEGIN src/config/features/mainnet.mlh*)
-[%%define network "mainnet"]
-(*END src/config/features/mainnet.mlh*)
+(* this is the signature kind *)
+[%%define network "invalid_network"]
 
 (* 2*block_window_duration *)
 [%%define compaction_interval 0]
