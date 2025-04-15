@@ -399,6 +399,8 @@ module Txn_snark_witness = struct
 end
 
 module Slot_range = struct
+  include Zeko_util.Slot_range
+
   type t = Zeko_util.Slot_range.t = { lower : Slot.t; upper : Slot.t }
   [@@deriving yojson]
 end
@@ -412,6 +414,7 @@ module Zeko_stmt = struct
     ; sequencer : Even_PC.t
     ; accumulated_fees : Currency.Amount.Signed.t
     ; slot_range : Slot_range.t
+    ; global_slot_range : Slot_range.t
     ; source_local_state : Local_state.t
     ; target_local_state : Local_state.t
     }
@@ -631,6 +634,7 @@ module Outer_commit = struct
       ; new_inner_acc_path : Path.t
       ; da_signature : Signature_lib.Schnorr.Chunked.Signature.t
       ; da_key : Even_PC.t
+      ; slot_range : Slot_range.t
       }
 
     type serializable =
@@ -643,6 +647,7 @@ module Outer_commit = struct
       ; new_inner_acc_path : Path.t
       ; da_signature : Signature.t
       ; da_key : Even_PC.t
+      ; slot_range : Slot_range.t
       }
     [@@deriving yojson]
 
@@ -656,6 +661,7 @@ module Outer_commit = struct
          ; new_inner_acc_path
          ; da_signature
          ; da_key
+         ; slot_range
          } :
           serializable ) ~vk_hash : t =
       { txn_snark = Txn_snark.of_serializable txn_snark
@@ -668,6 +674,7 @@ module Outer_commit = struct
       ; new_inner_acc_path
       ; da_signature
       ; da_key
+      ; slot_range
       }
   end
 end

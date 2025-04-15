@@ -232,6 +232,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
        ; new_inner_acc_path
        ; da_signature
        ; da_key
+       ; slot_range = Slot_range.infinite
        } )
   >>| function
   | Prover.Output.Call_forest_tree tree ->

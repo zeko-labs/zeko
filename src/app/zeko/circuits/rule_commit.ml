@@ -155,8 +155,8 @@ struct
       let* payload =
         make_checked (fun () ->
             Random_oracle.Checked.hash
-              ~init:(Hash_prefix_create.salt "zeko da layer check")
-              [| Ledger_hash.var_to_field target_ledger |] )
+              ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+              (Random_oracle.Checked.pack_input input) )
       in
       Signature_lib.Schnorr.Chunked.Checked.assert_verifies
         (module Shifted)

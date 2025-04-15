@@ -1503,6 +1503,7 @@ module Mutations = struct
     | Ok (`Valid_assuming _) -> (
         match (command, t.disable_proofs) with
         | Zkapp_command zkapp_command, true ->
+            printf "Invalid proofs omitted because disable_proofs is true\n%!" ;
             return
               (Ok
                  ( match Zkapp_command.Valid.to_valid_unsafe zkapp_command with

@@ -2579,8 +2579,6 @@ module For_tests = struct
           (Zkapp_command.Digest.Account_update.create ?chain
              (Account_update.of_fee_payer zkapp_command.fee_payer) )
     in
-    printf "created full_commitment %s\n%!"
-      (Snark_params.Tick.Field.to_string full_commitment) ;
     let account_updates_signature =
       let c = if use_full_commitment then full_commitment else commitment in
       Schnorr.Chunked.sign ?signature_kind:chain sender.private_key
