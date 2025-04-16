@@ -185,7 +185,11 @@ include Indexed_merkle_tree.Make (struct
       let* v1p0, v1p1 = range_check0 y in
       range_check1 ~v2:z ~v0p0 ~v0p1 ~v1p0 ~v1p1
 
-    let sub_then_dec ~dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 =
+    (* calculate x0 + x1 * l + x2 * l * l - y0 - y1 * l - y2 * l * l - 1, then multi_range_check it *)
+    let sub_then_dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 =
+      (* we can't do this before the decomposition, because it might overflow,
+         and we want to calculate x - y - 1, not x - y - 1 % F_p *)
+      let y0 = Field.Var.add y0 Field.(constant typ one) in
       let* (z0, z1), z2 =
         exists
           Typ.(F.typ * F.typ * F.typ)
@@ -198,17 +202,6 @@ include Indexed_merkle_tree.Make (struct
              let- y2 in
              Zeko_as_prover.sub ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 |> As_prover.return )
       in
-      let* (w0, w1), w2 =
-        exists
-          Typ.(F.typ * F.typ * F.typ)
-          ~compute:
-            (let- z0 in
-             let- z1 in
-             let- z2 in
-             Zeko_as_prover.sub ~x0:z0 ~x1:z1 ~x2:z2 ~y0:Field.one
-               ~y1:Field.zero ~y2:Field.zero
-             |> As_prover.return )
-      in
       let* first_carry =
         exists F.typ
           ~compute:
@@ -218,14 +211,13 @@ include Indexed_merkle_tree.Make (struct
              let- y1 in
              Zeko_as_prover.carry ~x0 ~x1 ~y0 ~y1 |> As_prover.return )
       in
-      let* second_carry =
-        exists F.typ
-          ~compute:
-            (let- z0 in
-             let- z1 in
-             Zeko_as_prover.carry ~x0:z0 ~x1:z1 ~y0:Field.one ~y1:Field.zero
-             |> As_prover.return )
-      in
+      (* assert that
+         z0 + z1 * l + c * l * l = x0 + x1 * l - y0 - y1 * l - 1
+         z2 - c = x2 - y2
+         where l = 2^88
+         if z0, z1, z2 < l, then we know that x < y
+         TODO: prove
+      *)
       let* () =
         add_plonk_constraint
           (ForeignFieldAdd
@@ -245,26 +237,9 @@ include Indexed_merkle_tree.Make (struct
       in
       let* () =
         add_plonk_constraint
-          (ForeignFieldAdd
-             { left_input_lo = z0
-             ; left_input_mi = z1
-             ; left_input_hi = z2
-             ; right_input_lo = dec
-             ; right_input_mi = Field.(constant typ zero)
-             ; right_input_hi = Field.(constant typ zero)
-             ; sign = Field.of_int (-1)
-             ; carry = second_carry
-             ; field_overflow = Field.(constant typ zero)
-             ; foreign_field_modulus0 = Field.zero
-             ; foreign_field_modulus1 = Field.zero
-             ; foreign_field_modulus2 = Field.zero
-             } )
+          (Raw { kind = Zero; values = [| z0; z1; z2 |]; coeffs = [||] })
       in
-      let* () =
-        add_plonk_constraint
-          (Raw { kind = Zero; values = [| w0; w1; w2 |]; coeffs = [||] })
-      in
-      multi_range_check w0 w1 w2
+      multi_range_check z0 z1 z2
 
     let l =
       Bigint.of_bignum_bigint Bignum_bigint.(of_int 1 |> Fn.flip shift_left 88)
@@ -287,23 +262,11 @@ include Indexed_merkle_tree.Make (struct
       in
       (x0, x1, x2)
 
-    let assert_greater_than_full ~check x y =
-      (* if check is false, use x on both sides *)
-      let* y = if_ check ~typ:F.typ ~then_:y ~else_:x in
+    let assert_greater_than_full x y =
       let* x0, x1, x2 = with_label __LOC__ @@ fun () -> field_to_field3 x in
       let* y0, y1, y2 = with_label __LOC__ @@ fun () -> field_to_field3 y in
-      let dec =
-        let (Typ typ) = Boolean.typ in
-        match typ.var_to_fields check with
-        | [| dec |], _ ->
-            dec
-        | _ ->
-            failwith "unreachable"
-      in
-      (* if check (dec) is false, then we decrement with 0, and expand to greater than or equality check *)
       let* () =
-        with_label __LOC__
-        @@ fun () -> sub_then_dec ~dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2
+        with_label __LOC__ @@ fun () -> sub_then_dec ~x0 ~x1 ~x2 ~y0 ~y1 ~y2
       in
       assert (
         Bignum_bigint.(
@@ -321,9 +284,7 @@ include Indexed_merkle_tree.Make (struct
       let* () =
         with_label __LOC__
         @@ fun () ->
-        sub_then_dec
-          ~dec:Field.(constant typ one)
-          ~x0:(constant Field.typ fp0) ~x1:(constant Field.typ fp1)
+        sub_then_dec ~x0:(constant Field.typ fp0) ~x1:(constant Field.typ fp1)
           ~x2:(constant Field.typ fp2) ~y0:x0 ~y1:x1 ~y2:x2
       in
       Checked.return ()
@@ -343,14 +304,8 @@ include Indexed_merkle_tree.Make (struct
     let x = Token_id.Checked.to_field_unsafe x in
     let y = Token_id.Checked.to_field_unsafe y in
     let z = Token_id.Checked.to_field_unsafe z in
-    let* () =
-      with_label __LOC__
-      @@ fun () -> assert_greater_than_full ~check:Boolean.true_ z y
-    in
-    let*| () =
-      with_label __LOC__
-      @@ fun () -> assert_greater_than_full ~check:Boolean.true_ y x
-    in
+    let* () = with_label __LOC__ @@ fun () -> assert_greater_than_full z y in
+    let*| () = with_label __LOC__ @@ fun () -> assert_greater_than_full y x in
     ()
 
   let height = height
