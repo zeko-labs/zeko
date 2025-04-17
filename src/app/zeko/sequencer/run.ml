@@ -88,7 +88,7 @@ let () =
          (optional_with_default "testnet" string)
          ~doc:"string Network id"
      and l2_network_id =
-       flag "--network-id"
+       flag "--l2-network-id"
          (optional_with_default "testnet" string)
          ~doc:"string Network id"
      and deposit_delay_blocks =
