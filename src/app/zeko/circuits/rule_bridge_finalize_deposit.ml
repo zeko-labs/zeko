@@ -22,6 +22,10 @@ module Make (Inputs : sig
 
   val zeko_l2 : PC.t
 
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
+
   module Check_accepted :
       module type of
         Check_accepted_make.Make
@@ -31,10 +35,10 @@ module Make (Inputs : sig
             let token_owner_l1 = token_owner_l1
 
             module Deposit_params = Deposit_params
+
+            let chain_l1 = chain_l1
           end)
           ()
-
-  val chain_l2 : Mina_signature_kind.t
 end) =
 struct
   open Inputs

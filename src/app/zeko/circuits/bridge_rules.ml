@@ -30,6 +30,8 @@ struct
 
         let token_owner_l1 = None
 
+        let chain_l1 = Inputs.chain_l1
+
         module Deposit_params = Deposit_params_base
       end)
       ()
@@ -106,6 +108,8 @@ struct
         let holder_accounts_l1 = Inputs.holder_accounts_l1
 
         let token_owner_l1 = Some Inputs.token_owner_l1
+
+        let chain_l1 = Inputs.chain_l1
 
         module Deposit_params = Deposit_params_custom
       end)

@@ -284,34 +284,37 @@ module Calls = struct
     | ( :: ) of (Account_update.Checked.t * t) * t
     | Raw of Zkapp_call_forest.Checked.t
 
-  let rec hash : t -> Zkapp_call_forest.Checked.t Checked.t =
+  let rec hash :
+      chain:Mina_signature_kind.t -> t -> Zkapp_call_forest.Checked.t Checked.t
+      =
     let attach_control_var :
-           Account_update.Body.Checked.t
+           chain:Mina_signature_kind.t
+        -> Account_update.Body.Checked.t
         -> Zkapp_call_forest.Checked.account_update =
-     fun account_update ->
+     fun ~chain account_update ->
       { account_update =
           { data = account_update
           ; hash =
               Zkapp_command.Call_forest.Digest.Account_update.Checked.create
-                account_update
+                ~chain account_update
           }
       ; control =
           (let@ () = Mina_base.Prover_value.create in
            Control.None_given )
       }
     in
-    function
-    | [] ->
-        Checked.return (Zkapp_call_forest.Checked.empty ())
-    | (account_update, nested_calls) :: tail ->
-        let* calls = hash nested_calls in
-        let* tail = hash tail in
-        Checked.return
-          (Zkapp_call_forest.Checked.push
-             ~account_update:(attach_control_var account_update)
-             ~calls tail )
-    | Raw calls ->
-        Checked.return calls
+    fun ~chain -> function
+      | [] ->
+          Checked.return (Zkapp_call_forest.Checked.empty ())
+      | (account_update, nested_calls) :: tail ->
+          let* calls = hash ~chain nested_calls in
+          let* tail = hash ~chain tail in
+          Checked.return
+            (Zkapp_call_forest.Checked.push
+               ~account_update:(attach_control_var ~chain account_update)
+               ~calls tail )
+      | Raw calls ->
+          Checked.return calls
 end
 
 (** Given calls the zkapp wishes to make, constructs output that can be used to construct a full account update *)
@@ -324,7 +327,7 @@ let make_outputs :
        )
        Checked.t =
  fun ~chain account_update calls ->
-  let* calls = Calls.hash calls in
+  let* calls = Calls.hash ~chain calls in
   let account_update_digest =
     Zkapp_command.Call_forest.Digest.Account_update.Checked.create ~chain
       account_update
