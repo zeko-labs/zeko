@@ -49,6 +49,8 @@ module Make (Inputs : sig
 
   (** The public key of the inner account *)
   val inner_public_key : PC.t
+
+  val chain_l1 : Mina_signature_kind.t
 end) =
 struct
   open Inputs
@@ -404,7 +406,8 @@ struct
 
     (* Assemble some stuff to help the prover and calculate public output *)
     let*| out =
-      make_outputs account_update [ (sequencer_account_update, []) ]
+      make_outputs ~chain:chain_l1 account_update
+        [ (sequencer_account_update, []) ]
     in
     Compile_simple.{ prevs = Two_prevs (verify_txn_snark, verify_ases); out }
 

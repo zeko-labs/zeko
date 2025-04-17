@@ -316,16 +316,17 @@ end
 
 (** Given calls the zkapp wishes to make, constructs output that can be used to construct a full account update *)
 let make_outputs :
-       Account_update.Checked.t
+       chain:Mina_signature_kind.t
+    -> Account_update.Checked.t
     -> Calls.t
     -> ( Zkapp_statement.Checked.t
        * (Account_update.Body.t * Zkapp_command.Digest.Account_update.t * _) V.t
        )
        Checked.t =
- fun account_update calls ->
+ fun ~chain account_update calls ->
   let* calls = Calls.hash calls in
   let account_update_digest =
-    Zkapp_command.Call_forest.Digest.Account_update.Checked.create
+    Zkapp_command.Call_forest.Digest.Account_update.Checked.create ~chain
       account_update
   in
   let public_output : Zkapp_statement.Checked.t =

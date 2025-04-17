@@ -31,6 +31,8 @@ module Make (Inputs : sig
             module Deposit_params = Deposit_params
           end)
           ()
+
+  val chain_l1 : Mina_signature_kind.t
 end)
 () =
 struct
@@ -310,7 +312,7 @@ struct
           }
         in
         let*| out =
-          make_outputs account_update
+          make_outputs ~chain:chain_l1 account_update
             [ (helper_account, []); (witness_outer, []) ]
         in
         Compile_simple.

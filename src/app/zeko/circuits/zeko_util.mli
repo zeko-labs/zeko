@@ -110,7 +110,8 @@ module Boolean : sig
 end
 
 val make_outputs :
-     Mina_base.Account_update.Checked.t
+     chain:Mina_signature_kind.t
+  -> Mina_base.Account_update.Checked.t
   -> Calls.t
   -> ( Mina_base.Zkapp_statement.Checked.t
      * ( Mina_base.Account_update.Body.t

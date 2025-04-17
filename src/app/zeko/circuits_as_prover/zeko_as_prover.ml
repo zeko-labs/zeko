@@ -134,6 +134,4 @@ let carry ~x0 ~x1 ~y0 ~y1 =
   let x = x0 + (x1 * l) in
   let y = y0 + (y1 * l) in
   let r = x - y in
-  if r < zero
-    then Field.(negate one)
-    else Field.zero
+  if r < zero then Field.(negate one) else Field.zero

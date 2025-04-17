@@ -16,6 +16,10 @@ module Make_mina (Inputs : sig
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
+
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
 end)
 () =
 struct
@@ -89,6 +93,10 @@ module Make_custom (Inputs : sig
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
+
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
 end)
 () =
 struct
