@@ -1897,14 +1897,6 @@ module Queries = struct
     @ Archive.commands
 end
 
-module Subscriptions = struct
-  (* open Schema *)
-
-  let commands = []
-end
-
 let schema ~chain =
   Graphql_async.Schema.(
-    schema Queries.commands
-      ~mutations:(Mutations.commands ~chain)
-      ~subscriptions:Subscriptions.commands)
+    schema Queries.commands ~mutations:(Mutations.commands ~chain))

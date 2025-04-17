@@ -1930,6 +1930,4 @@ end
 
 let schema ~chain =
   Graphql_async.Schema.(
-    schema Queries.commands
-      ~mutations:(Mutations.commands ~chain)
-      ~subscriptions:[])
+    schema Queries.commands ~mutations:(Mutations.commands ~chain))
