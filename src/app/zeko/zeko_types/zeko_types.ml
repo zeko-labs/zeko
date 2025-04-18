@@ -250,16 +250,9 @@ end
 module Verification_key = struct
   type t = Compile_simple.Verification_key.t
 
-  let to_yojson =
-    Fn.compose Pickles.Side_loaded.Verification_key.to_yojson
-      Compile_simple.Verification_key.to_pickles
+  type serializable = Pickles.Side_loaded.Verification_key.t [@@deriving yojson]
 
-  let of_yojson json : t Ppx_deriving_yojson_runtime.error_or =
-    match Pickles.Side_loaded.Verification_key.of_yojson json with
-    | Ok vk ->
-        Ok (Compile_simple.Verification_key.of_pickles vk)
-    | Error e ->
-        Error e
+  let of_serializable x = Compile_simple.Verification_key.of_pickles x
 end
 
 module Zkapp_single_proved_input = struct
@@ -272,14 +265,18 @@ module Zkapp_single_proved_input = struct
 
   type serializable =
     { base : Zkapp_rule_input.serializable
-    ; vk : Verification_key.t
+    ; vk : Verification_key.serializable
     ; zkapp_proof : Proof.t
     ; first : Per_account_update.t
     }
   [@@deriving yojson]
 
   let of_serializable ({ base; vk; zkapp_proof; first } : serializable) : t =
-    { base = Zkapp_rule_input.of_serializable base; vk; zkapp_proof; first }
+    { base = Zkapp_rule_input.of_serializable base
+    ; vk = Verification_key.of_serializable vk
+    ; zkapp_proof
+    ; first
+    }
 end
 
 module Zkapp_single_unproved_input = struct

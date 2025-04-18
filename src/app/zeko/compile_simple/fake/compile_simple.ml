@@ -34,7 +34,11 @@ module Verification_key = struct
 
   let hash_var (Var x) = x
 
-  let of_pickles _ = Vk Field.one
+  let of_pickles x =
+    Vk
+      Random_oracle.(
+        hash ~init:Hash_prefix_states.side_loaded_vk
+          (pack_input (Pickles.Side_loaded.Verification_key.to_input x)))
 
   let to_pickles _ = Pickles.Side_loaded.Verification_key.dummy
 end

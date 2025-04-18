@@ -349,7 +349,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                     Zkapp_single_proved_input.
                       { base = incomplete_base ~imt_hash ~imt_witness
                       ; first = empty_start_data
-                      ; vk = Compile_simple.Verification_key.of_pickles vk.data
+                      ; vk = vk.data
                       ; zkapp_proof = Compile_simple.Proof.of_pickles proof
                       } )
         in
