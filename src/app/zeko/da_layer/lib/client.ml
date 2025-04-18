@@ -331,9 +331,12 @@ let check_synced_nodes ~logger ~(config : Config.t) ~target_ledger_hash =
         Rpc.get_diff ~logger ~node_location:node ~ledger_hash:target_ledger_hash
       with
       | Ok (Some _) ->
-          return ( (* synced node *) )
+          return
+            (printf
+               !"Node %s is already synced\n%!"
+               (Host_and_port.to_string node.value) )
       | Ok None | Error _ ->
           printf
-            !"Node %s is not synced\n%!"
+            !"Node %s is *not* synced\n%!"
             (Host_and_port.to_string node.value) ;
           return (Config.throw_out_node config ~node) )
