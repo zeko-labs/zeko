@@ -69,7 +69,7 @@ If the `post` request is made against o1labs' backend service, the there would b
 ## daemon.json config to enable/disable the node error collection service
 
 [daemon.json]: #daemon
-This service would be enabled by default. It turned turned off by setting the `errorReport` field in `daemon.json` file to be false.
+This service would be enabled by default. It turned off by setting the `errorReport` field in `daemon.json` file to be false.
 
 ## Cloud storage
 
