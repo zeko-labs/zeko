@@ -529,8 +529,14 @@ module Sequencer = struct
   let bootstrap ~logger ({ config; _ } as t) da_config =
     print_endline "Bootstrapping" ;
     let%bind commited_ledger_hash =
-      Gql_client.infer_committed_state config.l1_uri ~zkapp_pk:config.zkapp_pk
-        ~signer_pk:(Public_key.compress config.signer.public_key)
+      match Sys.getenv "ZEKO_OVERRIDE_BOOTSTRAP_HASH" with
+      | None ->
+          Gql_client.infer_committed_state config.l1_uri
+            ~zkapp_pk:config.zkapp_pk
+            ~signer_pk:(Public_key.compress config.signer.public_key)
+      | Some hash ->
+          printf "Using override hash: %s\n%!" hash ;
+          return (Ledger_hash.of_decimal_string hash)
     in
     printf "Fetched commited root: %s\n%!"
       Ledger_hash.(to_decimal_string commited_ledger_hash) ;
