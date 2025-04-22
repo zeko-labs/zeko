@@ -104,6 +104,8 @@ let transaction_snark ?proving_timeout t input =
   >>| function
   | Prover.Output.Txn_snark snark ->
       snark
+  | Prover.Output.Error err ->
+      failwith err
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -112,6 +114,8 @@ let ase_with_length ?proving_timeout t input =
   >>| function
   | Prover.Output.Ase (With_length ase) ->
       ase
+  | Prover.Output.Error err ->
+      failwith err
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -120,6 +124,8 @@ let ase_without_length ?proving_timeout t input =
   >>| function
   | Prover.Output.Ase (Without_length ase) ->
       ase
+  | Prover.Output.Error err ->
+      failwith err
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -153,6 +159,8 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
   >>| function
   | Prover.Output.Call_forest_tree tree ->
       tree
+  | Prover.Output.Error err ->
+      failwith err
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -161,6 +169,8 @@ let verify_both_ases ?proving_timeout t input =
   >>| function
   | Prover.Output.Verify_both_ases snark ->
       snark
+  | Prover.Output.Error err ->
+      failwith err
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -237,6 +247,8 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
   >>| function
   | Prover.Output.Call_forest_tree tree ->
       tree
+  | Prover.Output.Error err ->
+      failwith err
   | _ ->
       failwith "Unexpected response from prover"
 

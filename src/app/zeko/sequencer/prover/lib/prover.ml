@@ -141,6 +141,7 @@ module Output = struct
   end
 
   type t =
+    | Error of string
     | Pong
     | Txn_snark of (Zeko_stmt.t * Compile_simple.Proof.t)
     | Ase of Ase.t
@@ -268,14 +269,14 @@ let run ?fake_proving_time ~logger ~port () =
                               prove ?fake_proving_time ~logger input )
                         with
                         | Ok output ->
-                            return
-                              (Yojson.Safe.to_string @@ Output.to_yojson output)
+                            return output
                         | Error e ->
                             let err = Exn.to_string e in
                             [%log error] "Error proving: %s" err ;
-                            return err )
+                            return (Output.Error err) )
                     | Error e ->
-                        return e )
+                        return (Output.Error e) )
+               >>| Output.to_yojson >>| Yojson.Safe.to_string
                >>| Writer.write_line w
                >>= fun () -> loop ()
          in
