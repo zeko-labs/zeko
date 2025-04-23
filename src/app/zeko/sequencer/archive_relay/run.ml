@@ -3,7 +3,6 @@ open Core_kernel
 open Mina_base
 open Mina_lib
 open Mina_ledger
-open Mina_transaction_logic
 open Cli_lib
 
 let constraint_constants = Zeko_constants.constraint_constants
@@ -87,7 +86,10 @@ let reset_ledger_cache t () =
     @@ Ledger.Db.get_directory t.db
   in
   Ledger.Db.close t.db ;
-  rmrf directory_name ;
+
+  Sys.readdir directory_name
+  |> Array.iter ~f:(fun file_name ->
+         rmrf (Filename.concat directory_name file_name) ) ;
   t.db <-
     Ledger.Db.create ~directory_name ~depth:constraint_constants.ledger_depth ()
 
@@ -99,37 +101,35 @@ let sync_archive (t : t) ~hash =
     ~target_ledger_hash:hash
     ~f:(fun ~current_chunk ~chunks_length diff ->
       let ledger = Ledger.of_database t.db in
+      let changed_accounts =
+        Da_layer.Diff.Stable.Latest.changed_accounts diff
+      in
+      let accounts_created =
+        let aids =
+          List.map changed_accounts ~f:snd |> List.map ~f:Account.identifier
+        in
+        Ledger.location_of_account_batch ledger aids
+        |> List.filter_map ~f:(fun (aid, opt) ->
+               if Option.is_some opt then Some aid else None )
+      in
+      List.iter changed_accounts ~f:(fun (index, account) ->
+          Ledger.set_at_index_exn ledger index account ) ;
+      Ledger.commit ledger ;
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
-          (* Apply accounts diff *)
-          let changed_accounts =
-            Da_layer.Diff.Stable.Latest.changed_accounts diff
-          in
-          List.iter changed_accounts ~f:(fun (index, account) ->
-              Ledger.set_at_index_exn ledger index account ) ;
-          Ledger.commit ledger ;
           return ()
       | Some (command, _) -> (
-          let txn_applied =
-            Or_error.ok_exn
-            @@ Result.( >>= )
-                 (Ledger.apply_transaction_first_pass ~constraint_constants
-                    ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-                    ~txn_state_view:
-                      Mina_state.Protocol_state.(
-                        Body.view @@ body compile_time_genesis.data)
-                    ledger (Command command) )
-                 (Ledger.apply_transaction_second_pass ledger)
-          in
-          Ledger.commit ledger ;
           let kvdb = Ledger.Db.zeko_kvdb t.db in
           let new_protocol_state, diff =
             Archive_lib.Diff.Builder.zeko_transaction_added
-              ~constraint_constants
-              ~accounts_created:(Transaction_applied.new_accounts txn_applied)
+              ~constraint_constants ~accounts_created
               ~new_state_hash:(Ledger.merkle_root ledger)
               ~protocol_state:(Protocol_state.get kvdb) ~ledger
-              ~txn:(Transaction_applied.transaction_with_status txn_applied)
+              ~txn:
+                With_status.
+                  { data = Mina_transaction.Transaction.Command command
+                  ; status = Transaction_status.Applied
+                  }
               ~dummy_fee_payer:Zeko_constants.inner_public_key
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
