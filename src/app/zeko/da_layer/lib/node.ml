@@ -386,19 +386,7 @@ let create_server ~chain ~sync_arg ~port ~logger ~db_dir ~signer_sk
               ; ("context", `String "rpc_tcp_server")
               ] ) )
     where_to_listen
-    (fun address reader writer ->
-      let address = Socket.Address.Inet.addr address in
+    (fun _ reader writer ->
       Rpc.Connection.server_with_close reader writer ~implementations
         ~connection_state:(fun _ -> ())
-        ~on_handshake_error:
-          (`Call
-            (fun exn ->
-              return
-              @@ [%log error]
-                   "Exception while handling RPC server request from $address: \
-                    $error"
-                   ~metadata:
-                     [ ("error", `String (Core.Exn.to_string_mach exn))
-                     ; ("context", `String "rpc_server")
-                     ; ("address", `String (Unix.Inet_addr.to_string address))
-                     ] ) ) )
+        ~on_handshake_error:`Ignore )

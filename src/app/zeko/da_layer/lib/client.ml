@@ -118,14 +118,21 @@ end
 
 (** Send the diff to all the nodes in the [~config] *)
 let distribute_diff ~logger ~config ~ledger_openings ~diff ~quorum =
-  let%bind signatures =
+  let%bind results =
     Deferred.List.map ~how:`Parallel (Config.nodes config)
       ~f:(fun node_location ->
         Rpc.post_diff ~logger ~node_location ~ledger_openings ~diff )
-    |> Deferred.map ~f:(List.filter_map ~f:Result.ok)
   in
+  let signatures = List.filter_map results ~f:Result.ok in
+  let errors = List.filter_map results ~f:Result.error in
   if List.length signatures >= quorum then return (Ok signatures)
-  else return (Error (Error.of_string "Quorum not reached"))
+  else
+    return
+      (Error
+         (Error.of_string
+            (sprintf "Quorum not reached: %s"
+               (List.fold errors ~init:"" ~f:(fun acc e ->
+                    sprintf "%s\n%s" acc (Error.to_string_hum e) ) ) ) ) )
 
 (** This module ensures that diffes are sent in order. 
     Signatures can be collected as [Deferred.t] via [get_signatures] *)
