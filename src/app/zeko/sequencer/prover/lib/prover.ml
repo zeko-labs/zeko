@@ -201,7 +201,11 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
       let Compile_simple.[ prove; _ ] = Inner_rules.provers in
       let%bind vk_hash =
         Compile_simple.Verification_key.of_tag Inner_rules.tag
-        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.to_pickles
+        >>| Compile_simple.Verification_key.of_pickles
+        >>| Compile_simple.Verification_key.hash
       in
       let%map (_stmt, au), proof =
         time ?fake_proving_time ~logger "Inner_rules.inner_sync"
@@ -237,7 +241,11 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
       let Compile_simple.[ prove; _; _ ] = Outer_rules.provers in
       let%bind vk_hash =
         Compile_simple.Verification_key.of_tag Outer_rules.tag
-        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.to_pickles
+        >>| Compile_simple.Verification_key.of_pickles
+        >>| Compile_simple.Verification_key.hash
       in
       let%map (_stmt, au), proof =
         time ?fake_proving_time ~logger "Outer_rules.commit"

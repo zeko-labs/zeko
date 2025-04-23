@@ -31,7 +31,7 @@ let l1_network_id = "testnet"
 
 let l1_signature_kind = Utils.signature_kind l1_network_id
 
-let l2_network_id = "zeko"
+let l2_network_id = "testnet"
 
 let l2_signature_kind = Utils.signature_kind l2_network_id
 
