@@ -66,10 +66,11 @@ let get_index t = get t Diff_index ~key:() |> Option.value ~default:[]
 let add_diff t ~ledger_hash ~diff =
   let index = get_index t in
   if List.mem index ledger_hash ~equal:Ledger_hash.equal then `Already_existed
-  else (
-    set t Diff ~key:ledger_hash ~data:diff ;
-    set_index t ~index:(ledger_hash :: index) ;
-    `Added )
+  else
+    let new_index = ledger_hash :: index in
+    set_batch t
+      [ Pack (Diff, ledger_hash, diff); Pack (Diff_index, (), new_index) ] ;
+    `Added
 
 let get_diff t ~ledger_hash = get t Diff ~key:ledger_hash
 

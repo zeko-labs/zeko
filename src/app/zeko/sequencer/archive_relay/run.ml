@@ -46,30 +46,19 @@ let time ~logger label (d : 'a Deferred.t) =
   [%log info] "%s: %s" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-module State = struct
-  type _t = { mutable protocol_state : Mina_state.Protocol_state.value }
-  [@@deriving yojson]
-
-  type t = _t
-
-  module Db = Kvdb_base.Make_singleton (struct
-    type t = _t [@@deriving yojson]
+module Protocol_state = struct
+  include Kvdb_base.Make_singleton (struct
+    type t = Mina_state.Protocol_state.value [@@deriving yojson]
 
     let key = "archive_relay_state"
   end)
 
-  let save kvdb t = Db.set ~data:t kvdb
-
-  let load kvdb =
-    match Db.get kvdb with
+  let get kvdb =
+    match get kvdb with
     | Some state ->
         state
     | None ->
-        { protocol_state = compile_time_genesis.data }
-
-  let set_protocol_state t kvdb protocol_state =
-    t.protocol_state <- protocol_state ;
-    save kvdb t
+        compile_time_genesis.data
 end
 
 type t =
@@ -77,7 +66,6 @@ type t =
   ; archive_uri : Host_and_port.t Cli_lib.Flag.Types.with_name
   ; zeko_uri : Uri.t
   ; da_config : Da_layer.Client.Config.t
-  ; state : State.t
   ; mutable db : Ledger.Db.t
   }
 
@@ -90,7 +78,6 @@ let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache =
   ; archive_uri
   ; zeko_uri
   ; da_config = Da_layer.Client.Config.of_string_list da_nodes
-  ; state = State.load (Ledger.Db.zeko_kvdb db)
   ; db
   }
 
@@ -135,18 +122,18 @@ let sync_archive (t : t) ~hash =
                  (Ledger.apply_transaction_second_pass ledger)
           in
           Ledger.commit ledger ;
+          let kvdb = Ledger.Db.zeko_kvdb t.db in
           let new_protocol_state, diff =
             Archive_lib.Diff.Builder.zeko_transaction_added
               ~constraint_constants
               ~accounts_created:(Transaction_applied.new_accounts txn_applied)
               ~new_state_hash:(Ledger.merkle_root ledger)
-              ~protocol_state:t.state.protocol_state ~ledger
+              ~protocol_state:(Protocol_state.get kvdb) ~ledger
               ~txn:(Transaction_applied.transaction_with_status txn_applied)
               ~dummy_fee_payer:Zeko_constants.inner_public_key
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
-          State.set_protocol_state t.state (Ledger.Db.zeko_kvdb t.db)
-            new_protocol_state ;
+          Protocol_state.set kvdb ~data:new_protocol_state ;
           match%bind
             Archive_client.dispatch ~logger ~compile_config t.archive_uri
               (Archive_lib.Diff.Transition_frontier diff)

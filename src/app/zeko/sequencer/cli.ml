@@ -45,8 +45,8 @@ let committer =
            let kvdb = Committer.Store.Kvdb.create db_dir in
            match
              Committer.Store.get_commit kvdb
-               ~source:(Frozen_ledger_hash.of_decimal_string source)
-               ~target:(Frozen_ledger_hash.of_decimal_string target)
+               ( Frozen_ledger_hash.of_decimal_string source
+               , Frozen_ledger_hash.of_decimal_string target )
            with
            | Some commit ->
                print_endline

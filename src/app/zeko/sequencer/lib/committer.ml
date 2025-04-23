@@ -24,86 +24,24 @@ module Store = struct
     match x with Ok x -> x | Error e -> failwith e
 
   type commit_id = Frozen_ledger_hash.t * Frozen_ledger_hash.t
-  [@@deriving yojson]
+  [@@deriving yojson, equal]
 
-  type index = commit_id list [@@deriving yojson]
+  module Kvdb = Kvdb_base.Make_table (struct
+    type key = commit_id [@@deriving yojson, equal]
 
-  module Kvdb = struct
-    module Key_value = struct
-      type _ t =
-        | Commit : (commit_id * Commit_witness.t) t
-        | Commit_index : (unit * index) t
+    type value = Commit_witness.t [@@deriving yojson]
 
-      let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
-       fun pair_type key ->
-        match pair_type with
-        | Commit ->
-            let hash1, hash2 = key in
-            Bigstring.(
-              concat
-                [ of_string "commit"
-                ; of_string
-                    ( Frozen_ledger_hash.to_base58_check hash1
-                    ^ "-"
-                    ^ Frozen_ledger_hash.to_base58_check hash2 )
-                ])
-        | Commit_index ->
-            Bigstring.of_string "commit_index"
-
-      let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
-       fun pair_type value ->
-        match pair_type with
-        | Commit ->
-            Bigstring.of_string @@ Yojson.Safe.to_string
-            @@ Commit_witness.to_yojson value
-        | Commit_index ->
-            Bigstring.of_string @@ Yojson.Safe.to_string
-            @@ index_to_yojson value
-
-      let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
-       fun pair_type data ->
-        match pair_type with
-        | Commit ->
-            ok_exn @@ Commit_witness.of_yojson @@ Yojson.Safe.from_string
-            @@ Bigstring.to_string data
-        | Commit_index ->
-            ok_exn @@ index_of_yojson @@ Yojson.Safe.from_string
-            @@ Bigstring.to_string data
-    end
-
-    include Kvdb_base.Make (Key_value)
-  end
+    let key = "commit"
+  end)
 
   let store_commit kvdb witness ~source ~target =
-    (* Update index *)
-    let index =
-      Kvdb.get kvdb Commit_index ~key:() |> Option.value ~default:[]
-    in
-    let index = (source, target) :: index in
-    Kvdb.set kvdb Commit_index ~key:() ~data:index ;
+    Kvdb.set kvdb ~key:(source, target) ~data:witness
 
-    (* Store commit *)
-    let commit_id = (source, target) in
-    Kvdb.set kvdb Commit ~key:commit_id ~data:witness
+  let get_index kvdb = Kvdb.get_keys kvdb
 
-  let load_commit_exn kvdb commit_id =
-    Option.value_exn @@ Kvdb.get kvdb Commit ~key:commit_id
+  let get_commit kvdb commit_id = Kvdb.get kvdb ~key:commit_id
 
-  let get_index kvdb =
-    Kvdb.get kvdb Commit_index ~key:() |> Option.value ~default:[]
-
-  let get_commit kvdb ~source ~target =
-    let index = get_index kvdb in
-    let%bind.Option commit_id =
-      List.find index ~f:(fun (s, t) ->
-          Frozen_ledger_hash.equal s source && Frozen_ledger_hash.equal t target )
-    in
-    Some (load_commit_exn kvdb commit_id)
-
-  let get_all kvdb =
-    let index = get_index kvdb in
-    let commits = List.map index ~f:(load_commit_exn kvdb) in
-    commits
+  let get_all kvdb = Kvdb.get_all kvdb
 end
 
 let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
@@ -168,7 +106,9 @@ let recommit_all ~provers ~(executor : Executor.t) ~db ~zkapp_pk ~archive_uri =
         printf "Recommitting %s -> %s\n%!"
           (Frozen_ledger_hash.to_base58_check source)
           (Frozen_ledger_hash.to_base58_check target) ;
-        let witness = Store.load_commit_exn kvdb (source, target) in
+        let witness =
+          Store.get_commit kvdb (source, target) |> Option.value_exn
+        in
         let%bind command =
           prove_commit ~provers ~executor ~zkapp_pk ~archive_uri witness
         in
