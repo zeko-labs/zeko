@@ -1,7 +1,7 @@
 open Core_kernel
 open Snark_params.Tick
 
-module Impl = struct
+module Merkle_tree = struct
   let merge x y =
     Random_oracle.hash
       ~init:(Hash_prefix_create.salt "indexed merkle tree")
@@ -400,25 +400,111 @@ end
 
 let hash_simple : field list -> field =
  fun xs ->
-  let (Some_full_trees xs) = Impl.to_trees xs in
-  let level = Impl.get_max_level Level_z xs in
+  let (Some_full_trees xs) = Merkle_tree.to_trees xs in
+  let level = Merkle_tree.get_max_level Level_z xs in
   let (Prove_lte_result lte) =
-    Impl.prove_lte level Impl.level_34 |> Option.value_exn
+    Merkle_tree.prove_lte level Merkle_tree.level_34 |> Option.value_exn
   in
-  let xs = Impl.extend_full_trees (Impl.mkext Impl.level_34 lte) xs in
-  let xs = Impl.of_full_trees Level_z Empty xs in
-  Impl.hash_of Impl.level_34 xs
+  let xs =
+    Merkle_tree.extend_full_trees
+      (Merkle_tree.mkext Merkle_tree.level_34 lte)
+      xs
+  in
+  let xs = Merkle_tree.of_full_trees Level_z Empty xs in
+  Merkle_tree.hash_of Merkle_tree.level_34 xs
 
 let path_simple :
     int64 -> field list -> [ `Left of field | `Right of field ] list =
  fun idx xs ->
-  let (Some_full_trees xs) = Impl.to_trees xs in
-  let level = Impl.get_max_level Level_z xs in
+  let (Some_full_trees xs) = Merkle_tree.to_trees xs in
+  let level = Merkle_tree.get_max_level Level_z xs in
   let (Prove_lte_result lte) =
-    Impl.prove_lte level Impl.level_34 |> Option.value_exn
+    Merkle_tree.prove_lte level Merkle_tree.level_34 |> Option.value_exn
   in
-  let xs = Impl.extend_full_trees (Impl.mkext Impl.level_34 lte) xs in
-  let xs = Impl.of_full_trees Level_z Empty xs in
-  (* FIXME: is the shift correct? *)
-  let loc = Impl.loc_of_index Impl.level_34 (Int64.shift_left idx (64 - 35)) in
-  Impl.get_path (Impl.level_34, xs, loc) |> Impl.simplify_path
+  let xs =
+    Merkle_tree.extend_full_trees
+      (Merkle_tree.mkext Merkle_tree.level_34 lte)
+      xs
+  in
+  let xs = Merkle_tree.of_full_trees Level_z Empty xs in
+  let loc =
+    Merkle_tree.loc_of_index Merkle_tree.level_34
+      (Int64.shift_left idx (64 - 34))
+  in
+  Merkle_tree.get_path (Merkle_tree.level_34, xs, loc)
+  |> Merkle_tree.simplify_path
+
+module Merkle_set (T : sig
+  type t [@@deriving sexp]
+
+  val compare : t -> t -> int
+
+  val min : t
+
+  val max : t
+
+  val to_fields : t -> field list
+end) : sig
+  type t
+
+  val empty : t
+
+  type r =
+    { path : [ `Left of field | `Right of field ] list
+    ; before_path : [ `Left of field | `Right of field ] list
+    ; before : T.t
+    ; after : T.t
+    ; hash : field
+    }
+
+  val maybe_add : T.t -> t -> t * r
+end = struct
+  module S = Set.Make (T)
+
+  type t = T.t list
+
+  type r =
+    { path : [ `Left of field | `Right of field ] list
+    ; before_path : [ `Left of field | `Right of field ] list
+    ; before : T.t
+    ; after : T.t
+    ; hash : field
+    }
+
+  let empty = [ T.min; T.max ]
+
+  let calculate_tree set entries =
+    let f entry =
+      let _, _, set' = S.split set entry in
+      let next =
+        match S.min_elt set' with None -> T.max | Some next -> next
+      in
+      let fields = T.to_fields entry @ T.to_fields next in
+      let init = "indexed merkle tree entry hash" in
+      Random_oracle.hash
+        ~init:(Hash_prefix_create.salt init)
+        (Array.of_list fields)
+    in
+    List.map ~f entries
+
+  let get_idx entry entries =
+    let idx, _ =
+      List.findi entries ~f:(fun _ x -> Int.( = ) (T.compare entry x) 0)
+      |> Option.value_exn
+    in
+    Int64.of_int idx
+
+  let maybe_add entry entries : t * r =
+    let set = S.of_list entries in
+    let old_tree = calculate_tree set entries in
+    let set = S.add set entry in
+    let before_set, _, after_set = S.split set entry in
+    let before = S.max_elt_exn before_set in
+    let after = S.min_elt_exn after_set in
+    let entries' = if S.mem set entry then entries else entries @ [ entry ] in
+    let new_tree = calculate_tree set entries' in
+    let path = path_simple (get_idx entry entries') new_tree in
+    let before_path = path_simple (get_idx before entries') old_tree in
+    let hash = hash_simple new_tree in
+    (entries', { path; before_path; before; after; hash })
+end

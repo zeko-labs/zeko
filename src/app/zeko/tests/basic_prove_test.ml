@@ -3,6 +3,16 @@ open Signature_lib
 open Snark_params.Tick
 open Zeko_circuits
 
+let list_to_fun l =
+  let l = ref l in
+  fun () ->
+    match !l with
+    | [] ->
+        failwith "empty!"
+    | x :: xs ->
+        l := xs ;
+        x
+
 let da_sk =
   Quickcheck.random_value ~seed:(`Deterministic "182128381918") Private_key.gen
 
@@ -94,9 +104,16 @@ let point_of_string s =
     to_affine_exn @@ point_near_x @@ Snark_params.Tick.Field.of_string s)
   |> Public_key.compress
 
+module Inner_rules_inst =
+  Inner_rules.Make
+    (struct
+      let chain_l2 = Mina_signature_kind.Testnet
+    end)
+    ()
+
 let _inner_stmt, _inner_proof =
   let open struct
-    let Compile_simple.[ sync; action ] = Inner_rules.provers
+    let Compile_simple.[ sync; action ] = Inner_rules_inst.provers
 
     let ase_with_length : Rule_inner_sync.Ase_inst.t =
       Rule_inner_sync.Ase_inst.make ~proof_source:ase_with_length.source
@@ -124,9 +141,27 @@ let _inner_stmt, _inner_proof =
   end in
   (stmt, proof)
 
+let inner_public_key =
+  let pk =
+    Snark_params.Tick.Inner_curve.(
+      to_affine_exn @@ point_near_x @@ Snark_params.Tick.Field.of_int 123456789)
+  in
+  Signature_lib.Public_key.compress pk
+
+module Outer_rules_inst =
+  Outer_rules.Make
+    (struct
+      let max_valid_while_size = 1024
+
+      let inner_public_key = inner_public_key
+
+      let chain_l1 = Mina_signature_kind.Testnet
+    end)
+    ()
+
 let _outer =
   let open struct
-    let Compile_simple.[ _commit; action; _pause ] = Outer_rules.provers
+    let Compile_simple.[ _commit; action; _pause ] = Outer_rules_inst.provers
 
     (* let pause_witness : Rule_pause.Witness.t =
          { public_key = point_of_string_even "1238881"
@@ -175,7 +210,7 @@ let _outer =
 
     let old_inner_acc =
       { Mina_base.Account.empty with
-        public_key = Outer_rules.Inputs.inner_public_key
+        public_key = inner_public_key
       ; zkapp =
           Some
             { Mina_base.Zkapp_account.default with
@@ -416,60 +451,64 @@ let _outer =
       printf "commitment out circuit: %s\n"
         (full_transaction_commitment |> Field.to_string)
 
-    type acc_set_entry = { key : field; next_key : field }
-
-    let hash_entry { key; next_key } =
-      Random_oracle.hash
-        ~init:(Hash_prefix_create.salt "indexed merkle tree entry hash")
-        [| key; next_key |]
-
-    let acc_set_merge x y =
-      Random_oracle.hash
-        ~init:(Hash_prefix_create.salt "indexed merkle tree")
-        [| x; y |]
-
-    let acc_set_intermediate_ledger_hashes =
-      let base = Field.zero in
-      let rec go = function
-        | 34, hash ->
-            [ (34, hash) ]
-        | height, hash ->
-            (height, hash) :: go (height + 1, acc_set_merge hash hash)
-      in
-      go (0, base)
-
     let to_account_set x =
       let (Typ typ) = Account_set.typ in
       typ.value_of_fields ([| x |], typ.constraint_system_auxiliary ())
 
-    let max = Field.negate Field.one
+    let derive pk =
+      Mina_base.Account_id.create pk Mina_base.Token_id.default
+      |> fun owner -> Mina_base.Account_id.derive_token_id ~owner
 
-    let base_right = hash_entry { key = max; next_key = max }
+    let inner_own_token_id = derive inner_public_key
 
-    let acc_set_implied_root init path =
-      List.fold path ~init ~f:(fun acc -> function
+    let fee_payer_own_token_id =
+      derive (Public_key.compress fee_payer_kp.public_key)
+
+    module S = Account_set_data.Merkle_set (struct
+      type t = Mina_base.Token_id.t
+
+      let compare = Mina_base.Token_id.compare
+
+      let min = Mina_base.Token_id.of_field Field.zero
+
+      let max = Mina_base.Token_id.of_field (Field.negate Field.one)
+
+      let sexp_of_t = Mina_base.Token_id.sexp_of_t
+
+      let t_of_sexp = Mina_base.Token_id.t_of_sexp
+
+      let to_fields x = [ Mina_base.Token_id.to_field_unsafe x ]
+    end)
+
+    let acc_set, { S.hash = source_acc_set; _ } =
+      S.maybe_add inner_own_token_id S.empty
+      |> fun (s, _) -> S.maybe_add fee_payer_own_token_id s
+
+    let acc_set, acc_set_data_0 =
+      S.maybe_add (derive first_account_update.public_key) acc_set
+
+    let acc_set, acc_set_data_1 =
+      S.maybe_add (derive second_account_update.public_key) acc_set
+
+    let convert_path =
+      let f = function
         | `Left right ->
-            acc_set_merge acc right
+            ({ hash_other = right; is_right = false } : Account_set.PathStep.t)
         | `Right left ->
-            acc_set_merge left acc )
+            { hash_other = left; is_right = true }
+      in
+      List.map ~f
 
-    (* FIXME: add entry for fee payer acc and inner acc *)
-    let source_acc_set =
-      hash_entry { key = Field.zero; next_key = max }
-      |> Fn.flip acc_set_implied_root
-           ( `Left base_right
-           :: ( List.drop acc_set_intermediate_ledger_hashes 1
-              |> List.map ~f:(fun (_, right) -> `Left right) ) )
-
-    let () = printf !"source_acc_set:      %{sexp: Field.t}\n" source_acc_set
-
-    let () = assert (List.length acc_set_intermediate_ledger_hashes = 35)
-
-    let account_set_least_path : Account_set.Path.t =
-      { hash_other = base_right; is_right = false }
-      :: ( List.drop acc_set_intermediate_ledger_hashes 1
-         |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
-                { hash_other; is_right = false } ) )
+    let make_update_acc_set_witness first second =
+      { Txn_state.get_account_set_x =
+          list_to_fun [ first.S.before; second.S.before ]
+      ; get_account_set_z = list_to_fun [ first.after; second.after ]
+      ; get_account_set_x_path =
+          List.map ~f:convert_path [ first.before_path; second.before_path ]
+          |> list_to_fun
+      ; get_account_set_y_path =
+          List.map ~f:convert_path [ first.path; second.path ] |> list_to_fun
+      }
 
     let zkapp_double_witness : Rule_zkapp_command.Zkapp_double_unproved_input.t
         =
@@ -494,14 +533,7 @@ let _outer =
               ; call_stack = []
               ; source_ledger_sparse = sparse_source_ledger
               ; update_acc_set_witness =
-                  { get_account_set_x =
-                      (fun () -> Mina_base.Token_id.of_field Field.zero)
-                  ; get_account_set_z =
-                      (fun () ->
-                        Mina_base.Token_id.of_field (Field.negate Field.one) )
-                  ; get_account_set_x_path = (fun () -> account_set_least_path)
-                  ; get_account_set_y_path = (fun () -> account_set_least_path)
-                  }
+                  make_update_acc_set_witness acc_set_data_0 acc_set_data_1
               }
           }
       ; first =
@@ -591,79 +623,13 @@ let _outer =
       printf "new full_transaction_commitment: %s\n"
         (Field.to_string stmt0.target_local_state.full_transaction_commitment)
 
-    let token_id_new =
-      Mina_base.Account_id.derive_token_id ~owner:account_id_new
-      |> Mina_base.Token_id.to_field_unsafe
+    let acc_set, acc_set_data_2 =
+      S.maybe_add (derive third_account_update.public_key) acc_set
 
-    let account_set_new_path : Account_set.Path.t =
-      { hash_other = Field.zero; is_right = false }
-      :: { hash_other =
-             acc_set_merge
-               (hash_entry { key = Field.zero; next_key = token_id_new })
-               base_right
-         ; is_right = true
-         }
-      :: ( List.drop acc_set_intermediate_ledger_hashes 2
-         |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
-                { hash_other; is_right = false } ) )
+    let acc_set, acc_set_data_3 =
+      S.maybe_add (derive fourth_account_update.public_key) acc_set
 
-    let intermediate_acc_set =
-      hash_entry { key = Field.zero; next_key = token_id_new }
-      |> Fn.flip acc_set_implied_root
-           ( `Left base_right
-           :: ( List.drop acc_set_intermediate_ledger_hashes 1
-              |> List.map ~f:(fun (_, right) -> `Left right) ) )
-
-    let intermediate_acc_set' =
-      let second_left =
-        acc_set_merge
-          (hash_entry { key = Field.zero; next_key = token_id_new })
-          base_right
-      in
-      acc_set_implied_root Field.zero
-        ( `Left Field.zero :: `Right second_left
-        :: ( List.drop acc_set_intermediate_ledger_hashes 2
-           |> List.map ~f:(fun (_, right) -> `Left right) ) )
-
-    let to_field (Snark_params.Tick.Typ.Typ typ) x =
-      match typ.value_to_fields x with
-      | [| f |], _ ->
-          f
-      | _ ->
-          failwith "too big"
-
-    let () =
-      printf !"intermediate_acc_set:  %{sexp: Field.t}\n" intermediate_acc_set
-
-    let () =
-      printf !"intermediate_acc_set': %{sexp: Field.t}\n" intermediate_acc_set'
-
-    let () =
-      printf
-        !"intermediate_acc_set2: %{sexp: Field.t}\n"
-        (to_field Account_set.typ stmt0.target_acc_set)
-
-    let list_to_fun l =
-      let l = ref l in
-      fun () ->
-        match !l with
-        | [] ->
-            failwith "empty!"
-        | x :: xs ->
-            l := xs ;
-            x
-
-    let account_set_least_path' : Account_set.Path.t =
-      { hash_other = base_right; is_right = false }
-      :: { hash_other =
-             acc_set_merge
-               (hash_entry { key = token_id_new; next_key = max })
-               Field.zero
-         ; is_right = false
-         }
-      :: ( List.drop acc_set_intermediate_ledger_hashes 2
-         |> List.map ~f:(fun (_, hash_other) : Account_set.PathStep.t ->
-                { hash_other; is_right = false } ) )
+    let _ = acc_set
 
     let zkapp_second_double_witness :
         Rule_zkapp_command.Zkapp_double_unproved_input.t =
@@ -692,18 +658,7 @@ let _outer =
               ; call_stack = []
               ; source_ledger_sparse = sparse_source_ledger
               ; update_acc_set_witness =
-                  { get_account_set_x =
-                      (fun () -> Mina_base.Token_id.of_field Field.zero)
-                  ; get_account_set_z =
-                      list_to_fun
-                        [ Mina_base.Token_id.of_field (Field.negate Field.one)
-                        ; Mina_base.Token_id.of_field token_id_new
-                        ]
-                  ; get_account_set_x_path =
-                      list_to_fun
-                        [ account_set_least_path; account_set_least_path' ]
-                  ; get_account_set_y_path = (fun () -> account_set_new_path)
-                  }
+                  make_update_acc_set_witness acc_set_data_2 acc_set_data_3
               }
           }
       ; first =
