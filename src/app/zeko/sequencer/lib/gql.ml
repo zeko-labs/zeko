@@ -809,20 +809,20 @@ module Types = struct
           ~args:[] ~doc:"Account that the command is sent from"
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
             AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+              (Ledger.of_database sequencer.ledger)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "receiver" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command applies to"
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
             AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+              (Ledger.of_database sequencer.ledger)
               (Signed_command.receiver cmd.With_hash.data) )
       ; field_no_status "feePayer" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that pays the fees for the command"
           ~deprecated:(Deprecated (Some "use source field instead"))
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
             AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+              (Ledger.of_database sequencer.ledger)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "validUntil" ~typ:(non_null global_slot_since_genesis)
           ~args:[]
@@ -882,7 +882,8 @@ module Types = struct
           ~args:[] ~doc:"Account of the sender"
           ~deprecated:(Deprecated (Some "use feePayer field instead"))
           ~resolve:(fun { ctx = sequencer; _ } payment ->
-            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.ledger)
             @@ Signed_command.fee_payer payment.With_hash.data )
       ; field_no_status "to" ~typ:(non_null public_key) ~args:[]
           ~doc:"Public key of the receiver"
@@ -894,7 +895,8 @@ module Types = struct
           ~deprecated:(Deprecated (Some "use receiver field instead"))
           ~args:Arg.[]
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.ledger)
             @@ Signed_command.receiver cmd.With_hash.data )
       ; field "failureReason"
           ~typ:
@@ -1763,7 +1765,7 @@ module Queries = struct
               ~typ:(non_null Types.Input.PublicKey.arg_typ)
           ]
       ~resolve:(fun { ctx = sequencer; _ } () pk ->
-        let ledger = Ledger.of_database sequencer.db in
+        let ledger = Ledger.of_database sequencer.ledger in
         let tokens = Ledger.tokens ledger pk |> Set.to_list in
         List.filter_map tokens ~f:(fun token ->
             let%bind.Option location =
@@ -1781,8 +1783,8 @@ module Queries = struct
           [ arg "tokenId" ~doc:"Token ID to find accounts for"
               ~typ:(non_null Types.Input.TokenId.arg_typ)
           ]
-      ~resolve:(fun { ctx = mina; _ } () token_id ->
-        let ledger = Ledger.of_database mina.db in
+      ~resolve:(fun { ctx = sequencer; _ } () token_id ->
+        let ledger = Ledger.of_database sequencer.ledger in
         let%map account_ids = Ledger.accounts ledger in
         Ok
           (List.filter_map (Set.to_list account_ids) ~f:(fun account_id ->
@@ -1842,7 +1844,7 @@ module Queries = struct
           ]
       ~resolve:(fun { ctx = sequencer; _ } () token ->
         let open Option.Let_syntax in
-        let l = Ledger.of_database sequencer.db in
+        let l = Ledger.of_database sequencer.ledger in
         let%map account_id = Ledger.token_owner l token in
         Types.AccountObj.get_best_ledger_account l account_id )
 

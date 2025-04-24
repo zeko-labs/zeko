@@ -17,7 +17,6 @@ module Sequencer = struct
       { max_pool_size : int
       ; commitment_period_sec : float
       ; db_dir : string option
-      ; imt_dir : string option
       ; zkapp_pk : Public_key.Compressed.t
       ; signer : Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
@@ -202,7 +201,7 @@ module Sequencer = struct
   end
 
   type t =
-    { db : L.Db.t
+    { ledger : L.Db.t
     ; imt : Indexed_merkle_tree.Db.t
     ; logger : Logger.t
     ; archive : Archive.t
@@ -216,14 +215,14 @@ module Sequencer = struct
     }
 
   let add_account t account_id account =
-    ( L.Db.get_or_create_account t.db account_id account |> Or_error.ok_exn
+    ( L.Db.get_or_create_account t.ledger account_id account |> Or_error.ok_exn
       : [ `Added | `Existed ] * L.Db.Location.t )
     |> ignore
 
   let get_account t public_key token_id =
     let account_id = Account_id.create public_key token_id in
-    let%bind.Option location = L.Db.location_of_account t.db account_id in
-    L.Db.get t.db location
+    let%bind.Option location = L.Db.location_of_account t.ledger account_id in
+    L.Db.get t.ledger location
 
   let infer_nonce t public_key =
     match get_account t public_key Token_id.default with
@@ -232,9 +231,9 @@ module Sequencer = struct
     | None ->
         Unsigned.UInt32.zero
 
-  let get_root t = L.Db.merkle_root t.db
+  let get_root t = L.Db.merkle_root t.ledger
 
-  let is_empty t = L.Db.num_accounts t.db = 0
+  let is_empty t = L.Db.num_accounts t.ledger = 0
 
   let get_latest_state t =
     (* TODO: proved hashes *)
@@ -245,7 +244,7 @@ module Sequencer = struct
       }
 
   let apply_events_and_actions t command =
-    let ledger = L.of_database t.db in
+    let ledger = L.of_database t.ledger in
     Zkapp_command.(Call_forest.to_list (account_updates command))
     |> List.map ~f:(fun update ->
            let%bind.Result account =
@@ -305,7 +304,7 @@ module Sequencer = struct
 
           (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
           let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
-          let l = L.of_database t.db in
+          let l = L.of_database t.ledger in
 
           let%bind.Deferred.Result () =
             if skip_validity_check then return (Ok ())
@@ -389,7 +388,7 @@ module Sequencer = struct
           in
           Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
             ~ledger_openings:source_ledger ~diff
-            ~target_ledger_hash:(Ledger.Db.merkle_root t.db) ;
+            ~target_ledger_hash:(Ledger.Db.merkle_root t.ledger) ;
 
           return (Ok witnesses) )
 
@@ -399,7 +398,7 @@ module Sequencer = struct
       Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
     in
     let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
-    let ledger = L.of_database t.db in
+    let ledger = L.of_database t.ledger in
     let%bind.Result source_ledger, witness =
       Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk ~fee
         ~constraint_constants ~global_slot ledger t.imt
@@ -424,7 +423,7 @@ module Sequencer = struct
     in
     Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
       ~ledger_openings:source_ledger ~diff
-      ~target_ledger_hash:(Ledger.Db.merkle_root t.db) ;
+      ~target_ledger_hash:(Ledger.Db.merkle_root t.ledger) ;
 
     don't_wait_for @@ Merger.P.add_job t.merger t.merger_ctx ~data:witness ;
 
@@ -432,7 +431,7 @@ module Sequencer = struct
 
   let update_inner_account t =
     let old_deposits_state, old_deposits_length =
-      let s = Utils.get_inner_deposits_state_exn (L.of_database t.db) in
+      let s = Utils.get_inner_deposits_state_exn (L.of_database t.ledger) in
       C.Rollup_state.Outer_action_state.With_length.(raw s, length s)
     in
     let%bind all_new_actions =
@@ -502,7 +501,7 @@ module Sequencer = struct
     let%bind old_deposits_pointer, processed_pointer = update_inner_account t in
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
-        L.(of_database t.db)
+        L.(of_database t.ledger)
         [ Zeko_constants.inner_account_id ]
     in
     if
@@ -558,7 +557,7 @@ module Sequencer = struct
                (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) )
             (Float.of_int current_chunk /. Float.of_int chunks_length *. 100.0) ;
           (* Apply accounts diff *)
-          let mask = L.of_database t.db in
+          let mask = L.of_database t.ledger in
           let changed_accounts =
             Da_layer.Diff.Stable.Latest.changed_accounts diff
           in
@@ -605,23 +604,27 @@ module Sequencer = struct
 
     let sparse_ledger =
       Sparse_ledger.of_ledger_subset_exn
-        L.(of_database t.db)
+        L.(of_database t.ledger)
         [ Zeko_constants.inner_account_id ]
     in
     Merger.Context.set_last_committed_ledger t.merger_ctx sparse_ledger ;
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
-      ~da_quorum ~db_dir ~imt_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
+      ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
       ~l2_network_id ~deposit_delay_blocks ~provers =
     print_endline "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
-    let db =
-      L.Db.create ?directory_name:db_dir
+    let ledger =
+      L.Db.create
+        ?directory_name:
+          (Option.map db_dir ~f:(fun db_dir -> Filename.concat db_dir "ledger"))
         ~depth:constraint_constants.ledger_depth ()
     in
     let imt =
-      Indexed_merkle_tree.Db.create ?directory_name:imt_dir
+      Indexed_merkle_tree.Db.create
+        ?directory_name:
+          (Option.map db_dir ~f:(fun db_dir -> Filename.concat db_dir "imt"))
         ~depth:constraint_constants.ledger_depth ()
     in
     let config =
@@ -629,7 +632,6 @@ module Sequencer = struct
         { max_pool_size
         ; commitment_period_sec
         ; db_dir
-        ; imt_dir
         ; l1_uri
         ; archive_uri
         ; zkapp_pk
@@ -642,7 +644,7 @@ module Sequencer = struct
       Da_layer.Client.Sequencer.create ~logger ~config:da_config
         ~quorum:da_quorum
     in
-    let kvdb = L.Db.zeko_kvdb db in
+    let kvdb = L.Db.zeko_kvdb ledger in
     let provers =
       Zeko_prover.Client.create
         (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
@@ -653,10 +655,10 @@ module Sequencer = struct
         ~signer ~kvdb ()
     in
     let t =
-      { db
+      { ledger
       ; imt
       ; logger
-      ; archive = Archive.create ~kvdb:(L.Db.zeko_kvdb db)
+      ; archive = Archive.create ~kvdb
       ; config
       ; da_client
       ; snark_q = Snark_queue.create ~provers
@@ -678,7 +680,7 @@ module Sequencer = struct
     in
     let%bind () =
       Committer.recommit_all ~provers:t.snark_q.provers
-        ~executor:t.merger_ctx.executor ~db ~zkapp_pk:config.zkapp_pk
+        ~executor:t.merger_ctx.executor ~kvdb ~zkapp_pk:config.zkapp_pk
         ~archive_uri:config.archive_uri
     in
     let%bind () =

@@ -6,7 +6,9 @@ open Mina_transaction
 module Ledger = Mina_ledger.Ledger
 open Signature_lib
 open Currency
+module Tmp = State
 open Sequencer_lib
+module State = Tmp
 module Schema = Graphql_wrapper.Make (Schema)
 
 module Types = struct

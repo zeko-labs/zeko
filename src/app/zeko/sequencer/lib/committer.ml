@@ -88,8 +88,8 @@ let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
   in
   return command
 
-let recommit_all ~provers ~(executor : Executor.t) ~db ~zkapp_pk ~archive_uri =
-  let kvdb = Ledger.Db.zeko_kvdb db in
+let recommit_all ~provers ~(executor : Executor.t) ~kvdb ~zkapp_pk ~archive_uri
+    =
   let%bind current_state =
     Gql_client.infer_committed_state executor.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress executor.signer.public_key)
