@@ -16,6 +16,10 @@ module Make_mina (Inputs : sig
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
+
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
 end)
 () =
 struct
@@ -25,6 +29,8 @@ struct
         let holder_accounts_l1 = Inputs.holder_accounts_l1
 
         let token_owner_l1 = None
+
+        let chain_l1 = Inputs.chain_l1
 
         module Deposit_params = Deposit_params_base
       end)
@@ -89,6 +95,10 @@ module Make_custom (Inputs : sig
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
+
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
 end)
 () =
 struct
@@ -98,6 +108,8 @@ struct
         let holder_accounts_l1 = Inputs.holder_accounts_l1
 
         let token_owner_l1 = Some Inputs.token_owner_l1
+
+        let chain_l1 = Inputs.chain_l1
 
         module Deposit_params = Deposit_params_custom
       end)

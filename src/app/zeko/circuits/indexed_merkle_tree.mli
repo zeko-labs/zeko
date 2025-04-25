@@ -33,6 +33,8 @@ end) : sig
 
   val typ : (var, t) Typ.t
 
+  val to_input_var : var -> Field.Var.t Random_oracle.Input.Chunked.t
+
   module PathStep : sig
     type t = { hash_other : F.t; is_right : Boolean.t } [@@deriving snarky]
   end

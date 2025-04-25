@@ -16,6 +16,8 @@ module Make (Inputs : sig
   val token_owner_l1 : Account_id.t option
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
+
+  val chain_l1 : Mina_signature_kind.t
 end) =
 struct
   open Inputs
@@ -102,7 +104,7 @@ struct
           }
       }
     in
-    let*| out = make_outputs account_update [] in
+    let*| out = make_outputs ~chain:chain_l1 account_update [] in
     Compile_simple.{ prevs = No_prevs; out }
 
   let rule : _ Compile_simple.branch =

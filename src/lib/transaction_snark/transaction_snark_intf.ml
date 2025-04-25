@@ -252,7 +252,7 @@ module type Full = sig
          Tick.Checked.t
 
     val apply_tagged_transaction :
-         ?set_account_new:(Account_id.var * Tick.Boolean.var -> unit)
+         ?zeko_set_account_new:(Account_id.var * Tick.Boolean.var -> unit)
       -> constraint_constants:Genesis_constants.Constraint_constants.t
       -> (module Tick.Inner_curve.Checked.Shifted.S with type t = 'shifted)
       -> Ledger_hash.var

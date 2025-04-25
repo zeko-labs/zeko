@@ -1,22 +1,24 @@
-open Core_kernel
+module Make (Inputs : sig
+  val max_valid_while_size : int
 
-module Inputs = struct
-  let max_valid_while_size = 128
+  val inner_public_key : Signature_lib.Public_key.Compressed.t
 
-  let inner_public_key =
-    let pk =
-      Snark_params.Tick.Inner_curve.(
-        to_affine_exn @@ point_near_x
-        @@ Snark_params.Tick.Field.of_int 123456789)
-    in
-    Signature_lib.Public_key.compress pk
+  val chain_l1 : Mina_signature_kind.t
+end)
+() =
+struct
+  module Rule_commit_inst = Rule_commit.Make (Inputs)
+  module Rule_action_witness_inst = Rule_action_witness.Make (Inputs)
+  module Rule_pause_inst = Rule_pause.Make (Inputs)
+
+  include
+    ( val Compile_simple.compile ()
+            ~out_typ:
+              Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+            ~branches:
+              [ Rule_commit_inst.rule
+              ; Rule_action_witness_inst.rule
+              ; Rule_pause_inst.rule
+              ]
+            ~name:"Outer_rules" )
 end
-
-module Rule_commit_inst = Rule_commit.Make (Inputs)
-
-include
-  ( val Compile_simple.compile ()
-          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:
-            [ Rule_commit_inst.rule; Rule_action_witness.rule; Rule_pause.rule ]
-          ~name:"Outer_rules" )

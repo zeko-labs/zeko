@@ -15,7 +15,7 @@
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules basic_prove_test)
+ (modules basic_prove_test account_set_data)
  )
 
 (executable
