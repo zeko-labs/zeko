@@ -10,7 +10,8 @@ module Calls : sig
     | ( :: ) of (Mina_base.Account_update.Checked.t * t) * t
     | Raw of Zkapp_call_forest.Checked.t
 
-  val hash : t -> Zkapp_call_forest.Checked.t Checked.t
+  val hash :
+    chain:Mina_signature_kind.t -> t -> Zkapp_call_forest.Checked.t Checked.t
 end
 
 module Fine : sig
@@ -110,7 +111,8 @@ module Boolean : sig
 end
 
 val make_outputs :
-     Mina_base.Account_update.Checked.t
+     chain:Mina_signature_kind.t
+  -> Mina_base.Account_update.Checked.t
   -> Calls.t
   -> ( Mina_base.Zkapp_statement.Checked.t
      * ( Mina_base.Account_update.Body.t

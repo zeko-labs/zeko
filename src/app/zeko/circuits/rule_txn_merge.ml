@@ -24,6 +24,7 @@ let main input =
            ; accumulated_fees = left_fees
            ; sequencer = left_sequencer
            ; slot_range = left_slot_range
+           ; global_slot_range = left_global_slot_range
            ; source_acc_set
            ; target_acc_set = left_target_acc_set
            } as left_stmt
@@ -36,6 +37,7 @@ let main input =
            ; accumulated_fees = right_fees
            ; sequencer = right_sequencer
            ; slot_range = right_slot_range
+           ; global_slot_range = right_global_slot_range
            ; source_acc_set = right_source_acc_set
            ; target_acc_set
            } as right_stmt
@@ -58,7 +60,10 @@ let main input =
   let* sequencer =
     assert_equal_safer ~label:__LOC__ Even_PC.typ left_sequencer right_sequencer
   in
-  let*| slot_range = slot_range_intersection left_slot_range right_slot_range in
+  let* slot_range = slot_range_intersection left_slot_range right_slot_range in
+  let*| global_slot_range =
+    slot_range_intersection left_global_slot_range right_global_slot_range
+  in
   Compile_simple.
     { prevs =
         Two_prevs
@@ -78,6 +83,7 @@ let main input =
          ; accumulated_fees
          ; sequencer
          ; slot_range
+         ; global_slot_range
          ; source_acc_set
          ; target_acc_set
          } : Zeko_stmt.var)

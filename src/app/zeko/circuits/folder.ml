@@ -53,19 +53,18 @@ struct
           exists Stmt.typ
             ~compute:
               (let+ length = V.get length in
-               (* there must be at least one element *)
-               (* TODO: maybe return source in this case? *)
-               assert (Int.(length > 0)) ;
-               As_prover.read Stmt.typ targets.(length - 1) )
+               As_prover.read Stmt.typ
+                 (if Int.(length > 0) then targets.(length - 1) else source) )
         in
         (* TODO: Do this with a runtime table in the future. *)
         let* equalities =
           Checked.List.map (Array.to_list targets)
             ~f:(var_equal Stmt.typ target)
         in
+        let* target_is_source = var_equal Stmt.typ source target in
         let*| () =
           let open Boolean.Expr in
-          any equalities |> assert_
+          any (target_is_source :: equalities) |> assert_
         in
         target
     | `End ->
@@ -268,26 +267,26 @@ struct
       let dummy_filler = dummy_elem
     end)
 
-    type t = { init_arg : Init.t; t : System.t; excess : Elems.t }
+    type t =
+      { init_arg : Init.t
+      ; t : System.t
+      ; excess : Elems.t
+      ; use_t : Boolean.t (* TODO: Remove this field. *)
+      }
     [@@deriving snarky]
 
     let%snarkydef_ get_full ?(check : Boolean.var option)
-        ({ init_arg; t; excess } : var) =
+        ({ init_arg; t; excess; use_t } : var) =
       (* We get the supposed source from the initialization of the state machine. *)
       let* source = init ~check init_arg in
       let* { source = proof_source; target = proof_target }, verify_proof =
-        System.get ?check t
+        System.get ~check:use_t t
       in
       let* source =
         assert_equal_safer ~label:__LOC__ Stmt.typ source proof_source
       in
       let* excess_init =
-        match check with
-        | Some proof_must_verify ->
-            if_ proof_must_verify ~typ:Stmt.typ ~then_:proof_target
-              ~else_:source
-        | None ->
-            Checked.return proof_target
+        if_ use_t ~typ:Stmt.typ ~then_:proof_target ~else_:source
       in
       let* target = fold `Middle excess_init excess.array excess.length in
       Checked.return (`Source source, `Target target, verify_proof)
@@ -303,6 +302,6 @@ struct
         System.make_unchecked ?proof
           { source = proof_source; target = proof_target }
       in
-      ({ init_arg; t; excess } : t)
+      ({ init_arg; t; excess; use_t = Option.is_some proof } : t)
   end
 end

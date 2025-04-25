@@ -49,6 +49,8 @@ module Make (Inputs : sig
 
   (** The public key of the inner account *)
   val inner_public_key : PC.t
+
+  val chain_l1 : Mina_signature_kind.t
 end) =
 struct
   open Inputs
@@ -78,6 +80,7 @@ struct
       ; new_inner_acc_path : Path.t
       ; da_signature : Signature_lib.Schnorr.Chunked.Signature.t
       ; da_key : Even_PC.t
+      ; slot_range : Slot_range.t
       }
     [@@deriving snarky]
   end
@@ -113,6 +116,7 @@ struct
           ; new_inner_acc_path
           ; da_signature
           ; da_key
+          ; slot_range
           } :
            Witness.var ) =
       exists ~compute:(V.get w) Witness.typ
@@ -127,7 +131,8 @@ struct
            ; target_local_state
            ; sequencer
            ; accumulated_fees
-           ; slot_range
+           ; slot_range = txn_snark_slot_range
+           ; global_slot_range
            ; source_acc_set
            ; target_acc_set
            }
@@ -152,11 +157,17 @@ struct
       let* da_key_uncompressed =
         Even_PC.to_pc_var da_key |> Signature_lib.Public_key.decompress_var
       in
+      let input =
+        let open Random_oracle.Input.Chunked in
+        append
+          (Ledger_hash.var_to_field target_ledger |> field)
+          (Account_set.to_input_var target_acc_set)
+      in
       let* payload =
         make_checked (fun () ->
             Random_oracle.Checked.hash
               ~init:(Hash_prefix_create.salt "zeko da layer check")
-              [| Ledger_hash.var_to_field target_ledger |] )
+              (Random_oracle.Checked.pack_input input) )
       in
       Signature_lib.Schnorr.Chunked.Checked.assert_verifies
         (module Shifted)
@@ -182,6 +193,16 @@ struct
             diff
             < constant
                 (Global_slot_span (Unsigned.UInt32.of_int max_valid_while_size))) )
+    in
+
+    (* Our slot range must be a subset of the txn snark slot range. *)
+    let* () =
+      assert_var __LOC__
+      @@ fun () -> Slot.Checked.(slot_range.lower >= txn_snark_slot_range.lower)
+    in
+    let* () =
+      assert_var __LOC__
+      @@ fun () -> Slot.Checked.(slot_range.upper <= txn_snark_slot_range.upper)
     in
 
     (* We check that the paths provided for the inner account are correct. *)
@@ -312,8 +333,7 @@ struct
       }
     in
     let preconditions =
-      { default_account_update.preconditions with
-        account =
+      { Account_update.Preconditions.Checked.account =
           { default_account_update.preconditions.account with
             state =
               Outer_state.fine
@@ -348,6 +368,11 @@ struct
               (* Our action state must match *)
           }
       ; valid_while = Slot_range.Checked.to_valid_while slot_range
+      ; network =
+          { default_account_update.preconditions.network with
+            global_slot_since_genesis =
+              Slot_range.Checked.to_valid_while global_slot_range
+          }
       }
     in
     (* We submit an action that summarizes what we did. Used as a way to timestamp when actions were synchronized. *)
@@ -381,7 +406,8 @@ struct
 
     (* Assemble some stuff to help the prover and calculate public output *)
     let*| out =
-      make_outputs account_update [ (sequencer_account_update, []) ]
+      make_outputs ~chain:chain_l1 account_update
+        [ (sequencer_account_update, []) ]
     in
     Compile_simple.{ prevs = Two_prevs (verify_txn_snark, verify_ases); out }
 

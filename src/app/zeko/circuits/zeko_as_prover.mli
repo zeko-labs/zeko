@@ -64,3 +64,5 @@ val sub :
   -> (field * field) * field
 
 val field_to_field3 : field -> (field * field) * field
+
+val carry : x0:field -> x1:field -> y0:field -> y1:field -> field

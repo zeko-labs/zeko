@@ -2216,7 +2216,8 @@ module Make_str (A : Wire_types.Concrete) = struct
       Amount.Checked.if_ accumulate_burned_tokens ~then_:amt
         ~else_:acc_burned_tokens
 
-    let%snarkydef_ apply_tagged_transaction ?(set_account_new = fun _ -> ())
+    let%snarkydef_ apply_tagged_transaction
+        ?(zeko_set_account_new = fun _ -> ())
         ~(constraint_constants : Genesis_constants.Constraint_constants.t)
         (type shifted)
         (shifted : (module Inner_curve.Checked.Shifted.S with type t = shifted))
@@ -2452,7 +2453,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               ~depth:constraint_constants.ledger_depth fee_payment_root
               ~is_writeable:can_create_fee_payer_account fee_payer
               ~f:(fun ~is_empty_and_writeable account ->
-                set_account_new (fee_payer, is_empty_and_writeable) ;
+                zeko_set_account_new (fee_payer, is_empty_and_writeable) ;
                 (* this account is:
                    - the fee-payer for payments
                    - the fee-payer for stake delegation
@@ -2655,7 +2656,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               ~depth:constraint_constants.ledger_depth
               root_after_fee_payer_update receiver
               ~f:(fun ~is_empty_and_writeable account ->
-                set_account_new (receiver, is_empty_and_writeable) ;
+                zeko_set_account_new (receiver, is_empty_and_writeable) ;
                 (* this account is:
                    - the receiver for payments
                    - the delegated-to account for stake delegation
@@ -2865,7 +2866,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                 user_command_failure.source_not_present
               root_after_receiver_update source
               ~f:(fun ~is_empty_and_writeable account ->
-                set_account_new (source, is_empty_and_writeable) ;
+                zeko_set_account_new (source, is_empty_and_writeable) ;
                 (* this account is:
                    - the source for payments
                    - the delegator for stake delegation

@@ -23,6 +23,10 @@ module Make (Inputs : sig
   val holder_account_l2 : PC.t
 
   val withdrawal_delay : Mina_numbers.Global_slot_span.t
+
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
 end) =
 struct
   open Inputs
@@ -101,7 +105,7 @@ struct
         (* make sure that withdrawal ase is connected to withdrawal *)
         let* () =
           let* action =
-            withdrawal_action ~holder_account_l2 ~token_owner_l2
+            withdrawal_action ~chain_l2 ~holder_account_l2 ~token_owner_l2
               (module Withdrawal_params)
               withdrawal_params
           in
@@ -215,7 +219,7 @@ struct
           }
         in
         let*| out =
-          make_outputs account_update
+          make_outputs ~chain:chain_l1 account_update
             [ (helper_account, []); (witness_outer, []) ]
         in
         Compile_simple.

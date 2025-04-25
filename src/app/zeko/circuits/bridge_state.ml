@@ -160,8 +160,8 @@ module type WITHDRAWAL_PARAMS = sig
   val custom : var -> Withdrawal_params_custom.var option
 end
 
-let deposit_action (type deposit_params_var) ~(holder_accounts_l1 : PC.t list)
-    ~(token_owner_l1 : Account_id.t option)
+let deposit_action (type deposit_params_var) ~chain_l1
+    ~(holder_accounts_l1 : PC.t list) ~(token_owner_l1 : Account_id.t option)
     (module Deposit_params : DEPOSIT_PARAMS with type var = deposit_params_var)
     (params : deposit_params_var) :
     Rollup_state.Outer_action.Witness.var Checked.t =
@@ -213,7 +213,9 @@ let deposit_action (type deposit_params_var) ~(holder_accounts_l1 : PC.t list)
           }
         , (a, []) :: Raw custom_params.nested_children )
   in
-  let* children' = Calls.hash ((a', children) :: Raw base_params.children) in
+  let* children' =
+    Calls.hash ~chain:chain_l1 ((a', children) :: Raw base_params.children)
+  in
   let hash_prefix = "Deposit_params - qFB3jXP*)" in
   let* aux = var_to_hash ~init:hash_prefix Deposit_params.typ params in
   Checked.return
@@ -223,8 +225,8 @@ let deposit_action (type deposit_params_var) ~(holder_accounts_l1 : PC.t list)
       }
       : Rollup_state.Outer_action.Witness.var )
 
-let withdrawal_action (type withdrawal_params_var) ~(holder_account_l2 : PC.t)
-    ~(token_owner_l2 : Account_id.t option)
+let withdrawal_action (type withdrawal_params_var) ~chain_l2
+    ~(holder_account_l2 : PC.t) ~(token_owner_l2 : Account_id.t option)
     (module Withdrawal_params : WITHDRAWAL_PARAMS
       with type var = withdrawal_params_var ) (params : Withdrawal_params.var) :
     Rollup_state.Inner_action.var Checked.t =
@@ -267,7 +269,9 @@ let withdrawal_action (type withdrawal_params_var) ~(holder_account_l2 : PC.t)
           }
         , (a, []) :: Raw custom_params.nested_children )
   in
-  let* children' = Calls.hash ((a', children) :: Raw base_params.children) in
+  let* children' =
+    Calls.hash ~chain:chain_l2 ((a', children) :: Raw base_params.children)
+  in
   let hash_prefix = "Withdrawal_params - qFB3jXP*)" in
   let* aux = var_to_hash ~init:hash_prefix Withdrawal_params.typ params in
   Checked.return ({ aux; children = children' } : Rollup_state.Inner_action.var)

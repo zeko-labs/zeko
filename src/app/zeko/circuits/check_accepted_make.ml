@@ -10,6 +10,8 @@ module Make (Inputs : sig
   val holder_accounts_l1 : Signature_lib.Public_key.Compressed.t list
 
   val token_owner_l1 : Account_id.t option
+
+  val chain_l1 : Mina_signature_kind.t
 end)
 () =
 struct
@@ -47,7 +49,8 @@ struct
         ({ params; original_action_state; deposit_index } : Init.var) :
         Stmt.var Checked.t =
       let* witness =
-        Bridge_state.deposit_action ~holder_accounts_l1 ~token_owner_l1
+        Bridge_state.deposit_action ~chain_l1 ~holder_accounts_l1
+          ~token_owner_l1
           (module Deposit_params)
           params
       in

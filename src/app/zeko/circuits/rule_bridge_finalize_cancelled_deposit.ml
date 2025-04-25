@@ -18,6 +18,8 @@ module Make (Inputs : sig
 
   val zeko_l1 : PC.t
 
+  val chain_l1 : Mina_signature_kind.t
+
   module Deposit_params : Bridge_state.DEPOSIT_PARAMS
 
   module Check_accepted :
@@ -29,6 +31,8 @@ module Make (Inputs : sig
             let token_owner_l1 = token_owner_l1
 
             module Deposit_params = Deposit_params
+
+            let chain_l1 = chain_l1
           end)
           ()
 end)
@@ -310,7 +314,7 @@ struct
           }
         in
         let*| out =
-          make_outputs account_update
+          make_outputs ~chain:chain_l1 account_update
             [ (helper_account, []); (witness_outer, []) ]
         in
         Compile_simple.
