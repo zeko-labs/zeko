@@ -125,6 +125,60 @@ module Merkle_tree = struct
     | Left_loc : 'level location -> 'level level_s location
     | Right_loc : 'level location -> 'level level_s location
 
+  open struct
+    [@@@warning "-4"]
+
+    type simple_tree =
+      | Empty
+      | Node of
+          { hash : Field.t
+          ; left : simple_tree
+          ; right : simple_tree
+          ; sparse : [ `Sparse | `Full ]
+          }
+      | Leaf of { hash : Field.t }
+    [@@deriving sexp]
+
+    type simple_location =
+      | Loc_end
+      | Left_loc of simple_location
+      | Right_loc of simple_location
+    [@@deriving sexp]
+
+    [@@@warning "+4"]
+
+    let rec simple_tree_of_tree : 'level. 'level tree -> simple_tree =
+      fun (type level) (loc : level tree) : simple_tree ->
+       match loc with
+       | Empty ->
+           Empty
+       | Node { hash; left; right; sparse } ->
+           Node
+             { hash
+             ; left = simple_tree_of_tree left
+             ; right = simple_tree_of_tree right
+             ; sparse
+             }
+       | Leaf { hash } ->
+           Leaf { hash }
+
+    let rec simple_location_of_location :
+              'level. 'level location -> simple_location =
+      fun (type level) (loc : level location) : simple_location ->
+       match loc with
+       | Loc_end ->
+           Loc_end
+       | Left_loc rest ->
+           Left_loc (simple_location_of_location rest)
+       | Right_loc rest ->
+           Right_loc (simple_location_of_location rest)
+  end
+
+  let sexp_of_location l =
+    sexp_of_simple_location (simple_location_of_location l)
+
+  let sexp_of_tree t = sexp_of_simple_tree (simple_tree_of_tree t)
+
   type 'level path =
     | End : level_z path
     | Left : 'level path * field -> 'level level_s path
@@ -431,6 +485,8 @@ let path_simple :
     Merkle_tree.loc_of_index Merkle_tree.level_34
       (Int64.shift_left idx (64 - 34))
   in
+  printf !"tree: %{sexp:Merkle_tree.tree}\n" xs ;
+  printf !"loc: %{sexp:Merkle_tree.location}\n" loc ;
   Merkle_tree.get_path (Merkle_tree.level_34, xs, loc)
   |> Merkle_tree.simplify_path
 
