@@ -552,12 +552,13 @@ end = struct
 
   let maybe_add entry entries : t * r =
     let set = S.of_list entries in
+    let is_not_new = S.mem set entry in
     let old_tree = calculate_tree set entries in
     let set = S.add set entry in
     let before_set, _, after_set = S.split set entry in
     let before = S.max_elt_exn before_set in
     let after = S.min_elt_exn after_set in
-    let entries' = if S.mem set entry then entries else entries @ [ entry ] in
+    let entries' = if is_not_new then entries else entries @ [ entry ] in
     let new_tree = calculate_tree set entries' in
     let path = path_simple (get_idx entry entries') new_tree in
     let before_path = path_simple (get_idx before entries') old_tree in
