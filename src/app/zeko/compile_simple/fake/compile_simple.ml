@@ -67,8 +67,8 @@ let branches_to_provers name tag out_typ =
     function
     (* FIXME: verify recursive proofs *)
     | Branches.({ branch_name; tags = _; main } :: rest) ->
-        printf "Fake proving %s.%s\n" name branch_name ;
         let prover input =
+          printf "Fake proving %s.%s\n" name branch_name ;
           let out =
             Snark_params.Tick.run_and_check_exn
             @@
@@ -76,6 +76,7 @@ let branches_to_provers name tag out_typ =
             main (V.return input)
             >>| fun { out; prevs = _ } -> As_prover.read out_typ out
           in
+          printf "Fake proving %s.%s done\n" name branch_name ;
           let hash = hash_proof tag out_typ out in
           Promise.return (out, Proof.Proof hash)
         in
