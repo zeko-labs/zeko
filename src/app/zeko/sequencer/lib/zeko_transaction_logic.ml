@@ -86,7 +86,7 @@ module Inputs = struct
           , Currency.Amount.Signed.t
           , Ledger.t
           , bool
-          , Outer_action_state.t
+          , Field.t
           , Unsigned.uint32
           , 'a list )
           Zkapp_command_logic.Local_state.t ) : Zeko_local_state.t =

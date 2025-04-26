@@ -12,6 +12,26 @@ let ok_exn = function
   | Error e ->
       failwith e
 
+module Snarky_yojson (Typ : SnarkType) = struct
+  let to_yojson t : Yojson.Safe.t =
+    let (Typ typ) = Typ.typ in
+    let fields, _aux = typ.value_to_fields t in
+    Array.to_list fields |> List.map ~f:Field.to_yojson |> fun fs -> `List fs
+
+  let of_yojson json : Typ.t Ppx_deriving_yojson_runtime.error_or =
+    let module M = Ppx_deriving_yojson_runtime in
+    let open Yojson.Safe.Util in
+    try
+      let fields =
+        to_list json
+        |> List.map ~f:Field.of_yojson
+        |> List.map ~f:ok_exn |> Array.of_list
+      in
+      let (Typ typ) = Typ.typ in
+      Ok (typ.value_of_fields (fields, typ.constraint_system_auxiliary ()))
+    with e -> Error (Exn.to_string e)
+end
+
 module Inner_rules_inst =
   Inner_rules.Make
     (struct
@@ -566,11 +586,14 @@ end
 module Make_serializable_action_state
     (Action_state : Rollup_state.Action_state_type) =
 struct
-  type t = F.t [@@deriving yojson]
+  type t = Action_state.t
+
+  include Snarky_yojson (Action_state)
 
   module With_length = struct
-    type t = Action_state.With_length.t = { state : F.t; length : Checked32.t }
-    [@@deriving yojson]
+    type t = Action_state.With_length.t
+
+    include Snarky_yojson (Action_state.With_length)
   end
 end
 
