@@ -46,7 +46,7 @@ struct
       let*| target' = step elem target in
       (target', target')
     in
-    let* last_target, targets = Checked.Array.fold_map ~f ~init:source elems in
+    let* last_target, targets = SnarkArray.fold_map ~f ~init:source elems in
     match middle_or_end with
     | `Middle ->
         let* target =
@@ -89,7 +89,7 @@ struct
   struct
     open Inputs
 
-    module Elems = SnarkArray (struct
+    module Elems = SnarkArray.Make (struct
       module T = Elem
 
       let max_length = iterations
@@ -259,7 +259,7 @@ struct
   struct
     include Inputs
 
-    module Elems = SnarkArray (struct
+    module Elems = SnarkArray.Make (struct
       module T = Elem
 
       let max_length = get_iterations

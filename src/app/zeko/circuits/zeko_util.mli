@@ -33,13 +33,6 @@ val var_to_app_state_fine :
   -> Field.Var.t Zkapp_basic.Set_or_keep.Checked.t
      Pickles_types.Vector.Vector_8.t
 
-val value_to_init_state : ('a, 'b) Typ.t -> 'b -> field Zkapp_state.V.t
-
-val value_to_app_state :
-  ('a, 'b) Typ.t -> 'b -> field Zkapp_basic.Set_or_keep.t Zkapp_state.V.t
-
-val value_of_state : ('var, 'value) Typ.t -> field Zkapp_state.V.t -> 'value
-
 val var_to_actions :
   ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t
 
@@ -77,20 +70,34 @@ module SnarkList : functor
   val typ : (var, t) Typ.t
 end
 
-module SnarkArray : functor
-  (Inputs : sig
-     module T : SnarkType
+module SnarkArray : sig
+  module Make : functor
+    (Inputs : sig
+       module T : SnarkType
 
-     val max_length : int
+       val max_length : int
 
-     val dummy_filler : T.t
-   end)
-  -> sig
-  type t = Inputs.T.t list
+       val dummy_filler : T.t
+     end)
+    -> sig
+    type t = Inputs.T.t list
 
-  type var = { array : Inputs.T.var array; length : int V.t }
+    type var = { array : Inputs.T.var array; length : int V.t }
 
-  val typ : (var, t) Typ.t
+    val typ : (var, t) Typ.t
+  end
+
+  (* val init : int -> f:(int -> 'a Checked.t) -> 'a array Checked.t
+
+     val mapi : 'a array -> f:(int -> 'a -> 'b Checked.t) -> 'b array Checked.t *)
+
+  val map : 'a array -> f:('a -> 'b Checked.t) -> 'b array Checked.t
+
+  val fold_map :
+       'a array
+    -> init:'b
+    -> f:('b -> 'a -> ('b * 'c) Checked.t)
+    -> ('b * 'c array) Checked.t
 end
 
 module type V_S = sig

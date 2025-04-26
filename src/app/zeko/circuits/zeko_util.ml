@@ -74,29 +74,6 @@ let var_to_state_generic_fine :
       assert (List.length r' = 8) ;
       Zkapp_state.V.of_list_exn r'
 
-let value_to_state (some : field -> 'option) (none : 'option)
-    (typ : ('var, 'value) Typ.t) (x : 'value) : 'option Zkapp_state.V.t =
-  let (Typ typ) = typ in
-  let fields, _aux = typ.value_to_fields x in
-  assert (Array.length fields <= 8) ;
-  let missing = 8 - Array.length fields in
-  Zkapp_state.V.of_list_exn
-  @@ List.append
-       (List.map ~f:(fun f -> some f) @@ Array.to_list fields)
-       (List.init missing ~f:(fun _ -> none))
-
-let value_to_init_state typ x = value_to_state (fun f -> f) Field.zero typ x
-
-let value_to_app_state typ x =
-  value_to_state (fun f -> Set_or_keep.Set f) Set_or_keep.Keep typ x
-
-let value_of_state (typ : ('var, 'value) Typ.t) (x : field Zkapp_state.V.t) :
-    'value =
-  let (Typ typ) = typ in
-  typ.value_of_fields
-    ( Zkapp_state.V.to_list x |> Array.of_list
-    , typ.constraint_system_auxiliary () )
-
 let var_to_precondition_fine =
   var_to_state_generic_fine
     ( module struct
@@ -169,50 +146,78 @@ struct
   let typ : (var, t) Typ.t = Typ.list ~length:Len.length T.typ
 end
 
-module SnarkArray (Inputs : sig
-  module T : SnarkType
+module SnarkArray = struct
+  module Make (Inputs : sig
+    module T : SnarkType
 
-  val max_length : int
+    val max_length : int
 
-  val dummy_filler : T.t
-end) =
-struct
-  open Inputs
+    val dummy_filler : T.t
+  end) =
+  struct
+    open Inputs
 
-  type t = T.t list
+    type t = T.t list
 
-  type var = { array : T.var array; length : int V.t }
+    type var = { array : T.var array; length : int V.t }
 
-  let typ : (var, t) Typ.t =
-    let pad : int -> T.t list -> T.t array * int =
-     fun len list ->
-      let arr = Array.create ~len dummy_filler in
-      let rec go idx = function
-        | x :: xs ->
-            Array.set arr idx x ;
-            go (idx + 1) xs
-        | [] ->
-            idx
+    let typ : (var, t) Typ.t =
+      let pad : int -> T.t list -> T.t array * int =
+       fun len list ->
+        let arr = Array.create ~len dummy_filler in
+        let rec go idx = function
+          | x :: xs ->
+              Array.set arr idx x ;
+              go (idx + 1) xs
+          | [] ->
+              idx
+        in
+        let real_len = go 0 list in
+        (arr, real_len)
       in
-      let real_len = go 0 list in
-      (arr, real_len)
+      let rec extract : int -> int -> T.t array -> T.t list =
+       fun len offset array ->
+        match len with
+        | 0 ->
+            []
+        | _ ->
+            array.(offset) :: extract (len - 1) (offset + 1) array
+      in
+      let open Typ in
+      array ~length:max_length T.typ * V.typ
+      |> transport
+           ~there:(fun xs -> pad max_length xs)
+           ~back:(fun (xs, len) -> extract len 0 xs)
+      |> transport_var
+           ~there:(fun { array; length } -> (array, length))
+           ~back:(fun (array, length) -> { array; length })
+  end
+
+  let map t ~f =
+    let len = Array.length t in
+    let rec go arr i =
+      if i >= len then Checked.return arr
+      else
+        let%bind x = f (Array.unsafe_get t i) in
+        Array.unsafe_set arr i x ;
+        go arr (i + 1)
     in
-    let rec extract : int -> int -> T.t array -> T.t list =
-     fun len offset array ->
-      match len with
-      | 0 ->
-          []
-      | _ ->
-          array.(offset) :: extract (len - 1) (offset + 1) array
+    if len < 0 then invalid_arg "SnarkArray.init"
+    else if len = 0 then Checked.return [||]
+    else
+      let%bind first = f (Array.unsafe_get t 0) in
+      let arr = Array.create ~len first in
+      go arr 1
+
+  let fold_map t ~init ~f =
+    let res = ref init in
+    let%map t =
+      map t ~f:(fun x ->
+          let%map acc, y = f !res x in
+          res := acc ;
+          y )
     in
-    let open Typ in
-    array ~length:max_length T.typ * V.typ
-    |> transport
-         ~there:(fun xs -> pad max_length xs)
-         ~back:(fun (xs, len) -> extract len 0 xs)
-    |> transport_var
-         ~there:(fun { array; length } -> (array, length))
-         ~back:(fun (array, length) -> { array; length })
+    (!res, t)
 end
 
 module Proof_V = Mk_V (Proof)
