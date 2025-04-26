@@ -87,10 +87,6 @@ module SnarkArray : sig
     val typ : (var, t) Typ.t
   end
 
-  (* val init : int -> f:(int -> 'a Checked.t) -> 'a array Checked.t
-
-     val mapi : 'a array -> f:(int -> 'a -> 'b Checked.t) -> 'b array Checked.t *)
-
   val map : 'a array -> f:('a -> 'b Checked.t) -> 'b array Checked.t
 
   val fold_map :
