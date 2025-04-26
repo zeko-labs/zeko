@@ -65,6 +65,7 @@ module Sequencer = struct
         ; config : Config.t
         ; kvdb : Committer.Store.Kvdb.t
         ; state : State.t
+        ; archive : Archive.t
         }
 
       let save_state t = Db.set t.kvdb ~data:t.state
@@ -131,15 +132,13 @@ module Sequencer = struct
     module Commit = struct
       type t =
         { new_inner_ledger : Sparse_ledger.t
-        ; old_deposits_pointer : Field.t
-        ; processed_deposits_pointer : Field.t
+        ; processed_actions_pointer : Field.t
         }
       [@@deriving yojson]
 
       let process
-          ({ da_client; provers; executor; config; kvdb; state } as ctx :
-            Context.t )
-          { new_inner_ledger; old_deposits_pointer; processed_deposits_pointer }
+          ({ da_client; provers; executor; config; kvdb; state; archive } as ctx :
+            Context.t ) { new_inner_ledger; processed_actions_pointer }
           txn_snark =
         let%bind signatures =
           Da_layer.Client.Sequencer.get_signatures da_client
@@ -157,8 +156,7 @@ module Sequencer = struct
         let commit_witness : Committer.Commit_witness.t =
           { old_inner_ledger
           ; new_inner_ledger
-          ; old_deposits_pointer
-          ; processed_deposits_pointer
+          ; processed_actions_pointer
           ; signatures
           ; txn_snark
           }
@@ -168,8 +166,9 @@ module Sequencer = struct
           ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
 
         let%bind command =
-          Committer.prove_commit ~provers ~executor ~zkapp_pk:config.zkapp_pk
-            ~archive_uri:config.archive_uri commit_witness
+          Committer.prove_commit ~provers ~executor ~archive
+            ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
+            commit_witness
         in
         let%bind () = Executor.send_zkapp_command executor command in
         Context.committed ctx new_inner_ledger ;
@@ -430,27 +429,29 @@ module Sequencer = struct
     Ok ()
 
   let update_inner_account t =
-    let old_deposits_state, old_deposits_length =
-      let s = Utils.get_inner_deposits_state_exn (L.of_database t.ledger) in
+    let old_synced_outer_action_state, old_deposits_length =
+      let s =
+        Utils.get_synced_outer_action_state_exn (L.of_database t.ledger)
+      in
       C.Rollup_state.Outer_action_state.With_length.(raw s, length s)
     in
     let%bind all_new_actions =
       Gql_client.fetch_actions t.config.archive_uri
-        ~from_action_state:old_deposits_state t.config.zkapp_pk
+        ~from_action_state:old_synced_outer_action_state t.config.zkapp_pk
     in
     let%bind current_height = Gql_client.fetch_block_height t.config.l1_uri in
-    (* Find pointer for deposits to be processed *)
+    (* Find pointer for actions to be processed *)
     let processed_pointer, processed_new_actions =
-      List.fold all_new_actions ~init:(old_deposits_state, [])
+      List.fold all_new_actions ~init:(old_synced_outer_action_state, [])
         ~f:(fun (curr_state, curr_actions) (action, block_height) ->
           if block_height + t.config.deposit_delay_blocks <= current_height then
             ( Zkapp_account.Actions.push_events curr_state action
             , action :: curr_actions )
           else (curr_state, curr_actions) )
     in
-    if Field.equal old_deposits_state processed_pointer then
-      (* In case no new deposits are to process, we don't need to update inner account *)
-      return (old_deposits_state, old_deposits_state)
+    if Field.equal old_synced_outer_action_state processed_pointer then
+      (* In case no new actions are to process, we don't need to update inner account *)
+      return old_synced_outer_action_state
     else
       let%bind inner_account_update =
         Zeko_prover.Client.inner_sync t.snark_q.provers
@@ -458,7 +459,9 @@ module Sequencer = struct
           ~ase_elms:
             (List.map processed_new_actions ~f:Account_update.Actions.hash)
           ~ase_source:
-            ( { action_state = old_deposits_state; length = old_deposits_length }
+            ( { action_state = old_synced_outer_action_state
+              ; length = old_deposits_length
+              }
               : C.Ase.With_length.Stmt.t )
       in
       let fee = Currency.Fee.of_mina_int_exn 0 in
@@ -494,11 +497,11 @@ module Sequencer = struct
             don't_wait_for
             @@ Merger.P.add_job t.merger t.merger_ctx ~data:witness )
       in
-      return (old_deposits_state, processed_pointer)
+      return processed_pointer
 
   let commit t =
     apply_fee_transfer t |> Or_error.ok_exn ;
-    let%bind old_deposits_pointer, processed_pointer = update_inner_account t in
+    let%bind processed_actions_pointer = update_inner_account t in
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.ledger)
@@ -512,10 +515,7 @@ module Sequencer = struct
     else
       Merger.P.commit_exn t.merger t.merger_ctx
         ~commit_witness:
-          { new_inner_ledger = target_ledger
-          ; old_deposits_pointer
-          ; processed_deposits_pointer = processed_pointer
-          }
+          { new_inner_ledger = target_ledger; processed_actions_pointer }
       |> Deferred.ignore_m
 
   let run_committer t =
@@ -530,9 +530,11 @@ module Sequencer = struct
     let%bind commited_ledger_hash =
       match Sys.getenv "ZEKO_OVERRIDE_BOOTSTRAP_HASH" with
       | None ->
-          Gql_client.infer_committed_state config.l1_uri
-            ~zkapp_pk:config.zkapp_pk
+          Gql_client.infer_state config.l1_uri ~zkapp_pk:config.zkapp_pk
             ~signer_pk:(Public_key.compress config.signer.public_key)
+          >>| Utils.value_of_zkapp_state
+                Zeko_circuits.Rollup_state.Outer_state.typ
+          >>| fun { ledger_hash; _ } -> ledger_hash
       | Some hash ->
           printf "Using override hash: %s\n%!" hash ;
           return (Ledger_hash.of_decimal_string hash)
@@ -654,11 +656,12 @@ module Sequencer = struct
         ~signature_kind:(Utils.signature_kind l1_network_id)
         ~signer ~kvdb ()
     in
+    let archive = Archive.create ~kvdb in
     let t =
       { ledger
       ; imt
       ; logger
-      ; archive = Archive.create ~kvdb
+      ; archive
       ; config
       ; da_client
       ; snark_q = Snark_queue.create ~provers
@@ -670,6 +673,7 @@ module Sequencer = struct
           ; config
           ; kvdb
           ; state = Merger.Context.load_state kvdb
+          ; archive
           }
       ; apply_q = Sequencer.create ()
       }
@@ -680,7 +684,7 @@ module Sequencer = struct
     in
     let%bind () =
       Committer.recommit_all ~provers:t.snark_q.provers
-        ~executor:t.merger_ctx.executor ~kvdb ~zkapp_pk:config.zkapp_pk
+        ~executor:t.merger_ctx.executor ~archive ~kvdb ~zkapp_pk:config.zkapp_pk
         ~archive_uri:config.archive_uri
     in
     let%bind () =

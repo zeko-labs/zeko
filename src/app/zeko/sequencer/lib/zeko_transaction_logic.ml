@@ -239,7 +239,10 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
   let perform eff = perform ~zeko_env ~global_slot eff in
   let witnesses_rev =
     let l = hash_local_state (snd state) in
-    let account_id = Zkapp_command.fee_payer command in
+    let account_id =
+      Account_update.account_id @@ Account_update.of_fee_payer
+      @@ command.fee_payer
+    in
     [ ( account_id
       , fun ~imt_hash ~imt_witness ->
           Txn_snark_witness.Zkapp_command_segment.Single_unproved

@@ -4,14 +4,14 @@ open Mina_base
 open Signature_lib
 open Mina_ledger
 open Zeko_types
+open Zeko_circuits
 module Field = Snark_params.Tick.Field
 
 module Commit_witness = struct
   type t =
     { old_inner_ledger : Sparse_ledger.t
     ; new_inner_ledger : Sparse_ledger.t
-    ; old_deposits_pointer : Frozen_ledger_hash.t
-    ; processed_deposits_pointer : Frozen_ledger_hash.t
+    ; processed_actions_pointer : Field.t
     ; signatures : (Public_key.Compressed.t * Signature.t) list
     ; txn_snark : Txn_snark.serializable
     }
@@ -44,32 +44,80 @@ module Store = struct
   let get_all kvdb = Kvdb.get_all kvdb
 end
 
-let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
+let prove_commit ~provers ~(executor : Executor.t) ~(archive : Archive.t)
+    ~zkapp_pk ~archive_uri
     ({ old_inner_ledger
      ; new_inner_ledger
-     ; old_deposits_pointer
-     ; processed_deposits_pointer
+     ; processed_actions_pointer
      ; signatures
      ; txn_snark
      } :
       Commit_witness.t ) =
-  let%bind new_actions =
-    Gql_client.fetch_actions archive_uri ~from_action_state:old_deposits_pointer
-      ~end_action_state:processed_deposits_pointer zkapp_pk
-    >>| List.map ~f:fst >>| List.rev
-    >>| List.map ~f:Account_update.Actions.hash
+  let get_inner_acc ledger =
+    let inner_acc =
+      Sparse_ledger.get_exn ledger Zeko_constants.inner_account_index
+    in
+    let inner_acc_path =
+      Sparse_ledger.path_exn ledger Zeko_constants.inner_account_index
+      |> List.map ~f:(function
+           | `Left hash ->
+               ( { right_side = hash }
+                 : Outer_rules_inst.Rule_commit_inst.PathElt.t )
+           | `Right _ ->
+               failwith "The inner account is supposed to be left most" )
+    in
+    (inner_acc, inner_acc_path)
+  in
+  let old_inner_acc, old_inner_acc_path = get_inner_acc old_inner_ledger in
+  let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
+  let%bind { inner_action_state; _ } =
+    Gql_client.infer_state
+      Executor.(executor.l1_uri)
+      ~zkapp_pk
+      ~signer_pk:(Public_key.compress executor.signer.public_key)
+    >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
+  in
+  let inner_ase_source : Ase.With_length.Stmt.t =
+    Rollup_state.Inner_action_state.With_length.
+      { action_state = raw inner_action_state
+      ; length = length inner_action_state
+      }
+  in
+  let new_inner_actions =
+    let from =
+      match (Option.value_exn old_inner_acc.zkapp).action_state with
+      | x :: _ ->
+          x
+    in
+    let to_ =
+      match (Option.value_exn new_inner_acc.zkapp).action_state with
+      | x :: _ ->
+          x
+    in
+    Archive.get_actions archive
+      (Account_id.of_public_key @@ Public_key.decompress_exn zkapp_pk)
+      ~from:(Some from) ~to_:(Some to_)
+    |> Result.map_error ~f:Error.of_string
+    |> Or_error.ok_exn
+    (* Drop the first action if it's not the initial state *)
+    |> ( if Stdlib.(from = Zkapp_account.Actions.empty_state_element) then
+         List.tl
+       else Option.some )
+    |> Option.value ~default:[]
+    |> List.map ~f:(fun x -> Account_update.Actions.hash x.actions)
   in
   let%bind unprocessed_actions =
     Gql_client.fetch_actions archive_uri
-      ~from_action_state:processed_deposits_pointer zkapp_pk
+      ~from_action_state:processed_actions_pointer zkapp_pk
     >>| List.map ~f:fst >>| List.rev
     >>| List.map ~f:Account_update.Actions.hash
   in
   let%bind account_update =
     let da_key, da_signature = List.hd_exn signatures in
     Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
-      ~public_key:zkapp_pk ~new_actions ~unprocessed_actions ~old_inner_ledger
-      ~new_inner_ledger ~da_signature
+      ~public_key:zkapp_pk ~inner_ase_source ~new_inner_actions ~old_inner_acc
+      ~old_inner_acc_path ~new_inner_acc ~new_inner_acc_path
+      ~unprocessed_actions ~da_signature
       ~da_key:(Even_PC.create_exn da_key)
   in
   let command : Zkapp_command.t =
@@ -88,11 +136,12 @@ let prove_commit ~provers ~(executor : Executor.t) ~zkapp_pk ~archive_uri
   in
   return command
 
-let recommit_all ~provers ~(executor : Executor.t) ~kvdb ~zkapp_pk ~archive_uri
-    =
-  let%bind current_state =
-    Gql_client.infer_committed_state executor.l1_uri ~zkapp_pk
+let recommit_all ~provers ~(executor : Executor.t) ~archive ~kvdb ~zkapp_pk
+    ~archive_uri =
+  let%bind { ledger_hash; _ } =
+    Gql_client.infer_state executor.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress executor.signer.public_key)
+    >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
   in
   let commits = Store.get_index kvdb in
   let rec recommit_next current_state =
@@ -110,9 +159,10 @@ let recommit_all ~provers ~(executor : Executor.t) ~kvdb ~zkapp_pk ~archive_uri
           Store.get_commit kvdb (source, target) |> Option.value_exn
         in
         let%bind command =
-          prove_commit ~provers ~executor ~zkapp_pk ~archive_uri witness
+          prove_commit ~provers ~executor ~archive ~zkapp_pk ~archive_uri
+            witness
         in
         let%bind () = Executor.send_zkapp_command executor command in
         recommit_next target
   in
-  recommit_next current_state
+  recommit_next ledger_hash

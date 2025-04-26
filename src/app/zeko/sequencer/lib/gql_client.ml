@@ -256,7 +256,7 @@ let infer_nonce uri pk =
   let%map committed_nonce = fetch_nonce uri pk in
   Unsigned.UInt32.max max_pooled_nonce committed_nonce
 
-let fetch_committed_state uri pk =
+let fetch_state uri pk =
   let q =
     object
       method query =
@@ -278,33 +278,30 @@ let fetch_committed_state uri pk =
     end
   in
   let%map result = Graphql_client.query_json_exn q uri in
-  let open Zeko_circuits.Rollup_state in
-  let ({ ledger_hash; _ } : Outer_state.t) =
-    Yojson.Safe.Util.(
-      result |> member "account" |> member "zkappState" |> to_list
-      |> List.map ~f:to_string
-      |> List.map ~f:Field.of_string
-      |> Zkapp_state.V.of_list_exn |> Outer_state.value_of_app_state)
-  in
-  ledger_hash
+  Yojson.Safe.Util.(
+    result |> member "account" |> member "zkappState" |> to_list
+    |> List.map ~f:to_string
+    |> List.map ~f:Field.of_string
+    |> Zkapp_state.V.of_list_exn)
 
-let infer_committed_state uri ~zkapp_pk ~signer_pk =
-  let%bind committed_state = fetch_committed_state uri zkapp_pk
+let infer_state uri ~zkapp_pk ~signer_pk =
+  let%bind committed_state = fetch_state uri zkapp_pk
   and pooled_zkapp_commands = fetch_pooled_zkapp_commands uri signer_pk in
   let pooled_zkapp_commands =
     List.sort pooled_zkapp_commands ~compare:(fun a b ->
         Zkapp_command.(
           Account.Nonce.compare (applicable_at_nonce a) (applicable_at_nonce b)) )
   in
-  let pooled_state_transitions =
-    List.map pooled_zkapp_commands ~f:(Utils.get_state_transition zkapp_pk)
-    |> List.filter_opt
-  in
   let future_state =
-    List.fold_until pooled_state_transitions ~init:committed_state
-      ~f:(fun acc (source, target) ->
-        if Frozen_ledger_hash.equal acc source then Continue target
-        else Stop acc )
+    List.fold_until pooled_zkapp_commands ~init:committed_state
+      ~f:(fun acc command ->
+        match Utils.update_state zkapp_pk command acc with
+        | `Precondition_failed ->
+            Stop acc
+        | `Skipped ->
+            Continue acc
+        | `Updated new_state ->
+            Continue new_state )
       ~finish:Fn.id
   in
   return future_state

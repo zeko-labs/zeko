@@ -1,6 +1,6 @@
 open Async
 open Core_kernel
-open Mina_ledger
+open Mina_base
 open Zeko_circuits
 open Zeko_types
 module Field = Snark_params.Tick.Field
@@ -174,45 +174,21 @@ let verify_both_ases ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let outer_commit ?proving_timeout t ~txn_snark ~public_key ~new_actions
-    ~unprocessed_actions ~old_inner_ledger ~new_inner_ledger ~da_signature
-    ~da_key =
-  let get_inner_acc ledger =
-    let inner_acc =
-      Sparse_ledger.get_exn ledger Zeko_constants.inner_account_index
-    in
-    let inner_acc_path =
-      Sparse_ledger.path_exn ledger Zeko_constants.inner_account_index
-      |> List.map ~f:(function
-           | `Left hash ->
-               ({ right_side = hash } : Outer_rules.Rule_commit_inst.PathElt.t)
-           | `Right _ ->
-               failwith "The inner account is supposed to be left most" )
-    in
-    (inner_acc, inner_acc_path)
-  in
-  let old_inner_acc, old_inner_acc_path = get_inner_acc old_inner_ledger in
-  let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
-
+let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
+    ~new_inner_actions ~unprocessed_actions ~(old_inner_acc : Account.t)
+    ~old_inner_acc_path ~(new_inner_acc : Account.t) ~new_inner_acc_path
+    ~da_signature ~da_key =
+  (* Counting length of inner action state *)
   let%bind inner_ase =
-    let ({ outer_action_state } : Rollup_state.Inner_state.t) =
-      Rollup_state.Inner_state.value_of_app_state
-        (Option.value_exn old_inner_acc.zkapp).app_state
-    in
-    let action_state : Ase.With_length.Stmt.t =
-      Rollup_state.Outer_action_state.With_length.
-        { action_state = raw outer_action_state
-        ; length = length outer_action_state
-        }
-    in
     let%map proof, target, excess =
-      ase t ~source:action_state ~elems:new_actions
+      ase t ~source:inner_ase_source ~elems:new_inner_actions
         ~max_excess:Zeko_constants.Max_excess_actions.commit_inner
         ase_with_length
     in
     Outer_commit.Ase_inner_inst.
-      { proof; proof_target = target; init = action_state; excess }
+      { proof; proof_target = target; init = inner_ase_source; excess }
   in
+  (* Delay ASE *)
   let%bind outer_ase =
     let ({ outer_action_state } : Rollup_state.Inner_state.t) =
       Rollup_state.Inner_state.value_of_app_state

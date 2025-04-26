@@ -198,9 +198,9 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
       in
       Output.Txn_snark (stmt, proof)
   | Inner_sync input ->
-      let Compile_simple.[ prove; _ ] = Inner_rules.provers in
+      let Compile_simple.[ prove; _ ] = Inner_rules_inst.provers in
       let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag Inner_rules.tag
+        Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.to_pickles
@@ -238,9 +238,9 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
       in
       Output.Verify_both_ases (stmt, proof)
   | Outer_commit input ->
-      let Compile_simple.[ prove; _; _ ] = Outer_rules.provers in
+      let Compile_simple.[ prove; _; _ ] = Outer_rules_inst.provers in
       let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag Outer_rules.tag
+        Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.to_pickles

@@ -1,8 +1,8 @@
 open Core_kernel
-open Async
 open Mina_base
 open Signature_lib
-module Field = Snark_params.Tick.Field
+open Snark_params.Tick
+open Async
 
 let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
   let rec go attempt =
@@ -28,32 +28,69 @@ let print_time label (d : 'a Deferred.t) =
   printf "%s: %s\n%!" label (Time.Span.to_string_hum t) ;
   return x
 
-let get_state_transition pk command =
+let value_to_zkapp_state (some : Field.t -> 'option) (none : 'option)
+    (typ : ('var, 'value) Typ.t) (x : 'value) : 'option Zkapp_state.V.t =
+  let (Typ typ) = typ in
+  let fields, _aux = typ.value_to_fields x in
+  assert (Array.length fields <= 8) ;
+  let missing = 8 - Array.length fields in
+  Zkapp_state.V.of_list_exn
+  @@ List.append
+       (List.map ~f:(fun f -> some f) @@ Array.to_list fields)
+       (List.init missing ~f:(fun _ -> none))
+
+let value_of_zkapp_state (typ : ('var, 'value) Typ.t) (x : field Zkapp_state.V.t)
+    : 'value =
+  let (Typ typ) = typ in
+  typ.value_of_fields
+    ( Zkapp_state.V.to_list x |> Array.of_list
+    , typ.constraint_system_auxiliary () )
+
+let update_state pk command state =
+  let open Zkapp_basic in
   let account_id = Account_id.create pk Token_id.default in
-  let%bind.Option account_update =
+  match
     Zkapp_command.account_updates command
     |> Zkapp_command.Call_forest.to_list
     |> List.find ~f:(fun account_update ->
            Account_update.account_id account_update
            |> Account_id.equal account_id )
-  in
-  let body = Account_update.body account_update in
-  (* Use the Rollup_state.Outer_state.t to determine which is ledger hash *)
-  let third l = List.nth_exn l 2 in
-  let source =
-    body |> Account_update.Body.preconditions
-    |> Account_update.Preconditions.account |> Zkapp_precondition.Account.state
-    |> Zkapp_state.V.to_list |> third |> Zkapp_basic.Or_ignore.to_option
-    |> Option.value ~default:Field.zero
-  in
-  let target =
-    body |> Account_update.Body.update |> Account_update.Update.app_state
-    |> Zkapp_state.V.to_list |> third |> Zkapp_basic.Set_or_keep.to_option
-    |> Option.value ~default:Field.zero
-  in
-  Some (source, target)
+  with
+  | None ->
+      `Skipped
+  | Some account_update -> (
+      let body = Account_update.body account_update in
+      let preconditions =
+        body |> Account_update.Body.preconditions
+        |> Account_update.Preconditions.account
+        |> Zkapp_precondition.Account.state
+      in
+      let update =
+        body |> Account_update.Body.update |> Account_update.Update.app_state
+      in
+      match
+        List.map3_exn (Zkapp_state.V.to_list state)
+          (Zkapp_state.V.to_list preconditions) (Zkapp_state.V.to_list update)
+          ~f:(fun s p u -> (s, p, u))
+        |> List.fold_map ~init:`Updated ~f:(function
+             | `Precondition_failed ->
+                 fun (s, _, _) -> (`Precondition_failed, s)
+             | `Updated -> (
+                 fun (s, p, u) ->
+                   let u = Set_or_keep.to_option u |> Option.value ~default:s in
+                   match Or_ignore.to_option p with
+                   | None ->
+                       (`Updated, u)
+                   | Some p ->
+                       if Field.equal s p then (`Updated, u)
+                       else (`Precondition_failed, u) ) )
+      with
+      | `Precondition_failed, _ ->
+          `Precondition_failed
+      | `Updated, new_state ->
+          `Updated (Zkapp_state.V.of_list_exn new_state) )
 
-let get_inner_deposits_state_exn l =
+let get_synced_outer_action_state_exn l =
   let open Zeko_circuits in
   let ({ outer_action_state } : Rollup_state.Inner_state.t) =
     let idx =

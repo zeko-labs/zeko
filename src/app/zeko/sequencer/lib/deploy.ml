@@ -1,11 +1,14 @@
+open Core_kernel
 open Async
 open Mina_base
 open Account_update
 open Signature_lib
+module Field = Snark_params.Tick.Field
 module L = Mina_ledger.Ledger
 
 module Z = struct
   open Zeko_circuits
+  open Zeko_types
 
   let proof_permissions : Permissions.t =
     { edit_state = Proof
@@ -42,7 +45,7 @@ module Z = struct
   module Inner = struct
     let initial_account ?(fake = false) () =
       let%bind vk =
-        Compile_simple.Verification_key.of_tag Inner_rules.tag
+        Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
         |> Promise.to_deferred
       in
       return
@@ -57,7 +60,8 @@ module Z = struct
             Some
               { Zkapp_account.default with
                 app_state =
-                  Rollup_state.Inner_state.(value_to_init_state default)
+                  Rollup_state.Inner_state.(
+                    Utils.value_to_zkapp_state Fn.id Field.zero typ default)
               ; verification_key =
                   Some
                     (Verification_key_wire.Stable.Latest.M.of_binable
@@ -69,15 +73,18 @@ module Z = struct
   module Outer = struct
     let unsafe_deploy ~pause_key ~ledger_hash ~sequencer ~da_key ~acc_set
         ?(fake = false) () =
+      let open Zkapp_basic in
       let%bind vk =
-        Compile_simple.Verification_key.of_tag Outer_rules.tag
+        Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
         |> Promise.to_deferred
       in
       return
         { Update.dummy with
           app_state =
             Rollup_state.Outer_state.(
-              value_to_app_state
+              Utils.value_to_zkapp_state
+                (fun f -> Set_or_keep.Set f)
+                Set_or_keep.Keep typ
                 ( { pause_key
                   ; paused = false
                   ; ledger_hash

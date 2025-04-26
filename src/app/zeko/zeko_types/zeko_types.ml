@@ -12,6 +12,24 @@ let ok_exn = function
   | Error e ->
       failwith e
 
+module Inner_rules_inst =
+  Inner_rules.Make
+    (struct
+      let chain_l2 = Mina_signature_kind.Testnet
+    end)
+    ()
+
+module Outer_rules_inst =
+  Outer_rules.Make
+    (struct
+      let max_valid_while_size = 999999
+
+      let inner_public_key = Zeko_constants.inner_public_key
+
+      let chain_l1 = Mina_signature_kind.Testnet
+    end)
+    ()
+
 module F = struct
   include F
 
@@ -584,7 +602,7 @@ end
 module Outer_commit = struct
   module Path = Make_serializable_path (struct
     module PathStep = struct
-      type t = Outer_rules.Rule_commit_inst.PathElt.t
+      type t = Outer_rules_inst.Rule_commit_inst.PathElt.t
 
       let to_yojson ({ right_side } : t) =
         `Assoc [ ("right_side", Field.to_yojson right_side) ]
@@ -620,7 +638,7 @@ module Outer_commit = struct
   end)
 
   module Witness = struct
-    type t = Outer_rules.Rule_commit_inst.Witness.t =
+    type t = Outer_rules_inst.Rule_commit_inst.Witness.t =
       { txn_snark : Txn_snark.t
       ; public_key : Public_key.Compressed.t
       ; vk_hash : F.t

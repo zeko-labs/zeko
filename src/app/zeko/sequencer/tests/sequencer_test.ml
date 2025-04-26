@@ -211,10 +211,12 @@ let () =
           let%bind () = commit sequencer in
           let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
           let%bind () = Executor.wait_to_finish sequencer.merger_ctx.executor in
-          let%bind committed_ledger_hash =
-            Gql_client.infer_committed_state gql_uri
+          let%bind { ledger_hash = committed_ledger_hash; _ } =
+            Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+            >>| Utils.value_of_zkapp_state
+                  Zeko_circuits.Rollup_state.Outer_state.typ
           in
           let target_ledger_hash = get_root sequencer in
           [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
@@ -271,9 +273,12 @@ let () =
               Executor.wait_to_finish sequencer.merger_ctx.executor
             in
             let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
-            let%bind committed_ledger_hash =
-              Gql_client.fetch_committed_state gql_uri
-                Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+            let%bind { ledger_hash = committed_ledger_hash; _ } =
+              Gql_client.infer_state gql_uri
+                ~signer_pk:(Public_key.compress signer.public_key)
+                ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+              >>| Utils.value_of_zkapp_state
+                    Zeko_circuits.Rollup_state.Outer_state.typ
             in
             let target_ledger_hash = get_root sequencer in
             [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
