@@ -70,30 +70,20 @@ module SnarkList : functor
   val typ : (var, t) Typ.t
 end
 
-module SnarkArray : sig
-  module Make : functor
-    (Inputs : sig
-       module T : SnarkType
+module SnarkArray : functor
+  (Inputs : sig
+     module T : SnarkType
 
-       val max_length : int
+     val max_length : int
 
-       val dummy_filler : T.t
-     end)
-    -> sig
-    type t = Inputs.T.t list
+     val dummy_filler : T.t
+   end)
+  -> sig
+  type t = Inputs.T.t list
 
-    type var = { array : Inputs.T.var array; length : int V.t }
+  type var = { array : Inputs.T.var array; length : int V.t }
 
-    val typ : (var, t) Typ.t
-  end
-
-  val map : 'a array -> f:('a -> 'b Checked.t) -> 'b array Checked.t
-
-  val fold_map :
-       'a array
-    -> init:'b
-    -> f:('b -> 'a -> ('b * 'c) Checked.t)
-    -> ('b * 'c array) Checked.t
+  val typ : (var, t) Typ.t
 end
 
 module type V_S = sig

@@ -146,78 +146,50 @@ struct
   let typ : (var, t) Typ.t = Typ.list ~length:Len.length T.typ
 end
 
-module SnarkArray = struct
-  module Make (Inputs : sig
-    module T : SnarkType
+module SnarkArray (Inputs : sig
+  module T : SnarkType
 
-    val max_length : int
+  val max_length : int
 
-    val dummy_filler : T.t
-  end) =
-  struct
-    open Inputs
+  val dummy_filler : T.t
+end) =
+struct
+  open Inputs
 
-    type t = T.t list
+  type t = T.t list
 
-    type var = { array : T.var array; length : int V.t }
+  type var = { array : T.var array; length : int V.t }
 
-    let typ : (var, t) Typ.t =
-      let pad : int -> T.t list -> T.t array * int =
-       fun len list ->
-        let arr = Array.create ~len dummy_filler in
-        let rec go idx = function
-          | x :: xs ->
-              Array.set arr idx x ;
-              go (idx + 1) xs
-          | [] ->
-              idx
-        in
-        let real_len = go 0 list in
-        (arr, real_len)
+  let typ : (var, t) Typ.t =
+    let pad : int -> T.t list -> T.t array * int =
+     fun len list ->
+      let arr = Array.create ~len dummy_filler in
+      let rec go idx = function
+        | x :: xs ->
+            Array.set arr idx x ;
+            go (idx + 1) xs
+        | [] ->
+            idx
       in
-      let rec extract : int -> int -> T.t array -> T.t list =
-       fun len offset array ->
-        match len with
-        | 0 ->
-            []
-        | _ ->
-            array.(offset) :: extract (len - 1) (offset + 1) array
-      in
-      let open Typ in
-      array ~length:max_length T.typ * V.typ
-      |> transport
-           ~there:(fun xs -> pad max_length xs)
-           ~back:(fun (xs, len) -> extract len 0 xs)
-      |> transport_var
-           ~there:(fun { array; length } -> (array, length))
-           ~back:(fun (array, length) -> { array; length })
-  end
-
-  let map t ~f =
-    let len = Array.length t in
-    let rec go arr i =
-      if i >= len then Checked.return arr
-      else
-        let%bind x = f (Array.unsafe_get t i) in
-        Array.unsafe_set arr i x ;
-        go arr (i + 1)
+      let real_len = go 0 list in
+      (arr, real_len)
     in
-    if len < 0 then invalid_arg "SnarkArray.init"
-    else if len = 0 then Checked.return [||]
-    else
-      let%bind first = f (Array.unsafe_get t 0) in
-      let arr = Array.create ~len first in
-      go arr 1
-
-  let fold_map t ~init ~f =
-    let res = ref init in
-    let%map t =
-      map t ~f:(fun x ->
-          let%map acc, y = f !res x in
-          res := acc ;
-          y )
+    let rec extract : int -> int -> T.t array -> T.t list =
+     fun len offset array ->
+      match len with
+      | 0 ->
+          []
+      | _ ->
+          array.(offset) :: extract (len - 1) (offset + 1) array
     in
-    (!res, t)
+    let open Typ in
+    array ~length:max_length T.typ * V.typ
+    |> transport
+         ~there:(fun xs -> pad max_length xs)
+         ~back:(fun (xs, len) -> extract len 0 xs)
+    |> transport_var
+         ~there:(fun { array; length } -> (array, length))
+         ~back:(fun (array, length) -> { array; length })
 end
 
 module Proof_V = Mk_V (Proof)
