@@ -51,13 +51,36 @@ module Types = struct
                ~value:status ) )
 
   module DaemonStatus = struct
-    type t = { chain_id : string }
+    type t =
+      { chain_id : string; consensus_configuration : Consensus.Configuration.t }
 
     let t : ('context, t option) typ =
+      let consensus_configuration :
+          ('context, Consensus.Configuration.t option) typ =
+        let open Consensus.Configuration in
+        obj "ConsensusConfiguration" ~fields:(fun _ ->
+            [ field "epochDuration" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.epoch_duration)
+            ; field "k" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.k)
+            ; field "slotsPerEpoch" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.slots_per_epoch)
+            ; field "slotDuration" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.slot_duration)
+            ] )
+      in
       obj "DaemonStatus" ~fields:(fun _ ->
           [ field "chainId" ~typ:(non_null string)
               ~args:Arg.[]
               ~resolve:(fun _ v -> v.chain_id)
+          ; field "consensusConfiguration"
+              ~typ:(non_null consensus_configuration)
+              ~args:Arg.[]
+              ~resolve:(fun _ v -> v.consensus_configuration)
           ] )
   end
 
@@ -131,6 +154,14 @@ module Types = struct
             ~args:Arg.[]
             ~resolve:(fun _ () ->
               Zeko_sequencer.constraint_constants.account_creation_fee )
+        ; field "coinbase" ~typ:(non_null amount) ~doc:"Dummy value for Zeko"
+            ~args:Arg.[]
+            ~resolve:(fun _ () -> Currency.Amount.zero)
+        ; field "genesisTimestamp" ~typ:(non_null string)
+            ~doc:"Dummy value for Zeko"
+            ~args:Arg.[]
+            ~resolve:(fun _ () ->
+              Time.now () |> Time.to_string_iso8601_basic ~zone:Time.Zone.utc )
         ] )
 
   module AccountObj = struct
@@ -1726,7 +1757,19 @@ module Queries = struct
     io_field "daemonStatus" ~doc:"Get running daemon status" ~args:[]
       ~typ:(non_null Types.DaemonStatus.t) ~resolve:(fun { ctx = _; _ } () ->
         let open Types.DaemonStatus in
-        return (Ok { chain_id = "69420" }) )
+        return
+          (Ok
+             { chain_id = "69420"
+             ; consensus_configuration =
+                 { delta = 0
+                 ; k = 0
+                 ; slots_per_epoch = 0
+                 ; slot_duration = 0
+                 ; epoch_duration = 0
+                 ; genesis_state_timestamp = Block_time.zero
+                 ; acceptable_network_delay = 0
+                 }
+             } ) )
 
   let network_id =
     field "networkID"
