@@ -12,11 +12,20 @@ let ok_exn = function
   | Error e ->
       failwith e
 
-module Snarky_yojson (Typ : SnarkType) = struct
-  let to_yojson t : Yojson.Safe.t =
+module Snarky_serializable (Typ : SnarkType) = struct
+  let of_fields fields =
+    let (Typ typ) = Typ.typ in
+    typ.value_of_fields (fields, typ.constraint_system_auxiliary ())
+
+  let to_fields t =
     let (Typ typ) = Typ.typ in
     let fields, _aux = typ.value_to_fields t in
-    Array.to_list fields |> List.map ~f:Field.to_yojson |> fun fs -> `List fs
+    fields
+
+  let to_yojson t : Yojson.Safe.t =
+    to_fields t |> Array.to_list
+    |> List.map ~f:Field.to_yojson
+    |> fun fs -> `List fs
 
   let of_yojson json : Typ.t Ppx_deriving_yojson_runtime.error_or =
     let module M = Ppx_deriving_yojson_runtime in
@@ -27,8 +36,7 @@ module Snarky_yojson (Typ : SnarkType) = struct
         |> List.map ~f:Field.of_yojson
         |> List.map ~f:ok_exn |> Array.of_list
       in
-      let (Typ typ) = Typ.typ in
-      Ok (typ.value_of_fields (fields, typ.constraint_system_auxiliary ()))
+      Ok (of_fields fields)
     with e -> Error (Exn.to_string e)
 end
 
@@ -69,8 +77,7 @@ end
 
 module Account_set = struct
   include Account_set
-
-  type t = F.t [@@deriving yojson]
+  include Snarky_serializable (Account_set)
 end
 
 module Acc_set_witness = struct
@@ -588,12 +595,12 @@ module Make_serializable_action_state
 struct
   type t = Action_state.t
 
-  include Snarky_yojson (Action_state)
+  include Snarky_serializable (Action_state)
 
   module With_length = struct
     type t = Action_state.With_length.t
 
-    include Snarky_yojson (Action_state.With_length)
+    include Snarky_serializable (Action_state.With_length)
   end
 end
 

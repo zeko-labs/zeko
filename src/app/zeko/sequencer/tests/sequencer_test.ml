@@ -101,10 +101,8 @@ module Sequencer_test_spec = struct
       List.iter tids ~f:(fun tid ->
           let _, _ = Indexed_merkle_tree.Db.get_or_create_entry_exn db tid in
           () ) ;
-      Indexed_merkle_tree.Db.merkle_root db
+      Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root db |]
     in
-    printf "Initial IMT hash: %s\n%!"
-      (Ledger_hash.to_decimal_string account_set_hash) ;
 
     print_endline "(* Post genesis batch *)" ;
     run (fun () ->

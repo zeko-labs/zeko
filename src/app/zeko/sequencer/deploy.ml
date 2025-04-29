@@ -3,6 +3,7 @@ open Mina_base
 open Async
 open Mina_ledger
 open Signature_lib
+open Zeko_types
 module L = Ledger
 
 let constraint_constants = Zeko_constants.constraint_constants
@@ -65,9 +66,11 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
         | `None ->
             return
               ( ledger
-              , Indexed_merkle_tree.Db.(
-                  create ~depth:constraint_constants.ledger_depth ()
-                  |> merkle_root) )
+              , Account_set.of_fields
+                  [| Indexed_merkle_tree.Db.(
+                       create ~depth:constraint_constants.ledger_depth ()
+                       |> merkle_root)
+                  |] )
         | `Test_accounts test_accounts_path ->
             let accounts =
               Test_accounts.parse_accounts_exn ~test_accounts_path
@@ -86,7 +89,7 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
                     Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
                   in
                   () ) ;
-              Indexed_merkle_tree.Db.merkle_root imt
+              Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root imt |]
             in
             let ledger =
               List.fold ~init:ledger accounts
@@ -105,10 +108,12 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
               match imt_dir with
               | Some imt_dir ->
                   return
-                    Indexed_merkle_tree.Db.(
-                      create ~directory_name:imt_dir
-                        ~depth:constraint_constants.ledger_depth ()
-                      |> merkle_root)
+                    (Account_set.of_fields
+                       [| Indexed_merkle_tree.Db.(
+                            create ~directory_name:imt_dir
+                              ~depth:constraint_constants.ledger_depth ()
+                            |> merkle_root)
+                       |] )
               | None ->
                   printf "Creating imt\n%!" ;
                   let imt =
@@ -126,9 +131,10 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
                         Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
                       in
                       () ) ;
-                  let imt_hash = Indexed_merkle_tree.Db.merkle_root imt in
-                  printf "Imt hash: %s\n%!"
-                    (Ledger_hash.to_base58_check imt_hash) ;
+                  let imt_hash =
+                    Account_set.of_fields
+                      [| Indexed_merkle_tree.Db.merkle_root imt |]
+                  in
                   return imt_hash
             in
             return (ledger, imt_hash)

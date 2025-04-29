@@ -195,7 +195,7 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
     ( source_ledger
     , Base_input.
         { source_ledger = Sparse_ledger.merkle_root source_ledger
-        ; source_acc_set = source_imt
+        ; source_acc_set = Account_set.of_fields [| source_imt |]
         ; sequencer = sequencer_pk
         ; transaction = Command command
         ; witness =
@@ -381,7 +381,9 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
 
   let witnesses =
     List.map witnesses ~f:(fun (aid, incomplete_witness) ->
-        let imt_hash = Indexed_merkle_tree.Db.merkle_root imt in
+        let imt_hash =
+          Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root imt |]
+        in
         let imt_witness =
           let _, w =
             Indexed_merkle_tree.Db.get_or_create_entry_exn imt
@@ -467,7 +469,9 @@ let apply_fee_transfer_unchecked ~(receiver_pk : Even_PC.t) ~fee
     in
     Sparse_ledger.of_ledger_subset_exn ledger accounts_referenced
   in
-  let source_imt = Indexed_merkle_tree.Db.merkle_root imt in
+  let source_imt =
+    Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root imt |]
+  in
   let%bind.Result status =
     Or_error.try_with_join (fun () ->
         match
