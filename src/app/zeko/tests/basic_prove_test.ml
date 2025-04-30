@@ -465,19 +465,25 @@ let _outer =
       derive (Public_key.compress fee_payer_kp.public_key)
 
     module S = Account_set_data.Merkle_set (struct
+      open struct
+        let to_ = Mina_base.Token_id.to_field_unsafe
+
+        let of_ = Mina_base.Token_id.of_field
+      end
+
       type t = Mina_base.Token_id.t
 
-      let compare = Mina_base.Token_id.compare
+      let compare x y = Field.compare (to_ x) (to_ y)
 
-      let min = Mina_base.Token_id.of_field Field.zero
+      let min = of_ Field.zero
 
-      let max = Mina_base.Token_id.of_field (Field.negate Field.one)
+      let max = of_ (Field.negate Field.one)
 
-      let sexp_of_t = Mina_base.Token_id.sexp_of_t
+      let sexp_of_t x = Field.sexp_of_t (to_ x)
 
-      let t_of_sexp = Mina_base.Token_id.t_of_sexp
+      let t_of_sexp x = Field.t_of_sexp x |> of_
 
-      let to_fields x = [ Mina_base.Token_id.to_field_unsafe x ]
+      let to_fields x = [ to_ x ]
     end)
 
     let acc_set, { S.hash = source_acc_set; _ } =
