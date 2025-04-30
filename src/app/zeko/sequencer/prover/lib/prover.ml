@@ -4,13 +4,6 @@ open Mina_base
 open Zeko_circuits
 open Zeko_types
 
-let mktree (account_update, account_update_digest, calls) proof =
-  let account_update : Account_update.t =
-    { body = account_update; authorization = Proof proof }
-  in
-  Zkapp_command.Call_forest.Tree.
-    { account_update; account_update_digest; calls }
-
 let constraint_constants = Genesis_constants.Compiled.constraint_constants
 
 let time ?fake_proving_time ~logger label (d : 'a Deferred.t) =
@@ -146,11 +139,14 @@ module Output = struct
     | Txn_snark of (Zeko_stmt.t * Compile_simple.Proof.t)
     | Ase of Ase.t
     | Verify_both_ases of Outer_commit.Verify_both_ases.serializable
-    | Call_forest_tree of
-        ( Account_update.t
-        , Zkapp_command.Digest.Account_update.t
-        , Zkapp_command.Digest.Forest.t )
-        Zkapp_command.Call_forest.Tree.t
+    | Call_forest of
+        ( Account_update.Body.t
+        * Zkapp_command.Digest.Account_update.t
+        * ( Account_update.t
+          , Zkapp_command.Digest.Account_update.t
+          , Zkapp_command.Digest.Forest.t )
+          Zkapp_command.Call_forest.t )
+        * Compile_simple.Proof.t
   [@@deriving yojson]
 end
 
@@ -207,13 +203,12 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
         >>| Compile_simple.Verification_key.of_pickles
         >>| Compile_simple.Verification_key.hash
       in
-      let%map (_stmt, au), proof =
+      let%map (_stmt, parent_with_calls), proof =
         time ?fake_proving_time ~logger "Inner_rules.inner_sync"
           ( prove (Inner_sync.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
       in
-      Output.Call_forest_tree
-        (mktree au (Compile_simple.Proof.to_pickles proof))
+      Output.Call_forest (parent_with_calls, proof)
   | Ase (With_length (source, elems)) ->
       let%map snark =
         time ?fake_proving_time ~logger "Folder_with_length.fold"
@@ -247,13 +242,12 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
         >>| Compile_simple.Verification_key.of_pickles
         >>| Compile_simple.Verification_key.hash
       in
-      let%map (_stmt, au), proof =
+      let%map (_stmt, parent_with_calls), proof =
         time ?fake_proving_time ~logger "Outer_rules.commit"
           ( prove (Outer_commit.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
       in
-      Output.Call_forest_tree
-        (mktree au (Compile_simple.Proof.to_pickles proof))
+      Output.Call_forest (parent_with_calls, proof)
 
 let run ?fake_proving_time ~logger ~port () =
   ignore

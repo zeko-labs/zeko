@@ -26,24 +26,24 @@ module Z = struct
     ; access = Proof
     }
 
-  let either_permissions : Permissions.t =
-    { edit_state = Either
-    ; send = Either
+  let none_permissions : Permissions.t =
+    { edit_state = None
+    ; send = None
     ; receive = None
-    ; set_delegate = Either
-    ; set_permissions = Either
-    ; set_verification_key = (Either, Mina_numbers.Txn_version.current)
-    ; set_zkapp_uri = Either
-    ; edit_action_state = Either
-    ; set_token_symbol = Either
-    ; increment_nonce = Either
-    ; set_voting_for = Either
-    ; set_timing = Either
-    ; access = Either
+    ; set_delegate = None
+    ; set_permissions = None
+    ; set_verification_key = (None, Mina_numbers.Txn_version.current)
+    ; set_zkapp_uri = None
+    ; edit_action_state = None
+    ; set_token_symbol = None
+    ; increment_nonce = None
+    ; set_voting_for = None
+    ; set_timing = None
+    ; access = None
     }
 
   module Inner = struct
-    let initial_account ?(fake = false) () =
+    let initial_account () =
       let%bind vk =
         Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
         |> Promise.to_deferred
@@ -53,7 +53,10 @@ module Z = struct
           public_key = Zeko_constants.inner_public_key
         ; balance = Currency.Balance.max_int
         ; permissions =
-            { (if fake then either_permissions else proof_permissions) with
+            { ( if Option.is_some Compile_simple.Proof.is_real then
+                proof_permissions
+              else none_permissions )
+              with
               access = Permissions.Auth_required.None
             }
         ; zkapp =
@@ -71,8 +74,7 @@ module Z = struct
   end
 
   module Outer = struct
-    let unsafe_deploy ~pause_key ~ledger_hash ~sequencer ~da_key ~acc_set
-        ?(fake = false) () =
+    let unsafe_deploy ~pause_key ~ledger_hash ~sequencer ~da_key ~acc_set () =
       let open Zkapp_basic in
       let%bind vk =
         Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
@@ -100,28 +102,30 @@ module Z = struct
               (Verification_key_wire.Stable.Latest.M.of_binable
                  (Compile_simple.Verification_key.to_pickles vk) )
         ; permissions =
-            Set (if fake then either_permissions else proof_permissions)
+            Set
+              ( if Option.is_some Compile_simple.Proof.is_real then
+                proof_permissions
+              else none_permissions )
         }
 
-    let deploy_exn (l : L.t) ~fake =
+    let deploy_exn (l : L.t) =
       if
         not
           (Public_key.Compressed.equal Zeko_constants.inner_public_key
              (L.get_at_index_exn l 0).public_key )
       then failwith "zeko outer deploy: ledger invalid"
       else () ;
-      unsafe_deploy ~ledger_hash:(L.merkle_root l) ~fake
+      unsafe_deploy ~ledger_hash:(L.merkle_root l)
   end
 end
 
 let deploy_command_exn ?signature_kind ~(signer : Keypair.t)
     ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~(zkapp : Keypair.t)
     ~(initial_ledger : L.t) ~account_set_hash
-    ~(account_creation_fee : Currency.Fee.t) ~pause_key ~sequencer ~da_key
-    ?(fake = false) () =
+    ~(account_creation_fee : Currency.Fee.t) ~pause_key ~sequencer ~da_key () =
   let%bind update =
     Z.Outer.deploy_exn ~pause_key ~sequencer ~da_key ~acc_set:account_set_hash
-      ~fake initial_ledger ()
+      initial_ledger ()
   in
   let zkapp_update =
     { body =

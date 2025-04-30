@@ -453,16 +453,39 @@ module Sequencer = struct
       (* In case no new actions are to process, we don't need to update inner account *)
       return old_synced_outer_action_state
     else
-      let%bind inner_account_update =
-        Zeko_prover.Client.inner_sync t.snark_q.provers
-          ~public_key:Zeko_constants.inner_public_key
-          ~ase_elms:
-            (List.map processed_new_actions ~f:Account_update.Actions.hash)
-          ~ase_source:
-            ( { action_state = old_synced_outer_action_state
-              ; length = old_deposits_length
+      let%bind tree =
+        let%map (body, account_update_digest, calls), proof =
+          Zeko_prover.Client.inner_sync t.snark_q.provers
+            ~public_key:Zeko_constants.inner_public_key
+            ~ase_elms:
+              (List.map processed_new_actions ~f:Account_update.Actions.hash)
+            ~ase_source:
+              ( { action_state = old_synced_outer_action_state
+                ; length = old_deposits_length
+                }
+                : C.Ase.With_length.Stmt.t )
+        in
+        match Compile_simple.Proof.is_real with
+        | Some eq ->
+            let account_update : Account_update.t =
+              { body; authorization = Proof (Type_equal.conv eq proof) }
+            in
+            Zkapp_command.Call_forest.Tree.
+              { account_update; account_update_digest; calls }
+        | None ->
+            let account_update : Account_update.t =
+              { body = { body with authorization_kind = None_given }
+              ; authorization = None_given
               }
-              : C.Ase.With_length.Stmt.t )
+            in
+            Zkapp_command.Call_forest.Tree.
+              { account_update
+              ; account_update_digest =
+                  Zkapp_command.Digest.Account_update.create
+                    ~chain:(Utils.signature_kind t.config.network_id)
+                    account_update
+              ; calls
+              }
       in
       let fee = Currency.Fee.of_mina_int_exn 0 in
       let command : Zkapp_command.t =
@@ -477,8 +500,7 @@ module Sequencer = struct
                 }
             ; authorization = Signature.dummy
             }
-        ; account_updates =
-            Zkapp_command.Call_forest.cons_tree inner_account_update []
+        ; account_updates = Zkapp_command.Call_forest.cons_tree tree []
         ; memo = Signed_command_memo.empty
         }
       in

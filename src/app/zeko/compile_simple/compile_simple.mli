@@ -1,7 +1,7 @@
 module Proof : sig
   type t [@@deriving yojson]
 
-  val to_pickles : t -> Pickles.Side_loaded.Proof.t
+  val is_real : (t, Pickles.Side_loaded.Proof.t) Base.Type_equal.t option
 
   val of_pickles : Pickles.Side_loaded.Proof.t -> t
 end

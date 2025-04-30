@@ -6,9 +6,7 @@ module Proof = struct
   type t = Proof of Field.t (* hash of vk and public input *)
   [@@deriving yojson]
 
-  let to_pickles _ =
-    let open Pickles_types in
-    Pickles.Proof.dummy Nat.N2.n Nat.N2.n Nat.N2.n ~domain_log2:15
+  let is_real = None
 
   let of_pickles _ = Proof Field.one
 end

@@ -8,7 +8,7 @@ type self_width = Pickles_types.Nat.N2.n
 module Proof = struct
   include Pickles.Side_loaded.Proof
 
-  let to_pickles x = x
+  let is_real = Some Type_equal.T
 
   let of_pickles x = x
 end

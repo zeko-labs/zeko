@@ -37,7 +37,7 @@ module Test_accounts = struct
 end
 
 let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
-    ~network ~account_creation_fee ~fake () =
+    ~network ~account_creation_fee () =
   let logger = Logger.create () in
   let sender_keypair =
     Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
@@ -54,7 +54,7 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
           (Public_key.compress sender_keypair.public_key)
       in
       let%bind initial_inner_account =
-        Sequencer_lib.Deploy.Z.Inner.initial_account ~fake ()
+        Sequencer_lib.Deploy.Z.Inner.initial_account ()
       in
       let%bind ledger, imt_hash =
         let ledger =
@@ -145,7 +145,7 @@ let run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key ~da_key
           ~fee:(Currency.Fee.of_mina_int_exn 1)
           ~nonce ~account_creation_fee ~initial_ledger:ledger
           ~account_set_hash:imt_hash ~pause_key ~sequencer:sequencer_key ~da_key
-          ~fake ()
+          ()
       in
 
       (* Post genesis batch *)
@@ -199,7 +199,7 @@ let () =
         and account_creation_fee =
           flag "--account-creation-fee" (required string)
             ~doc:"float Account creation fee in mina"
-        and fake = flag "--fake" no_arg ~doc:"bool Fake mode" in
+        in
         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
         let da_nodes =
           List.mapi da_nodes ~f:(fun i uri ->
@@ -253,4 +253,4 @@ let () =
           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
         in
         run ~l1_uri ~sk ~initial_state ~da_nodes ~pause_key ~sequencer_key
-          ~da_key ~network ~account_creation_fee ~fake )
+          ~da_key ~network ~account_creation_fee )

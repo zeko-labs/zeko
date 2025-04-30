@@ -112,13 +112,35 @@ let prove_commit ~provers ~(executor : Executor.t) ~(archive : Archive.t)
     >>| List.map ~f:fst >>| List.rev
     >>| List.map ~f:Account_update.Actions.hash
   in
-  let%bind account_update =
+  let%bind tree =
     let da_key, da_signature = List.hd_exn signatures in
-    Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
-      ~public_key:zkapp_pk ~inner_ase_source ~new_inner_actions ~old_inner_acc
-      ~old_inner_acc_path ~new_inner_acc ~new_inner_acc_path
-      ~unprocessed_actions ~da_signature
-      ~da_key:(Even_PC.create_exn da_key)
+    let%map (body, account_update_digest, calls), proof =
+      Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
+        ~public_key:zkapp_pk ~inner_ase_source ~new_inner_actions ~old_inner_acc
+        ~old_inner_acc_path ~new_inner_acc ~new_inner_acc_path
+        ~unprocessed_actions ~da_signature
+        ~da_key:(Even_PC.create_exn da_key)
+    in
+    match Compile_simple.Proof.is_real with
+    | Some eq ->
+        let account_update : Account_update.t =
+          { body; authorization = Proof (Type_equal.conv eq proof) }
+        in
+        Zkapp_command.Call_forest.Tree.
+          { account_update; account_update_digest; calls }
+    | None ->
+        let account_update : Account_update.t =
+          { body = { body with authorization_kind = None_given }
+          ; authorization = None_given
+          }
+        in
+        Zkapp_command.Call_forest.Tree.
+          { account_update
+          ; account_update_digest =
+              Zkapp_command.Digest.Account_update.create
+                ~chain:executor.signature_kind account_update
+          ; calls
+          }
   in
   let command : Zkapp_command.t =
     { fee_payer =
@@ -130,7 +152,7 @@ let prove_commit ~provers ~(executor : Executor.t) ~(archive : Archive.t)
             }
         ; authorization = Signature.dummy
         }
-    ; account_updates = Zkapp_command.Call_forest.cons_tree account_update []
+    ; account_updates = Zkapp_command.Call_forest.cons_tree tree []
     ; memo = Signed_command_memo.empty
     }
   in

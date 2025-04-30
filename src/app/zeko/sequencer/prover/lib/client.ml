@@ -157,8 +157,8 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
   in
   send ?proving_timeout t (Prover.Input.Inner_sync { public_key; ase })
   >>| function
-  | Prover.Output.Call_forest_tree tree ->
-      tree
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      (parent_with_calls, proof)
   | Prover.Output.Error err ->
       failwith err
   | _ ->
@@ -221,8 +221,8 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
        ; slot_range = Slot_range.infinite
        } )
   >>| function
-  | Prover.Output.Call_forest_tree tree ->
-      tree
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      (parent_with_calls, proof)
   | Prover.Output.Error err ->
       failwith err
   | _ ->
