@@ -188,7 +188,7 @@ module Sequencer = struct
       ctx.state.witnesses <- [] ;
       printf "Requeueing %d commands\n%!" (List.length witnesses_to_requeue) ;
       List.iter witnesses_to_requeue ~f:(fun witness ->
-          don't_wait_for @@ P.add_job t ctx ~data:witness )
+          (P.add_job t ctx ~data:witness : P.Tree.id) |> ignore )
   end
 
   module State_hashes = struct
@@ -424,7 +424,8 @@ module Sequencer = struct
       ~ledger_openings:source_ledger ~diff
       ~target_ledger_hash:(Ledger.Db.merkle_root t.ledger) ;
 
-    don't_wait_for @@ Merger.P.add_job t.merger t.merger_ctx ~data:witness ;
+    (Merger.P.add_job t.merger t.merger_ctx ~data:witness : Merger.P.Tree.id)
+    |> ignore ;
 
     Ok ()
 
@@ -465,6 +466,7 @@ module Sequencer = struct
                 }
                 : C.Ase.With_length.Stmt.t )
         in
+        (* see #286 *)
         match Compile_simple.Proof.is_real with
         | Some eq ->
             let account_update : Account_update.t =
@@ -516,8 +518,9 @@ module Sequencer = struct
       in
       let () =
         List.iter witnesses ~f:(fun witness ->
-            don't_wait_for
-            @@ Merger.P.add_job t.merger t.merger_ctx ~data:witness )
+            ( Merger.P.add_job t.merger t.merger_ctx ~data:witness
+              : Merger.P.Tree.id )
+            |> ignore )
       in
       return processed_pointer
 
@@ -531,7 +534,7 @@ module Sequencer = struct
     in
     if
       Merger.P.current_tree t.merger
-      |> Option.map ~f:Merger.P.Tree.is_empty
+      |> Option.map ~f:(fun tree -> Merger.P.Tree.is_empty tree.value)
       |> Option.value ~default:true
     then return (print_endline "Nothing to commit")
     else

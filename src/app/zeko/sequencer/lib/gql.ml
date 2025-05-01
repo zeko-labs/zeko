@@ -1659,9 +1659,10 @@ module Mutations = struct
             return (Error (Error.to_string_mach err))
         | Ok witnesses ->
             List.iter witnesses ~f:(fun witness ->
-                don't_wait_for
-                @@ Zeko_sequencer.Merger.P.add_job sequencer.merger
-                     sequencer.merger_ctx ~data:witness ) ;
+                let open Zeko_sequencer.Merger.P in
+                ( add_job sequencer.merger sequencer.merger_ctx ~data:witness
+                  : Tree.id )
+                |> ignore ) ;
             let cmd =
               { Types.User_command.With_status.data =
                   Signed_command.forget_check command
@@ -1694,9 +1695,10 @@ module Mutations = struct
             return (Error (Error.to_string_mach err))
         | Ok witnesses ->
             List.iter witnesses ~f:(fun witness ->
-                don't_wait_for
-                @@ Zeko_sequencer.Merger.P.add_job sequencer.merger
-                     sequencer.merger_ctx ~data:witness ) ;
+                let open Zeko_sequencer.Merger.P in
+                ( add_job sequencer.merger sequencer.merger_ctx ~data:witness
+                  : Tree.id )
+                |> ignore ) ;
             let cmd =
               { Types.Zkapp_command.With_status.data = zkapp_command
               ; status = Applied

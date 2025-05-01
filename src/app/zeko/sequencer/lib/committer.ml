@@ -121,6 +121,7 @@ let prove_commit ~provers ~(executor : Executor.t) ~(archive : Archive.t)
         ~unprocessed_actions ~da_signature
         ~da_key:(Even_PC.create_exn da_key)
     in
+    (* see #286 *)
     match Compile_simple.Proof.is_real with
     | Some eq ->
         let account_update : Account_update.t =

@@ -53,6 +53,7 @@ module Z = struct
           public_key = Zeko_constants.inner_public_key
         ; balance = Currency.Balance.max_int
         ; permissions =
+            (* see #286 *)
             { ( if Option.is_some Compile_simple.Proof.is_real then
                 proof_permissions
               else none_permissions )
@@ -103,6 +104,7 @@ module Z = struct
                  (Compile_simple.Verification_key.to_pickles vk) )
         ; permissions =
             Set
+              (* see #286 *)
               ( if Option.is_some Compile_simple.Proof.is_real then
                 proof_permissions
               else none_permissions )
