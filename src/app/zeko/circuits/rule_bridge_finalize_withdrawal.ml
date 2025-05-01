@@ -133,6 +133,11 @@ struct
           assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
             commit_ase.source commit_ase_source'
         in
+        let* () =
+          assert_equal ~label:__LOC__
+            Rollup_state.Inner_action_state.With_length.typ
+            commit.inner_action_state withdrawal_ase.target
+        in
         let base_params = Withdrawal_params.base withdrawal_params in
         let helper_account =
           { default_account_update with
@@ -181,16 +186,7 @@ struct
                         { pause_key = None
                         ; paused = Some Boolean.false_ (* must not be paused *)
                         ; ledger_hash = None
-                        ; inner_action_state =
-                            { state =
-                                Rollup_state.Inner_action_state.With_length
-                                .state_var withdrawal_ase.target
-                                |> Some
-                            ; length =
-                                Rollup_state.Inner_action_state.With_length
-                                .length_var withdrawal_ase.target
-                                |> Some
-                            }
+                        ; inner_action_state = { state = None; length = None }
                         ; sequencer = None
                         ; da_key = None
                         ; acc_set = None
