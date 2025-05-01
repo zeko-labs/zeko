@@ -1683,7 +1683,7 @@ module Make (L : Ledger_intf.S) :
     let initial_state :
         Inputs.Global_state.t * _ Zkapp_command_logic.Local_state.t =
       ( { protocol_state = state_view
-        ; first_pass_ledger = L.empty ~depth:0 ()
+        ; first_pass_ledger = ledger
         ; second_pass_ledger =
             (* We stub out the second_pass_ledger initially, and then poke the
                correct value in place after the first pass is finished.
