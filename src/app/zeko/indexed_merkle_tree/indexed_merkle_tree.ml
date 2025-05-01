@@ -235,7 +235,7 @@ module Db : Database_intf = struct
       Account_location.build_location (Account_id.with_empty_key tid)
     in
     let prev_location_key =
-      Kvdb.prev_key (zeko_kvdb t)
+      Kvdb.zeko_prev_key (zeko_kvdb t)
         ~key:(Location.serialize ~ledger_depth:(depth t) location_key)
       |> Location.parse ~ledger_depth:(depth t)
       |> Result.map_error ~f:(fun () ->

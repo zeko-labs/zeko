@@ -20,6 +20,7 @@ module type S = sig
 
   type location
 
+  (* ZEKO NOTE: We are reusing this module for zeko_transaction_logic.ml *)
   module Inputs :
     Zkapp_command_logic.Inputs_intf
       with type Account.t = Account.t

@@ -202,7 +202,7 @@ module type Key_value_database = sig
     -> finish:('a -> 'b)
     -> 'b
 
-  val prev_key : t -> key:Bigstring.t -> Bigstring.t
+  val zeko_prev_key : t -> key:Bigstring.t -> Bigstring.t
 end
 
 module type Storage_locations = sig

@@ -119,7 +119,7 @@ let fold_until :
   in
   finish @@ loop init
 
-let prev_key t ~(key : Bigstring.t) : Bigstring.t =
+let zeko_prev_key t ~(key : Bigstring.t) : Bigstring.t =
   let iterator = Rocks.Iterator.create t.db in
   Rocks.Iterator.seek iterator key ;
   Rocks.Iterator.prev iterator ;

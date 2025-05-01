@@ -178,10 +178,13 @@ module type S = sig
       -> With_valid_signature.t
   end
 
+  (* ZEKO NOTE: added ?signature_kind *)
+
   (** checks signature and keys *)
   val check :
     ?signature_kind:Mina_signature_kind.t -> t -> With_valid_signature.t option
 
+  (* ZEKO NOTE: added ?signature_kind *)
   val check_only_for_signature :
     ?signature_kind:Mina_signature_kind.t -> t -> With_valid_signature.t option
 

@@ -193,6 +193,7 @@ include T
 
 [%%define_locally Stable.Latest.Wire.(gen)]
 
+(* ZEKO NOTE: added ?chain *)
 let of_simple ?chain (w : Simple.t) : t =
   { fee_payer = w.fee_payer
   ; memo = w.memo
@@ -894,6 +895,7 @@ include Codable.Make_base64 (Stable.Latest.With_top_version_tag)
 type account_updates =
   (Account_update.t, Digest.Account_update.t, Digest.Forest.t) Call_forest.t
 
+(* ZEKO NOTE: added ?chain *)
 let account_updates_deriver ?chain obj =
   let of_zkapp_command_with_depth (ps : Account_update.Graphql_repr.t list) :
       account_updates =
@@ -914,6 +916,7 @@ let account_updates_deriver ?chain obj =
   iso ~map:of_zkapp_command_with_depth ~contramap:to_zkapp_command_with_depth
     inner obj
 
+(* ZEKO NOTE: added ?chain *)
 let deriver ?chain obj =
   let open Fields_derivers_zkapps.Derivers in
   let ( !. ) = ( !. ) ~t_fields_annots in
@@ -923,15 +926,19 @@ let deriver ?chain obj =
     ~memo:!.Signed_command_memo.deriver
   |> finish "ZkappCommand" ~t_toplevel_annots
 
+(* ZEKO NOTE: added ?chain *)
 let arg_typ ?chain () =
   Fields_derivers_zkapps.(arg_typ (deriver ?chain @@ Derivers.o ()))
 
+(* ZEKO NOTE: added ?chain *)
 let typ ?chain () =
   Fields_derivers_zkapps.(typ (deriver ?chain @@ Derivers.o ()))
 
+(* ZEKO NOTE: added ?chain *)
 let to_json ?chain x =
   Fields_derivers_zkapps.(to_json (deriver ?chain @@ Derivers.o ())) x
 
+(* ZEKO NOTE: added ?chain *)
 let of_json ?chain x =
   Fields_derivers_zkapps.(of_json (deriver ?chain @@ Derivers.o ())) x
 
@@ -944,6 +951,7 @@ let account_updates_of_json x =
 let account_updates_to_json x =
   Fields_derivers_zkapps.(to_json (account_updates_deriver @@ derivers ())) x
 
+(* ZEKO NOTE: added ?chain *)
 let zkapp_command_to_json ?chain x =
   Fields_derivers_zkapps.(to_json (deriver ?chain @@ derivers ())) x
 
@@ -1353,6 +1361,7 @@ let is_incompatible_version t =
       | Set { set_verification_key = _auth, txn_version; _ } ->
           not Mina_numbers.Txn_version.(equal_to_current txn_version) )
 
+(* ZEKO NOTE: added ?chain *)
 let get_transaction_commitments ?chain (zkapp_command : t) =
   let memo_hash = Signed_command_memo.hash zkapp_command.memo in
   let fee_payer_hash =
