@@ -464,6 +464,55 @@ module Merkle_tree = struct
     in
     let xs = extend_full_trees (mkext full_level lte) xs in
     of_full_trees Level_z Empty xs
+
+  let rec index : 'level. 'level location -> 'level tree -> field option =
+    fun (type level) (loc : level location) (xs : level tree) ->
+     match (loc, xs) with
+     | Loc_end, Leaf { hash } ->
+         Some hash
+     | Right_loc loc, Node { right; _ } ->
+         index loc right
+     | Left_loc loc, Node { left; _ } ->
+         index loc left
+     | (Loc_end | Right_loc _ | Left_loc _), Empty ->
+         None
+
+  let rec unsimplify_path :
+            'level.
+               'level level_witness
+            -> [ `Left of field | `Right of field ] list
+            -> 'level path option =
+    fun (type level) (level : level level_witness)
+        (path : [ `Left of field | `Right of field ] list) : level path option ->
+     match (level, path) with
+     | Level_z, [] ->
+         Some End
+     | Level_s level, `Left hash :: xs -> (
+         match unsimplify_path level xs with
+         | Some xs ->
+             Some (Left (xs, hash))
+         | None ->
+             None )
+     | Level_s level, `Right hash :: xs -> (
+         match unsimplify_path level xs with
+         | Some xs ->
+             Some (Right (xs, hash))
+         | None ->
+             None )
+     | Level_z, _ :: _ ->
+         None
+     | Level_s _, [] ->
+         None
+
+  let rec path_to_location : 'level. 'level path -> 'level location =
+    fun (type level) (path : level path) : level location ->
+     match path with
+     | End ->
+         Loc_end
+     | Left (xs, _) ->
+         Left_loc (path_to_location xs)
+     | Right (xs, _) ->
+         Right_loc (path_to_location xs)
 end
 
 let full_level = Merkle_tree.level_34
@@ -480,6 +529,14 @@ let path_simple :
       (Int64.shift_left idx (64 - Merkle_tree.level_to_int full_level))
   in
   Merkle_tree.get_path (full_level, xs, loc) |> Merkle_tree.simplify_path
+
+let get_at :
+    [ `Left of field | `Right of field ] list -> field list -> field option =
+ fun path xs ->
+  let xs = Merkle_tree.of_list full_level xs in
+  let path = Merkle_tree.unsimplify_path full_level path |> Option.value_exn in
+  let loc = Merkle_tree.path_to_location path in
+  Merkle_tree.index loc xs
 
 let simple_to_string_hum : field list -> string =
  fun xs ->
@@ -559,7 +616,7 @@ end = struct
     let entries' = if is_not_new then entries else entries @ [ entry ] in
     let new_tree = calculate_tree set entries' in
     let path = path_simple (get_idx entry entries') new_tree in
-    let before_path = path_simple (get_idx before entries') old_tree in
+    let before_path = path_simple (get_idx before entries) old_tree in
     let hash = hash_simple new_tree in
     (entries', { path; before_path; before; after; hash })
 
