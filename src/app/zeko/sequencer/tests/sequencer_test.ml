@@ -197,9 +197,11 @@ let () =
                         Error.raise e
                   in
                   List.iter witnesses ~f:(fun witness ->
-                      don't_wait_for
-                      @@ Merger.P.add_job sequencer.merger sequencer.merger_ctx
-                           ~data:witness ) )
+                      let _id =
+                        Merger.P.add_job sequencer.merger sequencer.merger_ctx
+                          ~data:witness
+                      in
+                      () ) )
             in
             return () )
       in
@@ -256,9 +258,10 @@ let () =
                 in
 
                 List.iter witnesses ~f:(fun witness ->
-                    don't_wait_for
-                    @@ Merger.P.add_job sequencer.merger sequencer.merger_ctx
-                         ~data:witness ) )
+                    ( Merger.P.add_job sequencer.merger sequencer.merger_ctx
+                        ~data:witness
+                      : Merger.P.Tree.id )
+                    |> ignore ) )
           in
           return () ) ;
 

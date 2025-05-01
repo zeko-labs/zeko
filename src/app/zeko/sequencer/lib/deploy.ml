@@ -53,8 +53,10 @@ module Z = struct
           public_key = Zeko_constants.inner_public_key
         ; balance = Currency.Balance.max_int
         ; permissions =
-            { ( if Option.is_some Compile_simple.is_compile_simple_real then
-                proof_permissions
+            { ( if
+                (* see #286 *)
+                Option.is_some Compile_simple.is_compile_simple_real
+              then proof_permissions
               else none_permissions )
               with
               access = Permissions.Auth_required.None
@@ -113,8 +115,10 @@ module Z = struct
                      Pickles.Side_loaded.Verification_key.dummy ) )
         ; permissions =
             Set
-              ( if Option.is_some Compile_simple.is_compile_simple_real then
-                proof_permissions
+              ( if
+                (* see #286 *)
+                Option.is_some Compile_simple.is_compile_simple_real
+              then proof_permissions
               else none_permissions )
         }
 
