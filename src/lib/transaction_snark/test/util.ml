@@ -12,6 +12,8 @@ let genesis_constants = Genesis_constants.Compiled.genesis_constants
 (* Always run tests with proof-level Full *)
 let proof_level = Genesis_constants.Proof_level.Full
 
+(* ZEKO NOTE: cli_lib depends on snark_profiler_lib, which depends on this module *)
+(* Leaving the default config leads to division by zero, since we removed the default configs *)
 let constraint_constants : Genesis_constants.Constraint_constants.t =
   { sub_windows_per_window = 1
   ; ledger_depth = 35
