@@ -1,8 +1,6 @@
 module Proof : sig
   type t [@@deriving yojson]
 
-  val is_real : (t, Pickles.Side_loaded.Proof.t) Base.Type_equal.t option
-
   val of_pickles : Pickles.Side_loaded.Proof.t -> t
 end
 
@@ -18,8 +16,6 @@ module Verification_key : sig
   val typ : (var, t) Snark_params.Tick.Typ.t
 
   val of_pickles : Pickles.Side_loaded.Verification_key.t -> t
-
-  val to_pickles : t -> Pickles.Side_loaded.Verification_key.t
 
   val of_tag : 'tag_var tag -> t Promise.t
 
@@ -52,3 +48,6 @@ val compile :
         with type out_t = 'out_t
          and type out_var = 'out_var
          and type branches = ('first_input, 'branches) cons_branch )
+
+val is_compile_simple_real :
+  (Proof.t, Pickles.Side_loaded.Proof.t) Base.Type_equal.t option
