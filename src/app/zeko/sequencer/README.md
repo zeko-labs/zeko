@@ -17,11 +17,9 @@ DUNE_PROFILE=devnet dune build
 
 ## Tests
 
-Move to the root of the repo and run the following commands each in separate terminal:
+Move to the sequencer's root `src/app/zeko/sequencer` and run the following commands each in separate terminal:
 
 ```bash
-cd src/app/zeko/sequencer
-
 # Run testing ledger to imitate L1
 ZEKO_SIGNATURE_KIND=testnet dune exec ./tests/testing_ledger/run.exe -- --db-dir l1_db --network-id testnet
 
