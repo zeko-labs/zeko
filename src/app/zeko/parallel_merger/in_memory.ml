@@ -6,8 +6,6 @@ let generate_id () = Uuid_unix.create () |> Uuid.to_string
 module type Intf = sig
   module Context : sig
     type t
-
-    val created_new_tree : t -> unit
   end
 
   module Merge : sig
@@ -56,8 +54,6 @@ end
 
 module Make (Context : sig
   type t
-
-  val created_new_tree : t -> unit
 end) (Merge : sig
   type t
 
@@ -206,13 +202,12 @@ end) :
 
   let create () = { trees = [] }
 
-  let start_new_tree t ctx =
-    Context.created_new_tree ctx ;
+  let start_new_tree t =
     t.trees <- t.trees @ [ { id = generate_id (); value = Tree.create () } ]
 
   let commit_exn t ctx ~commit_witness =
     (* Create new tree before waiting, so new transactions go there *)
-    start_new_tree t ctx ;
+    start_new_tree t ;
     match List.rev t.trees with
     | _just_created :: last :: rest ->
         Tree.close last.value ;
@@ -229,7 +224,7 @@ end) :
   let rec add_job t context ~(data : Base.t) =
     match List.last t.trees with
     | None ->
-        start_new_tree t context ; add_job t context ~data
+        start_new_tree t ; add_job t context ~data
     | Some last ->
         let () =
           don't_wait_for
@@ -256,8 +251,6 @@ let%test_module "in_memory parallel_merge on (+)" =
       (* let pp () = printf !"%{sexp: int list}\n%!" (get ()) *)
 
       let add t x = t := !t @ [ x ]
-
-      let created_new_tree _ = ()
     end
 
     module Merge = struct

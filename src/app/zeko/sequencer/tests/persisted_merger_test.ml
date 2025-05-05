@@ -4,8 +4,6 @@ open Relational_db
 
 module Context = struct
   type t = unit
-
-  let created_new_tree _ = ()
 end
 
 module Merge = struct
