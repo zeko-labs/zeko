@@ -184,7 +184,7 @@ module Sequencer = struct
   type t =
     { ledger : L.Db.t
     ; imt : Indexed_merkle_tree.Db.t
-    ; sql_pool : Relational_db.Db.pool
+    ; db_pool : Relational_db.Db.pool
     ; logger : Logger.t
     ; archive : Archive.t
     ; config : Config.t
@@ -202,7 +202,7 @@ module Sequencer = struct
     Ivar.fill t.closed () ;
     L.Db.close t.ledger ;
     Indexed_merkle_tree.Db.close t.imt ;
-    Relational_db.Pool.drain t.sql_pool
+    Relational_db.Pool.drain t.db_pool
 
   let add_account t account_id account =
     ( L.Db.get_or_create_account t.ledger account_id account |> Or_error.ok_exn
@@ -418,7 +418,7 @@ module Sequencer = struct
         ~target_ledger_hash:(Ledger.Db.merkle_root t.ledger) ;
       witness
     in
-    Merger.P.add_job t.sql_pool t.merger t.merger_ctx ~data:witness
+    Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
     >>| Result.map_error ~f:(fun e -> Error.of_string (Caqti_error.show e))
 
   let update_inner_account t =
@@ -511,7 +511,7 @@ module Sequencer = struct
       in
       let%bind () =
         Deferred.List.iter ~how:`Sequential witnesses ~f:(fun witness ->
-            Merger.P.add_job t.sql_pool t.merger t.merger_ctx ~data:witness
+            Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to add witness for inner account update: %s" )
       in
@@ -531,7 +531,7 @@ module Sequencer = struct
       |> Option.value ~default:true
     then return (print_endline "Nothing to commit")
     else
-      Merger.P.commit_exn t.sql_pool t.merger t.merger_ctx
+      Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
         ~commit_witness:
           { new_inner_ledger = target_ledger; processed_actions_pointer }
       |> Deferred.ignore_m
@@ -675,15 +675,7 @@ module Sequencer = struct
         ~signer ~kvdb ()
     in
     let archive = Archive.create ~kvdb in
-    let sql_pool, `Uri _ =
-      Relational_db.(
-        Db.create_pool
-          ?sqlite_path:
-            (Option.map db_dir ~f:(fun db_dir ->
-                 Filename.concat db_dir "state.db" ) )
-          ()
-        |> caqti_ok_exn ~msg:"Failed to create sql pool: %s")
-    in
+    let%bind db_pool = Db.create ?db_dir ~logger in
     let merger_ctx =
       Merger.Context.
         { provers
@@ -695,11 +687,11 @@ module Sequencer = struct
         ; archive
         }
     in
-    let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx sql_pool in
+    let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
     let t =
       { ledger
       ; imt
-      ; sql_pool
+      ; db_pool
       ; logger
       ; archive
       ; config

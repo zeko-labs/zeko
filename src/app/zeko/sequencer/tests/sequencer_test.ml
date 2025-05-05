@@ -200,7 +200,7 @@ let () =
                   match%map
                     Deferred.List.map ~how:`Sequential witnesses
                       ~f:(fun witness ->
-                        Merger.P.add_job sequencer.sql_pool sequencer.merger
+                        Merger.P.add_job sequencer.db_pool sequencer.merger
                           sequencer.merger_ctx ~data:witness )
                     >>| Result.all
                     >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
@@ -267,7 +267,7 @@ let () =
                 match%map
                   Deferred.List.map ~how:`Sequential witnesses
                     ~f:(fun witness ->
-                      Merger.P.add_job sequencer.sql_pool sequencer.merger
+                      Merger.P.add_job sequencer.db_pool sequencer.merger
                         sequencer.merger_ctx ~data:witness )
                   >>| Result.all
                   >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
@@ -391,7 +391,7 @@ let () =
                   match%map
                     Deferred.List.map ~how:`Sequential witnesses
                       ~f:(fun witness ->
-                        Merger.P.add_job sequencer.sql_pool sequencer.merger
+                        Merger.P.add_job sequencer.db_pool sequencer.merger
                           sequencer.merger_ctx ~data:witness )
                     >>| Result.all
                     >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
@@ -439,7 +439,7 @@ let () =
           let%map all_witnesses =
             Relational_db.Pool.use
               (fun conn -> Merger.P.Witness_row.get_all conn ())
-              new_sequencer.sql_pool
+              new_sequencer.db_pool
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to get all witnesses: %s"
           in
