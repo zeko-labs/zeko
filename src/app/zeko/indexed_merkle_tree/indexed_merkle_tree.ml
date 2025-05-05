@@ -161,6 +161,8 @@ module type Database_intf = sig
 
   val find_lower_entry_tid : t -> Token_id.t -> Token_id.t option
 
+  val close : t -> unit
+
   val num_entries : t -> int
 end
 
@@ -227,6 +229,8 @@ module Db : Database_intf = struct
   end
 
   let num_entries = num_accounts
+
+  let close = close
 
   let find_lower_entry_location_exn t tid =
     if Token_id.equal lowest_key tid then

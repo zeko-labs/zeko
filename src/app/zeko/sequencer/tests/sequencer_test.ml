@@ -11,7 +11,9 @@ let constraint_constants = Zeko_constants.constraint_constants
 
 let start_time = Time.now ()
 
-let logger = Logger.create ()
+let logger =
+  Cli_lib.Stdout_log.setup false Logger.Level.Debug ;
+  Logger.create ()
 
 let number_of_transactions = 5
 
@@ -47,7 +49,7 @@ module Sequencer_test_spec = struct
     ; sequencer : Sequencer.t
     }
 
-  let gen ?(delay_deposit = 0) () =
+  let gen ?(delay_deposit = 0) ?db_dir () =
     let zkapp_keypair = Keypair.create () in
 
     print_endline "(* Create signer *)" ;
@@ -152,9 +154,8 @@ module Sequencer_test_spec = struct
             ~zkapp_pk:
               Signature_lib.Public_key.(compress zkapp_keypair.public_key)
             ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:1
-            ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-            ~l1_network_id ~l2_network_id ~deposit_delay_blocks:delay_deposit
-            ~provers )
+            ~db_dir ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer ~l1_network_id
+            ~l2_network_id ~deposit_delay_blocks:delay_deposit ~provers )
     in
 
     Quickcheck.Generator.return
@@ -172,7 +173,7 @@ let () =
         run (fun () ->
             let%bind () =
               Deferred.List.iteri batch1 ~f:(fun i spec ->
-                  let%map result =
+                  let%bind result =
                     match i % 2 = 0 with
                     | true ->
                         let command =
@@ -196,12 +197,18 @@ let () =
                     | Error e ->
                         Error.raise e
                   in
-                  List.iter witnesses ~f:(fun witness ->
-                      let _id =
-                        Merger.P.add_job sequencer.merger sequencer.merger_ctx
-                          ~data:witness
-                      in
-                      () ) )
+                  match%map
+                    Deferred.List.map ~how:`Sequential witnesses
+                      ~f:(fun witness ->
+                        Merger.P.add_job sequencer.sql_pool sequencer.merger
+                          sequencer.merger_ctx ~data:witness )
+                    >>| Result.all
+                    >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+                  with
+                  | Ok () ->
+                      ()
+                  | Error e ->
+                      failwith (Caqti_error.show e) )
             in
             return () )
       in
@@ -231,7 +238,7 @@ let () =
       run (fun () ->
           let%bind () =
             Deferred.List.iteri batch2 ~f:(fun i spec ->
-                let%map result =
+                let%bind result =
                   match i % 2 = 0 with
                   | true ->
                       let command =
@@ -257,11 +264,18 @@ let () =
                       Error.raise e
                 in
 
-                List.iter witnesses ~f:(fun witness ->
-                    ( Merger.P.add_job sequencer.merger sequencer.merger_ctx
-                        ~data:witness
-                      : Merger.P.Tree.id )
-                    |> ignore ) )
+                match%map
+                  Deferred.List.map ~how:`Sequential witnesses
+                    ~f:(fun witness ->
+                      Merger.P.add_job sequencer.sql_pool sequencer.merger
+                        sequencer.merger_ctx ~data:witness )
+                  >>| Result.all
+                  >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+                with
+                | Ok () ->
+                    ()
+                | Error e ->
+                    failwith (Caqti_error.show e) )
           in
           return () ) ;
 
@@ -337,6 +351,99 @@ let () =
           failwith "Transaction should have failed"
       | Error unexpected_error ->
           Error.raise unexpected_error )
+
+let () =
+  print_endline "Started test 'restart sequencer and requeue witnesses'" ;
+  let db_dir =
+    Filename.concat Cache_dir.autogen_path
+      (Uuid.to_string @@ Uuid_unix.create ())
+  in
+  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ())
+    ~f:(fun { zkapp_keypair; signer; specs; sequencer; _ } ->
+      let () =
+        run (fun () ->
+            let%bind () =
+              Deferred.List.iteri specs ~f:(fun i spec ->
+                  let%bind result =
+                    match i % 2 = 0 with
+                    | true ->
+                        let command =
+                          Mina_transaction_logic.For_tests.account_update_send
+                            ~chain:l2_signature_kind spec
+                        in
+                        printf "Applying zkapp command\n%!" ;
+                        apply_user_command sequencer (Zkapp_command command)
+                    | false ->
+                        let command =
+                          Mina_transaction_logic.For_tests.command_send
+                            ~chain:l2_signature_kind spec
+                        in
+                        printf "Applying signed command\n%!" ;
+                        apply_user_command sequencer (Signed_command command)
+                  in
+                  let witnesses =
+                    match result with
+                    | Ok result ->
+                        result
+                    | Error e ->
+                        Error.raise e
+                  in
+                  match%map
+                    Deferred.List.map ~how:`Sequential witnesses
+                      ~f:(fun witness ->
+                        Merger.P.add_job sequencer.sql_pool sequencer.merger
+                          sequencer.merger_ctx ~data:witness )
+                    >>| Result.all
+                    >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+                  with
+                  | Ok () ->
+                      ()
+                  | Error e ->
+                      failwith (Caqti_error.show e) )
+            in
+            return () )
+      in
+
+      print_endline "(* Restart sequencer *)" ;
+      let new_sequencer =
+        run (fun () ->
+            let%bind () = Sequencer.shutdown sequencer in
+            Sequencer.create ~logger
+              ~zkapp_pk:
+                Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
+              ~da_quorum:1 ~db_dir:(Some db_dir) ~l1_uri:gql_uri
+              ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
+              ~deposit_delay_blocks:0 ~provers )
+      in
+
+      print_endline "(* Requeue witnesses and commit *)" ;
+      run (fun () ->
+          let%bind () = commit new_sequencer in
+          let%bind () = Snark_queue.wait_to_finish new_sequencer.snark_q in
+          let%bind () =
+            Executor.wait_to_finish new_sequencer.merger_ctx.executor
+          in
+          let%map { ledger_hash = committed_ledger_hash; _ } =
+            Gql_client.infer_state gql_uri
+              ~signer_pk:(Public_key.compress signer.public_key)
+              ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+            >>| Utils.value_of_zkapp_state
+                  Zeko_circuits.Rollup_state.Outer_state.typ
+          in
+          let target_ledger_hash = get_root new_sequencer in
+          [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
+
+      print_endline "(* Assert that no witnesses are left in merger *)" ;
+      run (fun () ->
+          let%map all_witnesses =
+            Relational_db.Pool.use
+              (fun conn -> Merger.P.Witness_row.get_all conn ())
+              new_sequencer.sql_pool
+            >>| Relational_db.caqti_ok_exn
+                  ~msg:"Failed to get all witnesses: %s"
+          in
+          [%test_eq: int] (List.length all_witnesses) 0 ) )
 
 (* let () =
    print_endline "Started test 'deposits'" ;

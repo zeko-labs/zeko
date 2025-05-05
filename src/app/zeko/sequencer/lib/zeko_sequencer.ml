@@ -39,7 +39,6 @@ module Sequencer = struct
         type t =
           { mutable previous_committed_ledger : Sparse_ledger.t option
           ; mutable previous_committed_ledger_hash : Ledger_hash.t option
-          ; mutable witnesses : Txn_snark_witness.t array ref list
           ; mutable fee_excess : Currency.Fee.t
           }
         [@@deriving yojson]
@@ -47,7 +46,6 @@ module Sequencer = struct
         let create () =
           { previous_committed_ledger = None
           ; previous_committed_ledger_hash = None
-          ; witnesses = []
           ; fee_excess = Currency.Fee.zero
           }
       end
@@ -74,7 +72,6 @@ module Sequencer = struct
         match Db.get kvdb with Some state -> state | None -> State.create ()
 
       let committed t ledger =
-        t.state.witnesses <- List.tl_exn t.state.witnesses ;
         t.state.previous_committed_ledger <- Some ledger ;
         t.state.previous_committed_ledger_hash <-
           Some (Sparse_ledger.merkle_root ledger) ;
@@ -85,15 +82,6 @@ module Sequencer = struct
         t.state.previous_committed_ledger <- Some ledger ;
         t.state.previous_committed_ledger_hash <-
           Some (Sparse_ledger.merkle_root ledger) ;
-        save_state t
-
-      let add_witness t witness =
-        let arr = List.last_exn t.state.witnesses in
-        arr := Array.append !arr [| witness |] ;
-        save_state t
-
-      let created_new_tree t =
-        t.state.witnesses <- t.state.witnesses @ [ ref [||] ] ;
         save_state t
 
       let add_fee_excess t fee_excess =
@@ -120,9 +108,8 @@ module Sequencer = struct
       type t = Txn_snark_witness.t [@@deriving yojson]
 
       let process (ctx : Context.t) witness =
-        Context.add_witness ctx witness ;
         match witness with
-        | Zkapp_command segment ->
+        | Txn_snark_witness.Zkapp_command segment ->
             Zeko_prover.Client.transaction_snark ctx.provers
               (Zkapp_command segment)
         | Signed_command w ->
@@ -175,20 +162,15 @@ module Sequencer = struct
         return ()
     end
 
-    module P = Parallel_merger.Make (Context) (Merge) (Base) (Commit)
+    module M = struct
+      include Parallel_merger.Make (Context) (Merge) (Base) (Commit)
+      module Context = Context
+      module Merge = Merge
+      module Base = Base
+      module Commit = Commit
+    end
 
-    let requeue_after_restart t (ctx : Context.t) =
-      let witnesses_to_requeue =
-        ctx.state.witnesses
-        |> List.map ~f:(fun arr -> Array.to_list !arr)
-        |> List.join
-      in
-      (* Adding jobs will repopulate the list *)
-      assert (phys_equal (P.current_tree t) None) ;
-      ctx.state.witnesses <- [] ;
-      printf "Requeueing %d commands\n%!" (List.length witnesses_to_requeue) ;
-      List.iter witnesses_to_requeue ~f:(fun witness ->
-          (P.add_job t ctx ~data:witness : P.Tree.id) |> ignore )
+    module P = Parallel_merger.Persisted.Make (M)
   end
 
   module State_hashes = struct
@@ -202,16 +184,25 @@ module Sequencer = struct
   type t =
     { ledger : L.Db.t
     ; imt : Indexed_merkle_tree.Db.t
+    ; sql_pool : Relational_db.Db.pool
     ; logger : Logger.t
     ; archive : Archive.t
     ; config : Config.t
     ; snark_q : Snark_queue.t
-    ; merger : Merger.P.t
+    ; merger : Merger.M.t
     ; merger_ctx : Merger.Context.t
     ; da_client : Da_layer.Client.Sequencer.t
+    ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
     }
+
+  let shutdown t =
+    printf "Shutting down sequencer\n%!" ;
+    Ivar.fill t.closed () ;
+    L.Db.close t.ledger ;
+    Indexed_merkle_tree.Db.close t.imt ;
+    Relational_db.Pool.drain t.sql_pool
 
   let add_account t account_id account =
     ( L.Db.get_or_create_account t.ledger account_id account |> Or_error.ok_exn
@@ -392,42 +383,43 @@ module Sequencer = struct
           return (Ok witnesses) )
 
   let apply_fee_transfer t =
-    let fee = t.merger_ctx.state.fee_excess in
-    let receiver_pk =
-      Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
-    in
-    let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
-    let ledger = L.of_database t.ledger in
-    let%bind.Result source_ledger, witness =
-      Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk ~fee
-        ~constraint_constants ~global_slot ledger t.imt
-    in
-
-    Merger.Context.reset_fee_excess t.merger_ctx ;
-
-    (* Post transaction to the DA layer *)
-    let changed_accounts =
-      let account_ids =
-        [ Account_id.of_public_key t.config.signer.public_key ]
+    let%bind.Deferred.Result witness =
+      return
+      @@
+      let fee = t.merger_ctx.state.fee_excess in
+      let receiver_pk =
+        Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
       in
-      List.map account_ids ~f:(fun id ->
-          let index = L.index_of_account_exn ledger id in
-          (index, L.get_at_index_exn ledger index) )
-    in
-    let diff =
-      (* FIXME: add fee transfer command to DA *)
-      Da_layer.Diff.create
-        ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
-        ~changed_accounts ~command_with_action_step_flags:None
-    in
-    Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
-      ~ledger_openings:source_ledger ~diff
-      ~target_ledger_hash:(Ledger.Db.merkle_root t.ledger) ;
+      let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+      let ledger = L.of_database t.ledger in
+      let%map.Result source_ledger, witness =
+        Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk ~fee
+          ~constraint_constants ~global_slot ledger t.imt
+      in
+      Merger.Context.reset_fee_excess t.merger_ctx ;
 
-    (Merger.P.add_job t.merger t.merger_ctx ~data:witness : Merger.P.Tree.id)
-    |> ignore ;
-
-    Ok ()
+      (* Post transaction to the DA layer *)
+      let changed_accounts =
+        let account_ids =
+          [ Account_id.of_public_key t.config.signer.public_key ]
+        in
+        List.map account_ids ~f:(fun id ->
+            let index = L.index_of_account_exn ledger id in
+            (index, L.get_at_index_exn ledger index) )
+      in
+      let diff =
+        (* FIXME: add fee transfer command to DA *)
+        Da_layer.Diff.create
+          ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
+          ~changed_accounts ~command_with_action_step_flags:None
+      in
+      Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
+        ~ledger_openings:source_ledger ~diff
+        ~target_ledger_hash:(Ledger.Db.merkle_root t.ledger) ;
+      witness
+    in
+    Merger.P.add_job t.sql_pool t.merger t.merger_ctx ~data:witness
+    >>| Result.map_error ~f:(fun e -> Error.of_string (Caqti_error.show e))
 
   let update_inner_account t =
     let old_synced_outer_action_state, old_deposits_length =
@@ -517,16 +509,16 @@ module Sequencer = struct
         | Error e ->
             Error.raise e
       in
-      let () =
-        List.iter witnesses ~f:(fun witness ->
-            ( Merger.P.add_job t.merger t.merger_ctx ~data:witness
-              : Merger.P.Tree.id )
-            |> ignore )
+      let%bind () =
+        Deferred.List.iter ~how:`Sequential witnesses ~f:(fun witness ->
+            Merger.P.add_job t.sql_pool t.merger t.merger_ctx ~data:witness
+            >>| Relational_db.caqti_ok_exn
+                  ~msg:"Failed to add witness for inner account update: %s" )
       in
       return processed_pointer
 
   let commit t =
-    apply_fee_transfer t |> Or_error.ok_exn ;
+    let%bind () = apply_fee_transfer t >>| Or_error.ok_exn in
     let%bind processed_actions_pointer = update_inner_account t in
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
@@ -534,12 +526,12 @@ module Sequencer = struct
         [ Zeko_constants.inner_account_id ]
     in
     if
-      Merger.P.current_tree t.merger
-      |> Option.map ~f:(fun tree -> Merger.P.Tree.is_empty tree.value)
+      Merger.M.current_tree t.merger
+      |> Option.map ~f:(fun tree -> Merger.M.Tree.is_empty tree.value)
       |> Option.value ~default:true
     then return (print_endline "Nothing to commit")
     else
-      Merger.P.commit_exn t.merger t.merger_ctx
+      Merger.P.commit_exn t.sql_pool t.merger t.merger_ctx
         ~commit_witness:
           { new_inner_ledger = target_ledger; processed_actions_pointer }
       |> Deferred.ignore_m
@@ -548,7 +540,7 @@ module Sequencer = struct
     if Float.(t.config.commitment_period_sec <= 0.) then ()
     else
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
-      every ~start:(after period) period (fun () ->
+      every ~start:(after period) ~stop:(Ivar.read t.closed) period (fun () ->
           don't_wait_for @@ Deferred.ignore_m @@ commit t )
 
   let bootstrap ~logger ({ config; _ } as t) da_config =
@@ -683,30 +675,44 @@ module Sequencer = struct
         ~signer ~kvdb ()
     in
     let archive = Archive.create ~kvdb in
+    let sql_pool, `Uri _ =
+      Relational_db.(
+        Db.create_pool
+          ?sqlite_path:
+            (Option.map db_dir ~f:(fun db_dir ->
+                 Filename.concat db_dir "state.db" ) )
+          ()
+        |> caqti_ok_exn ~msg:"Failed to create sql pool: %s")
+    in
+    let merger_ctx =
+      Merger.Context.
+        { provers
+        ; da_client
+        ; executor
+        ; config
+        ; kvdb
+        ; state = Merger.Context.load_state kvdb
+        ; archive
+        }
+    in
+    let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx sql_pool in
     let t =
       { ledger
       ; imt
+      ; sql_pool
       ; logger
       ; archive
       ; config
       ; da_client
       ; snark_q = Snark_queue.create ~provers
-      ; merger = Merger.P.create ()
-      ; merger_ctx =
-          { provers
-          ; da_client
-          ; executor
-          ; config
-          ; kvdb
-          ; state = Merger.Context.load_state kvdb
-          ; archive
-          }
+      ; merger
+      ; merger_ctx
+      ; closed = Ivar.create ()
       ; apply_q = Sequencer.create ()
       }
     in
     let%bind () =
-      if is_empty t then bootstrap ~logger t da_config
-      else return @@ Merger.requeue_after_restart t.merger t.merger_ctx
+      if is_empty t then bootstrap ~logger t da_config else return ()
     in
     let%bind () =
       Committer.recommit_all ~provers:t.snark_q.provers

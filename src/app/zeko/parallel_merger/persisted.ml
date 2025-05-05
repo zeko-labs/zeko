@@ -49,6 +49,12 @@ module Make (Merger : In_memory.Intf) = struct
       Conn.collect_list
         (Caqti_request.collect Caqti_type.unit typ
            {sql| SELECT tree_id, witness FROM parallel_merger ORDER BY id |sql} )
+
+    let merge_witnesses_into_tree (module Conn : CONNECTION) tree_id =
+      Conn.collect_list
+        (Caqti_request.collect Caqti_type.string Caqti_type.int
+           {sql| UPDATE parallel_merger SET tree_id = ? RETURNING id |sql} )
+        tree_id
   end
 
   let create_and_requeue ~logger ctx pool =
@@ -57,22 +63,49 @@ module Make (Merger : In_memory.Intf) = struct
       >>| caqti_ok_exn ~msg:"Failed to run Parallel merger migrations: %s"
     in
     let merger = Merger.create () in
-    let%map all_witnesses =
-      Pool.use (fun conn -> Witness_row.get_all conn ()) pool
-      >>| caqti_ok_exn ~msg:"Failed to get all witnesses: %s"
-      >>| List.map ~f:Witness_row.witness
-      >>| List.map ~f:(fun s ->
-              match Merger.Base.of_yojson (Yojson.Safe.from_string s) with
-              | Ok data ->
-                  data
-              | Error e ->
-                  failwithf "Failed to parse witness: %s" e () )
-    in
-    let () =
-      List.iter all_witnesses ~f:(fun data ->
-          (Merger.add_job merger ctx ~data : Merger.Tree.id) |> ignore )
-    in
-    merger
+    let open Deferred.Result.Let_syntax in
+    Pool.use
+      (with_transaction ~f:(fun conn ->
+           let%bind all_witnesses =
+             Witness_row.get_all conn ()
+             >>| List.map ~f:Witness_row.witness
+             >>| List.map ~f:(fun s ->
+                     match
+                       Merger.Base.of_yojson (Yojson.Safe.from_string s)
+                     with
+                     | Ok data ->
+                         data
+                     | Error e ->
+                         failwithf "Failed to parse witness: %s" e () )
+           in
+           [%log info] "Adding %d jobs to merger" (List.length all_witnesses) ;
+           let%map tid, merged_witnesses =
+             let tids =
+               List.map all_witnesses ~f:(fun data ->
+                   Merger.add_job merger ctx ~data )
+             in
+             match tids with
+             | [] ->
+                 return (None, [])
+             | hd :: tl ->
+                 assert (
+                   List.fold_until tl ~init:(hd, true)
+                     ~f:(fun (acc, _) tid ->
+                       if String.equal acc tid then Continue (tid, true)
+                       else Stop (tid, false) )
+                     ~finish:Fn.id
+                   |> snd ) ;
+                 let tid = hd in
+                 Witness_row.merge_witnesses_into_tree conn tid
+                 >>| fun result -> (Some tid, result)
+           in
+           [%log info]
+             !"Merged %d witnesses into tree %{sexp: string option}"
+             (List.length merged_witnesses)
+             tid ;
+           merger ) )
+      pool
+    |> Deferred.map ~f:(caqti_ok_exn ~msg:"Failed to requeue merger: %s")
 
   let add_job pool t ctx ~data =
     let tid = Merger.add_job t ctx ~data in
