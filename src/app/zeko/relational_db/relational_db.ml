@@ -79,10 +79,19 @@ module Db = struct
       | None ->
           0
 
-    let run ~logger pool migrations =
+    let run ~logger ~target_version pool migrations =
       let migrations =
         List.sort migrations ~compare:(fun a b ->
             Int.compare a.version b.version )
+      in
+      let target_version =
+        match target_version with
+        | `Latest ->
+            List.last migrations
+            |> Option.map ~f:(fun m -> m.version)
+            |> Option.value ~default:0
+        | `Version v ->
+            v
       in
       Pool.use
         (fun conn ->
@@ -90,8 +99,11 @@ module Db = struct
           let%bind.Deferred.Result applied_list = applied_versions conn in
           let applied_set = Int.Set.of_list applied_list in
           Deferred.List.fold migrations ~init:(Ok ()) ~f:(fun acc m ->
+              (* Don't continue if we have an error *)
               let%bind.Deferred.Result () = return acc in
-              if Set.mem applied_set m.version then return (Ok ())
+
+              if Set.mem applied_set m.version || m.version > target_version
+              then return (Ok ())
               else
                 with_transaction conn ~f:(fun conn ->
                     [%log info] "Running migration %s" m.name ;

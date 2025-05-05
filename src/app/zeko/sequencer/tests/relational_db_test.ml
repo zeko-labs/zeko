@@ -2,29 +2,26 @@ open Async
 open Core_kernel
 open Relational_db
 
-let migration1 =
-  Db.Migration.make 1 "create_schema" (fun (module Conn : CONNECTION) ->
-      Conn.exec
-        (Caqti_request.exec Caqti_type.unit
-           {sql| CREATE TABLE test (
+let migrations =
+  [ Db.Migration.make 1 "create_schema" (fun (module Conn : CONNECTION) ->
+        Conn.exec
+          (Caqti_request.exec Caqti_type.unit
+             {sql| CREATE TABLE test (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               name TEXT NOT NULL
             ) |sql} )
-        () )
-
-let migration2 =
-  Db.Migration.make 2 "insert_row" (fun (module Conn : CONNECTION) ->
-      Conn.exec
-        (Caqti_request.exec Caqti_type.unit
-           {sql| INSERT INTO test (name) VALUES ('test') |sql} )
-        () )
-
-let migration3 =
-  Db.Migration.make 3 "add_column" (fun (module Conn : CONNECTION) ->
-      Conn.exec
-        (Caqti_request.exec Caqti_type.unit
-           {sql| ALTER TABLE test ADD COLUMN age INTEGER NOT NULL DEFAULT 42 |sql} )
-        () )
+          () )
+  ; Db.Migration.make 2 "insert_row" (fun (module Conn : CONNECTION) ->
+        Conn.exec
+          (Caqti_request.exec Caqti_type.unit
+             {sql| INSERT INTO test (name) VALUES ('test') |sql} )
+          () )
+  ; Db.Migration.make 3 "add_column" (fun (module Conn : CONNECTION) ->
+        Conn.exec
+          (Caqti_request.exec Caqti_type.unit
+             {sql| ALTER TABLE test ADD COLUMN age INTEGER NOT NULL DEFAULT 42 |sql} )
+          () )
+  ]
 
 (* Test that migrations are run and that the database is created *)
 let () =
@@ -42,7 +39,10 @@ let () =
           let%bind pool, `Uri _ =
             Deferred.return (Db.create_pool ~sqlite_path ())
           in
-          let%bind () = Db.Migration.run ~logger pool [ migration1 ] in
+          let%bind () =
+            Db.Migration.run ~logger ~target_version:(`Version 1) pool
+              migrations
+          in
 
           (* Test that first migration was run *)
           let%map result =
@@ -67,7 +67,8 @@ let () =
             Deferred.return (Db.create_pool ~sqlite_path ())
           in
           let%bind () =
-            Db.Migration.run ~logger pool [ migration1; migration2 ]
+            Db.Migration.run ~logger ~target_version:(`Version 2) pool
+              migrations
           in
 
           (* Test that second migration was run *)
@@ -94,7 +95,7 @@ let () =
             Deferred.return (Db.create_pool ~sqlite_path ())
           in
           let%bind () =
-            Db.Migration.run ~logger pool [ migration1; migration2; migration3 ]
+            Db.Migration.run ~logger ~target_version:`Latest pool migrations
           in
 
           (* Test that third migration was run *)
