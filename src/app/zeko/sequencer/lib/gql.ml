@@ -1661,7 +1661,7 @@ module Mutations = struct
             let%bind.Deferred.Result () =
               Deferred.List.map ~how:`Sequential witnesses ~f:(fun witness ->
                   let open Zeko_sequencer in
-                  Merger.P.add_job sequencer.sql_pool sequencer.merger
+                  Merger.P.add_job sequencer.db_pool sequencer.merger
                     sequencer.merger_ctx ~data:witness )
               >>| Result.all
               >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
@@ -1701,7 +1701,7 @@ module Mutations = struct
             let%bind.Deferred.Result () =
               Deferred.List.map ~how:`Sequential witnesses ~f:(fun witness ->
                   let open Zeko_sequencer in
-                  Merger.P.add_job sequencer.sql_pool sequencer.merger
+                  Merger.P.add_job sequencer.db_pool sequencer.merger
                     sequencer.merger_ctx ~data:witness )
               >>| Result.all
               >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)

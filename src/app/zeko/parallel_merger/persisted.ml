@@ -3,26 +3,6 @@ open Async
 open Relational_db
 
 module Make (Merger : In_memory.Intf) = struct
-  let migrations : Db.Migration.t list =
-    let open Deferred.Result.Let_syntax in
-    [ Db.Migration.make 1 "create_merger_schema"
-        (fun (module Conn : CONNECTION) ->
-          let%bind () =
-            Conn.exec
-              (Caqti_request.exec Caqti_type.unit
-                 {sql| CREATE TABLE parallel_merger (
-                      id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      tree_id TEXT NOT NULL,
-                      witness TEXT NOT NULL
-                    ) |sql} )
-              ()
-          in
-          Conn.exec
-            (Caqti_request.exec Caqti_type.unit
-               {sql| CREATE INDEX idx_tree_id ON parallel_merger (tree_id) |sql} )
-            () )
-    ]
-
   module Witness_row = struct
     type t = { tree_id : Merger.Tree.id; witness : string }
     [@@deriving hlist, fields]
@@ -58,10 +38,6 @@ module Make (Merger : In_memory.Intf) = struct
   end
 
   let create_and_requeue ~logger ctx pool =
-    let%bind () =
-      Db.Migration.run ~logger pool migrations
-      >>| caqti_ok_exn ~msg:"Failed to run Parallel merger migrations: %s"
-    in
     let merger = Merger.create () in
     let open Deferred.Result.Let_syntax in
     Pool.use
