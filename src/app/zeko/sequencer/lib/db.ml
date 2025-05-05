@@ -22,7 +22,7 @@ let migrations : Db.Migration.t list =
           () )
   ]
 
-let create ?db_dir ~logger =
+let create_and_migrate ?db_dir ~logger =
   let pool, `Uri _ =
     Relational_db.(
       Db.create_pool
@@ -33,7 +33,7 @@ let create ?db_dir ~logger =
       |> caqti_ok_exn ~msg:"Failed to create db pool: %s")
   in
   let%map () =
-    Db.Migration.run ~logger pool migrations
+    Db.Migration.run ~logger ~target_version:`Latest pool migrations
     >>| caqti_ok_exn ~msg:"Failed to run migrations: %s"
   in
   pool

@@ -674,7 +674,7 @@ module Sequencer = struct
         ~signer ~kvdb ()
     in
     let archive = Archive.create ~kvdb in
-    let%bind db_pool = Db.create ?db_dir ~logger in
+    let%bind db_pool = Db.create_and_migrate ?db_dir ~logger in
     let merger_ctx =
       Merger.Context.
         { provers
