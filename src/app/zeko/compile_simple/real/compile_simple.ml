@@ -8,8 +8,6 @@ type self_width = Pickles_types.Nat.N2.n
 module Proof = struct
   include Pickles.Side_loaded.Proof
 
-  let is_real = Some Type_equal.T
-
   let of_pickles x = x
 end
 
@@ -22,8 +20,6 @@ module Verification_key = struct
   type var = Checked.t
 
   let of_pickles x = x
-
-  let to_pickles x = x
 
   let of_tag (Tag tag) = of_compiled_promise tag
 
