@@ -334,3 +334,10 @@ let compile (type out_t out_var first_input branches n_available_branches)
   r
 
 let is_compile_simple_real = None
+
+(* FIXME: check constraint *)
+let add_plonk_constraint ~label c =
+  assert_ ~label
+    { basic = Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.T c
+    ; annotation = None
+    }
