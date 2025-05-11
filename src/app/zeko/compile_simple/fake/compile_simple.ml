@@ -90,9 +90,7 @@ let get_first_backtrace_entry b =
 let make_fake_proof (Tag { circuit_hash; _ }) (Typ.Typ typ) out =
   let fields, _aux = typ.value_to_fields out in
   let out_hash =
-    Random_oracle.hash
-      ~init:(Hash_prefix_create.salt "compile_simple_fake proof hash")
-      fields
+    Random_oracle.hash ~init:(Hash_prefix_create.salt "fake proof hash") fields
   in
   Proof.Fake_proof { circuit_hash; out_hash }
 
@@ -116,7 +114,7 @@ let match_tag_prev : 'var tag -> 'var prev -> bool As_prover.t =
         let fields, _aux = typ.value_to_fields public_input in
         let out_hash' =
           Random_oracle.hash
-            ~init:(Hash_prefix_create.salt "compile_simple_fake proof hash")
+            ~init:(Hash_prefix_create.salt "fake proof hash")
             fields
         in
         let open Field in
@@ -155,7 +153,7 @@ let match_sideloaded_tag_prev :
         let fields, _aux = typ.value_to_fields public_input in
         let out_hash' =
           Random_oracle.hash
-            ~init:(Hash_prefix_create.salt "compile_simple_fake proof hash")
+            ~init:(Hash_prefix_create.salt "fake proof hash")
             fields
         in
         let open Field in
@@ -249,17 +247,23 @@ let rec hash_branches :
     (_, branches, available_branches) Branches.t -> field = function
   | Branches.({ branch_name = _; tags = _; main } :: rest) ->
       let rest_hash = hash_branches rest in
-      let main_wrapper input = Checked.(main input >>| fun _ -> ()) in
-      let cs =
-        constraint_system ~input_typ:V.typ ~return_typ:Typ.unit main_wrapper
+      let main_wrapper input () =
+        Run.run_checked Checked.(main input >>| fun _ -> ())
       in
+      let constraint_builder =
+        Run.constraint_system_manual ~input_typ:V.typ ~return_typ:Typ.unit
+      in
+      constraint_builder.run_circuit main_wrapper ;
+      let cs = constraint_builder.finish_computation () in
       let cs_hash =
-        R1CS_constraint_system.digest cs
-        |> Md5.to_hex |> Random_oracle.salt |> Random_oracle.digest
+        Run.R1CS_constraint_system.digest cs
+        |> Md5.to_hex |> Fn.flip String.prefix 7 |> Hash_prefix_create.salt
+        |> Random_oracle.digest
       in
+      (* FIXME: improve *)
       let tags_hash = Field.zero (* FIXME: fill out *) in
       Random_oracle.hash
-        ~init:(Hash_prefix_create.salt "compile_simple_fake circuit hash")
+        ~init:(Hash_prefix_create.salt "fake circuit hash")
         [| tags_hash; cs_hash; rest_hash |]
   | [] ->
       Field.zero
