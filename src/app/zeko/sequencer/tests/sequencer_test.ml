@@ -404,6 +404,8 @@ let () =
             return () )
       in
 
+      Gc.full_major () ;
+
       print_endline "(* Restart sequencer *)" ;
       let new_sequencer =
         run (fun () ->
