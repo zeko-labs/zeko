@@ -23,9 +23,9 @@ let time (d : 'a Deferred.t) =
   let stop = Time.now () in
   return (x, Time.diff stop start)
 
-let print_time label (d : 'a Deferred.t) =
+let log_time ~logger label (d : 'a Deferred.t) =
   let%bind x, t = time d in
-  printf "%s: %s\n%!" label (Time.Span.to_string_hum t) ;
+  [%log info] "%s took: %s" label (Time.Span.to_string_hum t) ;
   return x
 
 let value_to_zkapp_state (some : Field.t -> 'option) (none : 'option)

@@ -75,8 +75,7 @@ let run_node =
            @@ Da_layer.Node.create_server ~chain ~sync_arg ~logger ~port ~db_dir
                 ~signer_sk:signer ~no_migrations ()
          in
-         [%log info] "Server started on port $port"
-           ~metadata:[ ("port", `Int port) ] ;
+         [%log info] "Server started on port %d" port ;
          Async.never () ) )
 
 let sync_node =
@@ -130,8 +129,7 @@ let sync_node =
              | Ok _signature ->
                  return ()
              | Error e ->
-                 [%log warn] "Error posting diff: $error"
-                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+                 [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;
                  Error.raise e )
          >>| Or_error.ok_exn >>| ignore ) )
 

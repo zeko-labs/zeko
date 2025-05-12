@@ -160,8 +160,8 @@ let prove_commit ~provers ~(executor : Executor.t) ~(archive : Archive.t)
   in
   return command
 
-let recommit_all ~provers ~(executor : Executor.t) ~archive ~kvdb ~zkapp_pk
-    ~archive_uri =
+let recommit_all ~logger ~provers ~(executor : Executor.t) ~archive ~kvdb
+    ~zkapp_pk ~archive_uri =
   let%bind { ledger_hash; _ } =
     Gql_client.infer_state executor.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress executor.signer.public_key)
@@ -176,7 +176,7 @@ let recommit_all ~provers ~(executor : Executor.t) ~archive ~kvdb ~zkapp_pk
     | None ->
         return ()
     | Some (source, target) ->
-        printf "Recommitting %s -> %s\n%!"
+        [%log info] "Recommitting %s -> %s"
           (Frozen_ledger_hash.to_base58_check source)
           (Frozen_ledger_hash.to_base58_check target) ;
         let witness =
@@ -186,7 +186,7 @@ let recommit_all ~provers ~(executor : Executor.t) ~archive ~kvdb ~zkapp_pk
           prove_commit ~provers ~executor ~archive ~zkapp_pk ~archive_uri
             witness
         in
-        let%bind () = Executor.send_zkapp_command executor command in
+        let%bind () = Executor.send_zkapp_command ~logger executor command in
         recommit_next target
   in
   recommit_next ledger_hash

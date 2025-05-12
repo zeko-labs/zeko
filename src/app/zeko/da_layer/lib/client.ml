@@ -34,9 +34,8 @@ module Rpc = struct
             return (Ok result)
         | Error e ->
             if tries_left > 1 then
-              [%log error]
-                "Error sending data to the da node $error. Retrying..."
-                ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+              [%log error] "Error sending data to the da node %s. Retrying..."
+                (Error.to_string_hum e) ;
             let%bind () = after (Time_ns.Span.of_sec timeout) in
             go (tries_left - 1) (e :: errs)
     in
@@ -256,7 +255,7 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
         return (Ok (interval :: next_intervals))
   in
   let%bind.Deferred.Result intervals =
-    printf "Fetching intervals from da layer\n%!" ;
+    [%log info] "Fetching intervals from da layer" ;
     get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
   in
   return
@@ -339,11 +338,10 @@ let check_synced_nodes ~logger ~(config : Config.t) ~target_ledger_hash =
       with
       | Ok (Some _) ->
           return
-            (printf
-               !"Node %s is already synced\n%!"
+            ([%log info]
+               !"Node %s is already synced"
                (Host_and_port.to_string node.value) )
       | Ok None | Error _ ->
-          printf
-            !"Node %s is *not* synced\n%!"
+          [%log info] !"Node %s is *not* synced"
             (Host_and_port.to_string node.value) ;
           return (Config.throw_out_node config ~node) )

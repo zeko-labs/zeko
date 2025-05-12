@@ -1730,6 +1730,7 @@ module Mutations = struct
         don't_wait_for
         @@ Snark_queue.enqueue_prove_transfer_request
              Zeko_sequencer.(sequencer.snark_q)
+             ~logger:Zeko_sequencer.(sequencer.logger)
              ~zkapp_pk:Zeko_sequencer.(sequencer.config.zkapp_pk)
              ~key ~transfer ;
         return (Ok key) )
@@ -1743,6 +1744,7 @@ module Mutations = struct
         don't_wait_for
         @@ Snark_queue.enqueue_prove_transfer_claim
              Zeko_sequencer.(sequencer.snark_q)
+             ~logger:Zeko_sequencer.(sequencer.logger)
              ~zkapp_pk:Zeko_sequencer.(sequencer.config.zkapp_pk)
              ~key ~claim ;
         return (Ok key) )

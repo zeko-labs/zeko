@@ -140,15 +140,10 @@ let sync_archive (t : t) ~hash =
           with
           | Ok () ->
               [%log info]
-                "Synced diff to archive with hash: $hash, progress %.0f%%"
+                "Synced diff to archive with hash: %s, progress %.0f%%"
+                (Ledger_hash.to_decimal_string @@ Ledger.merkle_root ledger)
                 ( Float.of_int current_chunk /. Float.of_int chunks_length
-                *. 100.0 )
-                ~metadata:
-                  [ ( "hash"
-                    , `String
-                        ( Ledger_hash.to_decimal_string
-                        @@ Ledger.merkle_root ledger ) )
-                  ] ;
+                *. 100.0 ) ;
               return ()
           | Error e ->
               raise (Error.to_exn e) ) )
@@ -211,9 +206,8 @@ let sync (t : t) () =
       let%bind ledger_hash =
         match%bind fetch_current_ledger_hash ~zeko_uri:t.zeko_uri () with
         | Ok hash ->
-            [%log info] "Fetched ledger hash: $hash"
-              ~metadata:
-                [ ("hash", `String (Ledger_hash.to_decimal_string hash)) ] ;
+            [%log info] "Fetched ledger hash: %s"
+              (Ledger_hash.to_decimal_string hash) ;
             return hash
         | Error e ->
             failwith e
@@ -230,8 +224,7 @@ let rec run (t : t) ~sync_period () =
             after (Time.Span.of_sec sync_period) )
     | Error e ->
         (* ledger_hash_invalidated *)
-        [%log error] "Error syncing: $error"
-          ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+        [%log error] "Error syncing: %s" (Error.to_string_hum e) ;
         [%log warn] "Invalidating ledger cache" ;
         reset_ledger_cache t ()
   in
