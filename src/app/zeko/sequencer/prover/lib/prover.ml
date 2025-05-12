@@ -199,8 +199,6 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
         Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
         |> Promise.to_deferred
         (* To make fake tests work *)
-        >>| Compile_simple.Verification_key.to_pickles
-        >>| Compile_simple.Verification_key.of_pickles
         >>| Compile_simple.Verification_key.hash
       in
       let%map (_stmt, parent_with_calls), proof =
@@ -238,8 +236,6 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
         Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
         |> Promise.to_deferred
         (* To make fake tests work *)
-        >>| Compile_simple.Verification_key.to_pickles
-        >>| Compile_simple.Verification_key.of_pickles
         >>| Compile_simple.Verification_key.hash
       in
       let%map (_stmt, parent_with_calls), proof =

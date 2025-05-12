@@ -53,7 +53,7 @@ module Z = struct
           public_key = Zeko_constants.inner_public_key
         ; balance = Currency.Balance.max_int
         ; permissions =
-            { ( if Option.is_some Compile_simple.Proof.is_real then
+            { ( if Option.is_some Compile_simple.is_compile_simple_real then
                 proof_permissions
               else none_permissions )
               with
@@ -68,7 +68,12 @@ module Z = struct
               ; verification_key =
                   Some
                     (Verification_key_wire.Stable.Latest.M.of_binable
-                       (Compile_simple.Verification_key.to_pickles vk) )
+                       ( match Compile_simple.is_compile_simple_real with
+                       | Some eq ->
+                           let _, vk_eq = Type_equal.detuple2 eq in
+                           Type_equal.conv vk_eq vk
+                       | None ->
+                           Pickles.Side_loaded.Verification_key.dummy ) )
               }
         }
   end
@@ -100,10 +105,15 @@ module Z = struct
         ; verification_key =
             Set
               (Verification_key_wire.Stable.Latest.M.of_binable
-                 (Compile_simple.Verification_key.to_pickles vk) )
+                 ( match Compile_simple.is_compile_simple_real with
+                 | Some eq ->
+                     let _, vk_eq = Type_equal.detuple2 eq in
+                     Type_equal.conv vk_eq vk
+                 | None ->
+                     Pickles.Side_loaded.Verification_key.dummy ) )
         ; permissions =
             Set
-              ( if Option.is_some Compile_simple.Proof.is_real then
+              ( if Option.is_some Compile_simple.is_compile_simple_real then
                 proof_permissions
               else none_permissions )
         }

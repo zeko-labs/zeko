@@ -121,10 +121,11 @@ let prove_commit ~provers ~(executor : Executor.t) ~(archive : Archive.t)
         ~unprocessed_actions ~da_signature
         ~da_key:(Even_PC.create_exn da_key)
     in
-    match Compile_simple.Proof.is_real with
+    match Compile_simple.is_compile_simple_real with
     | Some eq ->
+        let proof_eq, _ = Type_equal.detuple2 eq in
         let account_update : Account_update.t =
-          { body; authorization = Proof (Type_equal.conv eq proof) }
+          { body; authorization = Proof (Type_equal.conv proof_eq proof) }
         in
         Zkapp_command.Call_forest.Tree.
           { account_update; account_update_digest; calls }
