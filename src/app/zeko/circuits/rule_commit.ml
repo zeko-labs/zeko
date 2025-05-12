@@ -10,14 +10,14 @@ open Checked.Let_syntax
 module Ase_outer_inst = Ase.Without_length.Make (struct
   module Action_state = Outer_action_state
 
-  let get_iterations = Int.pow 2 10
+  let get_iterations = Zeko_constants.Max_excess_actions.commit_outer
 end)
 
 (** Used to prove the length of the inner action state as stored on the outer account. *)
 module Ase_inner_inst = Ase.With_length.Make (struct
   module Action_state = Inner_action_state
 
-  let get_iterations = Int.pow 2 10
+  let get_iterations = Zeko_constants.Max_excess_actions.commit_inner
 end)
 
 (** Proves both Ase_outer_inst and Ase_inner_inst, to circumvent limitation of two recursive proof verifications per proof. *)
@@ -166,7 +166,7 @@ struct
       let* payload =
         make_checked (fun () ->
             Random_oracle.Checked.hash
-              ~init:(Hash_prefix_create.salt "zeko da layer check")
+              ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
               (Random_oracle.Checked.pack_input input) )
       in
       Signature_lib.Schnorr.Chunked.Checked.assert_verifies

@@ -1,15 +1,10 @@
 (library
- (name zeko_prover)
+ (name zeko_types)
  (libraries
   zeko_circuits
   zeko_constants
-  zeko_types
   ;; mina ;;
   mina_base
-  mina_ledger
-  ;; opam ;;
-  cohttp
-  cohttp-async
-  async_kernel)
+  mina_ledger)
  (preprocess
   (pps ppx_jane ppx_mina ppx_version)))

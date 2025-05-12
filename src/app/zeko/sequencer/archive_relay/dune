@@ -1,7 +1,9 @@
 (executable
  (name run)
  (libraries
+  zeko_constants
   da_layer
+  mina_transaction
   mina_lib
   mina_ledger
   archive_lib

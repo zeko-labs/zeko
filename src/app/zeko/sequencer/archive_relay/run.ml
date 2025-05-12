@@ -3,13 +3,31 @@ open Core_kernel
 open Mina_base
 open Mina_lib
 open Mina_ledger
-open Mina_transaction_logic
 open Cli_lib
 
-let constraint_constants = Genesis_constants.Compiled.constraint_constants
+let constraint_constants = Zeko_constants.constraint_constants
 
 (* FIXME: Don't use Mina_compile_config.For_tests.t *)
 let compile_config = Mina_compile_config.For_unit_tests.t
+
+let compile_time_genesis =
+  let consensus_constants =
+    let protocol_constants : Genesis_constants.Protocol.t =
+      { k = 1
+      ; slots_per_epoch = 1000
+      ; slots_per_sub_window = 1
+      ; grace_period_slots = 1
+      ; delta = 1
+      ; genesis_state_timestamp = Int64.one
+      }
+    in
+    Consensus.Constants.create ~constraint_constants ~protocol_constants
+  in
+  Mina_state.Genesis_protocol_state.t
+    ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+    ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+    ~constraint_constants ~consensus_constants
+    ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
 
 let rec rmrf path =
   match Sys.is_directory path with
@@ -20,21 +38,6 @@ let rec rmrf path =
   | false ->
       Sys.remove path
 
-let compile_time_genesis_state =
-  let genesis_constants = Genesis_constants.Compiled.genesis_constants in
-  let consensus_constants =
-    Consensus.Constants.create ~constraint_constants
-      ~protocol_constants:genesis_constants.protocol
-  in
-  let compile_time_genesis =
-    Mina_state.Genesis_protocol_state.t
-      ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-      ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-      ~constraint_constants ~consensus_constants
-      ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-  in
-  compile_time_genesis.data
-
 let time ~logger label (d : 'a Deferred.t) =
   let start = Time.now () in
   let%bind x = d in
@@ -42,30 +45,19 @@ let time ~logger label (d : 'a Deferred.t) =
   [%log info] "%s: %s" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-module State = struct
-  type _t = { mutable protocol_state : Mina_state.Protocol_state.value }
-  [@@deriving yojson]
-
-  type t = _t
-
-  module Db = Kvdb_base.Make_singleton (struct
-    type t = _t [@@deriving yojson]
+module Protocol_state = struct
+  include Kvdb_base.Make_singleton (struct
+    type t = Mina_state.Protocol_state.value [@@deriving yojson]
 
     let key = "archive_relay_state"
   end)
 
-  let save kvdb t = Db.set ~data:t kvdb
-
-  let load kvdb =
-    match Db.get kvdb with
+  let get kvdb =
+    match get kvdb with
     | Some state ->
         state
     | None ->
-        { protocol_state = compile_time_genesis_state }
-
-  let set_protocol_state t kvdb protocol_state =
-    t.protocol_state <- protocol_state ;
-    save kvdb t
+        compile_time_genesis.data
 end
 
 type t =
@@ -73,7 +65,6 @@ type t =
   ; archive_uri : Host_and_port.t Cli_lib.Flag.Types.with_name
   ; zeko_uri : Uri.t
   ; da_config : Da_layer.Client.Config.t
-  ; state : State.t
   ; mutable db : Ledger.Db.t
   }
 
@@ -86,7 +77,6 @@ let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache =
   ; archive_uri
   ; zeko_uri
   ; da_config = Da_layer.Client.Config.of_string_list da_nodes
-  ; state = State.load (Ledger.Db.zeko_kvdb db)
   ; db
   }
 
@@ -96,7 +86,10 @@ let reset_ledger_cache t () =
     @@ Ledger.Db.get_directory t.db
   in
   Ledger.Db.close t.db ;
-  rmrf directory_name ;
+
+  Sys.readdir directory_name
+  |> Array.iter ~f:(fun file_name ->
+         rmrf (Filename.concat directory_name file_name) ) ;
   t.db <-
     Ledger.Db.create ~directory_name ~depth:constraint_constants.ledger_depth ()
 
@@ -108,41 +101,39 @@ let sync_archive (t : t) ~hash =
     ~target_ledger_hash:hash
     ~f:(fun ~current_chunk ~chunks_length diff ->
       let ledger = Ledger.of_database t.db in
+      let changed_accounts =
+        Da_layer.Diff.Stable.Latest.changed_accounts diff
+      in
+      let accounts_created =
+        let aids =
+          List.map changed_accounts ~f:snd |> List.map ~f:Account.identifier
+        in
+        Ledger.location_of_account_batch ledger aids
+        |> List.filter_map ~f:(fun (aid, opt) ->
+               if Option.is_some opt then Some aid else None )
+      in
+      List.iter changed_accounts ~f:(fun (index, account) ->
+          Ledger.set_at_index_exn ledger index account ) ;
+      Ledger.commit ledger ;
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
-          (* Apply accounts diff *)
-          let changed_accounts =
-            Da_layer.Diff.Stable.Latest.changed_accounts diff
-          in
-          List.iter changed_accounts ~f:(fun (index, account) ->
-              Ledger.set_at_index_exn ledger index account ) ;
-          Ledger.commit ledger ;
           return ()
       | Some (command, _) -> (
-          let txn_applied =
-            Or_error.ok_exn
-            @@ Result.( >>= )
-                 (Ledger.apply_transaction_first_pass ~constraint_constants
-                    ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-                    ~txn_state_view:
-                      Mina_state.Protocol_state.(
-                        Body.view @@ body compile_time_genesis_state)
-                    ledger (Command command) )
-                 (Ledger.apply_transaction_second_pass ledger)
-          in
-          Ledger.commit ledger ;
+          let kvdb = Ledger.Db.zeko_kvdb t.db in
           let new_protocol_state, diff =
             Archive_lib.Diff.Builder.zeko_transaction_added
-              ~constraint_constants
-              ~accounts_created:(Transaction_applied.new_accounts txn_applied)
+              ~constraint_constants ~accounts_created
               ~new_state_hash:(Ledger.merkle_root ledger)
-              ~protocol_state:t.state.protocol_state ~ledger
-              ~txn:(Transaction_applied.transaction_with_status txn_applied)
-              ~dummy_fee_payer:Zkapps_rollup.inner_public_key
+              ~protocol_state:(Protocol_state.get kvdb) ~ledger
+              ~txn:
+                With_status.
+                  { data = Mina_transaction.Transaction.Command command
+                  ; status = Transaction_status.Applied
+                  }
+              ~dummy_fee_payer:Zeko_constants.inner_public_key
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
-          State.set_protocol_state t.state (Ledger.Db.zeko_kvdb t.db)
-            new_protocol_state ;
+          Protocol_state.set kvdb ~data:new_protocol_state ;
           match%bind
             Archive_client.dispatch ~logger ~compile_config t.archive_uri
               (Archive_lib.Diff.Transition_frontier diff)

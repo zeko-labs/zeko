@@ -55,7 +55,8 @@ let fetch_action_state uri pk =
     result |> member "account" |> member "actionState" |> index 0 |> to_string)
   |> Field.of_string
 
-let fetch_transfers uri ?from_action_state ?end_action_state pk =
+let fetch_actions uri ?from_action_state ?end_action_state pk :
+    (Account_update.Actions.t * int) list Deferred.t =
   let ok_exn = function
     | Ppx_deriving_yojson_runtime.Result.Ok x ->
         x
@@ -120,18 +121,8 @@ let fetch_transfers uri ?from_action_state ?end_action_state pk =
   List.map result.actions ~f:(fun { actionData; blockInfo } ->
       let block_height = blockInfo.height in
       List.map actionData ~f:(fun { data } ->
-          let amount = List.nth_exn data 0 in
-          let public_key_x = List.nth_exn data 1 in
-          let is_odd = List.nth_exn data 2 |> Int.of_string in
-          ( Zkapps_rollup.TR.
-              { amount = Currency.Amount.of_string amount
-              ; recipient =
-                  Signature_lib.Public_key.Compressed.
-                    { x = Field.of_string public_key_x
-                    ; is_odd = (match is_odd with 0 -> false | _ -> true)
-                    }
-              }
-          , block_height ) ) )
+          let fields = List.map data ~f:Field.of_string |> List.to_array in
+          ([ fields ], block_height) ) )
   |> List.join
   |>
   (* Drop the first transfer if it's not the initial state *)
@@ -265,7 +256,7 @@ let infer_nonce uri pk =
   let%map committed_nonce = fetch_nonce uri pk in
   Unsigned.UInt32.max max_pooled_nonce committed_nonce
 
-let fetch_committed_state uri pk =
+let fetch_state uri pk =
   let q =
     object
       method query =
@@ -288,26 +279,29 @@ let fetch_committed_state uri pk =
   in
   let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.Util.(
-    result |> member "account" |> member "zkappState" |> index 0 |> to_string)
-  |> Frozen_ledger_hash.of_decimal_string
+    result |> member "account" |> member "zkappState" |> to_list
+    |> List.map ~f:to_string
+    |> List.map ~f:Field.of_string
+    |> Zkapp_state.V.of_list_exn)
 
-let infer_committed_state uri ~zkapp_pk ~signer_pk =
-  let%bind committed_state = fetch_committed_state uri zkapp_pk
+let infer_state uri ~zkapp_pk ~signer_pk =
+  let%bind committed_state = fetch_state uri zkapp_pk
   and pooled_zkapp_commands = fetch_pooled_zkapp_commands uri signer_pk in
   let pooled_zkapp_commands =
     List.sort pooled_zkapp_commands ~compare:(fun a b ->
         Zkapp_command.(
           Account.Nonce.compare (applicable_at_nonce a) (applicable_at_nonce b)) )
   in
-  let pooled_state_transitions =
-    List.map pooled_zkapp_commands ~f:(Utils.get_state_transition zkapp_pk)
-    |> List.filter_opt
-  in
   let future_state =
-    List.fold_until pooled_state_transitions ~init:committed_state
-      ~f:(fun acc (source, target) ->
-        if Frozen_ledger_hash.equal acc source then Continue target
-        else Stop acc )
+    List.fold_until pooled_zkapp_commands ~init:committed_state
+      ~f:(fun acc command ->
+        match Utils.update_state zkapp_pk command acc with
+        | `Precondition_failed ->
+            Stop acc
+        | `Skipped ->
+            Continue acc
+        | `Updated new_state ->
+            Continue new_state )
       ~finish:Fn.id
   in
   return future_state

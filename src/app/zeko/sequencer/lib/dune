@@ -2,11 +2,12 @@
  (name sequencer_lib)
  (inline_tests)
  (libraries
-  zkapps_rollup
   kvdb_base
   da_layer
   zeko_prover
   parallel_merger
+  zeko_constants
+  indexed_merkle_tree
   ;; mina ;;
   mina_base
   mina_base.import
@@ -52,7 +53,6 @@
   random_oracle
   random_oracle_input
   init
-  cli_lib
   ;; opam libraries ;;
   base_quickcheck
   uri

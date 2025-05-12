@@ -20,6 +20,32 @@ module type S = sig
 
   type location
 
+  (* ZEKO NOTE: We are reusing this module for zeko_transaction_logic.ml *)
+  module Inputs :
+    Zkapp_command_logic.Inputs_intf
+      with type Account.t = Account.t
+       and type Account_update.t = Account_update.t
+       and type Account_update.call_forest = Zkapp_call_forest.t
+       and type Account_update.transaction_commitment =
+        Snark_params.Tick.Field.t
+       and type Field.t = Snark_params.Tick.Field.t
+       and type Bool.t = bool
+       and type Bool.failure_status = Transaction_status.Failure.t option
+       and type Bool.failure_status_tbl =
+        Transaction_status.Failure.Collection.t
+       and type Ledger.t = ledger
+       and type Global_slot_since_genesis.t = Global_slot_since_genesis.t
+       and type Protocol_state_precondition.t =
+        Zkapp_precondition.Protocol_state.t
+       and type Valid_while_precondition.t =
+        Global_slot_since_genesis.t Zkapp_precondition.Closed_interval.t
+        Zkapp_basic.Or_ignore.t
+       and type Stack_frame.t = Stack_frame.value
+       and type Call_stack.t = Stack_frame.value list
+       and type Amount.Signed.t = Currency.Amount.Signed.t
+       and type Index.t = Unsigned.uint32
+       and type Token_id.t = Token_id.t
+
   val transaction_of_applied :
     Transaction_applied.t -> Transaction.t With_status.t
 
@@ -789,7 +815,7 @@ module Make (L : Ledger_intf.S) :
       if should_update then L.apply_mask t.first_pass_ledger ~masked:ledger ;
       t
 
-    let second_pass_ledger { second_pass_ledger; _ } =
+    let _second_pass_ledger { second_pass_ledger; _ } =
       L.create_masked second_pass_ledger
 
     let _set_second_pass_ledger ~should_update t ledger =
@@ -1678,7 +1704,9 @@ module Make (L : Ledger_intf.S) :
         ; full_transaction_commitment = Inputs.Transaction_commitment.empty
         ; excess = Currency.Amount.(Signed.of_unsigned zero)
         ; supply_increase = Currency.Amount.(Signed.of_unsigned zero)
-        ; ledger = L.empty ~depth:0 ()
+        ; ledger
+          (* ; ledger = L.empty ~depth:0 () *)
+          (* ZEKO NOTE: by removing 2 pass logic this is the ledger being used in first pass *)
         ; success = true
         ; account_update_index = Inputs.Index.zero
         ; failure_status_tbl = []
@@ -1794,18 +1822,20 @@ module Make (L : Ledger_intf.S) :
     *)
     let global_state = { c.global_state with second_pass_ledger = ledger } in
     let local_state =
-      if List.is_empty c.local_state.stack_frame.Stack_frame.calls then
-        (* Don't mess with the local state; we've already finished the
-           transaction after the fee payer.
-        *)
-        c.local_state
-      else
-        (* Install the ledger that should already be in the local state, but
-           may not be in some situations depending on who the caller is.
-        *)
-        { c.local_state with
-          ledger = Global_state.second_pass_ledger global_state
-        }
+      (* if List.is_empty c.local_state.stack_frame.Stack_frame.calls then
+           (* Don't mess with the local state; we've already finished the
+              transaction after the fee payer.
+           *)
+           c.local_state
+         else
+           (* Install the ledger that should already be in the local state, but
+              may not be in some situations depending on who the caller is.
+           *)
+           { c.local_state with
+             ledger = Global_state.second_pass_ledger global_state
+           } *)
+      (* ZEKO NOTE: we are not using passes *)
+      c.local_state
     in
     let start = (global_state, local_state) in
     match step_all (f init start) start with
@@ -1875,8 +1905,12 @@ module Make (L : Ledger_intf.S) :
           then valid_result
           else
             Or_error.error_string
-              "Zkapp_command application failed but new accounts created or \
-               some of the other account_update updates applied"
+              (sprintf
+                 "Zkapp_command application failed but new accounts created or \
+                  some of the other account_update updates applied %s"
+                 ( Yojson.Safe.to_string
+                 @@ Transaction_status.Failure.Collection.to_yojson
+                      failure_status_tbl ) )
 
   let apply_zkapp_command_second_pass ?zeko_env ledger c :
       Transaction_applied.Zkapp_command_applied.t Or_error.t =
@@ -2434,11 +2468,11 @@ module For_tests = struct
     let gen = mk_gen ~num_transactions ()
   end
 
-  let command_send
+  let command_send ?chain
       { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount }
       : Signed_command.t =
     let sender_pk = Public_key.compress sender.public_key in
-    Signed_command.sign sender
+    Signed_command.sign ?signature_kind:chain sender
       { common =
           { fee
           ; fee_payer_pk = sender_pk
@@ -2450,7 +2484,7 @@ module For_tests = struct
       }
     |> Signed_command.forget_check
 
-  let account_update_send ?(use_full_commitment = true)
+  let account_update_send ?chain ?(use_full_commitment = true)
       ?(double_sender_nonce = true)
       { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount }
       : Zkapp_command.t =
@@ -2537,18 +2571,18 @@ module For_tests = struct
       ; memo = Signed_command_memo.empty
       }
     in
-    let zkapp_command = Zkapp_command.of_simple zkapp_command in
+    let zkapp_command = Zkapp_command.of_simple ?chain zkapp_command in
     let commitment = Zkapp_command.commitment zkapp_command in
     let full_commitment =
       Zkapp_command.Transaction_commitment.create_complete commitment
         ~memo_hash:(Signed_command_memo.hash zkapp_command.memo)
         ~fee_payer_hash:
-          (Zkapp_command.Digest.Account_update.create
+          (Zkapp_command.Digest.Account_update.create ?chain
              (Account_update.of_fee_payer zkapp_command.fee_payer) )
     in
     let account_updates_signature =
       let c = if use_full_commitment then full_commitment else commitment in
-      Schnorr.Chunked.sign sender.private_key
+      Schnorr.Chunked.sign ?signature_kind:chain sender.private_key
         (Random_oracle.Input.Chunked.field c)
     in
     let account_updates =
@@ -2563,7 +2597,7 @@ module For_tests = struct
               account_update )
     in
     let signature =
-      Schnorr.Chunked.sign sender.private_key
+      Schnorr.Chunked.sign ?signature_kind:chain sender.private_key
         (Random_oracle.Input.Chunked.field full_commitment)
     in
     { zkapp_command with

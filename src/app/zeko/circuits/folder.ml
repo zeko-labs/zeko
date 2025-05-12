@@ -46,7 +46,11 @@ struct
       let*| target' = step elem target in
       (target', target')
     in
+    (* [Checked.Array.fold_map] is a right fold, so we need to reverse the array to hash in correct order. *)
+    (* It also reverses the [targets] array, so we need to reverse it back. *)
+    Array.rev_inplace elems ;
     let* last_target, targets = Checked.Array.fold_map ~f ~init:source elems in
+    Array.rev_inplace targets ;
     match middle_or_end with
     | `Middle ->
         let* target =

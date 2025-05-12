@@ -6,8 +6,7 @@ open Core_kernel
 open Mina_base
 open Mina_transaction
 open Sexplib.Std
-open Snark_params
-open Key_value_database.Monad.Ident.Let_syntax
+open Snark_params.Tick
 
 let ok_exn x =
   let open Ppx_deriving_yojson_runtime.Result in
@@ -18,11 +17,11 @@ module Field = struct
 
   type t = Snark_params.Tick.Field.t [@@deriving sexp]
 
-  let to_yojson t = `String (Tick.Field.to_string t)
+  let to_yojson t = `String (Field.to_string t)
 
   let of_yojson = function
     | `String s -> (
-        try Ok (Tick.Field.of_string s)
+        try Ok (Field.of_string s)
         with _ -> Error "Field.of_yojson: bad string" )
     | _ ->
         Error "Field.of_yojson: expected string"
@@ -66,7 +65,7 @@ module Transaction_info = struct
 end
 
 module Event = struct
-  type t = Frozen_ledger_hash.t array [@@deriving sexp, yojson]
+  type t = Field.t array [@@deriving sexp, yojson]
 end
 
 module Account_update_events = struct
@@ -84,7 +83,7 @@ module Account_update_actions = struct
   type t =
     { block_info : Block_info.t option
     ; transaction_info : Transaction_info.t option
-    ; action_state : Frozen_ledger_hash.t Pickles_types.Vector.Vector_5.t
+    ; action_state : Field.t Pickles_types.Vector.Vector_5.t
     ; account_update_id : int
     ; actions : Action.t list
     }

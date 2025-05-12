@@ -33,7 +33,8 @@ struct
         let length = height
       end)
 
-  let hash_entry = var_to_hash ~init:"indexed merkle tree entry hash" Entry.typ
+  let hash_entry =
+    var_to_hash ~init:Zeko_constants.indexed_merkle_tree_salt Entry.typ
 
   (* TODO: consider different salt per level. *)
   let implied_root_raw (init : F.var) (path : Path.var) : F.var Checked.t =

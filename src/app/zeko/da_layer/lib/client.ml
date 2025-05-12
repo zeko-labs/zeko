@@ -2,6 +2,7 @@ open Core_kernel
 open Async_kernel
 open Mina_base
 open Mina_ledger
+open Signature_lib
 module Field = Snark_params.Tick.Field
 
 (* FIXME: Don't use Mina_compile_config.For_tests.t *)
@@ -117,14 +118,21 @@ end
 
 (** Send the diff to all the nodes in the [~config] *)
 let distribute_diff ~logger ~config ~ledger_openings ~diff ~quorum =
-  let%bind signatures =
+  let%bind results =
     Deferred.List.map ~how:`Parallel (Config.nodes config)
       ~f:(fun node_location ->
         Rpc.post_diff ~logger ~node_location ~ledger_openings ~diff )
-    |> Deferred.map ~f:(List.filter_map ~f:Result.ok)
   in
+  let signatures = List.filter_map results ~f:Result.ok in
+  let errors = List.filter_map results ~f:Result.error in
   if List.length signatures >= quorum then return (Ok signatures)
-  else return (Error (Error.of_string "Quorum not reached"))
+  else
+    return
+      (Error
+         (Error.of_string
+            (sprintf "Quorum not reached: %s"
+               (List.fold errors ~init:"" ~f:(fun acc e ->
+                    sprintf "%s\n%s" acc (Error.to_string_hum e) ) ) ) ) )
 
 (** This module ensures that diffes are sent in order. 
     Signatures can be collected as [Deferred.t] via [get_signatures] *)
@@ -135,7 +143,9 @@ module Sequencer = struct
     ; quorum : int
           (** The amount of signatures needed when distributing diff *)
     ; q : unit Async.Sequencer.t  (** Queue of diffs to be distributed *)
-    ; mutable signatures : Signature.t list Deferred.t Ledger_hash.Map.t
+    ; mutable signatures :
+        (Public_key.Compressed.t * Signature.t) list Deferred.t
+        Ledger_hash.Map.t
           (** Mapping of [target_ledger_hash] to list of deferred signatures *)
     ; mutable last_distributed_diff : Ledger_hash.t option
           (** [target_ledger_hash] of last processed diff in queue *)
@@ -246,6 +256,7 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
         return (Ok (interval :: next_intervals))
   in
   let%bind.Deferred.Result intervals =
+    printf "Fetching intervals from da layer\n%!" ;
     get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
   in
   return
@@ -284,7 +295,7 @@ let get_diff ~logger ~config ~ledger_hash =
 (** Distribute diff of initial accounts *)
 let distribute_genesis_diff ~logger ~config ~ledger =
   let%bind account_ids =
-    Ledger.accounts ledger |> Deferred.map ~f:Account_id.Set.to_list
+    Ledger.to_list ledger >>| List.map ~f:Account.identifier
   in
   let changed_accounts =
     List.map account_ids ~f:(fun aid ->
@@ -327,9 +338,12 @@ let check_synced_nodes ~logger ~(config : Config.t) ~target_ledger_hash =
         Rpc.get_diff ~logger ~node_location:node ~ledger_hash:target_ledger_hash
       with
       | Ok (Some _) ->
-          return ( (* synced node *) )
+          return
+            (printf
+               !"Node %s is already synced\n%!"
+               (Host_and_port.to_string node.value) )
       | Ok None | Error _ ->
           printf
-            !"Node %s is not synced\n%!"
+            !"Node %s is *not* synced\n%!"
             (Host_and_port.to_string node.value) ;
           return (Config.throw_out_node config ~node) )

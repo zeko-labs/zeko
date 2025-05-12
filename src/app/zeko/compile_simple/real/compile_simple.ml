@@ -5,7 +5,11 @@ open Checked.Let_syntax
 
 type self_width = Pickles_types.Nat.N2.n
 
-module Proof = Pickles.Side_loaded.Proof
+module Proof = struct
+  include Pickles.Side_loaded.Proof
+
+  let of_pickles x = x
+end
 
 type 'var tag =
   | Tag : ('var, 'value, self_width, 'height) Pickles.Tag.t -> 'var tag
@@ -14,6 +18,8 @@ module Verification_key = struct
   include Pickles.Side_loaded.Verification_key
 
   type var = Checked.t
+
+  let of_pickles x = x
 
   let of_tag (Tag tag) = of_compiled_promise tag
 
@@ -254,6 +260,9 @@ let transform_prover :
   in
   (stmt, Pickles.Side_loaded.Proof.of_proof proof)
 
+(* used to figure out what flags are used *)
+let bad_fixme_feature_flags = ref None
+
 (* TODO: collapse branches *)
 let rec branches_to_choices :
     type out_var out_t branches available_branches tag_branches.
@@ -274,7 +283,23 @@ let rec branches_to_choices :
             transform_prover ~branch_name ~name prover handler
             :: prev_transform_provers provers
           in
-          let feature_flags = Pickles_types.Plonk_types.Features.none_bool in
+          (* in the code below we pre-run the circuit once to find out what
+             features are used *)
+          bad_fixme_feature_flags :=
+            Some Pickles_types.Plonk_types.Features.none_bool ;
+          let main_wrapper i () =
+            Run.run_checked Checked.(main i >>| fun _ -> ())
+          in
+          let constraint_builder =
+            Run.constraint_system_manual ~input_typ:V.typ ~return_typ:Typ.unit
+          in
+          constraint_builder.run_circuit main_wrapper ;
+          let (_ : Run.R1CS_constraint_system.t) =
+            constraint_builder.finish_computation ()
+          in
+          let feature_flags = !bad_fixme_feature_flags |> Option.value_exn in
+          bad_fixme_feature_flags := None ;
+          (* we now have the features, and reset to be sure it's not used *)
           match tags with
           | No_tags ->
               Choices
@@ -761,3 +786,70 @@ let compile (type out_t out_var first_input branches n_available_branches)
         end )
       in
       r
+
+let is_compile_simple_real :
+    ( Proof.t * Verification_key.t
+    , Pickles.Side_loaded.Proof.t * Pickles.Side_loaded.Verification_key.t )
+    Base.Type_equal.t
+    option =
+  Some T
+
+let add_plonk_constraint ~label c =
+  ( match !bad_fixme_feature_flags with
+  | None ->
+      ()
+  | Some feature_flags ->
+      let feature_flags =
+        match
+          ( c
+            : _ Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.t
+            )
+        with
+        | Basic _
+        | Poseidon _
+        | EC_add_complete _
+        | EC_scale _
+        | EC_endoscale _
+        | EC_endoscalar _
+        | AddFixedLookupTable _
+        | Raw
+            { kind =
+                ( Zero
+                | Generic
+                | Poseidon
+                | CompleteAdd
+                | VarBaseMul
+                | EndoMul
+                | EndoMulScalar
+                | CairoClaim
+                | CairoInstruction
+                | CairoFlags
+                | CairoTransition )
+            ; values = _
+            ; coeffs = _
+            } ->
+            feature_flags
+        | Lookup _ | Raw { kind = Lookup; values = _; coeffs = _ } ->
+            { feature_flags with lookup = true }
+        | RangeCheck0 _ | Raw { kind = RangeCheck0; values = _; coeffs = _ } ->
+            { feature_flags with range_check0 = true }
+        | RangeCheck1 _ | Raw { kind = RangeCheck1; values = _; coeffs = _ } ->
+            { feature_flags with range_check1 = true }
+        | Xor _ | Raw { kind = Xor16; values = _; coeffs = _ } ->
+            { feature_flags with xor = true }
+        | ForeignFieldAdd _
+        | Raw { kind = ForeignFieldAdd; values = _; coeffs = _ } ->
+            { feature_flags with foreign_field_add = true }
+        | ForeignFieldMul _
+        | Raw { kind = ForeignFieldMul; values = _; coeffs = _ } ->
+            { feature_flags with foreign_field_mul = true }
+        | Rot64 _ | Raw { kind = Rot64; values = _; coeffs = _ } ->
+            { feature_flags with rot = true }
+        | AddRuntimeTableCfg _ ->
+            { feature_flags with runtime_tables = true }
+      in
+      bad_fixme_feature_flags := Some feature_flags ) ;
+  assert_ ~label
+    { basic = Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.T c
+    ; annotation = None
+    }

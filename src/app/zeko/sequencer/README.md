@@ -17,18 +17,21 @@ DUNE_PROFILE=devnet dune build
 
 ## Tests
 
-```bash
-# Run local network to imitate L1
-DUNE_PROFILE=devnet dune exec ./tests/testing_ledger/run.exe -- --db-dir l1_db
+Move to the sequencer's root `src/app/zeko/sequencer` and run the following commands each in separate terminal:
 
-# Run provers
-DUNE_PROFILE=devnet dune exec ./prover/cli.exe -- run-server --port 9990
-DUNE_PROFILE=devnet dune exec ./prover/cli.exe -- run-server --port 9991
+```bash
+# Run testing ledger to imitate L1
+ZEKO_SIGNATURE_KIND=testnet dune exec ./tests/testing_ledger/run.exe -- --db-dir l1_db --network-id testnet
 
 # Run da node
-DUNE_PROFILE=devnet dune exec ../da_layer/cli.exe -- run-node --port 8555 --random-sk
+ZEKO_SIGNATURE_KIND=testnet dune exec ../da_layer/cli.exe -- run-node --port 8555 --random-sk --network-id testnet
 
-DUNE_PROFILE=devnet dune runtest
+# Run provers (replace `cli_fake` with `cli` to run real provers)
+dune exec ./prover/cli_fake.exe -- run-server --port 9990
+dune exec ./prover/cli_fake.exe -- run-server --port 9991
+
+# Run tests
+ZEKO_SIGNATURE_KIND=testnet dune exec ./tests/sequencer_test_fake.exe
 ```
 
 ## Run

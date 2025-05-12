@@ -193,7 +193,8 @@ include T
 
 [%%define_locally Stable.Latest.Wire.(gen)]
 
-let of_simple (w : Simple.t) : t =
+(* ZEKO NOTE: added ?chain *)
+let of_simple ?chain (w : Simple.t) : t =
   { fee_payer = w.fee_payer
   ; memo = w.memo
   ; account_updates =
@@ -203,7 +204,7 @@ let of_simple (w : Simple.t) : t =
       |> Call_forest.map ~f:Account_update.of_simple
       |> Call_forest.accumulate_hashes
            ~hash_account_update:(fun (p : Account_update.t) ->
-             Digest.Account_update.create p )
+             Digest.Account_update.create ?chain p )
   }
 
 let to_simple (t : t) : Simple.t =
@@ -894,14 +895,16 @@ include Codable.Make_base64 (Stable.Latest.With_top_version_tag)
 type account_updates =
   (Account_update.t, Digest.Account_update.t, Digest.Forest.t) Call_forest.t
 
-let account_updates_deriver obj =
+(* ZEKO NOTE: added ?chain *)
+let account_updates_deriver ?chain obj =
   let of_zkapp_command_with_depth (ps : Account_update.Graphql_repr.t list) :
       account_updates =
     Call_forest.of_account_updates ps
       ~account_update_depth:(fun (p : Account_update.Graphql_repr.t) ->
         p.body.call_depth )
     |> Call_forest.map ~f:Account_update.of_graphql_repr
-    |> Call_forest.accumulate_hashes'
+    |> Call_forest.accumulate_hashes
+         ~hash_account_update:(Call_forest.Digest.Account_update.create ?chain)
   and to_zkapp_command_with_depth (ps : account_updates) :
       Account_update.Graphql_repr.t list =
     ps
@@ -913,22 +916,31 @@ let account_updates_deriver obj =
   iso ~map:of_zkapp_command_with_depth ~contramap:to_zkapp_command_with_depth
     inner obj
 
-let deriver obj =
+(* ZEKO NOTE: added ?chain *)
+let deriver ?chain obj =
   let open Fields_derivers_zkapps.Derivers in
   let ( !. ) = ( !. ) ~t_fields_annots in
   Fields.make_creator obj
     ~fee_payer:!.Account_update.Fee_payer.deriver
-    ~account_updates:!.account_updates_deriver
+    ~account_updates:!.(account_updates_deriver ?chain)
     ~memo:!.Signed_command_memo.deriver
   |> finish "ZkappCommand" ~t_toplevel_annots
 
-let arg_typ () = Fields_derivers_zkapps.(arg_typ (deriver @@ Derivers.o ()))
+(* ZEKO NOTE: added ?chain *)
+let arg_typ ?chain () =
+  Fields_derivers_zkapps.(arg_typ (deriver ?chain @@ Derivers.o ()))
 
-let typ () = Fields_derivers_zkapps.(typ (deriver @@ Derivers.o ()))
+(* ZEKO NOTE: added ?chain *)
+let typ ?chain () =
+  Fields_derivers_zkapps.(typ (deriver ?chain @@ Derivers.o ()))
 
-let to_json x = Fields_derivers_zkapps.(to_json (deriver @@ Derivers.o ())) x
+(* ZEKO NOTE: added ?chain *)
+let to_json ?chain x =
+  Fields_derivers_zkapps.(to_json (deriver ?chain @@ Derivers.o ())) x
 
-let of_json x = Fields_derivers_zkapps.(of_json (deriver @@ Derivers.o ())) x
+(* ZEKO NOTE: added ?chain *)
+let of_json ?chain x =
+  Fields_derivers_zkapps.(of_json (deriver ?chain @@ Derivers.o ())) x
 
 let account_updates_of_json x =
   Fields_derivers_zkapps.(
@@ -939,8 +951,9 @@ let account_updates_of_json x =
 let account_updates_to_json x =
   Fields_derivers_zkapps.(to_json (account_updates_deriver @@ derivers ())) x
 
-let zkapp_command_to_json x =
-  Fields_derivers_zkapps.(to_json (deriver @@ derivers ())) x
+(* ZEKO NOTE: added ?chain *)
+let zkapp_command_to_json ?chain x =
+  Fields_derivers_zkapps.(to_json (deriver ?chain @@ derivers ())) x
 
 let arg_query_string x =
   Fields_derivers_zkapps.Test.Loop.json_to_string_gql @@ to_json x
@@ -1348,11 +1361,12 @@ let is_incompatible_version t =
       | Set { set_verification_key = _auth, txn_version; _ } ->
           not Mina_numbers.Txn_version.(equal_to_current txn_version) )
 
-let get_transaction_commitments (zkapp_command : t) =
+(* ZEKO NOTE: added ?chain *)
+let get_transaction_commitments ?chain (zkapp_command : t) =
   let memo_hash = Signed_command_memo.hash zkapp_command.memo in
   let fee_payer_hash =
     Account_update.of_fee_payer zkapp_command.fee_payer
-    |> Digest.Account_update.create
+    |> Digest.Account_update.create ?chain
   in
   let account_updates_hash = account_updates_hash zkapp_command in
   let txn_commitment = Transaction_commitment.create ~account_updates_hash in

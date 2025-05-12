@@ -119,6 +119,12 @@ let fold_until :
   in
   finish @@ loop init
 
+let zeko_prev_key t ~(key : Bigstring.t) : Bigstring.t =
+  let iterator = Rocks.Iterator.create t.db in
+  Rocks.Iterator.seek iterator key ;
+  Rocks.Iterator.prev iterator ;
+  Rocks.Iterator.get_key iterator
+
 let to_bigstring = Bigstring.of_string
 
 let%test_unit "get_batch" =
