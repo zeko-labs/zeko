@@ -1,0 +1,13 @@
+(library
+ (name relational_db)
+ (libraries
+  ;; mina ;;
+  cache_dir
+  ;; opam libraries ;;
+  core_kernel
+  async
+  caqti
+  caqti-async
+  caqti-driver-sqlite3)
+ (preprocess
+  (pps ppx_jane ppx_mina)))

@@ -1658,10 +1658,15 @@ module Mutations = struct
         | Error err ->
             return (Error (Error.to_string_mach err))
         | Ok witnesses ->
-            List.iter witnesses ~f:(fun witness ->
-                don't_wait_for
-                @@ Zeko_sequencer.Merger.P.add_job sequencer.merger
-                     sequencer.merger_ctx ~data:witness ) ;
+            let%bind.Deferred.Result () =
+              Deferred.List.map ~how:`Sequential witnesses ~f:(fun witness ->
+                  let open Zeko_sequencer in
+                  Merger.P.add_job sequencer.db_pool sequencer.merger
+                    sequencer.merger_ctx ~data:witness )
+              >>| Result.all
+              >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+              >>| Result.map_error ~f:(fun e -> Caqti_error.show e)
+            in
             let cmd =
               { Types.User_command.With_status.data =
                   Signed_command.forget_check command
@@ -1693,10 +1698,15 @@ module Mutations = struct
         | Error err ->
             return (Error (Error.to_string_mach err))
         | Ok witnesses ->
-            List.iter witnesses ~f:(fun witness ->
-                don't_wait_for
-                @@ Zeko_sequencer.Merger.P.add_job sequencer.merger
-                     sequencer.merger_ctx ~data:witness ) ;
+            let%bind.Deferred.Result () =
+              Deferred.List.map ~how:`Sequential witnesses ~f:(fun witness ->
+                  let open Zeko_sequencer in
+                  Merger.P.add_job sequencer.db_pool sequencer.merger
+                    sequencer.merger_ctx ~data:witness )
+              >>| Result.all
+              >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+              >>| Result.map_error ~f:(fun e -> Caqti_error.show e)
+            in
             let cmd =
               { Types.Zkapp_command.With_status.data = zkapp_command
               ; status = Applied
