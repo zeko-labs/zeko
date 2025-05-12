@@ -8,13 +8,6 @@ let height = 35
 
 include Indexed_merkle_tree.Make (struct
   open struct
-    let add_plonk_constraint c =
-      assert_
-        { basic =
-            Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.T c
-        ; annotation = None
-        }
-
     let ( let- ) var f =
       let+ var = As_prover.read_var var in
       f var
@@ -62,7 +55,7 @@ include Indexed_merkle_tree.Make (struct
              Zeko_as_prover.range_check0 v0 |> As_prover.return )
       in
       let*| () =
-        add_plonk_constraint
+        Compile_simple.add_plonk_constraint ~label:__LOC__
           (RangeCheck0
              { v0
              ; v0p0
@@ -146,7 +139,7 @@ include Indexed_merkle_tree.Make (struct
             (let- v2 in
              Zeko_as_prover.range_check1 v2 |> As_prover.return )
       in
-      add_plonk_constraint
+      Compile_simple.add_plonk_constraint ~label:__LOC__
         (RangeCheck1
            { v2
            ; v12 = Field.Var.constant Field.zero
@@ -212,14 +205,16 @@ include Indexed_merkle_tree.Make (struct
              Zeko_as_prover.carry ~x0 ~x1 ~y0 ~y1 |> As_prover.return )
       in
       (* assert that
-         z0 + z1 * l + c * l * l = x0 + x1 * l - y0 - y1 * l - 1
-         z2 - c = x2 - y2
+         z0 + z1 * l = x0 + x1 * l - y0' - y1 * l - c * l * l
+         z2 = x2 - y2 + c
          where l = 2^88
+               y0' = y0 + 1
          if z0, z1, z2 < l, then we know that x < y
          TODO: prove
+         source: https://github.com/o1-labs/proof-systems/blob/bd608bb592eafd71eae1316474edbf8b80a8d802/kimchi/src/circuits/polynomials/foreign_field_add/circuitgates.rs
       *)
       let* () =
-        add_plonk_constraint
+        Compile_simple.add_plonk_constraint ~label:__LOC__
           (ForeignFieldAdd
              { left_input_lo = x0
              ; left_input_mi = x1
@@ -227,7 +222,7 @@ include Indexed_merkle_tree.Make (struct
              ; right_input_lo = y0
              ; right_input_mi = y1
              ; right_input_hi = y2
-             ; sign = Field.of_int (-1)
+             ; sign = Field.of_int 1 |> Field.negate
              ; carry = first_carry
              ; field_overflow = Field.(constant typ zero)
              ; foreign_field_modulus0 = Field.zero
@@ -236,7 +231,7 @@ include Indexed_merkle_tree.Make (struct
              } )
       in
       let* () =
-        add_plonk_constraint
+        Compile_simple.add_plonk_constraint ~label:__LOC__
           (Raw { kind = Zero; values = [| z0; z1; z2 |]; coeffs = [||] })
       in
       multi_range_check z0 z1 z2
