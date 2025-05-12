@@ -212,11 +212,13 @@ include Indexed_merkle_tree.Make (struct
              Zeko_as_prover.carry ~x0 ~x1 ~y0 ~y1 |> As_prover.return )
       in
       (* assert that
-         z0 + z1 * l + c * l * l = x0 + x1 * l - y0 - y1 * l - 1
-         z2 - c = x2 - y2
+         z0 + z1 * l = x0 + x1 * l - y0' - y1 * l - c * l * l
+         z2 = x2 - y2 + c
          where l = 2^88
+               y0' = y0 + 1
          if z0, z1, z2 < l, then we know that x < y
          TODO: prove
+         source: https://github.com/o1-labs/proof-systems/blob/bd608bb592eafd71eae1316474edbf8b80a8d802/kimchi/src/circuits/polynomials/foreign_field_add/circuitgates.rs
       *)
       let* () =
         add_plonk_constraint
@@ -227,7 +229,7 @@ include Indexed_merkle_tree.Make (struct
              ; right_input_lo = y0
              ; right_input_mi = y1
              ; right_input_hi = y2
-             ; sign = Field.of_int (-1)
+             ; sign = Field.of_int 1 |> Field.negate
              ; carry = first_carry
              ; field_overflow = Field.(constant typ zero)
              ; foreign_field_modulus0 = Field.zero
