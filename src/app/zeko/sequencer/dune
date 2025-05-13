@@ -19,7 +19,7 @@
   async_unix
   core_unix.command_unix)
  (preprocess
-  (pps ppx_jane))
+  (pps ppx_jane ppx_mina))
  (modules run))
 
 (executable
@@ -43,7 +43,7 @@
   async_unix
   core_unix.command_unix)
  (preprocess
-  (pps ppx_jane))
+  (pps ppx_jane ppx_mina))
  (modules run_fake))
 
 (executable

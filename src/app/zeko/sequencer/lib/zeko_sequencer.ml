@@ -64,6 +64,7 @@ module Sequencer = struct
         ; kvdb : Committer.Store.Kvdb.t
         ; state : State.t
         ; archive : Archive.t
+        ; logger : Logger.t
         }
 
       let save_state t = Db.set t.kvdb ~data:t.state
@@ -124,7 +125,15 @@ module Sequencer = struct
       [@@deriving yojson]
 
       let process
-          ({ da_client; provers; executor; config; kvdb; state; archive } as ctx :
+          ({ da_client
+           ; provers
+           ; executor
+           ; config
+           ; kvdb
+           ; state
+           ; archive
+           ; logger
+           } as ctx :
             Context.t ) { new_inner_ledger; processed_actions_pointer }
           txn_snark =
         let%bind signatures =
@@ -133,7 +142,7 @@ module Sequencer = struct
           |> Deferred.map ~f:(fun x ->
                  Option.value_exn x ~message:"No signatures" )
         in
-        printf "Received %d signatures from da layer\n%!"
+        [%log info] "Received %d signatures from da layer"
           (List.length signatures) ;
         assert (List.length signatures > 0) ;
         let old_inner_ledger =
@@ -157,7 +166,7 @@ module Sequencer = struct
             ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
             commit_witness
         in
-        let%bind () = Executor.send_zkapp_command executor command in
+        let%bind () = Executor.send_zkapp_command ~logger executor command in
         Context.committed ctx new_inner_ledger ;
         return ()
     end
@@ -198,7 +207,8 @@ module Sequencer = struct
     }
 
   let shutdown t =
-    printf "Shutting down sequencer\n%!" ;
+    let logger = t.logger in
+    [%log info] "Shutting down sequencer" ;
     Ivar.fill t.closed () ;
     L.Db.close t.ledger ;
     Indexed_merkle_tree.Db.close t.imt ;
@@ -518,6 +528,7 @@ module Sequencer = struct
       return processed_pointer
 
   let commit t =
+    let logger = t.logger in
     let%bind () = apply_fee_transfer t >>| Or_error.ok_exn in
     let%bind processed_actions_pointer = update_inner_account t in
     let target_ledger =
@@ -529,7 +540,7 @@ module Sequencer = struct
       Merger.M.current_tree t.merger
       |> Option.map ~f:(fun tree -> Merger.M.Tree.is_empty tree.value)
       |> Option.value ~default:true
-    then return (print_endline "Nothing to commit")
+    then return ([%log info] "Nothing to commit")
     else
       Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
         ~commit_witness:
@@ -544,7 +555,7 @@ module Sequencer = struct
           don't_wait_for @@ Deferred.ignore_m @@ commit t )
 
   let bootstrap ~logger ({ config; _ } as t) da_config =
-    print_endline "Bootstrapping" ;
+    [%log info] "Bootstrapping" ;
     let%bind commited_ledger_hash =
       match Sys.getenv "ZEKO_OVERRIDE_BOOTSTRAP_HASH" with
       | None ->
@@ -554,13 +565,13 @@ module Sequencer = struct
                 Zeko_circuits.Rollup_state.Outer_state.typ
           >>| fun { ledger_hash; _ } -> ledger_hash
       | Some hash ->
-          printf "Using override hash: %s\n%!" hash ;
+          [%log info] "Using override hash: %s" hash ;
           return (Ledger_hash.of_decimal_string hash)
     in
-    printf "Fetched commited root: %s\n%!"
+    [%log info] "Fetched commited root: %s"
       Ledger_hash.(to_decimal_string commited_ledger_hash) ;
 
-    printf "Init root: %s\n%!" Ledger_hash.(to_decimal_string (get_root t)) ;
+    [%log info] "Init root: %s" Ledger_hash.(to_decimal_string (get_root t)) ;
 
     (* apply diffs from DA layer *)
     let%bind () =
@@ -609,18 +620,18 @@ module Sequencer = struct
             | Ok () ->
                 ()
             | Error e ->
-                printf "Warning: Failed to add events and actions: %s\n%!"
+                [%log warn] "Warning: Failed to add events and actions: %s"
                   (Error.to_string_hum e) ) )
       >>| Or_error.ok_exn >>| ignore
     in
 
     let current_root = get_root t in
-    printf "Current root: %s\n%!" Ledger_hash.(to_decimal_string current_root) ;
-    printf "IMT root: %s\n%!"
+    [%log info] "Current root: %s" Ledger_hash.(to_decimal_string current_root) ;
+    [%log info] "IMT root: %s"
       (Ledger_hash.to_decimal_string @@ Indexed_merkle_tree.Db.merkle_root t.imt) ;
 
     if not @@ Ledger_hash.equal current_root commited_ledger_hash then
-      print_endline "Ledger mismatch" ;
+      [%log error] "Ledger mismatch" ;
 
     let sparse_ledger =
       Sparse_ledger.of_ledger_subset_exn
@@ -633,7 +644,7 @@ module Sequencer = struct
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
       ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
       ~l2_network_id ~deposit_delay_blocks ~provers =
-    print_endline "Precomputing srs" ;
+    [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let ledger =
       L.Db.create
@@ -666,7 +677,7 @@ module Sequencer = struct
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let provers =
-      Zeko_prover.Client.create
+      Zeko_prover.Client.create ~logger
         (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
     in
     let executor =
@@ -685,6 +696,7 @@ module Sequencer = struct
         ; kvdb
         ; state = Merger.Context.load_state kvdb
         ; archive
+        ; logger
         }
     in
     let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
@@ -707,7 +719,7 @@ module Sequencer = struct
       if is_empty t then bootstrap ~logger t da_config else return ()
     in
     let%bind () =
-      Committer.recommit_all ~provers:t.snark_q.provers
+      Committer.recommit_all ~logger ~provers:t.snark_q.provers
         ~executor:t.merger_ctx.executor ~archive ~kvdb ~zkapp_pk:config.zkapp_pk
         ~archive_uri:config.archive_uri
     in

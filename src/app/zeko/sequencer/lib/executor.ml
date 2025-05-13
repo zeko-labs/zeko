@@ -35,7 +35,7 @@ let refresh_nonce t = t.nonce <- None
 
 let increment_nonce t = t.nonce <- Option.map t.nonce ~f:Account.Nonce.(add one)
 
-let process_command t (command : Zkapp_command.t) =
+let process_command ~logger t (command : Zkapp_command.t) =
   let rec retry attempt () =
     let%bind nonce =
       match t.nonce with
@@ -65,7 +65,7 @@ let process_command t (command : Zkapp_command.t) =
     in
     match%bind Gql_client.send_zkapp t.l1_uri command with
     | Ok _ ->
-        printf "Sent zkapp command: %s\n%!"
+        [%log info] "Sent zkapp command: %s"
           Transaction_hash.(
             to_base58_check @@ hash_command (Zkapp_command command)) ;
         return @@ increment_nonce t
@@ -78,7 +78,7 @@ let process_command t (command : Zkapp_command.t) =
             ~substring:"Account_nonce_precondition_unsatisfied"
         then refresh_nonce t ;
 
-        printf "Failed to send zkapp command: %s, retrying in %s\n%!"
+        [%log info] "Failed to send zkapp command: %s, retrying in %s"
           (err_to_string err)
           (Time_ns.Span.to_string t.delay) ;
 
@@ -86,7 +86,7 @@ let process_command t (command : Zkapp_command.t) =
   in
   retry 0 ()
 
-let send_zkapp_command t command =
-  Throttle.enqueue t.q (fun () -> process_command t command)
+let send_zkapp_command ~logger t command =
+  Throttle.enqueue t.q (fun () -> process_command ~logger t command)
 
 let wait_to_finish t = Throttle.capacity_available t.q

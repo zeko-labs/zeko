@@ -203,17 +203,11 @@ let post_diff t ~ledger_openings ~diff =
   let () =
     match Db.add_diff t.db ~ledger_hash:target_ledger_hash ~diff with
     | `Already_existed ->
-        [%log warn] "Diff with target ledger hash $hash already exists"
-          ~metadata:
-            [ ( "hash"
-              , `String (Ledger_hash.to_decimal_string target_ledger_hash) )
-            ]
+        [%log warn] "Diff with target ledger hash %s already exists"
+          (Ledger_hash.to_decimal_string target_ledger_hash)
     | `Added ->
-        [%log info] "Diff with target ledger hash $hash added to the database"
-          ~metadata:
-            [ ( "hash"
-              , `String (Ledger_hash.to_decimal_string target_ledger_hash) )
-            ]
+        [%log info] "Diff with target ledger hash %s added to the database"
+          (Ledger_hash.to_decimal_string target_ledger_hash)
   in
   Ok signature
 
@@ -237,8 +231,7 @@ let sync t ~node_location ~ledger_hash =
           return (Ok ())
       | Error e ->
           let logger = t.logger in
-          [%log warn] "Error posting diff: $error"
-            ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+          [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;
           return (Error e) )
   >>| Result.map ~f:(fun asd -> Result.all_unit asd)
   >>| Result.join
@@ -293,8 +286,7 @@ let implementations t =
                 return (pk, signature)
             | Error e ->
                 let logger = t.logger in
-                [%log warn] "Error posting diff: $error"
-                  ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+                [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;
                 failwith (Error.to_string_hum e) )
       ; (* Get_diff *)
         Rpc.Rpc.implement Rpc_def.Get_diff.V1.t (fun () query ->

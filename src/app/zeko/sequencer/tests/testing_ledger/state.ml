@@ -1,13 +1,10 @@
 open Core
-open Async
 open Async_kernel
 open Mina_base
 open Mina_transaction
 open Network_pool
 open Sequencer_lib
 module Ledger = Mina_ledger.Ledger
-
-let logger = Logger.create ()
 
 module Constants = struct
   let constraint_constants = Zeko_constants.constraint_constants
@@ -41,15 +38,17 @@ type t =
   ; archive : Archive.t
   ; signature_kind : Mina_signature_kind.t
   ; disable_proofs : bool
+  ; logger : Logger.t
   }
 
 let db t = t.db
 
 let commands t = t.commands
 
-let pooled_commands t = Indexed_pool.transactions ~logger t.pool
+let pooled_commands t = Indexed_pool.transactions ~logger:t.logger t.pool
 
 let apply_command t ~command =
+  let logger = t.logger in
   let l = Ledger.of_database t.db in
   let%bind.Result partialy_applied_txn =
     Ledger.apply_transaction_first_pass
@@ -78,7 +77,7 @@ let apply_command t ~command =
   let status =
     Mina_transaction_logic.Transaction_applied.transaction_status txn_applied
   in
-  printf !"Applied command: %{sexp: Transaction_status.t\n}\n%!" status ;
+  [%log info] !"Applied command: %{sexp: Transaction_status.t\n}" status ;
 
   let () =
     match (status, command) with
@@ -121,6 +120,7 @@ let get_account t account_id =
   Ledger.Db.get t.db location
 
 let add_command_to_pool t ~(command : User_command.Valid.t) =
+  let logger = t.logger in
   match t.block_period with
   | None -> (
       match apply_command t ~command:(User_command.forget_check command) with
@@ -151,21 +151,22 @@ let add_command_to_pool t ~(command : User_command.Valid.t) =
                 @@ Command_error.to_yojson err )
           | Ok (_, pool, _) ->
               t.pool <- pool ;
-              printf "added command to pool: %s\n%!"
+              [%log info] "added command to pool: %s"
                 Transaction_hash.(
                   to_base58_check
                   @@ User_command_with_valid_signature.hash command) ;
               `Enqueued ) )
 
-let create_pool () =
+let create_pool ~logger () =
   Indexed_pool.empty ~constraint_constants:Constants.constraint_constants
     ~consensus_constants:Constants.consensus_constants
     ~time_controller:(Block_time.Controller.basic ~logger)
     ~slot_tx_end:None
 
 let create_new_block t =
+  let logger = t.logger in
   t.block_height <- t.block_height + 1 ;
-  printf "Creating a new block %d\n%!" t.block_height ;
+  [%log info] "Creating a new block %d" t.block_height ;
   let transactions = Indexed_pool.transactions ~logger t.pool in
   Sequence.iter transactions ~f:(fun txn ->
       let command =
@@ -175,13 +176,13 @@ let create_new_block t =
       | Ok () ->
           ()
       | Error err ->
-          printf "Failed to apply command %s: %s\n%!"
+          [%log error] "Failed to apply command %s: %s"
             ( Transaction_hash.to_base58_check
             @@ Transaction_hash.hash_command command )
             (Error.to_string_hum err) ) ;
-  t.pool <- create_pool ()
+  t.pool <- create_pool ~logger ()
 
-let create ~disable_proofs ~block_period ~db_dir ~signature_kind () =
+let create ~logger ~disable_proofs ~block_period ~db_dir ~signature_kind () =
   let db =
     Ledger.Db.create ~directory_name:db_dir
       ~depth:Constants.constraint_constants.ledger_depth ()
@@ -191,10 +192,11 @@ let create ~disable_proofs ~block_period ~db_dir ~signature_kind () =
     ; block_height = 0
     ; db
     ; commands = Hashtbl.create (module String)
-    ; pool = create_pool ()
+    ; pool = create_pool ~logger ()
     ; archive = Sequencer_lib.Archive.create ~kvdb:(Ledger.Db.zeko_kvdb db)
     ; signature_kind
     ; disable_proofs
+    ; logger
     }
   in
   match block_period with

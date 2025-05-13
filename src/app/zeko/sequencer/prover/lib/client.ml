@@ -20,9 +20,9 @@ type lazy_connection =
 
 type prover = lazy_connection ref * Tcp.Where_to_connect.inet
 
-type t = { q : prover Throttle.t }
+type t = { q : prover Throttle.t; logger : Logger.t }
 
-let create ?(ping_interval = 15.) ?(ping_timeout = 10.) provers =
+let create ?(ping_interval = 15.) ?(ping_timeout = 10.) ~logger provers =
   let connections = List.map provers ~f:(fun x -> (ref (try_connect x), x)) in
   let q = Throttle.create_with ~continue_on_error:true connections in
   (* Start pinging *)
@@ -32,7 +32,7 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) provers =
         @@ Throttle.enqueue q (fun (connection_ref, _) ->
                match%bind !connection_ref with
                | Error err ->
-                   printf "Error pinging prover: %s\n%!"
+                   [%log error] "Error pinging prover: %s"
                      (Error.to_string_hum err) ;
                    return ()
                | Ok (_, r, w) ->
@@ -48,7 +48,7 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) provers =
                    return () ) )
   in
   every ~continue_on_error:true (Time.Span.of_sec ping_interval) ping_loop ;
-  { q }
+  { q; logger }
 
 let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
@@ -56,12 +56,13 @@ let queue_size t = Throttle.num_jobs_waiting_to_start t.q
    If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
 let send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
     (input : Prover.Input.t) : Prover.Output.t Deferred.t =
+  let logger = t.logger in
   Throttle.enqueue t.q (fun (connection_ref, where_to_connect) ->
       let rec go ~attempts =
         let%bind result =
           match%bind !connection_ref with
           | Error err ->
-              printf "Error connecting to prover: %s\n%!"
+              [%log error] "Error connecting to prover: %s"
                 (Error.to_string_hum err) ;
               return `Connnection_error
           | Ok (s, r, w) -> (
@@ -81,11 +82,11 @@ let send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
                   | Ok output ->
                       `Ok output
                   | Error _ ->
-                      print_endline "Error parsing response from prover" ;
+                      [%log error] "Error parsing response from prover" ;
                       `Parsing_error )
               | `Timeout | `Result None ->
                   Socket.shutdown s `Both ;
-                  printf "Timeout from prover, remaining attempts: %d\n%!"
+                  [%log warn] "Timeout from prover, remaining attempts: %d"
                     (attempts - 1) ;
                   `Timeout )
         in

@@ -1,14 +1,15 @@
 open Core
 open Async
 open Sequencer_lib
+open Cli_lib
 module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 module Sequencer = Zeko_sequencer.Sequencer
 
-let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-    ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id ~l2_network_id
-    ~deposit_delay_blocks ~provers () =
+let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
+    ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
+    ~l2_network_id ~deposit_delay_blocks ~provers () =
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
@@ -16,8 +17,8 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
   in
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
-        Sequencer.create ~logger:(Logger.create ()) ~zkapp_pk ~max_pool_size
-          ~da_config ~da_quorum ~db_dir:(Some db_dir) ~l1_uri ~archive_uri
+        Sequencer.create ~logger ~zkapp_pk ~max_pool_size ~da_config ~da_quorum
+          ~db_dir:(Some db_dir) ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~l1_network_id ~l2_network_id
           ~deposit_delay_blocks
           ~signer:
@@ -39,18 +40,19 @@ let run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
       ~on_handler_error:
         (`Call
           (fun _ exn ->
-            print_endline "Unhandled exception" ;
-            print_endline (Exn.to_string exn) ) )
+            [%log error] "Unhandled exception: %s" (Exn.to_string exn) ) )
       (Async.Tcp.Where_to_listen.of_port port)
       (fun ~body _sock req -> graphql_callback () req body)
     |> Deferred.ignore_m |> don't_wait_for
   in
-  print_endline ("Sequencer listening on port " ^ Int.to_string port) ;
+  [%log info] "Sequencer listening on port %d" port ;
   never_returns (Async.Scheduler.go ())
 
 let () =
   Command.basic ~summary:"Zeko sequencer"
-    (let%map_open.Command port =
+    (let%map_open.Command log_json = Flag.Log.json
+     and log_level = Flag.Log.level
+     and port =
        flag "-p" (optional_with_default 8080 int) ~doc:"int Port to listen on"
      and zkapp_pk =
        flag "--zkapp-pk" (optional string) ~doc:"string ZkApp public key"
@@ -102,7 +104,9 @@ let () =
          { value = Uri.of_string archive_uri; name = "archive-uri" }
      in
      let provers = List.map provers ~f:Host_and_port.of_string in
-     run ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config ~da_quorum
-       ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id ~l2_network_id
-       ~deposit_delay_blocks ~provers )
+     let logger = Logger.create () in
+     Stdout_log.setup log_json log_level ;
+     run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
+       ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
+       ~l2_network_id ~deposit_delay_blocks ~provers )
   |> Command_unix.run

@@ -1,16 +1,16 @@
 open Core
-open Base
 open Async
 open Mina_ledger
 open Mina_base
+open Cli_lib
 module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 
-let run ~port ~db_dir ~genesis_account ~block_period ~network_id ~disable_proofs
-    =
+let run ~logger ~port ~db_dir ~genesis_account ~block_period ~network_id
+    ~disable_proofs =
   let t =
-    State.create
+    State.create ~logger
       ~signature_kind:(Sequencer_lib.Utils.signature_kind network_id)
       ~disable_proofs ~db_dir
       ~block_period:
@@ -45,8 +45,7 @@ let run ~port ~db_dir ~genesis_account ~block_period ~network_id ~disable_proofs
       ~on_handler_error:
         (`Call
           (fun _ exn ->
-            print_endline "Unhandled exception" ;
-            print_endline (Exn.to_string exn) ) )
+            [%log error] "Unhandled exception: %s" (Exn.to_string exn) ) )
       (Async.Tcp.Where_to_listen.of_port port)
       (fun ~body _sock req ->
         let headers = Cohttp.Request.headers req in
@@ -58,12 +57,14 @@ let run ~port ~db_dir ~genesis_account ~block_period ~network_id ~disable_proofs
             graphql_callback () req body )
     |> Deferred.ignore_m |> don't_wait_for
   in
-  print_endline ("Local network listening on port " ^ Int.to_string port) ;
+  [%log info] "Local network listening on port %d" port ;
   never_returns (Async.Scheduler.go ())
 
 let () =
   Command.basic ~summary:"Local network"
-    (let%map_open.Command port =
+    (let%map_open.Command log_json = Flag.Log.json
+     and log_level = Flag.Log.level
+     and port =
        flag "-p" (optional_with_default 8080 int) ~doc:"int Port to listen on"
      and genesis_account =
        flag "--genesis-account" (optional string)
@@ -82,6 +83,8 @@ let () =
      and disable_proofs =
        flag "--disable-proofs" no_arg ~doc:"bool Disable proofs"
      in
-     run ~port ~db_dir ~genesis_account ~block_period ~network_id
+     let logger = Logger.create () in
+     Stdout_log.setup log_json log_level ;
+     run ~logger ~port ~db_dir ~genesis_account ~block_period ~network_id
        ~disable_proofs )
   |> Command_unix.run

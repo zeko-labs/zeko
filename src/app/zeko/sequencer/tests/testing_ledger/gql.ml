@@ -1483,6 +1483,7 @@ module Mutations = struct
   open Schema
 
   let verify_command (t : State.t) command =
+    let logger = t.logger in
     let ledger = Ledger.of_database t.db in
     let%bind.Deferred.Result verifiable =
       User_command.to_verifiable ~failed:false
@@ -1505,7 +1506,7 @@ module Mutations = struct
     | Ok (`Valid_assuming _) -> (
         match (command, t.disable_proofs) with
         | Zkapp_command zkapp_command, true ->
-            printf "Invalid proofs omitted because disable_proofs is true\n%!" ;
+            [%log warn] "Invalid proofs omitted because disable_proofs is true" ;
             return
               (Ok
                  ( match Zkapp_command.Valid.to_valid_unsafe zkapp_command with
@@ -1517,7 +1518,7 @@ module Mutations = struct
         let error_str =
           Verifier.invalid_to_error invalid |> Error.to_string_hum
         in
-        printf "Invalid command: %s\n%!" error_str ;
+        [%log error] "Invalid command: %s" error_str ;
         return (Error error_str)
     | Error e ->
         return (Error (Error.to_string_hum e))
@@ -1533,6 +1534,7 @@ module Mutations = struct
       ~resolve:(fun { ctx = t; _ } ()
                     (signer, to_, amount, fee, valid_until, memo, nonce_opt)
                     signature ->
+        let logger = t.logger in
         let payload =
           Signed_command.Payload.create ~fee:(Fee.of_uint64 fee)
             ~fee_payer_pk:signer
@@ -1570,15 +1572,15 @@ module Mutations = struct
         let%bind.Deferred.Result () =
           match State.add_command_to_pool t ~command:valid with
           | `Applied ->
-              printf "Applied with hash %s\n%!"
+              [%log info] "Applied with hash %s"
                 (Transaction_hash.to_base58_check hash) ;
               return (Ok ())
           | `Enqueued ->
-              printf "Enqueued with hash %s\n%!"
+              [%log info] "Enqueued with hash %s"
                 (Transaction_hash.to_base58_check hash) ;
               return (Ok ())
           | `Failed err ->
-              printf "Failed with hash %s, error: %s\n%!"
+              [%log error] "Failed with hash %s, error: %s"
                 (Transaction_hash.to_base58_check hash)
                 (Error.to_string_hum err) ;
               return (Error (Error.to_string_hum err))

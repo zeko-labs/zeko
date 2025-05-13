@@ -22,7 +22,8 @@ let enqueue t f =
       let%map result = f () in
       result )
 
-let enqueue_prove_transfer_request t ~key ~zkapp_pk ~(transfer : Transfer.t) =
+let enqueue_prove_transfer_request t ~logger ~key ~zkapp_pk
+    ~(transfer : Transfer.t) =
   Throttle.enqueue t.q (fun () ->
       let%bind result =
         try_with (fun () ->
@@ -40,14 +41,15 @@ let enqueue_prove_transfer_request t ~key ~zkapp_pk ~(transfer : Transfer.t) =
             Transfer.Transfers_memory.add t.transfers_memory key
               (Ok (Zkapp_command.Call_forest.cons_tree tree []))
         | Error e ->
-            printf "Warning: prove_transfer_request failed %s\n%!"
+            [%log error] "Warning: prove_transfer_request failed %s"
               (Exn.to_string e) ;
             Transfer.Transfers_memory.add t.transfers_memory key
               (Error (Exn.to_string e))
       in
       return () )
 
-let enqueue_prove_transfer_claim t ~key ~zkapp_pk ~(claim : Transfer.claim) =
+let enqueue_prove_transfer_claim t ~logger ~key ~zkapp_pk
+    ~(claim : Transfer.claim) =
   Throttle.enqueue t.q (fun () ->
       let%bind result =
         try_with (fun () ->
@@ -75,7 +77,7 @@ let enqueue_prove_transfer_claim t ~key ~zkapp_pk ~(claim : Transfer.claim) =
         | Ok forest ->
             Transfer.Transfers_memory.add t.transfers_memory key (Ok forest)
         | Error e ->
-            printf "Warning: prove_transfer_claim failed %s\n%!"
+            [%log error] "Warning: prove_transfer_claim failed %s"
               (Exn.to_string e) ;
             Transfer.Transfers_memory.add t.transfers_memory key
               (Error (Exn.to_string e))
