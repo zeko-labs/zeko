@@ -149,6 +149,11 @@ module Sequencer = struct
           Option.value_exn state.previous_committed_ledger
             ~message:"No previous committed ledger"
         in
+        assert (
+          not
+          @@ Field.equal
+               (Sparse_ledger.merkle_root new_inner_ledger)
+               (Sparse_ledger.merkle_root old_inner_ledger) ) ;
         let commit_witness : Committer.Commit_witness.t =
           { old_inner_ledger
           ; new_inner_ledger
