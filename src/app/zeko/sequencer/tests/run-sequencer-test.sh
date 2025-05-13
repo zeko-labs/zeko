@@ -1,5 +1,16 @@
 #!/bin/bash
 
+cleanup() {
+    local exit_status=$1
+    echo "Cleaning up..."
+    kill $l1_pid $da_pid $prover1_pid $prover2_pid 2>/dev/null
+    rm -rf "$TMP_DIR"
+    exit ${exit_status:-0}
+}
+
+trap 'cleanup 1' SIGINT SIGTERM
+trap 'cleanup $?' EXIT
+
 if [ "$1" = "fake" ] || [ "$1" = "real" ]; then
     echo "Mode: $1"
     MODE=$1
@@ -65,7 +76,3 @@ if [ "$MODE" = "fake" ]; then
 else
     $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe
 fi
-
-rm -rf "$TMP_DIR"
-
-kill $l1_pid $da_pid $prover1_pid $prover2_pid
