@@ -31,9 +31,9 @@ module type Intf = sig
 
     type id = string
 
-    val is_empty : t -> bool
-
     val wait_till_finished : t -> Merge.t Deferred.t
+
+    val base_jobs_count : t -> int
   end
 
   module With_id : sig
@@ -97,6 +97,7 @@ end) :
       ; finished : Finished_job.t Ivar.t  (** All jobs are done *)
       ; ready_to_commit : unit Ivar.t
             (** All jobs are done and ready to commit *)
+      ; mutable base_jobs : int  (** Number of base jobs added to the tree *)
       }
 
     type id = string
@@ -106,6 +107,7 @@ end) :
       ; closed = false
       ; finished = Ivar.create ()
       ; ready_to_commit = Ivar.create ()
+      ; base_jobs = 0
       }
 
     let close t = t.closed <- true
@@ -113,7 +115,8 @@ end) :
     let wait_till_finished t = Ivar.read t.finished
 
     let append_base t ~id ~(data : Base.t) =
-      t.jobs <- t.jobs @ [ With_id.{ id; value = Job_status.Todo (Base data) } ]
+      t.jobs <- t.jobs @ [ With_id.{ id; value = Job_status.Todo (Base data) } ] ;
+      t.base_jobs <- t.base_jobs + 1
 
     let check_if_it's_ready_to_commit t =
       match t with
@@ -195,7 +198,7 @@ end) :
       let%bind result = Base.process ctx data in
       finish_job_exn t ctx ~id ~data:result
 
-    let is_empty t = List.is_empty t.jobs
+    let base_jobs_count t = t.base_jobs
   end
 
   type t = { mutable trees : Tree.t With_id.t list }

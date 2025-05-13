@@ -454,7 +454,7 @@ module Sequencer = struct
     in
     if Field.equal old_synced_outer_action_state processed_pointer then
       (* In case no new actions are to process, we don't need to update inner account *)
-      return old_synced_outer_action_state
+      return (0, old_synced_outer_action_state)
     else
       let%bind tree =
         let%map (body, account_update_digest, calls), proof =
@@ -525,22 +525,27 @@ module Sequencer = struct
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to add witness for inner account update: %s" )
       in
-      return processed_pointer
+      return (List.length processed_new_actions, processed_pointer)
 
   let commit t =
     let logger = t.logger in
     let%bind () = apply_fee_transfer t >>| Or_error.ok_exn in
-    let%bind processed_actions_pointer = update_inner_account t in
+    let%bind processed_actions, processed_actions_pointer =
+      update_inner_account t
+    in
     let target_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.ledger)
         [ Zeko_constants.inner_account_id ]
     in
-    if
+    let tree_leaves =
       Merger.M.current_tree t.merger
-      |> Option.map ~f:(fun tree -> Merger.M.Tree.is_empty tree.value)
-      |> Option.value ~default:true
-    then return ([%log info] "Nothing to commit")
+      |> Option.map ~f:(fun tree -> Merger.M.Tree.base_jobs_count tree.value)
+      |> Option.value ~default:0
+    in
+    (* If the only txn was update of inner account, we don't need to commit *)
+    if tree_leaves = 0 || (tree_leaves = 1 && processed_actions = 1) then
+      return ([%log info] "Nothing to commit")
     else
       Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
         ~commit_witness:
