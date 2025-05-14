@@ -18,6 +18,7 @@ DUNE_PROFILE=devnet dune build
 ## Tests
 
 ```bash
+dune build
 ./tests/run_sequencer_test.sh {fake | real}
 ```
 

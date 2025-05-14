@@ -10,8 +10,8 @@ let constraint_constants = Zeko_constants.constraint_constants
 
 let print_endline = Core.print_endline
 
-let run ~l1_uri ~sk ~ledger_input ~da_nodes ~pause_key ~sequencer_key ~da_key
-    ~network ~account_creation_fee () =
+let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
+    ~sequencer_key ~da_key ~network ~account_creation_fee () =
   let logger = Logger.create () in
   let sender_keypair =
     Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
@@ -38,6 +38,20 @@ let run ~l1_uri ~sk ~ledger_input ~da_nodes ~pause_key ~sequencer_key ~da_key
         | None ->
             L.create_new_account_exn ledger Zeko_constants.inner_account_id
               initial_inner_account ;
+            let () =
+              match faucet_account with
+              | None ->
+                  ()
+              | Some faucet_account ->
+                  let aid =
+                    Account_id.of_public_key
+                      Public_key.(
+                        decompress_exn
+                        @@ Compressed.of_base58_check_exn faucet_account)
+                  in
+                  L.create_new_account_exn ledger aid
+                    (Account.create aid Currency.Balance.max_int)
+            in
             ( None
             , ledger
             , Account_set.of_fields
@@ -171,6 +185,9 @@ let () =
         and ledger_input =
           flag "--ledger-input" (optional string)
             ~doc:"string Path to the json dump of the ledger"
+        and faucet_account =
+          flag "--faucet-account" (optional string)
+            ~doc:"string Faucet public key"
         and da_nodes =
           flag "--da-node" (listed string)
             ~doc:"string Address of the DA node, can be supplied multiple times"
@@ -223,5 +240,13 @@ let () =
         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
         in
-        run ~l1_uri ~sk ~ledger_input ~da_nodes ~pause_key ~sequencer_key
-          ~da_key ~network ~account_creation_fee )
+        let () =
+          match (faucet_account, ledger_input) with
+          | Some _, Some _ ->
+              failwith
+                "Faucet account and ledger input cannot be provided together"
+          | _ ->
+              ()
+        in
+        run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
+          ~sequencer_key ~da_key ~network ~account_creation_fee )
