@@ -32,7 +32,7 @@ module Stable = struct
           (User_command.Stable.V2.t * bool list) option
             (** Optionally add command with corresponding action steps to store the history *)
       }
-    [@@deriving yojson, fields, sexp_of]
+    [@@deriving yojson, fields, sexp]
 
     let to_latest ?(timestamp = Block_time.zero) (t : t) =
       { V2.source_ledger_hash = t.source_ledger_hash

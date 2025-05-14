@@ -71,6 +71,10 @@ let create_and_migrate ?db_dir ~logger =
         ()
       |> caqti_ok_exn ~msg:"Failed to create db pool: %s")
   in
+  let%bind () =
+    Pool.use (fun c -> Db.set_pragmas c ()) pool
+    >>| caqti_ok_exn ~msg:"Failed to set pragmas: %s"
+  in
   let%map () =
     Db.Migration.run ~logger ~target_version:`Latest pool migrations
     >>| caqti_ok_exn ~msg:"Failed to run migrations: %s"

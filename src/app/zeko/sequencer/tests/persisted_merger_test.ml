@@ -80,7 +80,10 @@ let () =
         Db.create_pool ~sqlite_path ()
         |> caqti_ok_exn ~msg:"Failed to create pool: %s"
       in
-      let%bind state = Merger.create_and_requeue ~logger () pool in
+      let db_write_lock = Mutex.create () in
+      let%bind state =
+        Merger.create_and_requeue ~logger () pool db_write_lock
+      in
 
       let data =
         List.map data ~f:(fun data ->
@@ -91,7 +94,7 @@ let () =
         Deferred.List.mapi ~how:`Sequential data ~f:(fun i data ->
             let%bind () =
               Deferred.List.iter ~how:`Sequential data ~f:(fun data ->
-                  Merger.add_job pool state () ~data
+                  Merger.add_job pool db_write_lock state () ~data
                   >>| caqti_ok_exn ~msg:"Failed to add job: %s" )
             in
             Merger.commit_exn pool state () ~commit_witness:i )
@@ -138,7 +141,10 @@ let () =
       (* Process first half *)
       let%bind () =
         (* Create merger *)
-        let%bind state = Merger.create_and_requeue ~logger () pool in
+        let db_write_lock = Mutex.create () in
+        let%bind state =
+          Merger.create_and_requeue ~logger () pool db_write_lock
+        in
 
         let data1 =
           List.map data1 ~f:(fun data ->
@@ -157,7 +163,7 @@ let () =
           Deferred.List.mapi ~how:`Sequential data1 ~f:(fun i data ->
               let%bind () =
                 Deferred.List.iter ~how:`Sequential data ~f:(fun data ->
-                    Merger.add_job pool state () ~data
+                    Merger.add_job pool db_write_lock state () ~data
                     >>| caqti_ok_exn ~msg:"Failed to add job: %s" )
               in
               Merger.commit_exn pool state () ~commit_witness:i )
@@ -169,7 +175,7 @@ let () =
           Deferred.List.iteri ~how:`Sequential data2 ~f:(fun i data ->
               let%map () =
                 Deferred.List.iter ~how:`Sequential data ~f:(fun data ->
-                    Merger.add_job pool state () ~data
+                    Merger.add_job pool db_write_lock state () ~data
                     >>| caqti_ok_exn ~msg:"Failed to add job: %s" )
               in
               don't_wait_for @@ Deferred.ignore_m
@@ -196,7 +202,10 @@ let () =
       (* Process second half *)
       let%bind () =
         (* Create merger *)
-        let%bind state = Merger.create_and_requeue ~logger () pool in
+        let db_write_lock = Mutex.create () in
+        let%bind state =
+          Merger.create_and_requeue ~logger () pool db_write_lock
+        in
 
         let%map result = Merger.commit_exn pool state () ~commit_witness:0 in
 

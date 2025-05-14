@@ -193,6 +193,7 @@ module Sequencer = struct
     { ledger : L.Db.t
     ; imt : Indexed_merkle_tree.Db.t
     ; db_pool : Relational_db.Db.pool
+    ; db_write_lock : Mutex.t
     ; logger : Logger.t
     ; archive : Archive.t
     ; config : Config.t
@@ -432,7 +433,8 @@ module Sequencer = struct
         ~ledger_openings:source_ledger ~diff
         ~target_ledger_hash:(L.Db.merkle_root t.ledger)
     in
-    Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
+    Merger.P.add_job t.db_pool t.db_write_lock t.merger t.merger_ctx
+      ~data:witness
     >>| Result.map_error ~f:(fun e -> Error.of_string (Caqti_error.show e))
 
   let update_inner_account t =
@@ -525,7 +527,8 @@ module Sequencer = struct
       in
       let%bind () =
         Deferred.List.iter ~how:`Sequential witnesses ~f:(fun witness ->
-            Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
+            Merger.P.add_job t.db_pool t.db_write_lock t.merger t.merger_ctx
+              ~data:witness
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to add witness for inner account update: %s" )
       in
@@ -698,9 +701,10 @@ module Sequencer = struct
         }
     in
     let%bind db_pool = Db.create_and_migrate ?db_dir ~logger in
+    let db_write_lock = Mutex.create () in
     let da_client =
       Da_layer.Client.create ~logger ~config:da_config ~quorum:da_quorum
-        ~db_pool
+        ~db_pool ~db_write_lock
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let provers =
@@ -725,11 +729,14 @@ module Sequencer = struct
         ; logger
         }
     in
-    let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
+    let%bind merger =
+      Merger.P.create_and_requeue ~logger merger_ctx db_pool db_write_lock
+    in
     let t =
       { ledger
       ; imt
       ; db_pool
+      ; db_write_lock
       ; logger
       ; archive
       ; config

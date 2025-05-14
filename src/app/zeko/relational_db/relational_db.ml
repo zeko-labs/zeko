@@ -38,6 +38,24 @@ module Db = struct
     let%map.Result pool = Caqti_async.connect_pool ~max_size:30 sqlite_uri in
     (pool, `Uri sqlite_uri)
 
+  let set_pragmas (module Conn : CONNECTION) () =
+    let open Deferred.Result.Let_syntax in
+    let%bind result =
+      Conn.find
+        (Caqti_request.find Caqti_type.unit Caqti_type.string
+           {sql| PRAGMA journal_mode = wal |sql} )
+        ()
+    in
+    assert (String.equal result "wal") ;
+
+    let%map result =
+      Conn.find
+        (Caqti_request.find Caqti_type.unit Caqti_type.int
+           {sql| PRAGMA busy_timeout = 5000 |sql} )
+        ()
+    in
+    assert (result = 5000)
+
   module Migration = struct
     type t =
       { version : int

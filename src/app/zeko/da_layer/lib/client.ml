@@ -13,7 +13,7 @@ module Diff_table = struct
     ; genesis : bool
     ; target_ledger_hash : Ledger_hash.t
     }
-  [@@deriving hlist, fields]
+  [@@deriving hlist, fields, sexp]
 
   let make ~diff ~ledger_openings ~target_ledger_hash ~genesis =
     { diff; ledger_openings; target_ledger_hash; genesis }
@@ -55,20 +55,29 @@ module Diff_table = struct
         } )
       Caqti_type.[ string; option string; octets; octets ]
 
-  let insert (module Conn : CONNECTION) t =
-    Conn.exec
-      (Caqti_request.exec typ
-         {sql| INSERT INTO da_diff (target_ledger_hash, source_ledger_hash, diff, ledger_openings)
+  let insert (module Conn : CONNECTION) db_write_lock t =
+    let () = Mutex.lock db_write_lock in
+    Fun.protect
+      ~finally:(fun () -> Mutex.unlock db_write_lock)
+      (fun () ->
+        Conn.exec
+          (Caqti_request.exec typ
+             {sql| INSERT INTO da_diff (target_ledger_hash, source_ledger_hash, diff, ledger_openings)
                 VALUES (?, ?, ?, ?) |sql} )
-      t
+          t )
 
   let get_diff_by_source (module Conn : CONNECTION) ledger_hash =
-    Conn.find_opt
-      (Caqti_request.find_opt
-         Caqti_type.(option string)
-         typ
-         {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings FROM da_diff WHERE source_ledger_hash = ? |sql} )
-      (Option.map ledger_hash ~f:Ledger_hash.to_decimal_string)
+    match ledger_hash with
+    | Some ledger_hash ->
+        Conn.find_opt
+          (Caqti_request.find_opt Caqti_type.string typ
+             {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings FROM da_diff WHERE source_ledger_hash = ? |sql} )
+          (Ledger_hash.to_decimal_string ledger_hash)
+    | None ->
+        Conn.find_opt
+          (Caqti_request.find_opt Caqti_type.unit typ
+             {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings FROM da_diff WHERE source_ledger_hash IS NULL |sql} )
+          ()
 
   let get_id_by_target (module Conn : CONNECTION) ledger_hash =
     Conn.find_opt
@@ -109,11 +118,15 @@ module Signature_table = struct
         } )
       Caqti_type.[ string; string; octets ]
 
-  let insert (module Conn : CONNECTION) t =
-    Conn.exec
-      (Caqti_request.exec typ
-         {sql| INSERT INTO da_signature (target_ledger_hash, public_key, signature) VALUES (?, ?, ?) |sql} )
-      t
+  let insert (module Conn : CONNECTION) db_write_lock t =
+    let () = Mutex.lock db_write_lock in
+    Fun.protect
+      ~finally:(fun () -> Mutex.unlock db_write_lock)
+      (fun () ->
+        Conn.exec
+          (Caqti_request.exec typ
+             {sql| INSERT INTO da_signature (target_ledger_hash, public_key, signature) VALUES (?, ?, ?) |sql} )
+          t )
 
   let get_signatures (module Conn : CONNECTION) ledger_hash =
     Conn.collect_list
@@ -236,16 +249,18 @@ type t =
   ; config : Config.t
   ; quorum : int  (** The amount of signatures needed when distributing diff *)
   ; db_pool : Db.pool
+  ; db_write_lock : Mutex.t
   ; pushed_diff : unit Condition.t
   ; pushed_signature : unit Condition.t
   ; stop : unit Ivar.t
   }
 
-let create ~logger ~config ~quorum ~db_pool =
+let create ~logger ~config ~quorum ~db_pool ~db_write_lock =
   { logger
   ; config
   ; quorum
   ; db_pool
+  ; db_write_lock
   ; pushed_diff = Condition.create ()
   ; pushed_signature = Condition.create ()
   ; stop = Ivar.create ()
@@ -257,7 +272,7 @@ let enqueue_diff t ~target_ledger_hash ~ledger_openings ~diff ~genesis =
   let%map () =
     Pool.use
       (fun conn ->
-        Diff_table.insert conn
+        Diff_table.insert conn t.db_write_lock
           { diff; ledger_openings; target_ledger_hash; genesis } )
       t.db_pool
     >>| caqti_ok_exn ~msg:"Failed to insert diff into db: %s"
@@ -302,7 +317,7 @@ let rec start_posting_diffs_from t
             let%bind () =
               Pool.use
                 (fun c ->
-                  Signature_table.insert c
+                  Signature_table.insert c t.db_write_lock
                     { target_ledger_hash; public_key; signature } )
                 t.db_pool
               >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s"

@@ -199,7 +199,8 @@ let () =
                   match%map
                     Deferred.List.map ~how:`Sequential witnesses
                       ~f:(fun witness ->
-                        Merger.P.add_job sequencer.db_pool sequencer.merger
+                        Merger.P.add_job sequencer.db_pool
+                          sequencer.db_write_lock sequencer.merger
                           sequencer.merger_ctx ~data:witness )
                     >>| Result.all
                     >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
@@ -266,8 +267,8 @@ let () =
                 match%map
                   Deferred.List.map ~how:`Sequential witnesses
                     ~f:(fun witness ->
-                      Merger.P.add_job sequencer.db_pool sequencer.merger
-                        sequencer.merger_ctx ~data:witness )
+                      Merger.P.add_job sequencer.db_pool sequencer.db_write_lock
+                        sequencer.merger sequencer.merger_ctx ~data:witness )
                   >>| Result.all
                   >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
                 with
@@ -390,7 +391,8 @@ let () =
                   match%map
                     Deferred.List.map ~how:`Sequential witnesses
                       ~f:(fun witness ->
-                        Merger.P.add_job sequencer.db_pool sequencer.merger
+                        Merger.P.add_job sequencer.db_pool
+                          sequencer.db_write_lock sequencer.merger
                           sequencer.merger_ctx ~data:witness )
                     >>| Result.all
                     >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
