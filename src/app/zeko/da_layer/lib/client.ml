@@ -312,7 +312,7 @@ let rec start_posting_diffs_from t
               ~source_ledger_hash:(Some target_ledger_hash) () )
 
 let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
-  let%bind right =
+  let%bind target_id =
     Pool.use
       (fun c -> Diff_table.get_id_by_target c target_ledger_hash)
       t.db_pool
@@ -347,13 +347,17 @@ let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
         | None ->
             return false
       in
-      if mid_found && next_found then go ~left:mid ~right
-      else if mid_found && not next_found then return (Some mid_ledger_hash)
+      if mid_found && not next_found then return (Some mid_ledger_hash)
+      else if mid_found && mid = target_id then return (Some mid_ledger_hash)
+      else if next_found && mid + 1 = target_id then return next_ledger_hash
+      else if (not mid_found) && mid = 1 then return None
+      else if mid_found && next_found then go ~left:mid ~right
       else go ~left ~right:mid
   in
-  go ~left:1 ~right
+  go ~left:1 ~right:target_id
 
-let catch_up t ~node_location ~target_ledger_hash =
+let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+    ~target_ledger_hash =
   let logger = t.logger in
   let%bind last_ledger_hash =
     binary_search_last_ledger_hash t ~node_location ~target_ledger_hash
