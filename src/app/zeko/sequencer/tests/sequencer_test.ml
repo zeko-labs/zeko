@@ -48,6 +48,7 @@ module Sequencer_test_spec = struct
     ; specs : Mina_transaction_logic.For_tests.Transaction_spec.t list
           (* Transaction specs *)
     ; sequencer : Sequencer.t
+    ; da_key : Even_PC.t
     }
 
   let gen ?(delay_deposit = 0) ?db_dir () =
@@ -109,25 +110,22 @@ module Sequencer_test_spec = struct
 
     print_endline "(* Post genesis batch *)" ;
     run (fun () ->
-        match%bind
-          Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
-            ~ledger:ephemeral_ledger
-        with
-        | Ok _ ->
-            return ()
-        | Error e ->
-            Error.raise e ) ;
+        Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
+          ~ledger:ephemeral_ledger ) ;
+
+    print_endline "(* Get da key *)" ;
+    let da_key =
+      run (fun () ->
+          Da_layer.Client.Rpc.get_node_public_key ~logger
+            ~node_location:(List.hd_exn da_config.nodes)
+            ()
+          >>| Or_error.ok_exn >>| Even_PC.create_exn )
+    in
 
     print_endline "(* Deploy zkapp *)" ;
     run (fun () ->
         let sequencer_pk =
           Public_key.compress signer.public_key |> Even_PC.create_exn
-        in
-        let%bind da_key =
-          Da_layer.Client.Rpc.get_node_public_key ~logger
-            ~node_location:(List.hd_exn da_config.nodes)
-            ()
-          >>| Or_error.ok_exn >>| Even_PC.create_exn
         in
         ( print_endline
         @@ Public_key.(
@@ -156,17 +154,17 @@ module Sequencer_test_spec = struct
               Signature_lib.Public_key.(compress zkapp_keypair.public_key)
             ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:2
             ~db_dir ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer ~l1_network_id
-            ~l2_network_id ~deposit_delay_blocks:delay_deposit ~provers )
+            ~l2_network_id ~deposit_delay_blocks:delay_deposit ~provers ~da_key )
     in
 
     Quickcheck.Generator.return
-      { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer }
+      { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer; da_key }
 end
 
 let () =
   print_endline "Started test 'apply commands and commit'" ;
   Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ())
-    ~f:(fun { zkapp_keypair; signer; specs; sequencer; _ } ->
+    ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
       let batch1, batch2 = List.split_n specs 3 in
 
       print_endline "(* Apply first batch *)" ;
@@ -311,7 +309,7 @@ let () =
               ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
               ~da_quorum:1 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
               ~signer ~l1_network_id ~l2_network_id ~deposit_delay_blocks:0
-              ~provers
+              ~provers ~da_key
           in
           return
           @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
@@ -360,7 +358,7 @@ let () =
       (Uuid.to_string @@ Uuid_unix.create ())
   in
   Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ())
-    ~f:(fun { zkapp_keypair; signer; specs; sequencer; _ } ->
+    ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
       let () =
         run (fun () ->
             let%bind () =
@@ -417,7 +415,7 @@ let () =
               ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
               ~da_quorum:1 ~db_dir:(Some db_dir) ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
-              ~deposit_delay_blocks:0 ~provers )
+              ~deposit_delay_blocks:0 ~provers ~da_key )
       in
 
       print_endline "(* Requeue witnesses and commit *)" ;
@@ -441,7 +439,7 @@ let () =
       run (fun () ->
           let%map all_witnesses =
             Relational_db.Pool.use
-              (fun conn -> Merger.P.Witness_row.get_all conn ())
+              (fun conn -> Merger.P.Witness_table.get_all conn ())
               new_sequencer.db_pool
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to get all witnesses: %s"

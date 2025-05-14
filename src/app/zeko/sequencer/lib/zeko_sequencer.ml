@@ -23,6 +23,7 @@ module Sequencer = struct
       ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; network_id : string
       ; deposit_delay_blocks : int
+      ; da_key : Even_PC.t
       }
   end
 
@@ -58,7 +59,7 @@ module Sequencer = struct
 
       type t =
         { provers : Zeko_prover.Client.t
-        ; da_client : Da_layer.Client.Sequencer.t
+        ; da_client : Da_layer.Client.t
         ; executor : Executor.t
         ; config : Config.t
         ; kvdb : Committer.Store.Kvdb.t
@@ -136,15 +137,13 @@ module Sequencer = struct
            } as ctx :
             Context.t ) { new_inner_ledger; processed_actions_pointer }
           txn_snark =
-        let%bind signatures =
-          Da_layer.Client.Sequencer.get_signatures da_client
+        let%bind count, signature =
+          Da_layer.Client.get_signature da_client
+            ~da_key:(Even_PC.to_pc config.da_key)
             ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
-          |> Deferred.map ~f:(fun x ->
-                 Option.value_exn x ~message:"No signatures" )
         in
-        [%log info] "Received %d signatures from da layer"
-          (List.length signatures) ;
-        assert (List.length signatures > 0) ;
+        [%log info] "Received %d signatures from da layer" count ;
+        assert (count > 0) ;
         let old_inner_ledger =
           Option.value_exn state.previous_committed_ledger
             ~message:"No previous committed ledger"
@@ -153,7 +152,7 @@ module Sequencer = struct
           { old_inner_ledger
           ; new_inner_ledger
           ; processed_actions_pointer
-          ; signatures
+          ; signature
           ; txn_snark
           }
         in
@@ -200,7 +199,7 @@ module Sequencer = struct
     ; snark_q : Snark_queue.t
     ; merger : Merger.M.t
     ; merger_ctx : Merger.Context.t
-    ; da_client : Da_layer.Client.Sequencer.t
+    ; da_client : Da_layer.Client.t
     ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
@@ -210,6 +209,7 @@ module Sequencer = struct
     let logger = t.logger in
     [%log info] "Shutting down sequencer" ;
     Ivar.fill t.closed () ;
+    Da_layer.Client.stop t.da_client ;
     L.Db.close t.ledger ;
     Indexed_merkle_tree.Db.close t.imt ;
     Relational_db.Pool.drain t.db_pool
@@ -386,14 +386,16 @@ module Sequencer = struct
                          Zkapp_command.all_account_updates_list command
                          |> List.map ~f:(fun _ -> true) ) )
           in
-          Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
-            ~ledger_openings:source_ledger ~diff
-            ~target_ledger_hash:(Ledger.Db.merkle_root t.ledger) ;
+          let%bind () =
+            Da_layer.Client.enqueue_diff t.da_client ~genesis:false
+              ~ledger_openings:source_ledger ~diff
+              ~target_ledger_hash:(L.Db.merkle_root t.ledger)
+          in
 
           return (Ok witnesses) )
 
   let apply_fee_transfer t =
-    let%bind.Deferred.Result witness =
+    let%bind.Deferred.Result witness, (source_ledger, diff) =
       return
       @@
       let fee = t.merger_ctx.state.fee_excess in
@@ -423,10 +425,12 @@ module Sequencer = struct
           ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
           ~changed_accounts ~command_with_action_step_flags:None
       in
-      Da_layer.Client.Sequencer.enqueue_distribute_diff t.da_client
+      (witness, (source_ledger, diff))
+    in
+    let%bind () =
+      Da_layer.Client.enqueue_diff t.da_client ~genesis:false
         ~ledger_openings:source_ledger ~diff
-        ~target_ledger_hash:(Ledger.Db.merkle_root t.ledger) ;
-      witness
+        ~target_ledger_hash:(L.Db.merkle_root t.ledger)
     in
     Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
     >>| Result.map_error ~f:(fun e -> Error.of_string (Caqti_error.show e))
@@ -583,17 +587,24 @@ module Sequencer = struct
       Da_layer.Client.map_diffs ~logger ~config:da_config
         ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
         ~target_ledger_hash:commited_ledger_hash
-        ~f:(fun ~current_chunk ~chunks_length diff ->
+        ~f:(fun ~current_chunk ~current_diff ~chunks_length diff ->
           assert (
             Ledger_hash.equal
               (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
               (get_root t) ) ;
-          [%log info] "Applying diff with hash %s, progress: %.0f%%"
+          [%log info]
+            "Applying diff with source ledger hash %s, progress: %.0f%%"
             (Ledger_hash.to_decimal_string
                (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) )
             (Float.of_int current_chunk /. Float.of_int chunks_length *. 100.0) ;
+
           (* Apply accounts diff *)
           let mask = L.of_database t.ledger in
+          let ledger_openings =
+            Da_layer.Client.get_openings
+              ~diff:(Da_layer.Diff.drop_time diff)
+              ~ledger:mask
+          in
           let changed_accounts =
             Da_layer.Diff.Stable.Latest.changed_accounts diff
           in
@@ -609,6 +620,15 @@ module Sequencer = struct
                   (Account_id.derive_token_id ~owner:aid)
               in
               () ) ;
+
+          (* Store diff to DA client *)
+          let%bind () =
+            Da_layer.Client.enqueue_diff t.da_client
+              ~diff:(Da_layer.Diff.drop_time diff)
+              ~ledger_openings
+              ~target_ledger_hash:(L.Db.merkle_root t.ledger)
+              ~genesis:(current_chunk = 0 && current_diff = 0)
+          in
 
           (* Add events and actions *)
           let result =
@@ -648,7 +668,7 @@ module Sequencer = struct
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
       ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
-      ~l2_network_id ~deposit_delay_blocks ~provers =
+      ~l2_network_id ~deposit_delay_blocks ~provers ~da_key =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let ledger =
@@ -674,11 +694,13 @@ module Sequencer = struct
         ; signer
         ; network_id = l2_network_id
         ; deposit_delay_blocks
+        ; da_key
         }
     in
+    let%bind db_pool = Db.create_and_migrate ?db_dir ~logger in
     let da_client =
-      Da_layer.Client.Sequencer.create ~logger ~config:da_config
-        ~quorum:da_quorum
+      Da_layer.Client.create ~logger ~config:da_config ~quorum:da_quorum
+        ~db_pool
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let provers =
@@ -691,7 +713,6 @@ module Sequencer = struct
         ~signer ~kvdb ()
     in
     let archive = Archive.create ~kvdb in
-    let%bind db_pool = Db.create_and_migrate ?db_dir ~logger in
     let merger_ctx =
       Merger.Context.
         { provers
@@ -728,9 +749,8 @@ module Sequencer = struct
         ~executor:t.merger_ctx.executor ~archive ~kvdb ~zkapp_pk:config.zkapp_pk
         ~archive_uri:config.archive_uri
     in
-    let%bind () =
-      Da_layer.Client.check_synced_nodes ~logger ~config:da_config
-        ~target_ledger_hash:(get_root t)
+    let () =
+      Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)
     in
     return t
 end

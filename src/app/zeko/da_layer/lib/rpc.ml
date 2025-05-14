@@ -4,7 +4,7 @@ open Mina_ledger
 open Mina_base
 open Signature_lib
 
-(* val post_diff : ledger_openings:Sparse_ledger.t -> diff:Diff.t -> Signature.t *)
+(* val post_diff : ledger_openings:Sparse_ledger.t -> diff:Diff.t -> (Public_key.Compressed.t * Signature.t) *)
 module Post_diff = struct
   module V1 = struct
     module Query = struct
@@ -45,6 +45,15 @@ module Get_diff = struct
     let t : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Get_diff" ~version:2
         ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
+  end
+end
+
+(* val has_diff : Ledger_hash.t -> bool *)
+module Has_diff = struct
+  module V1 = struct
+    let t : (Ledger_hash.t, bool) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Has_diff" ~version:1
+        ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Bool.bin_t
   end
 end
 

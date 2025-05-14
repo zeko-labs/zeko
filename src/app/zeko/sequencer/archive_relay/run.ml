@@ -99,7 +99,7 @@ let sync_archive (t : t) ~hash =
     ~depth:constraint_constants.ledger_depth
     ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.db))
     ~target_ledger_hash:hash
-    ~f:(fun ~current_chunk ~chunks_length diff ->
+    ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
       let ledger = Ledger.of_database t.db in
       let changed_accounts =
         Da_layer.Diff.Stable.Latest.changed_accounts diff

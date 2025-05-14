@@ -4,8 +4,10 @@
  (libraries
   kvdb_base
   zeko_constants
+  relational_db
   ;; mina ;;
   mina_base
+  mina_caqti
   mina_ledger
   signature_lib
   snark_params
@@ -18,4 +20,4 @@
   async
   ppx_version.runtime)
  (preprocess
-  (pps ppx_jane ppx_mina ppx_version)))
+  (pps ppx_jane ppx_mina ppx_version h_list.ppx)))

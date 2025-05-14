@@ -221,7 +221,7 @@ let sync t ~node_location ~ledger_hash =
   Client.map_diffs ~logger ~depth:constraint_constants.ledger_depth
     ~config:(Client.Config.of_node_locations [ node_location ])
     ~source_ledger_hash:`Genesis ~target_ledger_hash:ledger_hash
-    ~f:(fun ~current_chunk ~chunks_length diff ->
+    ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
       let progress = Float.of_int current_chunk /. Float.of_int chunks_length in
       printf "Progress: %.2f%%\n%!" (progress *. 100.0) ;
       let diff = Diff.drop_time diff in
@@ -295,6 +295,9 @@ let implementations t =
             v1_diff )
       ; Rpc.Rpc.implement Rpc_def.Get_diff.V2.t (fun () query ->
             Db.Async.get_diff t.db ~ledger_hash:query )
+      ; (* Has_diff *)
+        Rpc.Rpc.implement Rpc_def.Has_diff.V1.t (fun () query ->
+            Db.Async.has_diff t.db ~ledger_hash:query )
       ; (* Get_all_keys *)
         Rpc.Rpc.implement Rpc_def.Get_all_keys.V1.t (fun () () ->
             Db.Async.get_index t.db )

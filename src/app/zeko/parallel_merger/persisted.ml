@@ -3,7 +3,7 @@ open Async
 open Relational_db
 
 module Make (Merger : In_memory.Intf) = struct
-  module Witness_row = struct
+  module Witness_table = struct
     type t = { tree_id : Merger.Tree.id; witness : string }
     [@@deriving hlist, fields]
 
@@ -43,8 +43,8 @@ module Make (Merger : In_memory.Intf) = struct
     Pool.use
       (with_transaction ~f:(fun conn ->
            let%bind all_witnesses =
-             Witness_row.get_all conn ()
-             >>| List.map ~f:Witness_row.witness
+             Witness_table.get_all conn ()
+             >>| List.map ~f:Witness_table.witness
              >>| List.map ~f:(fun s ->
                      match
                        Merger.Base.of_yojson (Yojson.Safe.from_string s)
@@ -72,7 +72,7 @@ module Make (Merger : In_memory.Intf) = struct
                      ~finish:Fn.id
                    |> snd ) ;
                  let tid = hd in
-                 Witness_row.merge_witnesses_into_tree conn tid
+                 Witness_table.merge_witnesses_into_tree conn tid
                  >>| fun result -> (Some tid, result)
            in
            [%log info]
@@ -87,7 +87,7 @@ module Make (Merger : In_memory.Intf) = struct
     let tid = Merger.add_job t ctx ~data in
     Pool.use
       (fun conn ->
-        Witness_row.(
+        Witness_table.(
           insert conn
             (make ~tree_id:tid
                ~witness:(Yojson.Safe.to_string @@ Merger.Base.to_yojson data) ))
@@ -97,7 +97,7 @@ module Make (Merger : In_memory.Intf) = struct
   let commit_exn pool t ctx ~commit_witness =
     let%bind tree_result, tid = Merger.commit_exn t ctx ~commit_witness in
     let%map _deleted =
-      Pool.use (fun conn -> Witness_row.remove_tree conn tid) pool
+      Pool.use (fun conn -> Witness_table.remove_tree conn tid) pool
       >>| caqti_ok_exn ~msg:"Failed to remove tree: %s"
     in
     tree_result
