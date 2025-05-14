@@ -94,7 +94,8 @@ let send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
         | `Timeout | `Connnection_error | `Parsing_error ->
             let%bind () = after (Time.Span.of_sec cooldown) in
             connection_ref := try_connect where_to_connect ;
-            go ~attempts:(attempts - 1)
+            if attempts > 0 then go ~attempts:(attempts - 1)
+            else return (Prover.Output.Error "Failed to prove")
         | `Ok result ->
             return result
       in
