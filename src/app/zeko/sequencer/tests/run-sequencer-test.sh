@@ -3,7 +3,7 @@
 cleanup() {
     local exit_status=$1
     echo "Cleaning up..."
-    kill $l1_pid $da_pid $prover1_pid $prover2_pid 2>/dev/null
+    kill $l1_pid $da1_pid $da2_pid $prover1_pid $prover2_pid 2>/dev/null
     rm -rf "$TMP_DIR"
     exit ${exit_status:-0}
 }
@@ -29,8 +29,11 @@ TMP_DIR=$(mktemp -d)
 $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet &
 l1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --random-sk --network-id testnet --db-dir "$TMP_DIR/da_db" &
-da_pid=$!
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --random-sk --network-id testnet --db-dir "$TMP_DIR/da1_db" &
+da1_pid=$!
+
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --random-sk --network-id testnet --db-dir "$TMP_DIR/da2_db" &
+da2_pid=$!
 
 if [ "$MODE" = "fake" ]; then
     $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9990 &

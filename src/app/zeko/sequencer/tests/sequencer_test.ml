@@ -22,7 +22,8 @@ let gql_uri =
   ; name = "gql-uri"
   }
 
-let da_config = Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555" ]
+let da_config =
+  Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555"; "127.0.0.1:8556" ]
 
 let provers =
   [ Host_and_port.create ~host:"localhost" ~port:9990
@@ -153,7 +154,7 @@ module Sequencer_test_spec = struct
           Sequencer.create ~logger
             ~zkapp_pk:
               Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-            ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:1
+            ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:2
             ~db_dir ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer ~l1_network_id
             ~l2_network_id ~deposit_delay_blocks:delay_deposit ~provers )
     in
