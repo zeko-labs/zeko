@@ -150,8 +150,28 @@ struct
   type 'conn callback =
     'conn -> Cohttp.Request.t -> Body.t -> response_action Io.t
 
-  let respond_string ~status ~body () =
-    Io.return (`Response (Cohttp.Response.make ~status (), Body.of_string body))
+  (* ZEKO NOTE: add headers *)
+  let respond_string ~status ~body ?(headers = Cohttp.Header.init ()) () =
+    let headers =
+      Cohttp.Header.add headers "Content-Length"
+        (string_of_int (String.length body))
+    in
+    let headers =
+      match Cohttp.Header.get headers "Content-Type" with
+      | Some _ ->
+          headers
+      | None ->
+          Cohttp.Header.add headers "Content-Type" "text/plain"
+    in
+    Io.return
+      (`Response (Cohttp.Response.make ~status ~headers (), Body.of_string body))
+
+  (* ZEKO NOTE: add headers *)
+  let respond_json ~status ~body ?(headers = Cohttp.Header.init ()) () =
+    let headers =
+      Cohttp.Header.replace headers "Content-Type" "application/json"
+    in
+    respond_string ~status ~body ~headers ()
 
   let static_file_response path =
     match Assets.read path with
@@ -178,7 +198,7 @@ struct
         >>= function
         | Ok (`Response data) ->
             let body = Yojson.Basic.to_string data in
-            respond_string ~status:`OK ~body ()
+            respond_json ~status:`OK ~body ()
         | Ok (`Stream stream) ->
             Schema.Io.Stream.close stream ;
             let body =
@@ -187,7 +207,7 @@ struct
             respond_string ~status:`Bad_request ~body ()
         | Error err ->
             let body = Yojson.Basic.to_string err in
-            respond_string ~status:`OK ~body () )
+            respond_json ~status:`OK ~body () )
 
   let make_callback :
          ?auth_keys:Itn_crypto.pubkey list
