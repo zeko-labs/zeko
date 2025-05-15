@@ -24,37 +24,8 @@ let caqti_ok_exn ?msg r =
 module Db = struct
   type pool = (connection, Caqti_error.t) Pool.t
 
-  let create_pool ?sqlite_path () =
-    let uuid = Uuid_unix.create () in
-    let sqlite_uri =
-      Uri.of_string
-        (sprintf "sqlite3:%s"
-           ( match sqlite_path with
-           | None ->
-               Filename.concat Cache_dir.autogen_path (Uuid.to_string uuid)
-           | Some file ->
-               file ) )
-    in
-    let%map.Result pool = Caqti_async.connect_pool ~max_size:30 sqlite_uri in
-    (pool, `Uri sqlite_uri)
-
-  let set_pragmas (module Conn : CONNECTION) () =
-    let open Deferred.Result.Let_syntax in
-    let%bind result =
-      Conn.find
-        (Caqti_request.find Caqti_type.unit Caqti_type.string
-           {sql| PRAGMA journal_mode = wal |sql} )
-        ()
-    in
-    assert (String.equal result "wal") ;
-
-    let%map result =
-      Conn.find
-        (Caqti_request.find Caqti_type.unit Caqti_type.int
-           {sql| PRAGMA busy_timeout = 5000 |sql} )
-        ()
-    in
-    assert (result = 5000)
+  let create_pool ~postgres_uri () =
+    Caqti_async.connect_pool ~max_size:30 postgres_uri
 
   module Migration = struct
     type t =
@@ -130,4 +101,53 @@ module Db = struct
                     migration_applied conn m.version ) ) )
         pool
   end
+end
+
+module For_tests = struct
+  let create_database ~port name =
+    let postgres_uri =
+      Uri.of_string
+        (sprintf "postgresql://postgres:postgres@localhost:%d/postgres" port)
+    in
+    let pool =
+      Db.create_pool ~postgres_uri ()
+      |> caqti_ok_exn ~msg:"Failed to create db pool: %s"
+    in
+    let%map () =
+      Pool.use
+        (fun (module Conn : CONNECTION) ->
+          let%bind.Deferred.Result () =
+            Conn.exec
+              (Caqti_request.exec Caqti_type.unit
+                 (sprintf {sql| DROP DATABASE IF EXISTS %s WITH (FORCE) |sql}
+                    name ) )
+              ()
+          in
+          Conn.exec
+            (Caqti_request.exec Caqti_type.unit
+               (sprintf {sql| CREATE DATABASE %s |sql} name) )
+            () )
+        pool
+      >>| caqti_ok_exn ~msg:"Failed to create database: %s"
+    in
+    Uri.of_string
+      (sprintf "postgresql://postgres:postgres@localhost:%d/%s" port name)
+
+  let drop_database ~port name =
+    let postgres_uri =
+      Uri.of_string
+        (sprintf "postgresql://postgres:postgres@localhost:%d/postgres" port)
+    in
+    let pool =
+      Db.create_pool ~postgres_uri ()
+      |> caqti_ok_exn ~msg:"Failed to create db pool: %s"
+    in
+    Pool.use
+      (fun (module Conn : CONNECTION) ->
+        Conn.exec
+          (Caqti_request.exec Caqti_type.unit
+             (sprintf {sql| DROP DATABASE IF EXISTS %s WITH (FORCE) |sql} name) )
+          () )
+      pool
+    >>| caqti_ok_exn ~msg:"Failed to drop database: %s"
 end

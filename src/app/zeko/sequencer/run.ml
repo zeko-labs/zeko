@@ -10,7 +10,7 @@ module Graphql_cohttp_async =
 module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
-    ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
+    ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~l1_network_id
     ~l2_network_id ~deposit_delay_blocks ~provers ~da_key () =
   let zkapp_pk =
     Option.(
@@ -20,7 +20,7 @@ let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
         Sequencer.create ~logger ~zkapp_pk ~max_pool_size ~da_config ~da_quorum
-          ~db_dir:(Some db_dir) ~l1_uri ~archive_uri
+          ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~l1_network_id ~l2_network_id
           ~deposit_delay_blocks
           ~signer:
@@ -84,6 +84,8 @@ let () =
        flag "--db-dir"
          (optional_with_default "db" string)
          ~doc:"string Directory to store the Ledger database"
+     and postgres_uri =
+       flag "--postgres-uri" (required string) ~doc:"string Postgres URI"
      and l1_network_id =
        flag "--l1-network-id"
          (optional_with_default "testnet" string)
@@ -111,8 +113,9 @@ let () =
      in
      let provers = List.map provers ~f:Host_and_port.of_string in
      let logger = Logger.create () in
+     let postgres_uri = Uri.of_string postgres_uri in
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
-       ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
-       ~l2_network_id ~deposit_delay_blocks ~provers ~da_key )
+       ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
+       ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key )
   |> Command_unix.run

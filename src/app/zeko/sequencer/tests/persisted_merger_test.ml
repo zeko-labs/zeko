@@ -64,10 +64,6 @@ let () =
       Quickcheck.Generator.(
         list_with_length 10 (list_with_length 20 Int32.quickcheck_generator))
   in
-  let sqlite_path =
-    Filename.concat Cache_dir.autogen_path
-      (Uuid.to_string @@ Uuid_unix.create ())
-  in
   Thread_safe.block_on_async_exn (fun () ->
       (* Calculate expected results *)
       let expected_results =
@@ -76,14 +72,15 @@ let () =
       in
 
       (* Create merger *)
-      let pool, _ =
-        Db.create_pool ~sqlite_path ()
+      let pool =
+        Db.create_pool
+          ~postgres_uri:
+            (Uri.of_string
+               "postgresql://postgres:postgres@localhost:5433/sequencer" )
+          ()
         |> caqti_ok_exn ~msg:"Failed to create pool: %s"
       in
-      let db_write_lock = Mutex.create () in
-      let%bind state =
-        Merger.create_and_requeue ~logger () pool db_write_lock
-      in
+      let%bind state = Merger.create_and_requeue ~logger () pool in
 
       let data =
         List.map data ~f:(fun data ->
@@ -94,7 +91,7 @@ let () =
         Deferred.List.mapi ~how:`Sequential data ~f:(fun i data ->
             let%bind () =
               Deferred.List.iter ~how:`Sequential data ~f:(fun data ->
-                  Merger.add_job pool db_write_lock state () ~data
+                  Merger.add_job pool state () ~data
                   >>| caqti_ok_exn ~msg:"Failed to add job: %s" )
             in
             Merger.commit_exn pool state () ~commit_witness:i )
@@ -118,12 +115,11 @@ let () =
   in
   let data1, data2 = List.split_n data 5 in
 
-  let sqlite_path =
-    Filename.concat Cache_dir.autogen_path
-      (Uuid.to_string @@ Uuid_unix.create ())
-  in
-  let pool, _ =
-    Db.create_pool ~sqlite_path ()
+  let pool =
+    Db.create_pool
+      ~postgres_uri:
+        (Uri.of_string "postgresql://postgres:postgres@localhost:5433/sequencer")
+      ()
     |> caqti_ok_exn ~msg:"Failed to create pool: %s"
   in
 
@@ -141,10 +137,7 @@ let () =
       (* Process first half *)
       let%bind () =
         (* Create merger *)
-        let db_write_lock = Mutex.create () in
-        let%bind state =
-          Merger.create_and_requeue ~logger () pool db_write_lock
-        in
+        let%bind state = Merger.create_and_requeue ~logger () pool in
 
         let data1 =
           List.map data1 ~f:(fun data ->
@@ -163,7 +156,7 @@ let () =
           Deferred.List.mapi ~how:`Sequential data1 ~f:(fun i data ->
               let%bind () =
                 Deferred.List.iter ~how:`Sequential data ~f:(fun data ->
-                    Merger.add_job pool db_write_lock state () ~data
+                    Merger.add_job pool state () ~data
                     >>| caqti_ok_exn ~msg:"Failed to add job: %s" )
               in
               Merger.commit_exn pool state () ~commit_witness:i )
@@ -175,7 +168,7 @@ let () =
           Deferred.List.iteri ~how:`Sequential data2 ~f:(fun i data ->
               let%map () =
                 Deferred.List.iter ~how:`Sequential data ~f:(fun data ->
-                    Merger.add_job pool db_write_lock state () ~data
+                    Merger.add_job pool state () ~data
                     >>| caqti_ok_exn ~msg:"Failed to add job: %s" )
               in
               don't_wait_for @@ Deferred.ignore_m
@@ -202,10 +195,7 @@ let () =
       (* Process second half *)
       let%bind () =
         (* Create merger *)
-        let db_write_lock = Mutex.create () in
-        let%bind state =
-          Merger.create_and_requeue ~logger () pool db_write_lock
-        in
+        let%bind state = Merger.create_and_requeue ~logger () pool in
 
         let%map result = Merger.commit_exn pool state () ~commit_witness:0 in
 

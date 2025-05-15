@@ -13,15 +13,11 @@ module Make (Merger : In_memory.Intf) = struct
       Mina_caqti.Type_spec.custom_type ~to_hlist ~of_hlist
         Caqti_type.[ string; string ]
 
-    let insert (module Conn : CONNECTION) db_write_lock t =
-      let () = Mutex.lock db_write_lock in
-      Fun.protect
-        ~finally:(fun () -> Mutex.unlock db_write_lock)
-        (fun () ->
-          Conn.exec
-            (Caqti_request.exec typ
-               {sql| INSERT INTO parallel_merger (tree_id, witness) VALUES (?, ?) |sql} )
-            t )
+    let insert (module Conn : CONNECTION) t =
+      Conn.exec
+        (Caqti_request.exec typ
+           {sql| INSERT INTO parallel_merger (tree_id, witness) VALUES (?, ?) |sql} )
+        t
 
     let remove_tree (module Conn : CONNECTION) tree_id =
       Conn.collect_list
@@ -34,19 +30,14 @@ module Make (Merger : In_memory.Intf) = struct
         (Caqti_request.collect Caqti_type.unit typ
            {sql| SELECT tree_id, witness FROM parallel_merger ORDER BY id |sql} )
 
-    let merge_witnesses_into_tree (module Conn : CONNECTION) db_write_lock
-        tree_id =
-      let () = Mutex.lock db_write_lock in
-      Fun.protect
-        ~finally:(fun () -> Mutex.unlock db_write_lock)
-        (fun () ->
-          Conn.collect_list
-            (Caqti_request.collect Caqti_type.string Caqti_type.int
-               {sql| UPDATE parallel_merger SET tree_id = ? RETURNING id |sql} )
-            tree_id )
+    let merge_witnesses_into_tree (module Conn : CONNECTION) tree_id =
+      Conn.collect_list
+        (Caqti_request.collect Caqti_type.string Caqti_type.int
+           {sql| UPDATE parallel_merger SET tree_id = ? RETURNING id |sql} )
+        tree_id
   end
 
-  let create_and_requeue ~logger ctx pool db_write_lock =
+  let create_and_requeue ~logger ctx pool =
     let merger = Merger.create () in
     let open Deferred.Result.Let_syntax in
     Pool.use
@@ -81,7 +72,7 @@ module Make (Merger : In_memory.Intf) = struct
                      ~finish:Fn.id
                    |> snd ) ;
                  let tid = hd in
-                 Witness_table.merge_witnesses_into_tree conn db_write_lock tid
+                 Witness_table.merge_witnesses_into_tree conn tid
                  >>| fun result -> (Some tid, result)
            in
            [%log info]
@@ -92,12 +83,12 @@ module Make (Merger : In_memory.Intf) = struct
       pool
     |> Deferred.map ~f:(caqti_ok_exn ~msg:"Failed to requeue merger: %s")
 
-  let add_job pool db_write_lock t ctx ~data =
+  let add_job pool t ctx ~data =
     let tid = Merger.add_job t ctx ~data in
     Pool.use
       (fun conn ->
         Witness_table.(
-          insert conn db_write_lock
+          insert conn
             (make ~tree_id:tid
                ~witness:(Yojson.Safe.to_string @@ Merger.Base.to_yojson data) ))
         )

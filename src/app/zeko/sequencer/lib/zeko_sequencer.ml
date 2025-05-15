@@ -193,7 +193,6 @@ module Sequencer = struct
     { ledger : L.Db.t
     ; imt : Indexed_merkle_tree.Db.t
     ; db_pool : Relational_db.Db.pool
-    ; db_write_lock : Mutex.t
     ; logger : Logger.t
     ; archive : Archive.t
     ; config : Config.t
@@ -433,8 +432,7 @@ module Sequencer = struct
         ~ledger_openings:source_ledger ~diff
         ~target_ledger_hash:(L.Db.merkle_root t.ledger)
     in
-    Merger.P.add_job t.db_pool t.db_write_lock t.merger t.merger_ctx
-      ~data:witness
+    Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
     >>| Result.map_error ~f:(fun e -> Error.of_string (Caqti_error.show e))
 
   let update_inner_account t =
@@ -527,8 +525,7 @@ module Sequencer = struct
       in
       let%bind () =
         Deferred.List.iter ~how:`Sequential witnesses ~f:(fun witness ->
-            Merger.P.add_job t.db_pool t.db_write_lock t.merger t.merger_ctx
-              ~data:witness
+            Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to add witness for inner account update: %s" )
       in
@@ -670,8 +667,8 @@ module Sequencer = struct
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
-      ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
-      ~l2_network_id ~deposit_delay_blocks ~provers ~da_key =
+      ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
+      ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let ledger =
@@ -700,11 +697,10 @@ module Sequencer = struct
         ; da_key
         }
     in
-    let%bind db_pool = Db.create_and_migrate ?db_dir ~logger in
-    let db_write_lock = Mutex.create () in
+    let%bind db_pool = Db.create_and_migrate ~postgres_uri ~logger in
     let da_client =
       Da_layer.Client.create ~logger ~config:da_config ~quorum:da_quorum
-        ~db_pool ~db_write_lock
+        ~db_pool
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let provers =
@@ -729,14 +725,11 @@ module Sequencer = struct
         ; logger
         }
     in
-    let%bind merger =
-      Merger.P.create_and_requeue ~logger merger_ctx db_pool db_write_lock
-    in
+    let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
     let t =
       { ledger
       ; imt
       ; db_pool
-      ; db_write_lock
       ; logger
       ; archive
       ; config
@@ -756,7 +749,7 @@ module Sequencer = struct
         ~executor:t.merger_ctx.executor ~archive ~kvdb ~zkapp_pk:config.zkapp_pk
         ~archive_uri:config.archive_uri
     in
-    let () =
+    let%bind () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)
     in
     return t

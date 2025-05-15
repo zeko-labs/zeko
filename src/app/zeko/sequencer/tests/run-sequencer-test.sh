@@ -5,6 +5,7 @@ cleanup() {
     echo "Cleaning up..."
     kill $l1_pid $da1_pid $da2_pid $da3_pid $prover1_pid $prover2_pid 2>/dev/null
     rm -rf "$TMP_DIR"
+    docker rm -f pg-sequencer 2>/dev/null
     exit ${exit_status:-0}
 }
 
@@ -25,6 +26,13 @@ SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/ze
 export ZEKO_SIGNATURE_KIND=testnet
 
 TMP_DIR=$(mktemp -d)
+
+docker run --rm --name pg-sequencer \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid \
+  -p 5433:5432 \
+  -d postgres:16-alpine
 
 $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet &
 l1_pid=$!

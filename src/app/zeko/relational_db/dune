@@ -8,6 +8,6 @@
   async
   caqti
   caqti-async
-  caqti-driver-sqlite3)
+  caqti-driver-postgresql)
  (preprocess
   (pps ppx_jane ppx_mina)))

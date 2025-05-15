@@ -51,7 +51,7 @@ module Sequencer_test_spec = struct
     ; da_key : Even_PC.t
     }
 
-  let gen ?(delay_deposit = 0) ?db_dir () =
+  let gen ?(delay_deposit = 0) ?db_dir ~postgres_uri () =
     let zkapp_keypair = Keypair.create () in
 
     print_endline "(* Create signer *)" ;
@@ -153,8 +153,9 @@ module Sequencer_test_spec = struct
             ~zkapp_pk:
               Signature_lib.Public_key.(compress zkapp_keypair.public_key)
             ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:2
-            ~db_dir ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer ~l1_network_id
-            ~l2_network_id ~deposit_delay_blocks:delay_deposit ~provers ~da_key )
+            ~db_dir ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
+            ~l1_network_id ~l2_network_id ~deposit_delay_blocks:delay_deposit
+            ~provers ~da_key )
     in
 
     Quickcheck.Generator.return
@@ -163,7 +164,18 @@ end
 
 let () =
   print_endline "Started test 'apply commands and commit'" ;
-  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ())
+
+  let postgres_uri1 =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer1" )
+  in
+  let postgres_uri2 =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer2" )
+  in
+
+  Quickcheck.test ~trials:1
+    (Sequencer_test_spec.gen ~postgres_uri:postgres_uri1 ())
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
       let batch1, batch2 = List.split_n specs 3 in
 
@@ -199,8 +211,7 @@ let () =
                   match%map
                     Deferred.List.map ~how:`Sequential witnesses
                       ~f:(fun witness ->
-                        Merger.P.add_job sequencer.db_pool
-                          sequencer.db_write_lock sequencer.merger
+                        Merger.P.add_job sequencer.db_pool sequencer.merger
                           sequencer.merger_ctx ~data:witness )
                     >>| Result.all
                     >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
@@ -267,8 +278,8 @@ let () =
                 match%map
                   Deferred.List.map ~how:`Sequential witnesses
                     ~f:(fun witness ->
-                      Merger.P.add_job sequencer.db_pool sequencer.db_write_lock
-                        sequencer.merger sequencer.merger_ctx ~data:witness )
+                      Merger.P.add_job sequencer.db_pool sequencer.merger
+                        sequencer.merger_ctx ~data:witness )
                   >>| Result.all
                   >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
                 with
@@ -301,24 +312,44 @@ let () =
             return target_ledger_hash )
       in
 
+      Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown sequencer) ;
+
       print_endline "(* Try to bootstrap again *)" ;
+      let new_sequencer =
+        run (fun () ->
+            let%map new_sequencer =
+              Sequencer.create ~logger
+                ~zkapp_pk:
+                  Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+                ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
+                ~da_quorum:2 ~db_dir:None ~postgres_uri:postgres_uri2
+                ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer ~l1_network_id
+                ~l2_network_id ~deposit_delay_blocks:0 ~provers ~da_key
+            in
+            [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
+              final_ledger_hash ;
+            new_sequencer )
+      in
+
+      Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown new_sequencer) ;
+
+      print_endline "(* Drop database *)" ;
       run (fun () ->
-          let%bind new_sequencer =
-            Sequencer.create ~logger
-              ~zkapp_pk:
-                Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-              ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
-              ~da_quorum:2 ~db_dir:None ~l1_uri:gql_uri ~archive_uri:gql_uri
-              ~signer ~l1_network_id ~l2_network_id ~deposit_delay_blocks:0
-              ~provers ~da_key
-          in
-          return
-          @@ [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
-               final_ledger_hash ) )
+          Relational_db.For_tests.drop_database ~port:5433 "sequencer1" ) ;
+      run (fun () ->
+          Relational_db.For_tests.drop_database ~port:5433 "sequencer2" ) )
 
 let () =
   print_endline "Started test 'dummy signature should fail'" ;
-  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ())
+
+  let postgres_uri =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer" )
+  in
+
+  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~postgres_uri ())
     ~f:(fun { specs; sequencer; _ } ->
       let dummy_signature_command : Zkapp_command.t =
         let command =
@@ -346,7 +377,10 @@ let () =
       | Error e
         when String.is_substring ~substring:"Invalid_signature"
                (Error.to_string_hum e) ->
-          ()
+          run (fun () ->
+              Gc.full_major () ;
+              let%bind () = Sequencer.shutdown sequencer in
+              Relational_db.For_tests.drop_database ~port:5433 "sequencer" )
       | Ok _ ->
           failwith "Transaction should have failed"
       | Error unexpected_error ->
@@ -358,7 +392,11 @@ let () =
     Filename.concat Cache_dir.autogen_path
       (Uuid.to_string @@ Uuid_unix.create ())
   in
-  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ())
+  let postgres_uri =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer" )
+  in
+  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ~postgres_uri ())
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
       let () =
         run (fun () ->
@@ -391,8 +429,7 @@ let () =
                   match%map
                     Deferred.List.map ~how:`Sequential witnesses
                       ~f:(fun witness ->
-                        Merger.P.add_job sequencer.db_pool
-                          sequencer.db_write_lock sequencer.merger
+                        Merger.P.add_job sequencer.db_pool sequencer.merger
                           sequencer.merger_ctx ~data:witness )
                     >>| Result.all
                     >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
@@ -406,11 +443,11 @@ let () =
       in
 
       Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown sequencer) ;
 
       print_endline "(* Restart sequencer *)" ;
       let new_sequencer =
         run (fun () ->
-            let%bind () = Sequencer.shutdown sequencer in
             Sequencer.create ~logger
               ~zkapp_pk:
                 Signature_lib.Public_key.(compress zkapp_keypair.public_key)
@@ -418,7 +455,7 @@ let () =
               ~da_config:
                 (Da_layer.Client.Config.of_string_list
                    [ "127.0.0.1:8555"; "127.0.0.1:8556"; "127.0.0.1:8557" ] )
-              ~da_quorum:3 ~db_dir:(Some db_dir) ~l1_uri:gql_uri
+              ~da_quorum:3 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
               ~deposit_delay_blocks:0 ~provers ~da_key )
       in
@@ -449,7 +486,14 @@ let () =
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to get all witnesses: %s"
           in
-          [%test_eq: int] (List.length all_witnesses) 0 ) )
+          [%test_eq: int] (List.length all_witnesses) 0 ) ;
+
+      Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown new_sequencer) ;
+
+      print_endline "(* Drop database *)" ;
+      run (fun () ->
+          Relational_db.For_tests.drop_database ~port:5433 "sequencer" ) )
 
 (* let () =
    print_endline "Started test 'deposits'" ;
