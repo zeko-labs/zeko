@@ -165,12 +165,22 @@ let init_inner =
     }
   }
 
-let init_outer ~ledger ~sequencer ~pause_key ~da_key ~acc_set =
+(* Not a rule, but instead a spec of how it's supposed to be initialized.
+   In future, could have a circuit to verify that a zkapp account has been initialized
+   correctly with the history as witness.
+
+   Notably, there's nothing that says that the initial ledger must be empty.
+   In fact, it _can't_ be empty, if it's to be useful.
+   There should at least be the inner bridge account in addition
+   to the rollup's own inner account, to facilitate bridges from the
+   outside (L1) to the inside (L2), and vice-versa.
+
+   Since the bridges are a separate contract entirely,
+   they are not included in the spec here, though
+   it is expected that there be only two accounts as mentioned above.
+*)
+let init_outer ~ledger ~sequencer ~pause_key ~da_key =
   assert ledger.(0) = init_inner in (* left-most account must be inner *)
-  assert List.all ~f:(Indexed_merkle_tree.has acc_set)
-    ([ 0
-    ; max
-    ] @ ledger) ;
   { account_id = zeko_pk
   ; permissions = { all_proof with access = None }
   ; app_state =
@@ -180,7 +190,7 @@ let init_outer ~ledger ~sequencer ~pause_key ~da_key ~acc_set =
     ; sequencer
     ; pause_key
     ; da_key
-    ; acc_set
+    ; acc_set = Indexed_merkle_tree.from_list ([ 0 ; max ] @ ledger)
     ; is_paused = false
     }
   }
