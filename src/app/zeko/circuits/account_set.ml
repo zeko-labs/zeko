@@ -195,7 +195,7 @@ include Indexed_merkle_tree.Make (struct
              let- y2 in
              Zeko_as_prover.sub ~x0 ~x1 ~x2 ~y0 ~y1 ~y2 |> As_prover.return )
       in
-      let* first_carry =
+      let* carry =
         exists F.typ
           ~compute:
             (let- x0 in
@@ -223,7 +223,7 @@ include Indexed_merkle_tree.Make (struct
              ; right_input_mi = y1
              ; right_input_hi = y2
              ; sign = Field.of_int 1 |> Field.negate
-             ; carry = first_carry
+             ; carry
              ; field_overflow = Field.(constant typ zero)
              ; foreign_field_modulus0 = Field.zero
              ; foreign_field_modulus1 = Field.zero

@@ -6,12 +6,6 @@ open Bridge_state
 open Zeko_util
 open Checked.Let_syntax
 
-module A = struct
-  include Account_update.Authorization_kind
-
-  type var = Checked.t
-end
-
 module Make (Inputs : sig
   val token_owner_l1 : Account_id.t option
 
