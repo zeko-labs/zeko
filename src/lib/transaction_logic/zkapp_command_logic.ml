@@ -1145,11 +1145,6 @@ module Make (Inputs : Inputs_intf) = struct
         will_succeed
       }
     in
-    (* ZEKO NOTE: For Zeko we don't allow taking fees from failed transactions *)
-    let local_state =
-      with_label ~label:"must succeed" (fun () ->
-          Local_state.add_check local_state Predicate will_succeed )
-    in
     let ( (account_update, remaining, call_stack)
         , account_update_forest
         , local_state
@@ -1965,6 +1960,9 @@ module Make (Inputs : Inputs_intf) = struct
       *)
       global_state
     in
+    (* ZEKO NOTE: Don't allow failed transactions. Maybe not necessary because our custom add_check
+       doesn't allow failures anyway, but we've added this for good measure. *)
+    assert_ ~pos:__POS__ local_state.success ;
     let local_state =
       (* Make sure to reset the local_state at the end of a transaction.
          The following fields are already reset
