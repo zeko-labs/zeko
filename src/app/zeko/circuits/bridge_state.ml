@@ -59,6 +59,7 @@ module Inner_user_state = struct
 end
 
 module Outer_user_state = struct
+  (* NB! Order matters, everything here has to match *)
   type t =
     { next_cancelled_deposit : Checked32.t; next_withdrawal : Checked32.t }
   [@@deriving snarky]
@@ -72,6 +73,71 @@ module Outer_user_state = struct
     [ Whole (Checked32.typ, p.next_cancelled_deposit)
     ; Whole (Checked32.typ, p.next_withdrawal)
     ]
+
+  module Set_or_keep = struct
+    type t =
+      { next_cancelled_deposit : Checked32.var
+      ; set_next_cancelled_deposit : Boolean.var
+      ; next_withdrawal : Checked32.var
+      ; set_next_withdrawal : Boolean.var
+      }
+
+    let of_fields
+        (fields : F.var Zkapp_basic.Set_or_keep.Checked.t Zkapp_state.V.t) : t Checked.t =
+      let (next_cancelled_deposit :: next_withdrawal :: rest) = fields in
+      (* assert that everything else is kept *)
+      let* () =
+        let f acc field =
+          let* () = acc in
+          assert_var __LOC__
+          @@ fun () ->
+          Checked.return @@ Zkapp_basic.Set_or_keep.Checked.is_keep field
+        in
+        Pickles_types.Vector.fold ~init:(Checked.return ()) ~f rest
+      in
+      (* extract is_set and data *)
+      let set_next_cancelled_deposit =
+        Zkapp_basic.Set_or_keep.Checked.is_set next_cancelled_deposit
+      in
+      let next_cancelled_deposit' =
+        Zkapp_basic.Set_or_keep.Checked.data next_cancelled_deposit
+      in
+      (* check that it's equal to some Checked32 (basically range check) *)
+      let* next_cancelled_deposit =
+        exists Checked32.typ
+          ~compute:
+            ( As_prover.read_var next_cancelled_deposit'
+            |> As_prover.map ~f:(fun x ->
+                   Field.to_string x |> Checked32.of_string ) )
+      in
+      let* () =
+        assert_equal ~label:__LOC__ F.typ next_cancelled_deposit'
+          (Checked32.Checked.to_field next_cancelled_deposit)
+      in
+      (* do the same but for next_withdrawal instead of next_cancelled_deposit *)
+      let set_next_withdrawal =
+        Zkapp_basic.Set_or_keep.Checked.is_set next_withdrawal
+      in
+      let next_withdrawal' =
+        Zkapp_basic.Set_or_keep.Checked.data next_withdrawal
+      in
+      let* next_withdrawal =
+        exists Checked32.typ
+          ~compute:
+            ( As_prover.read_var next_withdrawal'
+            |> As_prover.map ~f:(fun x ->
+                   Field.to_string x |> Checked32.of_string ) )
+      in
+      let*| () =
+        assert_equal ~label:__LOC__ F.typ next_withdrawal'
+          (Checked32.Checked.to_field next_withdrawal)
+      in
+      { next_cancelled_deposit
+      ; set_next_cancelled_deposit
+      ; next_withdrawal
+      ; set_next_withdrawal
+      }
+  end
 end
 
 open struct
