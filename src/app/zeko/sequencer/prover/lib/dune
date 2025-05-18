@@ -1,10 +1,13 @@
 (library
  (name zeko_prover)
  (libraries
-  zkapps_rollup
-  mina_lib
+  zeko_circuits
+  zeko_constants
+  zeko_types
+  ;; mina ;;
+  mina_base
   mina_ledger
-  yojson
+  ;; opam ;;
   cohttp
   cohttp-async
   async_kernel)

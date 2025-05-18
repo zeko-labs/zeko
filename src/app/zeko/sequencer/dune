@@ -1,12 +1,8 @@
-(env
- (_
-  (flags
-   (-w -4-48))))
-
 (executable
  (name run)
  (libraries
   sequencer_lib
+  compile_simple_real
   ;; mina ;;
   init
   signature_lib
@@ -23,14 +19,38 @@
   async_unix
   core_unix.command_unix)
  (preprocess
-  (pps ppx_jane))
+  (pps ppx_jane ppx_mina))
  (modules run))
+
+(executable
+ (name run_fake)
+ (libraries
+  sequencer_lib
+  compile_simple_fake
+  ;; mina ;;
+  init
+  signature_lib
+  cli_lib
+  ;; opam libraries ;;
+  cohttp
+  cohttp-async
+  graphql
+  graphql-async
+  core
+  core_kernel
+  async_kernel
+  async
+  async_unix
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_jane ppx_mina))
+ (modules run_fake))
 
 (executable
  (name deploy)
  (libraries
   sequencer_lib
-  zkapps_rollup
+  compile_simple_real
   ;; mina ;;
   mina_base
   mina_numbers
@@ -61,9 +81,44 @@
  (modules deploy))
 
 (executable
+ (name deploy_fake)
+ (libraries
+  sequencer_lib
+  compile_simple_fake
+  ;; mina ;;
+  mina_base
+  mina_numbers
+  mina_ledger
+  pickles
+  pickles_types
+  init
+  signature_lib
+  currency
+  genesis_constants
+  transaction_snark
+  cli_lib
+  ;; opam libraries ;;
+  uri
+  yojson
+  cohttp
+  cohttp-async
+  graphql
+  graphql-async
+  core
+  core_kernel
+  async_kernel
+  async
+  async_unix
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_jane ppx_mina))
+ (modules deploy_fake))
+
+(executable
  (name cli)
  (libraries
   sequencer_lib
+  compile_simple_fake
   ;; mina ;;
   init
   signature_lib
@@ -80,5 +135,5 @@
   async_unix
   core_unix.command_unix)
  (preprocess
-  (pps ppx_jane))
+  (pps ppx_jane ppx_mina))
  (modules cli))

@@ -29,10 +29,20 @@ let run_node =
            ~doc:"Run in testing mode, the signer key will be generated randomly"
        and no_migrations =
          flag "--no-migrations" no_arg ~doc:"Do not run migrations"
+       and network_id =
+         flag "--network-id"
+           (optional_with_default "zeko" string)
+           ~doc:"string Network id to use as salt for applying receipts"
        in
        fun () ->
          let signer =
-           if testing_mode then Private_key.(create () |> to_base58_check)
+           if testing_mode then
+             let rec create_even_signer () =
+               let signer = Keypair.create () in
+               let compressed = Public_key.compress signer.public_key in
+               if compressed.is_odd then create_even_signer () else signer
+             in
+             (create_even_signer ()).private_key |> Private_key.to_base58_check
            else Sys.getenv_exn "MINA_PRIVATE_KEY"
          in
          let logger = Logger.create () in
@@ -51,13 +61,21 @@ let run_node =
            | _ ->
                failwith "Both node-to-sync and hash-to-sync must be provided"
          in
+         let chain =
+           match network_id with
+           | "mainnet" ->
+               Mina_signature_kind.Mainnet
+           | "testnet" ->
+               Mina_signature_kind.Testnet
+           | network_id ->
+               Mina_signature_kind.Other_network network_id
+         in
          let%bind () =
            Deferred.ignore_m
-           @@ Da_layer.Node.create_server ~sync_arg ~logger ~port ~db_dir
+           @@ Da_layer.Node.create_server ~chain ~sync_arg ~logger ~port ~db_dir
                 ~signer_sk:signer ~no_migrations ()
          in
-         [%log info] "Server started on port $port"
-           ~metadata:[ ("port", `Int port) ] ;
+         [%log info] "Server started on port %d" port ;
          Async.never () ) )
 
 let sync_node =
@@ -101,7 +119,7 @@ let sync_node =
              let progress =
                Float.of_int current_chunk /. Float.of_int chunks_length
              in
-             Zeko_util.progress_bar progress ;
+             printf "Progress: %.2f%%\n%!" (progress *. 100.0) ;
              let diff = Da_layer.Diff.drop_time diff in
              let ledger_openings = Da_layer.Client.get_openings ~diff ~ledger in
              match%bind
@@ -111,8 +129,7 @@ let sync_node =
              | Ok _signature ->
                  return ()
              | Error e ->
-                 [%log warn] "Error posting diff: $error"
-                   ~metadata:[ ("error", `String (Error.to_string_hum e)) ] ;
+                 [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;
                  Error.raise e )
          >>| Or_error.ok_exn >>| ignore ) )
 

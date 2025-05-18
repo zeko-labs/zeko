@@ -6,7 +6,9 @@ open Mina_transaction
 module Ledger = Mina_ledger.Ledger
 open Signature_lib
 open Currency
+module Tmp = State
 open Sequencer_lib
+module State = Tmp
 module Schema = Graphql_wrapper.Make (Schema)
 
 module Types = struct
@@ -1219,7 +1221,7 @@ module Types = struct
     module SendZkappInput = struct
       type input = Mina_base.Zkapp_command.t
 
-      let arg_typ =
+      let arg_typ ~chain =
         let conv
             (x :
               Mina_base.Zkapp_command.t
@@ -1228,12 +1230,12 @@ module Types = struct
           Obj.magic x
         in
         let arg_typ =
-          { arg_typ = Mina_base.Zkapp_command.arg_typ () |> conv
+          { arg_typ = Mina_base.Zkapp_command.arg_typ ~chain () |> conv
           ; to_json =
               (function
               | x ->
                   Yojson.Safe.to_basic
-                    (Mina_base.Zkapp_command.zkapp_command_to_json x) )
+                    (Mina_base.Zkapp_command.zkapp_command_to_json ~chain x) )
           }
         in
         obj "SendZkappInput" ~coerce:Fn.id
@@ -1480,6 +1482,47 @@ end
 module Mutations = struct
   open Schema
 
+  let verify_command (t : State.t) command =
+    let logger = t.logger in
+    let ledger = Ledger.of_database t.db in
+    let%bind.Deferred.Result verifiable =
+      User_command.to_verifiable ~failed:false
+        ~find_vk:
+          (Zkapp_command.Verifiable.load_vk_from_ledger ~get:(Ledger.get ledger)
+             ~location_of_account:(Ledger.location_of_account ledger) )
+        command
+      |> Result.map_error ~f:Error.to_string_hum
+      |> return
+    in
+    match%bind
+      try_with (fun () ->
+          Verifier.verify_command ~signature_kind:t.signature_kind
+            { data = verifiable; status = Applied } )
+      >>| Result.map_error ~f:Error.of_exn
+      >>| Result.join
+    with
+    | Ok (`Valid valid) ->
+        return (Ok valid)
+    | Ok (`Valid_assuming _) -> (
+        match (command, t.disable_proofs) with
+        | Zkapp_command zkapp_command, true ->
+            [%log warn] "Invalid proofs omitted because disable_proofs is true" ;
+            return
+              (Ok
+                 ( match Zkapp_command.Valid.to_valid_unsafe zkapp_command with
+                 | `If_this_is_used_it_should_have_a_comment_justifying_it c ->
+                     User_command.Zkapp_command c ) )
+        | _, _ ->
+            return (Error "Invalid zkapp proof") )
+    | Ok (#Verifier.invalid as invalid) ->
+        let error_str =
+          Verifier.invalid_to_error invalid |> Error.to_string_hum
+        in
+        [%log error] "Invalid command: %s" error_str ;
+        return (Error error_str)
+    | Error e ->
+        return (Error (Error.to_string_hum e))
+
   let send_payment =
     io_field "sendPayment" ~doc:"Send a payment"
       ~typ:(non_null Types.Payload.send_payment)
@@ -1489,11 +1532,12 @@ module Mutations = struct
           ; Types.Input.Fields.signature
           ]
       ~resolve:(fun { ctx = t; _ } ()
-                    (from, to_, amount, fee, valid_until, memo, nonce_opt)
+                    (signer, to_, amount, fee, valid_until, memo, nonce_opt)
                     signature ->
+        let logger = t.logger in
         let payload =
           Signed_command.Payload.create ~fee:(Fee.of_uint64 fee)
-            ~fee_payer_pk:from
+            ~fee_payer_pk:signer
             ~nonce:(Option.value ~default:Unsigned.UInt32.zero nonce_opt)
             ~valid_until:
               (Option.map valid_until
@@ -1505,63 +1549,65 @@ module Mutations = struct
               (Signed_command_payload.Body.Payment
                  { receiver_pk = to_; amount = Amount.of_uint64 amount } )
         in
-        let%bind.Deferred.Result command =
+        let%bind.Deferred.Result signature =
           match signature with
-          | None ->
-              return (Error "Signature needed")
-          | Some signature -> (
-              let%bind.Deferred.Result signature =
-                signature |> Deferred.return
-              in
-              match
-                Signed_command.create_with_signature_checked
-                  ~signature_kind:Mina_signature_kind.Testnet signature from
-                  payload
-              with
-              | Some command ->
-                  return (Ok command)
-              | None ->
-                  return (Error "Signature verification failed") )
+          | Some (Ok s) ->
+              return (Ok s)
+          | _ ->
+              return (Error "No signature")
         in
-        let%bind.Deferred.Result status =
-          match
-            State.add_command_to_pool t ~command:(Signed_command command)
-          with
+        let command =
+          Signed_command.Poly.
+            { signature
+            ; signer =
+                Public_key.decompress signer
+                |> Option.value_exn ~message:"Invalid signer"
+            ; payload
+            }
+        in
+        let%bind.Deferred.Result valid =
+          verify_command t (Signed_command command)
+        in
+        let hash = Transaction_hash.hash_command (Signed_command command) in
+        let%bind.Deferred.Result () =
+          match State.add_command_to_pool t ~command:valid with
           | `Applied ->
-              return (Ok Types.Command_status.Applied)
+              [%log info] "Applied with hash %s"
+                (Transaction_hash.to_base58_check hash) ;
+              return (Ok ())
           | `Enqueued ->
-              return (Ok Types.Command_status.Enqueued)
+              [%log info] "Enqueued with hash %s"
+                (Transaction_hash.to_base58_check hash) ;
+              return (Ok ())
           | `Failed err ->
+              [%log error] "Failed with hash %s, error: %s"
+                (Transaction_hash.to_base58_check hash)
+                (Error.to_string_hum err) ;
               return (Error (Error.to_string_hum err))
         in
-        let command = Signed_command.forget_check command in
         let cmd =
           { Types.User_command.With_status.data = command; status = Applied }
         in
         let cmd_with_hash =
           Types.User_command.With_status.map cmd ~f:(fun cmd ->
-              { With_hash.data = cmd
-              ; hash = Transaction_hash.hash_command (Signed_command cmd)
-              } )
+              { With_hash.data = cmd; hash } )
         in
         Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash) )
 
-  let send_zkapp =
+  let send_zkapp ~chain =
     io_field "sendZkapp" ~doc:"Send a zkApp transaction"
       ~typ:(non_null Types.Payload.send_zkapp)
       ~args:
-        Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
+        Arg.
+          [ arg "input"
+              ~typ:(non_null (Types.Input.SendZkappInput.arg_typ ~chain))
+          ]
       ~resolve:(fun { ctx = t; _ } () zkapp_command ->
-        let command =
-          match Zkapp_command.Valid.to_valid_unsafe zkapp_command with
-          (* FIXME: check zkapp command if needed *)
-          | `If_this_is_used_it_should_have_a_comment_justifying_it command ->
-              command
+        let%bind.Deferred.Result command =
+          verify_command t (Zkapp_command zkapp_command)
         in
         let%bind.Deferred.Result status =
-          match
-            State.add_command_to_pool t ~command:(Zkapp_command command)
-          with
+          match State.add_command_to_pool t ~command with
           | `Applied ->
               return (Ok Types.Command_status.Applied)
           | `Enqueued ->
@@ -1606,7 +1652,8 @@ module Mutations = struct
       ~args:Arg.[]
       ~resolve:(fun { ctx = t; _ } () -> State.create_new_block t ; "Created")
 
-  let commands = [ send_payment; send_zkapp; create_account; create_new_block ]
+  let commands ~chain =
+    [ send_payment; send_zkapp ~chain; create_account; create_new_block ]
 end
 
 module Queries = struct
@@ -1885,6 +1932,6 @@ module Queries = struct
     @ Archive.commands
 end
 
-let schema =
+let schema ~chain =
   Graphql_async.Schema.(
-    schema Queries.commands ~mutations:Mutations.commands ~subscriptions:[])
+    schema Queries.commands ~mutations:(Mutations.commands ~chain))

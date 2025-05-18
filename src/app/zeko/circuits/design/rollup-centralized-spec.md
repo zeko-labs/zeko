@@ -3,6 +3,9 @@
 Everything besides `do_inner_step` happens on the L1, i.e. host ledger.
 
 ```ocaml
+val inner_pk : Public_key.t
+val zeko_pk : Public_key.t
+
 type ledger = account list
 
 type commit =
@@ -31,6 +34,8 @@ type outer_app_state =
   ; inner_action_state_length : nat
   ; sequencer : public_key
   ; pause_key : public_key
+  ; da_key : public_key
+  ; acc_set : indexed_merkle_tree
   ; is_paused : bool
   }
 
@@ -67,6 +72,7 @@ let do_commit
   ~old_inner_action_state_length
   ~unsynchronized_actions
   ~pause_key
+  ~da_key
   =
   (* doesn't need to be at the same time as macroslot,
      can be early or late depending on other factors *)
@@ -108,6 +114,8 @@ let do_commit
       ; sequencer
       ; paused = false
       ; pause_key
+      ; da_key
+      ; acc_set = txn_snark.target_acc_set
       }
     ; preconditions =
       { app_state =
@@ -117,6 +125,8 @@ let do_commit
         ; sequencer
         ; paused = false
         ; pause_key
+        ; da_key
+        ; acc_set = txn_snark.source_acc_set
         }
       ; valid_while
       ; action_state
@@ -146,4 +156,32 @@ let do_witness_inner ~aux ~children =
     }
   ]
 
+let init_inner =
+  { account_id = inner_pk
+  ; permissions = { all_proof with access = None }
+  ; app_state =
+    { outer_action_state = empty_action_state
+    ; outer_action_state_length = 0
+    }
+  }
+
+let init_outer ~ledger ~sequencer ~pause_key ~da_key ~acc_set =
+  assert ledger.(0) = init_inner in (* left-most account must be inner *)
+  assert List.all ~f:(Indexed_merkle_tree.has acc_set)
+    ([ 0
+    ; max
+    ] @ ledger) ;
+  { account_id = zeko_pk
+  ; permissions = { all_proof with access = None }
+  ; app_state =
+    { ledger
+    ; inner_action_state = empty_action_state
+    ; inner_action_state_length = 0
+    ; sequencer
+    ; pause_key
+    ; da_key
+    ; acc_set
+    ; is_paused = false
+    }
+  }
 ```

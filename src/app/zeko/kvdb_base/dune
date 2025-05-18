@@ -3,8 +3,9 @@
  (inline_tests)
  (libraries
   ;; mina ;;
-  mina_base
-  mina_base.import
   mina_ledger
   ;; opam libraries ;;
-  core_kernel))
+  yojson
+  core_kernel)
+ (preprocess
+  (pps ppx_jane ppx_mina ppx_version)))

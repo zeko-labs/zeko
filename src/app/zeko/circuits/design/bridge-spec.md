@@ -55,7 +55,7 @@ type outer_state =
   ; enable_offset_upper : nat
   ; enable_period : nat
   ; disabled_vk : vk
-  ; enabled_vk ; vk
+  ; enabled_vk : vk
   } (* maybe should be ints? *)
 
 type outer_helper_state =
@@ -74,6 +74,7 @@ type deposit_params =
   ; children : call_forest
   ; deposit : deposit
   ; holder_account_l1
+  ; authorization_kind
   }
 
 (* L1 *)
@@ -84,7 +85,7 @@ let deposit_action (params : deposit_params) : outer_action =
     ; token_id = token_id_l1
     ; balance_change = params.deposit.amount
     ; may_use_token = Parents_own_token
-    ; authorization_kind = None
+    ; authorization_kind = params.authorization_kind
     }
   in
   let a' =
@@ -150,6 +151,15 @@ let check_accepted ~deposit ~actions_after_deposit ~deposit_index =
     | `Accepted -> fun _ -> `Accepted
   in
   List.fold_right ~init:`Unknown ~f actions_after_deposit
+
+(* L2, necessary because access = Proof *)
+let do_inner_receive =
+  assert amount > 0 ;
+  { account_id = account_id_l2
+  ; balance_change = amount
+  ; authorization_kind = Proof
+  ; may_use_token = Parents_own_token
+  }
 
 (* L2 *)
 let do_finalize_deposit
@@ -361,13 +371,20 @@ let do_finalize_withdrawal
   let withdrawal = withdrawal_params.withdrawal in
   assert prev_next_withdrawal <= withdrawal_index ;
   let inner_action_state =
-    List.append actions_after_withdrawal withdraw_action withdrawal_params :: action_state_before_withdrawal
+    List.append actions_after_withdrawal @@ withdraw_action withdrawal_params :: action_state_before_withdrawal
   in
   let outer_action_state =
     List.append actions_after_commit @@ Commit commit :: action_state_before_commit
   in
-  assert commit.inner_action_state = inner_action_state ;
   let inner_action_state_length = List.length actions_after_withdrawal + 1 + withdrawal_index in
+  (* FIXME: It isn't checked whether inner_action_state is still valid, it's only inferred
+     that it is from the Commit action.
+     This is safe unless the inner_action_state is forcibly changed, after which point
+     you'd also have to fix the circuit to check that the inner_action_state is
+     still valid or do some other kind of thing to prevent the invalid actions from being used.
+  *)
+  assert commit.inner_action_state = inner_action_state ;
+  assert commit.inner_action_state_length = inner_action_state_length ;
   { account_id = holder_account_l1
   ; balance_change = -withdrawal.amount
   ; may_use_token
@@ -396,7 +413,7 @@ let do_finalize_withdrawal
       ; authorization_kind = outer_authorization_kind
       ; preconditions =
         { action_state = outer_action_state
-        ; app_state = { inner_action_state ; inner_action_state_length ; paused = false }
+        ; app_state = { paused = false }
         ; valid_while =
           { lower = commit.valid_while.upper + withdrawal_delay
           ; upper = infinity }
@@ -456,6 +473,38 @@ let do_enable ~enabled_vk ~enable_offset_lower ~enable_offset_upper ~enable_peri
       ; enabled_vk
       }
     }
+  }
+```
+
+Init state
+```ocaml
+let init_inner =
+  { Account.empty with
+  ; account_id = account_id_l2
+  ; balance = Currency.Amount.max
+  ; permissions = all_proof
+  }
+
+let init_outer =
+  { Account.empty with
+  ; account_id = account_id_l1
+  ; app_state =
+    { disable_offset_lower = (* figure out *)
+    ; disable_offset_upper = (* figure out *)
+    ; disable_period = (* figure out *)
+    ; enable_offset_lower = (* figure out *)
+    ; enable_offset_upper = (* figure out *)
+    ; enable_period = (* figure out *)
+    ; disabled_vk
+    ; enabled_vk
+    }
+  ; permissions = { all_proof with access = None ; receive = None }
+  }
+
+let init_outer_token_owner =
+  { Account.empty with
+  ; public_key = helper_token_owner_l1
+  ; permissions = all_proof
   }
 ```
 

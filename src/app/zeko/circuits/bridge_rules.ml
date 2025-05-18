@@ -58,22 +58,31 @@ struct
     Rule_bridge_finalize_withdrawal.Make (Inputs)
   module Rule_bridge_disable = Rule_bridge_disable.Make (Inputs)
   module Rule_bridge_enable = Rule_bridge_enable.Make (Inputs)
+  module Rule_bridge_inner_receive = Rule_bridge_inner_receive.Make (Inputs)
 
-  module System_L1 =
+  module System_L1_enabled =
   ( val Compile_simple.compile ~name:"bridge rules for mina l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
           ~branches:
             [ Rule_bridge_finalize_cancelled_deposit.rule
             ; Rule_bridge_finalize_withdrawal.rule
             ; Rule_bridge_disable.rule
-            ; Rule_bridge_enable.rule
             ]
+          () )
+
+  module System_L1_disabled =
+  ( val Compile_simple.compile ~name:"bridge rules for mina l1"
+          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~branches:[ Rule_bridge_enable.rule ]
           () )
 
   module System_L2 =
   ( val Compile_simple.compile ~name:"bridge rules for mina l2"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:[ Rule_bridge_finalize_deposit.rule ]
+          ~branches:
+            [ Rule_bridge_finalize_deposit.rule
+            ; Rule_bridge_inner_receive.rule
+            ]
           () )
 end
 
@@ -137,21 +146,30 @@ struct
     Rule_bridge_finalize_withdrawal.Make (Inputs)
   module Rule_bridge_disable = Rule_bridge_disable.Make (Inputs)
   module Rule_bridge_enable = Rule_bridge_enable.Make (Inputs)
+  module Rule_bridge_inner_receive = Rule_bridge_inner_receive.Make (Inputs)
 
-  module System_L1 =
+  module System_L1_enabled =
   ( val Compile_simple.compile ~name:"bridge rules for custom l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
           ~branches:
             [ Rule_bridge_finalize_cancelled_deposit.rule
             ; Rule_bridge_finalize_withdrawal.rule
             ; Rule_bridge_disable.rule
-            ; Rule_bridge_enable.rule
             ]
+          () )
+
+  module System_L1_disabled =
+  ( val Compile_simple.compile ~name:"bridge rules for custom l1"
+          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~branches:[ Rule_bridge_enable.rule ]
           () )
 
   module System_L2 =
   ( val Compile_simple.compile ~name:"bridge rules for custom l2"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:[ Rule_bridge_finalize_deposit.rule ]
+          ~branches:
+            [ Rule_bridge_finalize_deposit.rule
+            ; Rule_bridge_inner_receive.rule
+            ]
           () )
 end

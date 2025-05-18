@@ -1,6 +1,7 @@
 (env
  (_
-  (flags (:standard -w @a-42-40-44-70-45-41))))
+  (flags
+   (:standard -w @a-42-40-44-70-45-41))))
 
 (library
  (name zeko_circuits)
@@ -10,7 +11,8 @@
   transaction_snark
   staged_ledger_diff
   compile_simple
-  v)
+  v
+  zeko_constants)
  (inline_tests)
  (instrumentation
   (backend bisect_ppx))
@@ -31,6 +33,7 @@
   rule_bridge_finalize_withdrawal
   rule_bridge_finalize_cancelled_deposit
   rule_bridge_finalize_deposit
+  rule_bridge_inner_receive
   check_accepted_make
   bridge_state
   outer_rules

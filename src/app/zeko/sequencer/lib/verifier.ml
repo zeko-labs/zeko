@@ -35,7 +35,7 @@ let invalid_to_error (invalid : invalid) : Error.t =
   | `Invalid_proof err ->
       Error.tag ~tag:"Invalid_proof" err
 
-let check :
+let check ?signature_kind :
        User_command.Verifiable.t With_status.t
     -> [ `Valid of User_command.Valid.t
        | `Valid_assuming of User_command.Valid.t * _ list
@@ -44,7 +44,7 @@ let check :
       if not (Signed_command.check_valid_keys c) then
         `Invalid_keys (Signed_command.public_keys c)
       else
-        match Signed_command.check_only_for_signature c with
+        match Signed_command.check_only_for_signature ?signature_kind c with
         | Some c ->
             `Valid (User_command.Signed_command c)
         | None ->
@@ -66,6 +66,7 @@ let check :
               ~memo_hash:(Signed_command_memo.hash memo)
               ~fee_payer_hash:
                 (Zkapp_command.Digest.Account_update.create
+                   ?chain:signature_kind
                    (Account_update.of_fee_payer fee_payer) )
           in
           let check_signature s pk msg =
@@ -75,7 +76,7 @@ let check :
             | Some pk ->
                 if
                   not
-                    (Signature_lib.Schnorr.Chunked.verify s
+                    (Signature_lib.Schnorr.Chunked.verify ?signature_kind s
                        (Backend.Tick.Inner_curve.of_affine pk)
                        (Random_oracle_input.Chunked.field msg) )
                 then
@@ -147,7 +148,8 @@ let check :
           | _ :: _ ->
               `Valid_assuming (v, valid_assuming) )
 
-let verify_command (command : User_command.Verifiable.t With_status.t) :
+let verify_command ?signature_kind
+    (command : User_command.Verifiable.t With_status.t) :
     [ `Valid of Mina_base.User_command.Valid.t
     | `Valid_assuming of
       ( Pickles.Side_loaded.Verification_key.t
@@ -156,7 +158,7 @@ let verify_command (command : User_command.Verifiable.t With_status.t) :
       list
     | invalid ]
     Deferred.Or_error.t =
-  let checked_command = check command in
+  let checked_command = check ?signature_kind command in
   let to_verify =
     match checked_command with
     | `Valid _ ->

@@ -18,17 +18,8 @@ DUNE_PROFILE=devnet dune build
 ## Tests
 
 ```bash
-# Run local network to imitate L1
-DUNE_PROFILE=devnet dune exec ./tests/testing_ledger/run.exe -- --db-dir l1_db
-
-# Run provers
-DUNE_PROFILE=devnet dune exec ./prover/cli.exe -- run-server --port 9990
-DUNE_PROFILE=devnet dune exec ./prover/cli.exe -- run-server --port 9991
-
-# Run da node
-DUNE_PROFILE=devnet dune exec ../da_layer/cli.exe -- run-node --port 8555 --random-sk
-
-DUNE_PROFILE=devnet dune runtest
+dune build
+./tests/run_sequencer_test.sh {fake | real}
 ```
 
 ## Run

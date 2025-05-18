@@ -51,13 +51,36 @@ module Types = struct
                ~value:status ) )
 
   module DaemonStatus = struct
-    type t = { chain_id : string }
+    type t =
+      { chain_id : string; consensus_configuration : Consensus.Configuration.t }
 
     let t : ('context, t option) typ =
+      let consensus_configuration :
+          ('context, Consensus.Configuration.t option) typ =
+        let open Consensus.Configuration in
+        obj "ConsensusConfiguration" ~fields:(fun _ ->
+            [ field "epochDuration" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.epoch_duration)
+            ; field "k" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.k)
+            ; field "slotsPerEpoch" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.slots_per_epoch)
+            ; field "slotDuration" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.slot_duration)
+            ] )
+      in
       obj "DaemonStatus" ~fields:(fun _ ->
           [ field "chainId" ~typ:(non_null string)
               ~args:Arg.[]
               ~resolve:(fun _ v -> v.chain_id)
+          ; field "consensusConfiguration"
+              ~typ:(non_null consensus_configuration)
+              ~args:Arg.[]
+              ~resolve:(fun _ v -> v.consensus_configuration)
           ] )
   end
 
@@ -131,6 +154,14 @@ module Types = struct
             ~args:Arg.[]
             ~resolve:(fun _ () ->
               Zeko_sequencer.constraint_constants.account_creation_fee )
+        ; field "coinbase" ~typ:(non_null amount) ~doc:"Dummy value for Zeko"
+            ~args:Arg.[]
+            ~resolve:(fun _ () -> Currency.Amount.zero)
+        ; field "genesisTimestamp" ~typ:(non_null string)
+            ~doc:"Dummy value for Zeko"
+            ~args:Arg.[]
+            ~resolve:(fun _ () ->
+              Time.now () |> Time.to_string_iso8601_basic ~zone:Time.Zone.utc )
         ] )
 
   module AccountObj = struct
@@ -809,20 +840,20 @@ module Types = struct
           ~args:[] ~doc:"Account that the command is sent from"
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
             AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+              (Ledger.of_database sequencer.ledger)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "receiver" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command applies to"
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
             AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+              (Ledger.of_database sequencer.ledger)
               (Signed_command.receiver cmd.With_hash.data) )
       ; field_no_status "feePayer" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that pays the fees for the command"
           ~deprecated:(Deprecated (Some "use source field instead"))
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
             AccountObj.get_best_ledger_account
-              (Ledger.of_database sequencer.db)
+              (Ledger.of_database sequencer.ledger)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "validUntil" ~typ:(non_null global_slot_since_genesis)
           ~args:[]
@@ -882,7 +913,8 @@ module Types = struct
           ~args:[] ~doc:"Account of the sender"
           ~deprecated:(Deprecated (Some "use feePayer field instead"))
           ~resolve:(fun { ctx = sequencer; _ } payment ->
-            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.ledger)
             @@ Signed_command.fee_payer payment.With_hash.data )
       ; field_no_status "to" ~typ:(non_null public_key) ~args:[]
           ~doc:"Public key of the receiver"
@@ -894,7 +926,8 @@ module Types = struct
           ~deprecated:(Deprecated (Some "use receiver field instead"))
           ~args:Arg.[]
           ~resolve:(fun { ctx = sequencer; _ } cmd ->
-            AccountObj.get_best_ledger_account (Ledger.of_database sequencer.db)
+            AccountObj.get_best_ledger_account
+              (Ledger.of_database sequencer.ledger)
             @@ Signed_command.receiver cmd.With_hash.data )
       ; field "failureReason"
           ~typ:
@@ -1242,7 +1275,7 @@ module Types = struct
     module SendZkappInput = struct
       type input = Mina_base.Zkapp_command.t
 
-      let arg_typ =
+      let arg_typ ~chain =
         let conv
             (x :
               Mina_base.Zkapp_command.t
@@ -1251,12 +1284,12 @@ module Types = struct
           Obj.magic x
         in
         let arg_typ =
-          { arg_typ = Mina_base.Zkapp_command.arg_typ () |> conv
+          { arg_typ = Mina_base.Zkapp_command.arg_typ ~chain () |> conv
           ; to_json =
               (function
               | x ->
                   Yojson.Safe.to_basic
-                    (Mina_base.Zkapp_command.zkapp_command_to_json x) )
+                    (Mina_base.Zkapp_command.zkapp_command_to_json ~chain x) )
           }
         in
         obj "SendZkappInput" ~coerce:Fn.id
@@ -1273,19 +1306,18 @@ module Types = struct
         let arg_typ =
           enum "TransferDirection"
             ~values:
-              [ enum_value "DEPOSIT" ~value:Zeko_sequencer.Transfer.Deposit
-              ; enum_value "WITHDRAW" ~value:Zeko_sequencer.Transfer.Withdraw
+              [ enum_value "DEPOSIT" ~value:Transfer.Deposit
+              ; enum_value "WITHDRAW" ~value:Transfer.Withdraw
               ]
       end
 
-      module Transfer = struct
-        type input = Zkapps_rollup.TR.t
+      module Transfer_input = struct
+        type input = Transfer.TR.t
 
         let arg_typ =
           obj "TransferInput"
             ~coerce:(fun amount recipient ->
-              Zkapps_rollup.TR.{ amount = Amount.of_uint64 amount; recipient }
-              )
+              Transfer.TR.{ amount = Amount.of_uint64 amount; recipient } )
             ~split:(fun f (x : input) ->
               f (Currency.Amount.to_uint64 x.amount) x.recipient )
             ~fields:
@@ -1295,16 +1327,15 @@ module Types = struct
       end
 
       module Request = struct
-        type input = Zeko_sequencer.Transfer.t
+        type input = Transfer.t
 
         let arg_typ =
           obj "TransferRequestInput"
-            ~coerce:(fun transfer direction ->
-              Zeko_sequencer.Transfer.{ transfer; direction } )
+            ~coerce:(fun transfer direction -> Transfer.{ transfer; direction })
             ~split:(fun f ({ transfer; direction } : input) ->
               f transfer direction )
             ~fields:
-              [ arg "transfer" ~typ:(non_null Transfer.arg_typ)
+              [ arg "transfer" ~typ:(non_null Transfer_input.arg_typ)
               ; arg "direction" ~typ:(non_null @@ Direction.arg_typ)
               ]
       end
@@ -1312,12 +1343,12 @@ module Types = struct
       module Claim = struct
         open Snark_params.Tick
 
-        type input = Zeko_sequencer.Transfer.claim
+        type input = Transfer.claim
 
         let arg_typ =
           obj "TransferClaimInput"
             ~coerce:(fun is_new pointer before after transfer ->
-              Zeko_sequencer.Transfer.
+              Transfer.
                 { is_new
                 ; pointer = Field.of_string pointer
                 ; before
@@ -1330,8 +1361,10 @@ module Types = struct
             ~fields:
               [ arg "isNew" ~typ:(non_null bool)
               ; arg "pointer" ~typ:(non_null string)
-              ; arg "before" ~typ:(non_null (list @@ non_null Transfer.arg_typ))
-              ; arg "after" ~typ:(non_null (list @@ non_null Transfer.arg_typ))
+              ; arg "before"
+                  ~typ:(non_null (list @@ non_null Transfer_input.arg_typ))
+              ; arg "after"
+                  ~typ:(non_null (list @@ non_null Transfer_input.arg_typ))
               ; arg "transfer" ~typ:(non_null Request.arg_typ)
               ]
       end
@@ -1382,140 +1415,6 @@ module Types = struct
               ]
       end
     end
-  end
-
-  module Analytics = struct
-    module User_activity = struct
-      type t = Analytics.User_activity.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.User_activity in
-        obj "UserActivity" ~fields:(fun _ ->
-            [ field "totalAccounts" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_accounts)
-            ; field "newAccounts30d" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.new_accounts_30d)
-            ; field "activeAccounts30d" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.active_accounts_30d)
-            ] )
-    end
-
-    module Zkapp_activity = struct
-      type t = Analytics.Zkapp_activity.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Zkapp_activity in
-        obj "ZkappActivity" ~fields:(fun _ ->
-            [ field "totalZkapps" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_zkapps)
-            ; field "newZkapps30d" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.new_zkapps_30d)
-            ; field "activeZkapps30d" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.active_zkapps_30d)
-            ] )
-    end
-
-    module Transaction_activity = struct
-      type t = Analytics.Transaction_activity.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Transaction_activity in
-        obj "TransactionActivity" ~fields:(fun _ ->
-            [ field "totalDeposits" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_deposits)
-            ; field "totalSignedCommands" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_signed_commands)
-            ; field "totalZkappCommands" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_zkapp_commands)
-            ; field "totalTransactions" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x ->
-                  x.total_signed_commands + x.total_zkapp_commands )
-            ] )
-    end
-
-    module Transaction_statistics = struct
-      type t = Analytics.Transaction_statistics.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Transaction_statistics in
-        obj "TransactionStatistics" ~fields:(fun _ ->
-            [ field "averageFee" ~typ:(non_null float)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.avg_fee)
-            ; field "averagePFS" ~typ:(non_null float)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.avg_pfs)
-            ] )
-    end
-
-    module Top_zkapps = struct
-      type t = Analytics.Top_zkapps.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Top_zkapps in
-        list @@ non_null
-        @@ obj "TopZkapps" ~fields:(fun _ ->
-               [ field "zkapp" ~typ:(non_null string)
-                   ~args:Arg.[]
-                   ~resolve:(fun _ x -> fst x)
-               ; field "count" ~typ:(non_null int)
-                   ~args:Arg.[]
-                   ~resolve:(fun _ x -> snd x)
-               ] )
-    end
-
-    module Lumina_activity = struct
-      type t = Analytics.Lumina_activity.t
-
-      let t : ('context, t option) typ =
-        let open Analytics.Lumina_activity in
-        obj "LuminaActivity" ~fields:(fun _ ->
-            [ field "totalSwaps" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_swaps)
-            ; field "totalLiquidityPools" ~typ:(non_null int)
-                ~args:Arg.[]
-                ~resolve:(fun _ x -> x.total_liquidity_pools)
-            ] )
-    end
-
-    type t = Analytics.t
-
-    let t : ('context, t option) typ =
-      obj "Analytics" ~fields:(fun _ ->
-          [ field "userActivity" ~typ:(non_null User_activity.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.user_activity))
-          ; field "zkappActivity"
-              ~typ:(non_null Zkapp_activity.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.zkapp_activity))
-          ; field "transactionActivity"
-              ~typ:(non_null Transaction_activity.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.transaction_activity))
-          ; field "transactionStatistics"
-              ~typ:(non_null Transaction_statistics.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.transaction_statistics))
-          ; field "topZkapps" ~typ:(non_null Top_zkapps.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.top_zkapps))
-          ; field "luminaActivity"
-              ~typ:(non_null Lumina_activity.t)
-              ~args:Arg.[]
-              ~resolve:(fun _ x -> Analytics.(x.lumina_activity))
-          ] )
   end
 
   module Archive = struct
@@ -1758,10 +1657,16 @@ module Mutations = struct
         with
         | Error err ->
             return (Error (Error.to_string_mach err))
-        | Ok (_, command_witness) ->
-            don't_wait_for
-            @@ Zeko_sequencer.Merger.P.add_job sequencer.merger
-                 sequencer.merger_ctx ~data:command_witness ;
+        | Ok witnesses ->
+            let%bind.Deferred.Result () =
+              Deferred.List.map ~how:`Sequential witnesses ~f:(fun witness ->
+                  let open Zeko_sequencer in
+                  Merger.P.add_job sequencer.db_pool sequencer.merger
+                    sequencer.merger_ctx ~data:witness )
+              >>| Result.all
+              >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+              >>| Result.map_error ~f:(fun e -> Caqti_error.show e)
+            in
             let cmd =
               { Types.User_command.With_status.data =
                   Signed_command.forget_check command
@@ -1777,11 +1682,14 @@ module Mutations = struct
             Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash)
         )
 
-  let send_zkapp =
+  let send_zkapp ~chain =
     io_field "sendZkapp" ~doc:"Send a zkApp transaction"
       ~typ:(non_null Types.Payload.send_zkapp)
       ~args:
-        Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
+        Arg.
+          [ arg "input"
+              ~typ:(non_null (Types.Input.SendZkappInput.arg_typ ~chain))
+          ]
       ~resolve:(fun { ctx = sequencer; _ } () zkapp_command ->
         match%bind
           Zeko_sequencer.apply_user_command sequencer
@@ -1789,10 +1697,16 @@ module Mutations = struct
         with
         | Error err ->
             return (Error (Error.to_string_mach err))
-        | Ok (_, command_witness) ->
-            don't_wait_for
-            @@ Zeko_sequencer.Merger.P.add_job sequencer.merger
-                 sequencer.merger_ctx ~data:command_witness ;
+        | Ok witnesses ->
+            let%bind.Deferred.Result () =
+              Deferred.List.map ~how:`Sequential witnesses ~f:(fun witness ->
+                  let open Zeko_sequencer in
+                  Merger.P.add_job sequencer.db_pool sequencer.merger
+                    sequencer.merger_ctx ~data:witness )
+              >>| Result.all
+              >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+              >>| Result.map_error ~f:(fun e -> Caqti_error.show e)
+            in
             let cmd =
               { Types.Zkapp_command.With_status.data = zkapp_command
               ; status = Applied
@@ -1814,8 +1728,10 @@ module Mutations = struct
       ~resolve:(fun { ctx = sequencer; _ } () transfer ->
         let key = Int.to_string @@ Random.int Int.max_value in
         don't_wait_for
-        @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer_request
+        @@ Snark_queue.enqueue_prove_transfer_request
              Zeko_sequencer.(sequencer.snark_q)
+             ~logger:Zeko_sequencer.(sequencer.logger)
+             ~zkapp_pk:Zeko_sequencer.(sequencer.config.zkapp_pk)
              ~key ~transfer ;
         return (Ok key) )
 
@@ -1826,13 +1742,19 @@ module Mutations = struct
       ~resolve:(fun { ctx = sequencer; _ } () claim ->
         let key = Int.to_string @@ Random.int Int.max_value in
         don't_wait_for
-        @@ Zeko_sequencer.Snark_queue.enqueue_prove_transfer_claim
+        @@ Snark_queue.enqueue_prove_transfer_claim
              Zeko_sequencer.(sequencer.snark_q)
+             ~logger:Zeko_sequencer.(sequencer.logger)
+             ~zkapp_pk:Zeko_sequencer.(sequencer.config.zkapp_pk)
              ~key ~claim ;
         return (Ok key) )
 
-  let commands =
-    [ send_payment; send_zkapp; prove_transfer_request; prove_transfer_claim ]
+  let commands ~chain =
+    [ send_payment
+    ; send_zkapp ~chain
+    ; prove_transfer_request
+    ; prove_transfer_claim
+    ]
 end
 
 module Queries = struct
@@ -1847,7 +1769,19 @@ module Queries = struct
     io_field "daemonStatus" ~doc:"Get running daemon status" ~args:[]
       ~typ:(non_null Types.DaemonStatus.t) ~resolve:(fun { ctx = _; _ } () ->
         let open Types.DaemonStatus in
-        return (Ok { chain_id = "69420" }) )
+        return
+          (Ok
+             { chain_id = "69420"
+             ; consensus_configuration =
+                 { delta = 0
+                 ; k = 0
+                 ; slots_per_epoch = 0
+                 ; slot_duration = 0
+                 ; epoch_duration = 0
+                 ; genesis_state_timestamp = Block_time.zero
+                 ; acceptable_network_delay = 0
+                 }
+             } ) )
 
   let network_id =
     field "networkID"
@@ -1886,7 +1820,7 @@ module Queries = struct
               ~typ:(non_null Types.Input.PublicKey.arg_typ)
           ]
       ~resolve:(fun { ctx = sequencer; _ } () pk ->
-        let ledger = Ledger.of_database sequencer.db in
+        let ledger = Ledger.of_database sequencer.ledger in
         let tokens = Ledger.tokens ledger pk |> Set.to_list in
         List.filter_map tokens ~f:(fun token ->
             let%bind.Option location =
@@ -1904,8 +1838,8 @@ module Queries = struct
           [ arg "tokenId" ~doc:"Token ID to find accounts for"
               ~typ:(non_null Types.Input.TokenId.arg_typ)
           ]
-      ~resolve:(fun { ctx = mina; _ } () token_id ->
-        let ledger = Ledger.of_database mina.db in
+      ~resolve:(fun { ctx = sequencer; _ } () token_id ->
+        let ledger = Ledger.of_database sequencer.ledger in
         let%map account_ids = Ledger.accounts ledger in
         Ok
           (List.filter_map (Set.to_list account_ids) ~f:(fun account_id ->
@@ -1935,7 +1869,7 @@ module Queries = struct
       ~args:Arg.[ arg "key" ~typ:(non_null string) ]
       ~resolve:(fun { ctx = sequencer; _ } () key ->
         match
-          Transfers_memory.get
+          Transfer.Transfers_memory.get
             Zeko_sequencer.(sequencer.snark_q.transfers_memory)
             key
         with
@@ -1965,24 +1899,9 @@ module Queries = struct
           ]
       ~resolve:(fun { ctx = sequencer; _ } () token ->
         let open Option.Let_syntax in
-        let l = Ledger.of_database sequencer.db in
+        let l = Ledger.of_database sequencer.ledger in
         let%map account_id = Ledger.token_owner l token in
         Types.AccountObj.get_best_ledger_account l account_id )
-
-  let analytics =
-    io_field "analytics"
-      ~typ:(non_null Types.Analytics.t)
-      ~args:
-        Arg.
-          [ arg "luminaFactory" ~typ:(non_null Types.Input.PublicKey.arg_typ) ]
-      ~resolve:(fun { ctx = sequencer; _ } () lumina_factory ->
-        let%bind analytics =
-          let open Zeko_sequencer in
-          Analytics.get sequencer.analytics_state
-            ~archive_uri:sequencer.config.archive_uri
-            ~zkapp_pk:sequencer.config.zkapp_pk ~lumina_factory
-        in
-        return (Ok analytics) )
 
   module Archive = struct
     let actions =
@@ -2031,34 +1950,10 @@ module Queries = struct
     ; state_hashes
     ; token_owner
     ; network_id
-    ; analytics
     ]
     @ Archive.commands
 end
 
-module Subscriptions = struct
-  open Schema
-
-  let state_hashes_changed =
-    subscription_field "stateHashesChanged"
-      ~doc:
-        "Event that triggers when some of the state hashes are changed. Max \
-         once per minute."
-      ~typ:(non_null Types.State_hashes.t)
-      ~args:Arg.[]
-      ~resolve:(fun { ctx = sequencer; _ } ->
-        let r, w =
-          Zeko_sequencer.Subscriptions.add_state_hashes_subscriber
-            sequencer.subscriptions
-        in
-        Pipe.write_without_pushback_if_open w
-          (Zeko_sequencer.get_latest_state sequencer) ;
-        return (Ok r) )
-
-  let commands = [ state_hashes_changed ]
-end
-
-let schema =
+let schema ~chain =
   Graphql_async.Schema.(
-    schema Queries.commands ~mutations:Mutations.commands
-      ~subscriptions:Subscriptions.commands)
+    schema Queries.commands ~mutations:(Mutations.commands ~chain))

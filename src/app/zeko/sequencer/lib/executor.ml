@@ -1,4 +1,3 @@
-open Async
 open Async_kernel
 open Core_kernel
 open Mina_base
@@ -17,11 +16,13 @@ type t =
   ; max_attempts : int
   ; delay : Time_ns.Span.t
   ; kvdb : Mina_ledger.Ledger.Kvdb.t
+  ; signature_kind : Mina_signature_kind.t
   }
 
-let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce ~l1_uri
-    ~signer ~kvdb () =
+let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce
+    ~signature_kind ~l1_uri ~signer ~kvdb () =
   { l1_uri
+  ; signature_kind
   ; signer
   ; q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
   ; nonce
@@ -34,7 +35,7 @@ let refresh_nonce t = t.nonce <- None
 
 let increment_nonce t = t.nonce <- Option.map t.nonce ~f:Account.Nonce.(add one)
 
-let process_command t (command : Zkapp_command.t) =
+let process_command ~logger t (command : Zkapp_command.t) =
   let rec retry attempt () =
     let%bind nonce =
       match t.nonce with
@@ -52,23 +53,9 @@ let process_command t (command : Zkapp_command.t) =
           }
       }
     in
-    let full_commitment =
-      Zkapp_command.Transaction_commitment.create_complete
-        (Zkapp_command.commitment command)
-        ~memo_hash:(Signed_command_memo.hash command.memo)
-        ~fee_payer_hash:
-          (Zkapp_command.Digest.Account_update.create
-             (Account_update.of_fee_payer command.fee_payer) )
-    in
-    let signature =
-      Signature_lib.Schnorr.Chunked.sign
-        ~signature_kind:Mina_signature_kind.Testnet t.signer.private_key
-        (Random_oracle.Input.Chunked.field full_commitment)
-    in
     let command =
-      { command with
-        fee_payer = { command.fee_payer with authorization = signature }
-      }
+      Utils.sign_zkapp_command ~signature_kind:t.signature_kind command
+        [ t.signer ]
     in
     let err_to_string = function
       | `Failed_request err ->
@@ -78,7 +65,7 @@ let process_command t (command : Zkapp_command.t) =
     in
     match%bind Gql_client.send_zkapp t.l1_uri command with
     | Ok _ ->
-        printf "Sent zkapp command: %s\n%!"
+        [%log info] "Sent zkapp command: %s"
           Transaction_hash.(
             to_base58_check @@ hash_command (Zkapp_command command)) ;
         return @@ increment_nonce t
@@ -91,7 +78,7 @@ let process_command t (command : Zkapp_command.t) =
             ~substring:"Account_nonce_precondition_unsatisfied"
         then refresh_nonce t ;
 
-        printf "Failed to send zkapp command: %s, retrying in %s\n%!"
+        [%log info] "Failed to send zkapp command: %s, retrying in %s"
           (err_to_string err)
           (Time_ns.Span.to_string t.delay) ;
 
@@ -99,7 +86,7 @@ let process_command t (command : Zkapp_command.t) =
   in
   retry 0 ()
 
-let send_zkapp_command t command =
-  Throttle.enqueue t.q (fun () -> process_command t command)
+let send_zkapp_command ~logger t command =
+  Throttle.enqueue t.q (fun () -> process_command ~logger t command)
 
 let wait_to_finish t = Throttle.capacity_available t.q

@@ -1,63 +1,73 @@
-open Core
 open Async
 open Sequencer_lib
+open Signature_lib
+open Cli_lib
 open Mina_base
+open Mina_ledger
 module Sequencer = Zeko_sequencer.Sequencer
 
-let printf = Core.printf
+let generate_even_key =
+  ( "generate-even-key"
+  , Command.basic ~summary:"Generate a private key with an even public key"
+      (Command_unix.Param.return (fun () ->
+           let keypair = Zeko_types.Even_PC.generate_even_signer () in
+           Core.printf "Private key: %s\n"
+             (Private_key.to_base58_check keypair.private_key) ;
+           Core.printf "Public key: %s\n"
+             ( Public_key.compress keypair.public_key
+             |> Public_key.Compressed.to_base58_check ) ) ) )
 
-let print_endline = Core.print_endline
+let migrate =
+  ( "migrate"
+  , Command.async ~summary:"Run migrations on the database"
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and db_dir = flag "--db-dir" (required string) ~doc:"string DB directory"
+       and target_version =
+         flag "--target-version" (optional int) ~doc:"int Target version"
+       in
+       fun () ->
+         let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
+         let pool, `Uri _ =
+           Relational_db.Db.create_pool ~sqlite_path:db_dir ()
+           |> Relational_db.caqti_ok_exn ~msg:"Failed to create db pool: %s"
+         in
+         Relational_db.Db.Migration.run ~logger
+           ~target_version:
+             (match target_version with None -> `Latest | Some v -> `Version v)
+           pool Db.migrations
+         >>| Relational_db.caqti_ok_exn ~msg:"Failed to run migrations: %s" ) )
 
-let committer =
-  let list =
-    ( "commits-list"
-    , Command.basic ~summary:"List all of the transactions in the database"
-        (let%map_open.Command db_dir =
-           flag "--db-dir"
-             (optional_with_default "db" string)
-             ~doc:"string Directory to store the database"
+let dump_ledger =
+  ( "dump-ledger"
+  , Command.basic ~summary:"Dump the ledger"
+      (let%map_open.Command target =
+         flag "--target" (required string) ~doc:"string Target file json"
+       and ledger_dir =
+         flag "--ledger-dir" (required string) ~doc:"string Ledger directory"
+       in
+       fun () ->
+         let out = Stdio.Out_channel.create target in
+         Stdio.Out_channel.output_string out "[" ;
+
+         let db =
+           Ledger.Db.create ~directory_name:ledger_dir
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
          in
-         fun () ->
-           let kvdb = Committer.Store.Kvdb.create db_dir in
-           let indices = Committer.Store.get_index kvdb in
-           printf "Found %d transactions\n%!" (List.length indices) ;
-           List.iter indices ~f:(fun (source, target) ->
-               printf "Source: %s\nTarget: %s\n\n%!"
-                 (Frozen_ledger_hash.to_decimal_string source)
-                 (Frozen_ledger_hash.to_decimal_string target) ) ) )
-  in
-  let get =
-    ( "get"
-    , Command.basic ~summary:"Find the command with the given source and target"
-        (let%map_open.Command db_dir =
-           flag "--db-dir"
-             (optional_with_default "db" string)
-             ~doc:"string Directory to store the database"
-         and source =
-           flag "--source" (required string)
-             ~doc:"string The source ledger of the transaction"
-         and target =
-           flag "--target" (required string)
-             ~doc:"string The target ledger of the transaction"
-         in
-         fun () ->
-           let kvdb = Committer.Store.Kvdb.create db_dir in
-           match
-             Committer.Store.get_commit kvdb
-               ~source:(Frozen_ledger_hash.of_decimal_string source)
-               ~target:(Frozen_ledger_hash.of_decimal_string target)
-           with
-           | Some commit ->
-               print_endline
-                 ( Yojson.Safe.pretty_to_string
-                 @@ Committer.Commit_witness.to_yojson commit )
-           | None ->
-               printf "No commit found\n%!" ) )
-  in
-  ( "committer"
-  , Command.group
-      ~summary:"Script to manually send commiting transactions to L1"
-      [ list; get ] )
+         Ledger.Db.iteri db ~f:(fun index account ->
+             let str =
+               Yojson.Safe.to_string
+                 ([%to_yojson: int * Account.t] (index, account))
+             in
+             Stdio.Out_channel.output_string out str ;
+             if index < Ledger.Db.num_accounts db - 1 then
+               Stdio.Out_channel.output_string out "," ) ;
+
+         Stdio.Out_channel.output_string out "]" ;
+         Stdio.Out_channel.close out ) )
 
 let () =
-  Command.group ~summary:"Sequencer CLI" [ committer ] |> Command_unix.run
+  Command.group ~summary:"Sequencer CLI"
+    [ generate_even_key; migrate; dump_ledger ]
+  |> Command_unix.run
