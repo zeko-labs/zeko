@@ -12,7 +12,7 @@ module Commit_witness = struct
     { old_inner_ledger : Sparse_ledger.t
     ; new_inner_ledger : Sparse_ledger.t
     ; processed_actions_pointer : Field.t
-    ; signatures : (Public_key.Compressed.t * Signature.t) list
+    ; signature : Public_key.Compressed.t * Signature.t
     ; txn_snark : Txn_snark.serializable
     }
   [@@deriving yojson]
@@ -49,7 +49,7 @@ let prove_commit ~provers ~(executor : Executor.t) ~(archive : Archive.t)
     ({ old_inner_ledger
      ; new_inner_ledger
      ; processed_actions_pointer
-     ; signatures
+     ; signature
      ; txn_snark
      } :
       Commit_witness.t ) =
@@ -113,7 +113,7 @@ let prove_commit ~provers ~(executor : Executor.t) ~(archive : Archive.t)
     >>| List.map ~f:Account_update.Actions.hash
   in
   let%bind tree =
-    let da_key, da_signature = List.hd_exn signatures in
+    let da_key, da_signature = signature in
     let%map (body, account_update_digest, calls), proof =
       Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
         ~public_key:zkapp_pk ~inner_ase_source ~new_inner_actions ~old_inner_acc

@@ -25,20 +25,18 @@ let migrations =
 
 (* Test that migrations are run and that the database is created *)
 let () =
+  let postgres_uri =
+    Thread_safe.block_on_async_exn (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "test" )
+  in
   let open Deferred.Result.Let_syntax in
   let logger = Logger.create () in
   Cli_lib.Stdout_log.setup false Logger.Level.Debug ;
-  let sqlite_path =
-    Filename.concat Cache_dir.autogen_path
-      (Uuid.to_string @@ Uuid_unix.create ())
-  in
   match
     Thread_safe.block_on_async_exn (fun () ->
         (* Create the database with first migration *)
         let%bind () =
-          let%bind pool, `Uri _ =
-            Deferred.return (Db.create_pool ~sqlite_path ())
-          in
+          let%bind pool = Deferred.return (Db.create_pool ~postgres_uri ()) in
           let%bind () =
             Db.Migration.run ~logger ~target_version:(`Version 1) pool
               migrations
@@ -63,9 +61,7 @@ let () =
 
         (* Run the second migration *)
         let%bind () =
-          let%bind pool, `Uri _ =
-            Deferred.return (Db.create_pool ~sqlite_path ())
-          in
+          let%bind pool = Deferred.return (Db.create_pool ~postgres_uri ()) in
           let%bind () =
             Db.Migration.run ~logger ~target_version:(`Version 2) pool
               migrations
@@ -91,9 +87,7 @@ let () =
 
         (* Run the third migration *)
         let%bind () =
-          let%bind pool, `Uri _ =
-            Deferred.return (Db.create_pool ~sqlite_path ())
-          in
+          let%bind pool = Deferred.return (Db.create_pool ~postgres_uri ()) in
           let%bind () =
             Db.Migration.run ~logger ~target_version:`Latest pool migrations
           in

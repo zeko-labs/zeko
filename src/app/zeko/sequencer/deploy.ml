@@ -142,28 +142,15 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
               ~changed_accounts:[ (0, initial_inner_account) ]
               ~command_with_action_step_flags:None
           in
-          match%map
-            Da_layer.Client.distribute_diff ~logger ~config:da_config
-              ~ledger_openings:old_inner_account_opening ~diff
-              ~quorum:(List.length da_nodes)
-          with
-          | Ok _ ->
-              ()
-          | Error e ->
-              Error.raise e
+          Da_layer.Client.distribute_diff ~logger ~config:da_config
+            ~ledger_openings:old_inner_account_opening ~diff
         else
           let () =
             print_endline
               "(* Post the whole genesis diff with all the accounts *)"
           in
-          match%bind
-            Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
-              ~ledger:new_ledger
-          with
-          | Ok _ ->
-              return ()
-          | Error e ->
-              Error.raise e
+          Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
+            ~ledger:new_ledger
       in
 
       print_endline "(* Deploy contract *)" ;

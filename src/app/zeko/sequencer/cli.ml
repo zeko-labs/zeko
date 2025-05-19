@@ -22,15 +22,17 @@ let migrate =
   , Command.async ~summary:"Run migrations on the database"
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
-       and db_dir = flag "--db-dir" (required string) ~doc:"string DB directory"
+       and postgres_uri =
+         flag "--postgres-uri" (required string) ~doc:"string Postgres URI"
        and target_version =
          flag "--target-version" (optional int) ~doc:"int Target version"
        in
        fun () ->
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
-         let pool, `Uri _ =
-           Relational_db.Db.create_pool ~sqlite_path:db_dir ()
+         let postgres_uri = Uri.of_string postgres_uri in
+         let pool =
+           Relational_db.Db.create_pool ~postgres_uri ()
            |> Relational_db.caqti_ok_exn ~msg:"Failed to create db pool: %s"
          in
          Relational_db.Db.Migration.run ~logger

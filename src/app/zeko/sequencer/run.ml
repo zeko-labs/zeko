@@ -2,14 +2,16 @@ open Core
 open Async
 open Sequencer_lib
 open Cli_lib
+open Zeko_types
+open Signature_lib
 module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
-    ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
-    ~l2_network_id ~deposit_delay_blocks ~provers () =
+    ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~l1_network_id
+    ~l2_network_id ~deposit_delay_blocks ~provers ~da_key () =
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
@@ -18,14 +20,14 @@ let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
         Sequencer.create ~logger ~zkapp_pk ~max_pool_size ~da_config ~da_quorum
-          ~db_dir:(Some db_dir) ~l1_uri ~archive_uri
+          ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~l1_network_id ~l2_network_id
           ~deposit_delay_blocks
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
               @@ Private_key.of_base58_check_exn signer)
-          ~provers )
+          ~provers ~da_key )
   in
 
   Sequencer.run_committer sequencer ;
@@ -56,6 +58,7 @@ let () =
        flag "-p" (optional_with_default 8080 int) ~doc:"int Port to listen on"
      and zkapp_pk =
        flag "--zkapp-pk" (optional string) ~doc:"string ZkApp public key"
+     and da_key = flag "--da-key" (required string) ~doc:"string DA key"
      and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
      and archive_uri =
        flag "--archive-uri" (required string) ~doc:"string archive URI"
@@ -81,6 +84,8 @@ let () =
        flag "--db-dir"
          (optional_with_default "db" string)
          ~doc:"string Directory to store the Ledger database"
+     and postgres_uri =
+       flag "--postgres-uri" (required string) ~doc:"string Postgres URI"
      and l1_network_id =
        flag "--l1-network-id"
          (optional_with_default "testnet" string)
@@ -96,6 +101,9 @@ let () =
      in
      let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in
+     let da_key =
+       Even_PC.create_exn (Public_key.Compressed.of_base58_check_exn da_key)
+     in
      let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
        Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
      in
@@ -105,8 +113,9 @@ let () =
      in
      let provers = List.map provers ~f:Host_and_port.of_string in
      let logger = Logger.create () in
+     let postgres_uri = Uri.of_string postgres_uri in
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
-       ~da_quorum ~db_dir ~l1_uri ~archive_uri ~signer ~l1_network_id
-       ~l2_network_id ~deposit_delay_blocks ~provers )
+       ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
+       ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key )
   |> Command_unix.run
