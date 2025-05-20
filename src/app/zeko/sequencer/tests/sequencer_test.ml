@@ -155,7 +155,7 @@ module Sequencer_test_spec = struct
             ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:2
             ~db_dir ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
             ~l1_network_id ~l2_network_id ~deposit_delay_blocks:delay_deposit
-            ~provers ~da_key )
+            ~provers ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01 )
     in
 
     Quickcheck.Generator.return
@@ -326,6 +326,7 @@ let () =
                 ~da_quorum:2 ~db_dir:None ~postgres_uri:postgres_uri2
                 ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer ~l1_network_id
                 ~l2_network_id ~deposit_delay_blocks:0 ~provers ~da_key
+                ~fee_modifier:1.0 ~minimum_fee:0.01
             in
             [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
               final_ledger_hash ;
@@ -457,7 +458,8 @@ let () =
                    [ "127.0.0.1:8555"; "127.0.0.1:8556"; "127.0.0.1:8557" ] )
               ~da_quorum:3 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
-              ~deposit_delay_blocks:0 ~provers ~da_key )
+              ~deposit_delay_blocks:0 ~provers ~da_key ~fee_modifier:1.0
+              ~minimum_fee:0.01 )
       in
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;

@@ -24,6 +24,8 @@ module Sequencer = struct
       ; network_id : string
       ; deposit_delay_blocks : int
       ; da_key : Even_PC.t
+      ; fee_modifier : float
+      ; minimum_fee : float
       }
   end
 
@@ -278,6 +280,18 @@ module Sequencer = struct
                      } ) ) )
     |> Or_error.combine_errors |> Result.map ~f:ignore
 
+  (** weight * minimum_fee * e^(q * 0.1 * modifier) *)
+  let calculate_fee t command =
+    let jobs_in_queue =
+      Zeko_prover.Client.queue_size t.merger_ctx.provers |> Float.of_int
+    in
+    let weight = User_command.weight command |> Float.of_int in
+    weight *. t.config.minimum_fee
+    *. exp (jobs_in_queue *. 0.1 *. t.config.fee_modifier)
+    (* convert to nanomina *)
+    *. 10e8
+    |> Float.to_int |> Currency.Fee.of_nanomina_int
+
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
       (command : User_command.t) =
@@ -288,19 +302,22 @@ module Sequencer = struct
     else
       Throttle.enqueue t.apply_q (fun () ->
           let%bind.Deferred.Result () =
-            let weight = User_command.weight command in
-            return
-            @@
-            if
-              Zeko_prover.Client.queue_size t.merger_ctx.provers + weight
-              > t.config.max_pool_size
-            then
-              Error
-                (Error.of_string "Maximum proof queue size reached, try later")
-            else Ok ()
+            if skip_validity_check then return (Ok ())
+            else
+              match calculate_fee t command with
+              | None ->
+                  return (Error (Error.of_string "Fee calculation overflow"))
+              | Some fee when Currency.Fee.(User_command.fee command < fee) ->
+                  return
+                    (Error
+                       (Error.of_string
+                          (Format.asprintf "Fee is too low, expected %s, got %s"
+                             (Currency.Fee.to_string fee)
+                             (Currency.Fee.to_string (User_command.fee command)) ) )
+                    )
+              | Some _ ->
+                  return (Ok ())
           in
-
-          (* TODO: Check if fee is sufficient *)
 
           (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
           let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
@@ -668,7 +685,8 @@ module Sequencer = struct
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
       ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-      ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key =
+      ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key
+      ~fee_modifier ~minimum_fee =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let ledger =
@@ -695,6 +713,8 @@ module Sequencer = struct
         ; network_id = l2_network_id
         ; deposit_delay_blocks
         ; da_key
+        ; fee_modifier
+        ; minimum_fee
         }
     in
     let%bind db_pool = Db.create_and_migrate ~postgres_uri ~logger in
