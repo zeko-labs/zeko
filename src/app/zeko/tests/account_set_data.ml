@@ -125,6 +125,53 @@ module Merkle_tree = struct
     | Left_loc : 'level location -> 'level level_s location
     | Right_loc : 'level location -> 'level level_s location
 
+  open struct
+    [@@@warning "-4"]
+
+    type simple_tree =
+      | Empty
+      | Node of { left : simple_tree; right : simple_tree }
+      | Leaf of { hash : Field.t }
+    [@@deriving sexp]
+
+    type simple_location =
+      | Loc_end
+      | Left_loc of simple_location
+      | Right_loc of simple_location
+    [@@deriving sexp]
+
+    [@@@warning "+4"]
+
+    let rec simple_tree_of_tree : 'level. 'level tree -> simple_tree =
+      fun (type level) (loc : level tree) : simple_tree ->
+       match loc with
+       | Empty ->
+           Empty
+       | Node { left; right; _ } ->
+           Node
+             { left = simple_tree_of_tree left
+             ; right = simple_tree_of_tree right
+             }
+       | Leaf { hash } ->
+           Leaf { hash }
+
+    let rec simple_location_of_location :
+              'level. 'level location -> simple_location =
+      fun (type level) (loc : level location) : simple_location ->
+       match loc with
+       | Loc_end ->
+           Loc_end
+       | Left_loc rest ->
+           Left_loc (simple_location_of_location rest)
+       | Right_loc rest ->
+           Right_loc (simple_location_of_location rest)
+  end
+
+  let sexp_of_location l =
+    sexp_of_simple_location (simple_location_of_location l)
+
+  let sexp_of_tree t = sexp_of_simple_tree (simple_tree_of_tree t)
+
   type 'level path =
     | End : level_z path
     | Left : 'level path * field -> 'level level_s path
@@ -175,12 +222,16 @@ module Merkle_tree = struct
       | (Node _ | Leaf _), (Node _ | Leaf _) ->
           `Full
     in
-    Node
-      { hash = merge (hash_of level left) (hash_of level right)
-      ; left
-      ; right
-      ; sparse
-      }
+    match (left, right) with
+    | Empty, Empty ->
+        Empty
+    | (Node _ | Leaf _ | Empty), (Node _ | Leaf _ | Empty) ->
+        Node
+          { hash = merge (hash_of level left) (hash_of level right)
+          ; left
+          ; right
+          ; sparse
+          }
 
   type 'level full_tree =
     | Node :
@@ -213,13 +264,20 @@ module Merkle_tree = struct
     fun (type l level) (x : l full_tree) (xs : (l, level) full_trees) ->
      match xs with
      | Cons_full_tree (y, xs) ->
-         let xy = merge_full x y in
-         let (Some_full_trees r) = cons_full_trees xy xs in
+         let yx = merge_full y x in
+         let (Some_full_trees r) = cons_full_trees yx xs in
          Some_full_trees (Cons_empty_tree r)
      | Cons_empty_tree xs ->
          Some_full_trees (Cons_full_tree (x, xs))
      | Nil ->
          Some_full_trees (Cons_full_tree (x, Nil))
+
+  let rec to_trees : t -> level_z some_full_trees = function
+    | [] ->
+        Some_full_trees Nil
+    | x :: xs ->
+        let (Some_full_trees r) = to_trees xs in
+        cons_full_trees (Leaf { hash = x }) r
 
   let rec of_full : 'l. 'l full_tree -> 'l tree =
     fun (type l) (x : l full_tree) : l tree ->
@@ -244,14 +302,7 @@ module Merkle_tree = struct
      | Cons_empty_tree xs ->
          of_full_trees (Level_s level) (mknode level tree Empty) xs
      | Cons_full_tree (y, xs) ->
-         of_full_trees (Level_s level) (mknode level tree (of_full y)) xs
-
-  let rec to_trees : t -> level_z some_full_trees = function
-    | [] ->
-        Some_full_trees Nil
-    | x :: xs ->
-        let (Some_full_trees r) = to_trees xs in
-        cons_full_trees (Leaf { hash = x }) r
+         of_full_trees (Level_s level) (mknode level (of_full y) tree) xs
 
   type ('x, 'y, 'z) level_add =
     | Z : (level_z, 'y, 'y) level_add
@@ -396,43 +447,102 @@ module Merkle_tree = struct
          `Left hash :: simplify_path xs
      | Right (xs, hash) ->
          `Right hash :: simplify_path xs
+
+  let rec level_to_int : 'level. 'level level_witness -> int =
+    fun (type level) -> function
+     | (Level_z : level level_witness) ->
+         0
+     | (Level_s l : level level_witness) ->
+         level_to_int l + 1
+
+  let of_list : 'level level_witness -> field list -> 'level tree =
+   fun full_level xs ->
+    let (Some_full_trees xs) = to_trees (List.rev xs) in
+    let level = get_max_level Level_z xs in
+    let (Prove_lte_result lte) =
+      prove_lte level full_level |> Option.value_exn
+    in
+    let xs = extend_full_trees (mkext full_level lte) xs in
+    of_full_trees Level_z Empty xs
+
+  let rec index : 'level. 'level location -> 'level tree -> field option =
+    fun (type level) (loc : level location) (xs : level tree) ->
+     match (loc, xs) with
+     | Loc_end, Leaf { hash } ->
+         Some hash
+     | Right_loc loc, Node { right; _ } ->
+         index loc right
+     | Left_loc loc, Node { left; _ } ->
+         index loc left
+     | (Loc_end | Right_loc _ | Left_loc _), Empty ->
+         None
+
+  let rec unsimplify_path :
+            'level.
+               'level level_witness
+            -> [ `Left of field | `Right of field ] list
+            -> 'level path option =
+    fun (type level) (level : level level_witness)
+        (path : [ `Left of field | `Right of field ] list) : level path option ->
+     match (level, path) with
+     | Level_z, [] ->
+         Some End
+     | Level_s level, `Left hash :: xs -> (
+         match unsimplify_path level xs with
+         | Some xs ->
+             Some (Left (xs, hash))
+         | None ->
+             None )
+     | Level_s level, `Right hash :: xs -> (
+         match unsimplify_path level xs with
+         | Some xs ->
+             Some (Right (xs, hash))
+         | None ->
+             None )
+     | Level_z, _ :: _ ->
+         None
+     | Level_s _, [] ->
+         None
+
+  let rec path_to_location : 'level. 'level path -> 'level location =
+    fun (type level) (path : level path) : level location ->
+     match path with
+     | End ->
+         Loc_end
+     | Left (xs, _) ->
+         Left_loc (path_to_location xs)
+     | Right (xs, _) ->
+         Right_loc (path_to_location xs)
 end
 
+let full_level = Merkle_tree.level_34
+
 let hash_simple : field list -> field =
- fun xs ->
-  let (Some_full_trees xs) = Merkle_tree.to_trees xs in
-  let level = Merkle_tree.get_max_level Level_z xs in
-  let (Prove_lte_result lte) =
-    Merkle_tree.prove_lte level Merkle_tree.level_34 |> Option.value_exn
-  in
-  let xs =
-    Merkle_tree.extend_full_trees
-      (Merkle_tree.mkext Merkle_tree.level_34 lte)
-      xs
-  in
-  let xs = Merkle_tree.of_full_trees Level_z Empty xs in
-  Merkle_tree.hash_of Merkle_tree.level_34 xs
+ fun xs -> Merkle_tree.hash_of full_level (Merkle_tree.of_list full_level xs)
 
 let path_simple :
     int64 -> field list -> [ `Left of field | `Right of field ] list =
  fun idx xs ->
-  let (Some_full_trees xs) = Merkle_tree.to_trees xs in
-  let level = Merkle_tree.get_max_level Level_z xs in
-  let (Prove_lte_result lte) =
-    Merkle_tree.prove_lte level Merkle_tree.level_34 |> Option.value_exn
-  in
-  let xs =
-    Merkle_tree.extend_full_trees
-      (Merkle_tree.mkext Merkle_tree.level_34 lte)
-      xs
-  in
-  let xs = Merkle_tree.of_full_trees Level_z Empty xs in
+  let xs = Merkle_tree.of_list full_level xs in
   let loc =
-    Merkle_tree.loc_of_index Merkle_tree.level_34
-      (Int64.shift_left idx (64 - 34))
+    Merkle_tree.loc_of_index full_level
+      (Int64.shift_left idx (64 - Merkle_tree.level_to_int full_level))
   in
-  Merkle_tree.get_path (Merkle_tree.level_34, xs, loc)
-  |> Merkle_tree.simplify_path
+  Merkle_tree.get_path (full_level, xs, loc)
+  |> Merkle_tree.simplify_path |> List.rev
+
+let get_at :
+    [ `Left of field | `Right of field ] list -> field list -> field option =
+ fun path xs ->
+  let xs = Merkle_tree.of_list full_level xs in
+  let path = Merkle_tree.unsimplify_path full_level path |> Option.value_exn in
+  let loc = Merkle_tree.path_to_location path in
+  Merkle_tree.index loc xs
+
+let simple_to_string_hum : field list -> string =
+ fun xs ->
+  let xs = Merkle_tree.of_list full_level xs in
+  Merkle_tree.sexp_of_tree xs |> Sexp.to_string_hum
 
 module Merkle_set (T : sig
   type t [@@deriving sexp]
@@ -458,6 +568,8 @@ end) : sig
     }
 
   val maybe_add : T.t -> t -> t * r
+
+  val to_string_hum : t -> string
 end = struct
   module S = Set.Make (T)
 
@@ -496,15 +608,20 @@ end = struct
 
   let maybe_add entry entries : t * r =
     let set = S.of_list entries in
+    let is_not_new = S.mem set entry in
     let old_tree = calculate_tree set entries in
     let set = S.add set entry in
     let before_set, _, after_set = S.split set entry in
     let before = S.max_elt_exn before_set in
     let after = S.min_elt_exn after_set in
-    let entries' = if S.mem set entry then entries else entries @ [ entry ] in
+    let entries' = if is_not_new then entries else entries @ [ entry ] in
     let new_tree = calculate_tree set entries' in
     let path = path_simple (get_idx entry entries') new_tree in
-    let before_path = path_simple (get_idx before entries') old_tree in
+    let before_path = path_simple (get_idx before entries) old_tree in
     let hash = hash_simple new_tree in
     (entries', { path; before_path; before; after; hash })
+
+  let to_string_hum entries =
+    let tree = calculate_tree (S.of_list entries) entries in
+    simple_to_string_hum tree
 end

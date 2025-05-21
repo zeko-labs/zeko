@@ -90,8 +90,7 @@ open struct
 end
 
 let update_acc_set accounts init ~witness =
-  Checked.List.fold accounts ~init
-    ~f:(fun set (account_id, is_empty_and_writeable) ->
+  foldr accounts ~init ~f:(fun (account_id, is_empty_and_writeable) set ->
       let open As_prover in
       let* x =
         exists Token_id.typ

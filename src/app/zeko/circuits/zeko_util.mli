@@ -199,3 +199,7 @@ val slot_range_intersection :
   Slot_range.var -> Slot_range.var -> Slot_range.var Checked.t
 
 val accumulate : (('a -> unit) -> 'b Checked.t) -> ('b * 'a list) Checked.t
+
+val foldl : f:('a -> 'b -> 'a Checked.t) -> init:'a -> 'b list -> 'a Checked.t
+
+val foldr : f:('b -> 'a -> 'a Checked.t) -> init:'a -> 'b list -> 'a Checked.t

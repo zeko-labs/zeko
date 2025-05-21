@@ -251,12 +251,12 @@ open struct
         ; supply_increase = Currency.Amount.Signed.(constant typ zero)
         }
       in
-      Checked.List.fold account_updates_data ~init:(g, l)
+      foldl account_updates_data ~init:(g, l)
         ~f:(fun
-             (g, l)
+             (g, (l : local_state_var))
              ( auth_type
              , is_start
-             , { account_updates
+             , { Per_account_update.account_updates
                ; memo_hash
                ; account_updates_data
                ; shift_action_state
@@ -337,7 +337,7 @@ open struct
           |> V.get )
     in
     let* slot_range =
-      Checked.List.fold ~init:None slot_ranges ~f:(function
+      foldl ~init:None slot_ranges ~f:(function
         | None ->
             fun x -> Checked.return (Some x)
         | Some x ->
@@ -345,7 +345,7 @@ open struct
       >>| Option.value ~default:Slot_range.(constant typ infinite)
     in
     let* global_slot_range =
-      Checked.List.fold ~init:None global_slot_ranges ~f:(function
+      foldl ~init:None global_slot_ranges ~f:(function
         | None ->
             fun x -> Checked.return (Some x)
         | Some x ->
