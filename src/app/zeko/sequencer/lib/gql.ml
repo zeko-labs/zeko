@@ -1793,6 +1793,13 @@ module Queries = struct
       ~resolve:(fun { ctx = sequencer; _ } () ->
         "zeko:" ^ Zeko_sequencer.(sequencer.config.network_id) )
 
+  let fee_per_weight_unit =
+    field "feePerWeightUnit" ~doc:"Current fee per weight unit"
+      ~args:Arg.[]
+      ~typ:(non_null int)
+      ~resolve:(fun { ctx = sequencer; _ } () ->
+        Zeko_sequencer.current_fee_per_weight_unit sequencer )
+
   let account =
     field "account" ~doc:"Find any account via a public key and token"
       ~typ:Types.AccountObj.account
@@ -1950,6 +1957,7 @@ module Queries = struct
     ; state_hashes
     ; token_owner
     ; network_id
+    ; fee_per_weight_unit
     ]
     @ Archive.commands
 end

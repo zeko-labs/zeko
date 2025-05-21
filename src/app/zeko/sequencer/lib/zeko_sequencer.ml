@@ -280,17 +280,16 @@ module Sequencer = struct
                      } ) ) )
     |> Or_error.combine_errors |> Result.map ~f:ignore
 
-  (** weight * minimum_fee * e^(q * 0.1 * modifier) *)
-  let calculate_fee t command =
+  (** minimum_fee * e^(q * 0.1 * modifier) *)
+  let current_fee_per_weight_unit t =
     let jobs_in_queue =
       Zeko_prover.Client.queue_size t.merger_ctx.provers |> Float.of_int
     in
-    let weight = User_command.weight command |> Float.of_int in
-    weight *. t.config.minimum_fee
+    t.config.minimum_fee
     *. exp (jobs_in_queue *. 0.1 *. t.config.fee_modifier)
     (* convert to nanomina *)
     *. 10e8
-    |> Float.to_int |> Currency.Fee.of_nanomina_int
+    |> Float.to_int
 
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
@@ -304,19 +303,18 @@ module Sequencer = struct
           let%bind.Deferred.Result () =
             if skip_validity_check then return (Ok ())
             else
-              match calculate_fee t command with
-              | None ->
-                  return (Error (Error.of_string "Fee calculation overflow"))
-              | Some fee when Currency.Fee.(User_command.fee command < fee) ->
-                  return
-                    (Error
-                       (Error.of_string
-                          (Format.asprintf "Fee is too low, expected %s, got %s"
-                             (Currency.Fee.to_string fee)
-                             (Currency.Fee.to_string (User_command.fee command)) ) )
-                    )
-              | Some _ ->
-                  return (Ok ())
+              let weight = User_command.weight command in
+              let required_fee = weight * current_fee_per_weight_unit t in
+              let command_fee =
+                User_command.fee command |> Currency.Fee.to_nanomina_int
+              in
+              if command_fee < required_fee then
+                return
+                  (Error
+                     (Error.of_string
+                        (Format.asprintf "Fee is too low, expected %d, got %d"
+                           required_fee command_fee ) ) )
+              else return (Ok ())
           in
 
           (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
