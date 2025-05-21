@@ -14,6 +14,8 @@ end
 module Make (Inputs : sig
   val token_owner_l1 : Account_id.t option
 
+  val helper_token_owner_l1 : PC.t
+
   val holder_accounts_l1 : PC.t list
 
   val zeko_l1 : PC.t
@@ -151,6 +153,7 @@ struct
       ; verify_two_outer_ases : Verify_two_outer_ases.t
       ; verify_check_accepted_and_ase : Verify_check_accepted_and_ase.t
       ; prev_next_cancelled_deposit : Checked32.t
+      ; helper_token_owner_l1_vk_hash : F.t
       }
     [@@deriving snarky]
   end
@@ -167,6 +170,7 @@ struct
                ; verify_two_outer_ases
                ; verify_check_accepted_and_ase
                ; prev_next_cancelled_deposit
+               ; helper_token_owner_l1_vk_hash
                } =
           exists Witness.typ ~compute:(V.get w)
         in
@@ -190,10 +194,9 @@ struct
         in
         let helper_token_id =
           let account_id =
-            Account_id.Checked.create public_key
-              (constant Token_id.typ token_id_l1)
+            Account_id.create helper_token_owner_l1 Token_id.default
           in
-          Account_id.Checked.derive_token_id ~owner:account_id
+          Account_id.derive_token_id ~owner:account_id |> constant Token_id.typ
         in
         let* () = Boolean.(Assert.is_true @@ not is_accepted) in
         let* () = Boolean.Assert.is_true is_rejected in
@@ -244,6 +247,13 @@ struct
             outer_action_state
         in
         let base_params = Deposit_params.base params in
+        let helper_token_owner =
+          { default_account_update with
+            public_key = constant PC.typ helper_token_owner_l1
+          ; authorization_kind =
+              authorization_vk_hash helper_token_owner_l1_vk_hash
+          }
+        in
         let helper_account =
           { default_account_update with
             public_key = base_params.recipient
@@ -315,7 +325,9 @@ struct
         in
         let*| out =
           make_outputs ~chain:chain_l1 account_update
-            [ (helper_account, []); (witness_outer, []) ]
+            [ (helper_token_owner, [ (helper_account, []) ])
+            ; (witness_outer, [])
+            ]
         in
         Compile_simple.
           { prevs =

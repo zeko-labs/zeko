@@ -16,6 +16,8 @@ module Inputs = struct
 
   let holder_account_l2 = point_of_string "11111"
 
+  let helper_token_owner_l1 = point_of_string "5123111"
+
   let zeko_l1 = inner_public_key
 
   let zeko_l2 = point_of_string "39921"

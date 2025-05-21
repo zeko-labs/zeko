@@ -291,6 +291,23 @@ open struct
             end
 
             module Global_state = G
+
+            (* We assert checks immediately instead of bubbling them up,
+               since this is only necessary to prove failed transactions,
+               which we don't want. *)
+            module Local_state = struct
+              include Local_state
+
+              let add_check local_state kind b =
+                Run.run_checked
+                @@ let*| () =
+                     assert_var
+                       ( __LOC__ ^ ":"
+                       ^ Transaction_status.Failure.to_string kind )
+                       (fun () -> Checked.return b)
+                   in
+                   local_state
+            end
           end in
           let module Logic =
             Mina_transaction_logic.Zkapp_command_logic.Make (Patched) in

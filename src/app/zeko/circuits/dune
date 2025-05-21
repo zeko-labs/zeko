@@ -34,6 +34,7 @@
   rule_bridge_finalize_cancelled_deposit
   rule_bridge_finalize_deposit
   rule_bridge_inner_receive
+  rule_bridge_outer_token_owner
   check_accepted_make
   bridge_state
   outer_rules

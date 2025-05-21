@@ -7,6 +7,8 @@ module Make_mina (Inputs : sig
 
   val holder_account_l2 : PC.t
 
+  val helper_token_owner_l1 : PC.t
+
   val zeko_l1 : PC.t
 
   val zeko_l2 : PC.t
@@ -90,6 +92,8 @@ module Make_custom (Inputs : sig
   val token_owner_l1 : Account_id.t
 
   val token_owner_l2 : Account_id.t
+
+  val helper_token_owner_l1 : PC.t
 
   val holder_accounts_l1 : PC.t list
 

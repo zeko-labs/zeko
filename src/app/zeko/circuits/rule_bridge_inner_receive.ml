@@ -15,18 +15,12 @@ struct
 
   let token_id_l2 = token_owner_id token_owner_l2
 
-  module May_use_token = struct
-    include Account_update.May_use_token
-
-    type var = Checked.t
-  end
-
   module Witness = struct
     type t = { public_key : PC.t; vk_hash : F.t; amount : Currency.Amount.t }
     [@@deriving snarky]
   end
 
-  (** Prove that we have submitted a deposit, and that it's been accepted. *)
+  (** Allow receiving any amount, even though access = Proof. *)
   let main (w : Witness.t V.t) =
     with_label ("main " ^ __LOC__) (fun () ->
         let* Witness.{ public_key; vk_hash; amount } =
@@ -36,7 +30,7 @@ struct
           { default_account_update with
             public_key
           ; token_id = constant Token_id.typ token_id_l2
-          ; may_use_token = constant May_use_token.typ Parents_own_token
+          ; may_use_token = constant Account_update.May_use_token.typ Parents_own_token
           ; authorization_kind = authorization_vk_hash vk_hash
           ; balance_change = Currency.Amount.Signed.Checked.(of_unsigned amount)
           }
