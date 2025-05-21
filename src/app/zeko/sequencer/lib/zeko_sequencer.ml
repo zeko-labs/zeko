@@ -289,7 +289,6 @@ module Sequencer = struct
     *. exp (jobs_in_queue *. 0.1 *. t.config.fee_modifier)
     (* convert to nanomina *)
     *. 10e8
-    |> Float.to_int
 
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
@@ -303,17 +302,18 @@ module Sequencer = struct
           let%bind.Deferred.Result () =
             if skip_validity_check then return (Ok ())
             else
-              let weight = User_command.weight command in
-              let required_fee = weight * current_fee_per_weight_unit t in
+              let weight = User_command.weight command |> Float.of_int in
+              let required_fee = weight *. current_fee_per_weight_unit t in
               let command_fee =
                 User_command.fee command |> Currency.Fee.to_nanomina_int
+                |> Float.of_int
               in
-              if command_fee < required_fee then
+              if Float.(command_fee < required_fee) then
                 return
                   (Error
                      (Error.of_string
-                        (Format.asprintf "Fee is too low, expected %d, got %d"
-                           required_fee command_fee ) ) )
+                        (Format.asprintf "Fee is too low, expected %f, got %f"
+                           (required_fee /. 10e8) (command_fee /. 10e8) ) ) )
               else return (Ok ())
           in
 

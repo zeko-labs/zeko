@@ -1796,7 +1796,7 @@ module Queries = struct
   let fee_per_weight_unit =
     field "feePerWeightUnit" ~doc:"Current fee per weight unit"
       ~args:Arg.[]
-      ~typ:(non_null int)
+      ~typ:(non_null float)
       ~resolve:(fun { ctx = sequencer; _ } () ->
         Zeko_sequencer.current_fee_per_weight_unit sequencer )
 
