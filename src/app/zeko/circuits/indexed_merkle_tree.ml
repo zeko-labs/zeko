@@ -37,8 +37,10 @@ struct
     var_to_hash ~init:Zeko_constants.indexed_merkle_tree_salt Entry.typ
 
   (* TODO: consider different salt per level. *)
+  (* NB: The first element in the list is the neighbor of init, and the next element
+     is a level up, and so on. This is the same as what the Mina code base does. *)
   let implied_root_raw (init : F.var) (path : Path.var) : F.var Checked.t =
-    Checked.List.fold path ~init ~f:(fun acc { hash_other; is_right } ->
+    foldl path ~init ~f:(fun acc { PathStep.hash_other; is_right } ->
         let* left, right =
           if_ is_right
             ~typ:Typ.(F.typ * F.typ)

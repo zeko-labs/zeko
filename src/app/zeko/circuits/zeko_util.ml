@@ -427,3 +427,12 @@ let accumulate (f : ('a -> unit) -> 'b Checked.t) : ('b * 'a list) Checked.t =
   in
   running := false ;
   (r, !acc)
+
+let rec foldl ~f ~init =
+  let open Checked in
+  function
+  | [] -> return init | x :: xs -> f init x >>= fun init -> foldl ~f ~init xs
+
+let rec foldr ~f ~init =
+  let open Checked in
+  function [] -> return init | x :: xs -> foldr ~f ~init xs >>= f x

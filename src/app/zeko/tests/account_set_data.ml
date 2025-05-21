@@ -528,7 +528,8 @@ let path_simple :
     Merkle_tree.loc_of_index full_level
       (Int64.shift_left idx (64 - Merkle_tree.level_to_int full_level))
   in
-  Merkle_tree.get_path (full_level, xs, loc) |> Merkle_tree.simplify_path
+  Merkle_tree.get_path (full_level, xs, loc)
+  |> Merkle_tree.simplify_path |> List.rev
 
 let get_at :
     [ `Left of field | `Right of field ] list -> field list -> field option =
