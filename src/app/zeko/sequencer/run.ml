@@ -11,7 +11,8 @@ module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
     ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~l1_network_id
-    ~l2_network_id ~deposit_delay_blocks ~provers ~da_key () =
+    ~l2_network_id ~deposit_delay_blocks ~provers ~da_key ~fee_modifier
+    ~minimum_fee () =
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
@@ -27,7 +28,7 @@ let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
             Signature_lib.(
               Keypair.of_private_key_exn
               @@ Private_key.of_base58_check_exn signer)
-          ~provers ~da_key )
+          ~provers ~da_key ~fee_modifier ~minimum_fee )
   in
 
   Sequencer.run_committer sequencer ;
@@ -98,6 +99,14 @@ let () =
        flag "--deposit-delay-blocks"
          (optional_with_default 5 int)
          ~doc:"int Number of blocks to wait before processing deposits"
+     and fee_modifier =
+       flag "--fee-modifier"
+         (optional_with_default 1.0 float)
+         ~doc:"float Fee modifier for the sequencer"
+     and minimum_fee =
+       flag "--minimum-fee"
+         (optional_with_default 0.01 float)
+         ~doc:"float Minimum fee for the sequencer"
      in
      let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in
@@ -117,5 +126,6 @@ let () =
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
        ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-       ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key )
+       ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key
+       ~fee_modifier ~minimum_fee )
   |> Command_unix.run
