@@ -85,9 +85,12 @@ let do_commit
   let synchronized_outer_action_state = new_inner.app_state.outer_action_state in
 
   (* The new actions must be the difference between old synchronized outer action state and new synchronized outer action state. *)
-  assert List.append new_actions old_inner.app_state.outer_action_state = synchronized_outer_action_state ;
+  assert
+    List.append new_actions old_inner.app_state.outer_action_state
+    = synchronized_outer_action_state ;
 
-  let synchronized_outer_action_state_length = List.length new_actions + old_synchronized_outer_action_state_length in
+  let synchronized_outer_action_state_length =
+    List.length new_actions + old_inner.app_state.outer_action_state_length in
 
   let action_state =
     (* We don't force sequencer to match on latest action state,
