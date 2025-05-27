@@ -9,4 +9,4 @@ let t =
   | Some x ->
       Other_network x
   | None ->
-      Other_network "invalid-network"
+      Testnet
