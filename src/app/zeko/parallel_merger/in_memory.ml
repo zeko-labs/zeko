@@ -20,12 +20,6 @@ module type Intf = sig
     val process : Context.t -> t -> Merge.t Deferred.t
   end
 
-  module Commit : sig
-    type t
-
-    val process : Context.t -> t -> Merge.t -> unit Deferred.t
-  end
-
   module Tree : sig
     type t
 
@@ -34,6 +28,14 @@ module type Intf = sig
     val wait_till_finished : t -> Merge.t Deferred.t
 
     val base_jobs_count : t -> int
+  end
+
+  module Commit : sig
+    type t
+
+    type out
+
+    val process : Context.t -> t -> Merge.t -> out Deferred.t
   end
 
   module With_id : sig
@@ -47,7 +49,10 @@ module type Intf = sig
   val add_job : t -> Context.t -> data:Base.t -> Tree.id
 
   val commit_exn :
-    t -> Context.t -> commit_witness:Commit.t -> (Merge.t * Tree.id) Deferred.t
+       t
+    -> Context.t
+    -> commit_witness:Commit.t
+    -> (Commit.out * Tree.id * Merge.t) Deferred.t
 
   val current_tree : t -> Tree.t With_id.t option
 end
@@ -65,7 +70,9 @@ end) (Base : sig
 end) (Commit : sig
   type t
 
-  val process : Context.t -> t -> Merge.t -> unit Deferred.t
+  type out
+
+  val process : Context.t -> t -> Merge.t -> out Deferred.t
 end) :
   Intf
     with module Context := Context
@@ -137,9 +144,9 @@ end) :
         ; jobs = [ { value = Done job; _ } ] (* One job with status done *)
         ; _
         } ->
-          let%bind () = Commit.process ctx commit_witness job in
+          let%bind result = Commit.process ctx commit_witness job in
           let () = Ivar.fill t.finished job in
-          return job
+          return (result, job)
       | _ ->
           failwith "Invalid state"
 
@@ -221,8 +228,8 @@ end) :
               let%bind _ = Tree.wait_till_finished tree.value in
               return () )
         in
-        let%map result = Tree.commit last.value ctx ~commit_witness in
-        (result, last.id)
+        let%map out, last_job = Tree.commit last.value ctx ~commit_witness in
+        (out, last.id, last_job)
     | _ ->
         failwith "No trees to commit"
 
@@ -279,11 +286,13 @@ let%test_module "in_memory parallel_merge on (+)" =
     module Commit = struct
       type t = int
 
-      let process ctx commit_witness _ =
+      type out = int64
+
+      let process ctx commit_witness out =
         let time = Quickcheck.random_value (Float.gen_incl 0.0 0.1) in
         let%bind () = Clock.after (Time.Span.of_sec time) in
         Context.add ctx commit_witness ;
-        return ()
+        return out
     end
 
     module Merger = Make (Context) (Merge) (Base) (Commit)
@@ -298,7 +307,7 @@ let%test_module "in_memory parallel_merge on (+)" =
           in
           let state = Merger.create () in
 
-          let final_result, _tid =
+          let _out, _tid, final_result =
             Thread_safe.block_on_async_exn (fun () ->
                 (* Create jobs *)
                 let () =
@@ -336,7 +345,7 @@ let%test_module "in_memory parallel_merge on (+)" =
                           |> ignore )
                     in
                     Merger.commit_exn state ctx ~commit_witness:i )
-                >>| List.map ~f:fst )
+                >>| List.map ~f:trd3 )
           in
 
           let expected_order = List.mapi data ~f:(fun i _ -> i) in

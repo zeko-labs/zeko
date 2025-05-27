@@ -107,6 +107,8 @@ module Sequencer = struct
         }
       [@@deriving yojson]
 
+      type out = unit -> (unit, Caqti_error.t) Result.t Deferred.t
+
       let process
           ({ da_client
            ; provers
@@ -139,21 +141,6 @@ module Sequencer = struct
           ; txn_snark
           }
         in
-        let%bind () =
-          let open Relational_db in
-          Pool.use
-            (fun conn ->
-              Committer.Commit_table.insert conn
-                { source_ledger_hash =
-                    Sparse_ledger.merkle_root old_inner_ledger
-                ; target_ledger_hash =
-                    Sparse_ledger.merkle_root new_inner_ledger
-                ; witness = commit_witness
-                } )
-            db_pool
-          >>| caqti_ok_exn ~msg:"Failed to insert commit into db: %s"
-        in
-
         let%bind command =
           Committer.prove_commit ~provers ~executor ~archive
             ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
@@ -161,7 +148,18 @@ module Sequencer = struct
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
         State.Last_committed_ledger.set sequencer_state ~data:new_inner_ledger ;
-        return ()
+        return (fun () ->
+            let open Relational_db in
+            Pool.use
+              (fun conn ->
+                Committer.Commit_table.insert conn
+                  { source_ledger_hash =
+                      Sparse_ledger.merkle_root old_inner_ledger
+                  ; target_ledger_hash =
+                      Sparse_ledger.merkle_root new_inner_ledger
+                  ; witness = commit_witness
+                  } )
+              db_pool )
     end
 
     module M = struct
