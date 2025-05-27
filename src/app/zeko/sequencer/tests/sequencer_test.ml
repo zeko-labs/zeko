@@ -497,6 +497,175 @@ let () =
       run (fun () ->
           Relational_db.For_tests.drop_database ~port:5433 "sequencer" ) )
 
+let () =
+  print_endline "Started test 'restart sequencer and recommit'" ;
+  let db_dir =
+    Filename.concat Cache_dir.autogen_path
+      (Uuid.to_string @@ Uuid_unix.create ())
+  in
+  let postgres_uri =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer" )
+  in
+  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ~postgres_uri ())
+    ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
+      let batch1, batch2 = List.split_n specs 3 in
+      let initial_ledger_hash = get_root sequencer in
+
+      print_endline "(* Apply first batch *)" ;
+      let () =
+        run (fun () ->
+            let%bind () =
+              Deferred.List.iteri batch1 ~f:(fun i spec ->
+                  let%bind result =
+                    match i % 2 = 0 with
+                    | true ->
+                        let command =
+                          Mina_transaction_logic.For_tests.account_update_send
+                            ~chain:l2_signature_kind spec
+                        in
+                        printf "Applying zkapp command\n%!" ;
+                        apply_user_command sequencer (Zkapp_command command)
+                    | false ->
+                        let command =
+                          Mina_transaction_logic.For_tests.command_send
+                            ~chain:l2_signature_kind spec
+                        in
+                        printf "Applying signed command\n%!" ;
+                        apply_user_command sequencer (Signed_command command)
+                  in
+                  let witnesses =
+                    match result with
+                    | Ok result ->
+                        result
+                    | Error e ->
+                        Error.raise e
+                  in
+                  match%map
+                    Deferred.List.map ~how:`Sequential witnesses
+                      ~f:(fun witness ->
+                        Merger.P.add_job sequencer.db_pool sequencer.merger
+                          sequencer.merger_ctx ~data:witness )
+                    >>| Result.all
+                    >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+                  with
+                  | Ok () ->
+                      ()
+                  | Error e ->
+                      failwith (Caqti_error.show e) )
+            in
+            return () )
+      in
+
+      print_endline "(* First commit *)" ;
+      run (fun () ->
+          let%bind () = commit sequencer in
+          let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+          Executor.wait_to_finish sequencer.merger_ctx.executor ) ;
+
+      print_endline "(* Apply second batch *)" ;
+      run (fun () ->
+          let%bind () =
+            Deferred.List.iteri batch2 ~f:(fun i spec ->
+                let%bind result =
+                  match i % 2 = 0 with
+                  | true ->
+                      let command =
+                        Mina_transaction_logic.For_tests.account_update_send
+                          ~chain:l2_signature_kind spec
+                      in
+                      printf "Applying zkapp command\n%!" ;
+                      apply_user_command sequencer (Zkapp_command command)
+                  | false ->
+                      let command =
+                        Mina_transaction_logic.For_tests.command_send
+                          ~chain:l2_signature_kind spec
+                      in
+                      printf "Applying signed command\n%!" ;
+                      apply_user_command sequencer (Signed_command command)
+                in
+
+                let witnesses =
+                  match result with
+                  | Ok result ->
+                      result
+                  | Error e ->
+                      Error.raise e
+                in
+
+                match%map
+                  Deferred.List.map ~how:`Sequential witnesses
+                    ~f:(fun witness ->
+                      Merger.P.add_job sequencer.db_pool sequencer.merger
+                        sequencer.merger_ctx ~data:witness )
+                  >>| Result.all
+                  >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+                with
+                | Ok () ->
+                    ()
+                | Error e ->
+                    failwith (Caqti_error.show e) )
+          in
+          return () ) ;
+
+      print_endline "(* Second commit *)" ;
+      let final_ledger_hash =
+        run (fun () ->
+            let%bind () = commit sequencer in
+            let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+            let%bind () =
+              Executor.wait_to_finish sequencer.merger_ctx.executor
+            in
+            let%bind _cleared = Gql_client.For_tests.clear_pool gql_uri in
+            let%map { ledger_hash = committed_ledger_hash; _ } =
+              Gql_client.infer_state gql_uri
+                ~signer_pk:(Public_key.compress signer.public_key)
+                ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+              >>| Utils.value_of_zkapp_state
+                    Zeko_circuits.Rollup_state.Outer_state.typ
+            in
+            [%test_eq: Ledger_hash.t] committed_ledger_hash initial_ledger_hash ;
+            get_root sequencer )
+      in
+
+      Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown sequencer) ;
+
+      print_endline "(* Restart sequencer *)" ;
+      let new_sequencer =
+        run (fun () ->
+            Sequencer.create ~logger
+              ~zkapp_pk:
+                Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              ~max_pool_size:10 ~commitment_period_sec:0.
+              ~da_config:
+                (Da_layer.Client.Config.of_string_list
+                   [ "127.0.0.1:8555"; "127.0.0.1:8556" ] )
+              ~da_quorum:2 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
+              ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
+              ~deposit_delay_blocks:0 ~provers ~da_key ~fee_modifier:1.0
+              ~minimum_fee:0.01 )
+      in
+
+      print_endline "(* Check that after restart it recommited *)" ;
+      run (fun () ->
+          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%map { ledger_hash = committed_ledger_hash; _ } =
+            Gql_client.infer_state gql_uri
+              ~signer_pk:(Public_key.compress signer.public_key)
+              ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+            >>| Utils.value_of_zkapp_state
+                  Zeko_circuits.Rollup_state.Outer_state.typ
+          in
+          [%test_eq: Ledger_hash.t] committed_ledger_hash final_ledger_hash ) ;
+
+      Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown new_sequencer) ;
+
+      print_endline "(* Drop database *)" ;
+      run (fun () ->
+          Relational_db.For_tests.drop_database ~port:5433 "sequencer" ) )
+
 (* let () =
    print_endline "Started test 'deposits'" ;
    Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~delay_deposit:2 ())
