@@ -212,6 +212,8 @@ end) :
     (* Create new tree before waiting, so new transactions go there *)
     start_new_tree t ;
     match List.rev t.trees with
+    | _just_created :: ({ value = { jobs = []; _ }; _ } as _last) :: _rest ->
+        failwith "Nothing to commit"
     | _just_created :: last :: rest ->
         Tree.close last.value ;
         let%bind _ =
