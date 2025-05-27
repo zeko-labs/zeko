@@ -64,7 +64,8 @@ module Sequencer = struct
         ; da_client : Da_layer.Client.t
         ; executor : Executor.t
         ; config : Config.t
-        ; kvdb : Committer.Store.Kvdb.t
+        ; kvdb : Db.t
+        ; db_pool : Relational_db.Db.pool
         ; state : State.t
         ; archive : Archive.t
         ; logger : Logger.t
@@ -132,10 +133,11 @@ module Sequencer = struct
            ; provers
            ; executor
            ; config
-           ; kvdb
            ; state
            ; archive
            ; logger
+           ; db_pool
+           ; _
            } as ctx :
             Context.t ) { new_inner_ledger; processed_actions_pointer }
           txn_snark =
@@ -158,9 +160,20 @@ module Sequencer = struct
           ; txn_snark
           }
         in
-        Committer.Store.store_commit kvdb commit_witness
-          ~source:(Sparse_ledger.merkle_root old_inner_ledger)
-          ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
+        let%bind () =
+          let open Relational_db in
+          Pool.use
+            (fun conn ->
+              Committer.Commit_table.insert conn
+                { source_ledger_hash =
+                    Sparse_ledger.merkle_root old_inner_ledger
+                ; target_ledger_hash =
+                    Sparse_ledger.merkle_root new_inner_ledger
+                ; witness = commit_witness
+                } )
+            db_pool
+          >>| caqti_ok_exn ~msg:"Failed to insert commit into db: %s"
+        in
 
         let%bind command =
           Committer.prove_commit ~provers ~executor ~archive
@@ -738,6 +751,7 @@ module Sequencer = struct
         ; executor
         ; config
         ; kvdb
+        ; db_pool
         ; state = Merger.Context.load_state kvdb
         ; archive
         ; logger
@@ -764,8 +778,8 @@ module Sequencer = struct
     in
     let%bind () =
       Committer.recommit_all ~logger ~provers:t.snark_q.provers
-        ~executor:t.merger_ctx.executor ~archive ~kvdb ~zkapp_pk:config.zkapp_pk
-        ~archive_uri:config.archive_uri
+        ~executor:t.merger_ctx.executor ~archive ~db_pool
+        ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
     in
     let%bind () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)

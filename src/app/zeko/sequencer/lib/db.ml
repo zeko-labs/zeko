@@ -58,6 +58,31 @@ let migrations : Db.Migration.t list =
                     UNIQUE (target_ledger_hash, public_key)
                 ) |sql} )
           () )
+  ; Db.Migration.make 3 "committer_schema" (fun (module Conn : CONNECTION) ->
+        let%bind () =
+          Conn.exec
+            (Caqti_request.exec Caqti_type.unit
+               {sql| CREATE TABLE "commit" (
+                        id SERIAL PRIMARY KEY,
+                        source_ledger_hash TEXT NOT NULL,
+                        target_ledger_hash TEXT NOT NULL,
+                        witness BYTEA NOT NULL,
+    
+                        UNIQUE (source_ledger_hash, target_ledger_hash),
+                        CHECK (source_ledger_hash <> target_ledger_hash)
+                      ) |sql} )
+            ()
+        in
+        let%bind () =
+          Conn.exec
+            (Caqti_request.exec Caqti_type.unit
+               {sql| CREATE INDEX idx_commit_source ON "commit" (source_ledger_hash) |sql} )
+            ()
+        in
+        Conn.exec
+          (Caqti_request.exec Caqti_type.unit
+             {sql| CREATE INDEX idx_commit_target ON "commit" (target_ledger_hash) |sql} )
+          () )
   ]
 
 let create_and_migrate ~postgres_uri ~logger =
