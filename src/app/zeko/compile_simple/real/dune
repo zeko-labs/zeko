@@ -3,7 +3,7 @@
   (flags (:standard -w @a-42-40-44-70-45-41))))
 
 (library
- (name compile_simple_real)
+ (name compile_simple_real_impl)
  (implements compile_simple)
  (libraries
   ;; opam libraries
@@ -13,7 +13,6 @@
   v
   random_oracle
   hash_prefix_states)
- (inline_tests)
  (instrumentation
   (backend bisect_ppx))
  (preprocess
@@ -25,3 +24,20 @@
    ppx_compare
    h_list.ppx))
  (modules compile_simple))
+
+(library
+ (name compile_simple_real)
+ (libraries
+  core_kernel
+  compile_simple_real_impl)
+ (instrumentation
+  (backend bisect_ppx))
+ (preprocess
+  (pps
+   ppx_deriving.show
+   ppx_deriving_snarky
+   ppx_mina
+   ppx_jane
+   ppx_compare
+   h_list.ppx))
+ (modules compile_simple_real))

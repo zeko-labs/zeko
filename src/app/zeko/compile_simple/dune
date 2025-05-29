@@ -14,5 +14,4 @@
  (modules
   compile_simple
   compile_simple_intf)
- (virtual_modules compile_simple)
- (default_implementation compile_simple_real))
+ (virtual_modules compile_simple))

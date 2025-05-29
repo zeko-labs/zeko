@@ -2,6 +2,7 @@
  (name sequencer_lib)
  (inline_tests)
  (libraries
+  is_compile_simple_real
   kvdb_base
   da_layer
   zeko_prover

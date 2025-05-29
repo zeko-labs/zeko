@@ -1,0 +1,5 @@
+(library
+ (name is_compile_simple_real_real)
+ (implements is_compile_simple_real)
+ (libraries compile_simple_real)
+ (modules is_compile_simple_real))

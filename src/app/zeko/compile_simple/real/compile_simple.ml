@@ -787,13 +787,6 @@ let compile (type out_t out_var first_input branches n_available_branches)
       in
       r
 
-let is_compile_simple_real :
-    ( Proof.t * Verification_key.t
-    , Pickles.Side_loaded.Proof.t * Pickles.Side_loaded.Verification_key.t )
-    Base.Type_equal.t
-    option =
-  Some T
-
 let add_plonk_constraint ~label c =
   ( match !bad_fixme_feature_flags with
   | None ->
