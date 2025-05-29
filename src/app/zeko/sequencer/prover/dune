@@ -8,7 +8,8 @@
   signature_lib
   ;; opam ;;
   async
-  core_unix.command_unix)
+  core_unix.command_unix
+  is_compile_simple_real_real)
  (preprocess
   (pps ppx_jane ppx_mina))
  (modules cli))
@@ -17,7 +18,7 @@
  (name cli_fake)
  (libraries
   zeko_prover
-  compile_simple_fake
+  is_compile_simple_real_fake
   ;; mina ;;
   mina_base
   cli_lib
