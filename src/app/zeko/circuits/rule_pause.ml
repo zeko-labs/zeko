@@ -3,7 +3,7 @@ open Snark_params.Tick
 open Rollup_state
 
 module Witness = struct
-  type t = { public_key : Even_PC.t; vk_hash : F.t; pause_key : Even_PC.t }
+  type t = { public_key : PC.t; vk_hash : F.t; pause_key : Even_PC.t }
   [@@deriving snarky]
 end
 
@@ -27,7 +27,7 @@ struct
     in
     let account_update =
       { default_account_update with
-        public_key = Even_PC.to_pc_var public_key
+        public_key
       ; authorization_kind = authorization_vk_hash vk_hash
       ; update =
           { default_account_update.update with
