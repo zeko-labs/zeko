@@ -49,12 +49,6 @@ val compile :
          and type out_var = 'out_var
          and type branches = ('first_input, 'branches) cons_branch )
 
-val is_compile_simple_real :
-  ( Proof.t * Verification_key.t
-  , Pickles.Side_loaded.Proof.t * Pickles.Side_loaded.Verification_key.t )
-  Base.Type_equal.t
-  option
-
 val add_plonk_constraint :
      label:string
   -> ( Snark_params.Tick.Field.Var.t

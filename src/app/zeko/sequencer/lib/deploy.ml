@@ -55,7 +55,7 @@ module Z = struct
         ; permissions =
             { ( if
                 (* see #286 *)
-                Option.is_some Compile_simple.is_compile_simple_real
+                Option.is_some Is_compile_simple_real.is_compile_simple_real
               then proof_permissions
               else none_permissions )
               with
@@ -70,7 +70,7 @@ module Z = struct
               ; verification_key =
                   Some
                     (Verification_key_wire.Stable.Latest.M.of_binable
-                       ( match Compile_simple.is_compile_simple_real with
+                       ( match Is_compile_simple_real.is_compile_simple_real with
                        | Some eq ->
                            let _, vk_eq = Type_equal.detuple2 eq in
                            Type_equal.conv vk_eq vk
@@ -107,7 +107,7 @@ module Z = struct
         ; verification_key =
             Set
               (Verification_key_wire.Stable.Latest.M.of_binable
-                 ( match Compile_simple.is_compile_simple_real with
+                 ( match Is_compile_simple_real.is_compile_simple_real with
                  | Some eq ->
                      let _, vk_eq = Type_equal.detuple2 eq in
                      Type_equal.conv vk_eq vk
@@ -117,7 +117,7 @@ module Z = struct
             Set
               ( if
                 (* see #286 *)
-                Option.is_some Compile_simple.is_compile_simple_real
+                Option.is_some Is_compile_simple_real.is_compile_simple_real
               then proof_permissions
               else none_permissions )
         }
