@@ -223,6 +223,8 @@ let branches_to_provers name tag out_typ =
             Snark_params.Tick.run_and_check_exn
             @@
             let open Checked in
+            exists Typ.unit ~compute:(fun _ -> ())
+            >>= fun () ->
             main (V.return input)
             >>| fun { out; prevs } ->
             let open As_prover in

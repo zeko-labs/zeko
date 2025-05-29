@@ -290,29 +290,28 @@ module Calls = struct
     let attach_control_var :
            chain:Mina_signature_kind.t
         -> Account_update.Body.Checked.t
-        -> Zkapp_call_forest.Checked.account_update =
+        -> Zkapp_call_forest.Checked.account_update Checked.t =
      fun ~chain account_update ->
-      { account_update =
-          { data = account_update
-          ; hash =
-              Zkapp_command.Call_forest.Digest.Account_update.Checked.create
-                ~chain account_update
-          }
-      ; control =
-          (let@ () = Mina_base.Prover_value.create in
-           Control.None_given )
+      let*| hash =
+        make_checked
+        @@ fun () ->
+        Zkapp_command.Call_forest.Digest.Account_update.Checked.create ~chain
+          account_update
+      in
+      { Zkapp_call_forest.Checked.account_update =
+          { data = account_update; hash }
+      ; control = (Mina_base.Prover_value.create @@ fun () -> Control.None_given)
       }
     in
     fun ~chain -> function
       | [] ->
-          Checked.return (Zkapp_call_forest.Checked.empty ())
+          make_checked Zkapp_call_forest.Checked.empty
       | (account_update, nested_calls) :: tail ->
           let* calls = hash ~chain nested_calls in
           let* tail = hash ~chain tail in
+          let* account_update = attach_control_var ~chain account_update in
           Checked.return
-            (Zkapp_call_forest.Checked.push
-               ~account_update:(attach_control_var ~chain account_update)
-               ~calls tail )
+            (Zkapp_call_forest.Checked.push ~account_update ~calls tail)
       | Raw calls ->
           Checked.return calls
 end
@@ -328,7 +327,9 @@ let make_outputs :
        Checked.t =
  fun ~chain account_update calls ->
   let* calls = Calls.hash ~chain calls in
-  let account_update_digest =
+  let* account_update_digest =
+    make_checked
+    @@ fun () ->
     Zkapp_command.Call_forest.Digest.Account_update.Checked.create ~chain
       account_update
   in
