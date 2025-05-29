@@ -1,8 +1,14 @@
+(library
+ (name is_compile_simple_real)
+ (libraries core_kernel compile_simple)
+ (modules is_compile_simple_real)
+ (virtual_modules is_compile_simple_real))
+
 (executable
  (name run)
  (libraries
   sequencer_lib
-  compile_simple_real
+  is_compile_simple_real_real
   ;; mina ;;
   init
   signature_lib
@@ -26,7 +32,7 @@
  (name run_fake)
  (libraries
   sequencer_lib
-  compile_simple_fake
+  is_compile_simple_real_fake
   ;; mina ;;
   init
   signature_lib
@@ -50,7 +56,7 @@
  (name deploy)
  (libraries
   sequencer_lib
-  compile_simple_real
+  is_compile_simple_real_real
   ;; mina ;;
   mina_base
   mina_numbers
@@ -84,7 +90,7 @@
  (name deploy_fake)
  (libraries
   sequencer_lib
-  compile_simple_fake
+  is_compile_simple_real_fake
   ;; mina ;;
   mina_base
   mina_numbers
@@ -118,7 +124,7 @@
  (name cli)
  (libraries
   sequencer_lib
-  compile_simple_fake
+  is_compile_simple_real_fake
   ;; mina ;;
   init
   signature_lib

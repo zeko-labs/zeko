@@ -488,7 +488,7 @@ module Sequencer = struct
                 : C.Ase.With_length.Stmt.t )
         in
         (* see #286 *)
-        match Compile_simple.is_compile_simple_real with
+        match Is_compile_simple_real.is_compile_simple_real with
         | Some eq ->
             let proof_eq, _ = Type_equal.detuple2 eq in
             let account_update : Account_update.t =
