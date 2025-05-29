@@ -159,19 +159,20 @@ module Outer_rules_inst =
     end)
     ()
 
-let _outer =
+let _txn_stmt, _txn_proof =
   let open struct
-    let Compile_simple.[ _commit; action; _pause ] = Outer_rules_inst.provers
+    let Compile_simple.[ commit; action; _pause ] = Outer_rules_inst.provers
 
-    (* let pause_witness : Rule_pause.Witness.t =
-         { public_key = point_of_string_even "1238881"
-         ; vk_hash = Field.of_string "19944541415"
-         ; pause_key = point_of_string_even "1511111121"
-         }
+    (*
+    let pause_witness : Rule_pause.Witness.t =
+      { public_key = point_of_string "1238881"
+      ; vk_hash = Field.of_string "19944541415"
+      ; pause_key = point_of_string_even "1511111121"
+      }
 
-       let _stmt, _proof =
-         Promise.block_on_async_exn @@ fun () -> pause pause_witness *)
-    (* FIXME: fails with fake compile somehow *)
+    let _stmt, _proof =
+      Promise.block_on_async_exn @@ fun () -> pause pause_witness
+    *)
 
     let action_witness : Rule_action_witness.Witness.t =
       { public_key = point_of_string "41889111"
@@ -204,7 +205,7 @@ let _outer =
     let verify_both_ases_stmt, verify_both_ases_proof =
       Promise.block_on_async_exn @@ fun () -> prove_both (ase_outer, ase_inner)
 
-    let _verify_both_ases =
+    let verify_both_ases =
       Rule_commit.Verify_both_ases.make_unchecked ~proof:verify_both_ases_proof
         verify_both_ases_stmt
 
@@ -298,8 +299,10 @@ let _outer =
             let acc' = Mina_base.Ledger_hash.merge ~height acc right in
             acc' )
 
-    let fee_payer_kp, new_kp =
-      Base_quickcheck.Generator.both Keypair.gen Keypair.gen
+    let (fee_payer_kp, new_kp), da_kp =
+      Base_quickcheck.Generator.both
+        (Base_quickcheck.Generator.both Keypair.gen Keypair.gen)
+        Keypair.gen
       |> Quickcheck.random_value
 
     let fee_payer_acc =
@@ -312,6 +315,8 @@ let _outer =
       `Left (Mina_base.Account.digest fee_payer_acc)
       :: ( List.map ~f:(fun (_, h) -> `Left h)
          @@ List.drop intermediate_ledger_hashes 1 )
+
+    let old_inner_acc_path = path_inner
 
     let path_fee_payer =
       `Right (Mina_base.Account.digest old_inner_acc)
@@ -340,19 +345,6 @@ let _outer =
 
     let account_id_new =
       Mina_base.Account_id.create new_pk Mina_base.Token_id.default
-
-    let sparse_source_ledger : Mina_ledger.Sparse_ledger.t =
-      Mina_ledger.Sparse_ledger.of_root ~depth:constraint_constants.ledger_depth
-        source_ledger
-      |> fun x ->
-      Mina_ledger.Sparse_ledger.add_path x path_inner (id_of old_inner_acc)
-        old_inner_acc
-      |> fun x ->
-      Mina_ledger.Sparse_ledger.add_path x path_fee_payer (id_of fee_payer_acc)
-        fee_payer_acc
-      |> fun x ->
-      Mina_ledger.Sparse_ledger.add_path x path_new account_id_new
-        Mina_base.Account.empty
 
     let () =
       printf "Fee  key: %s\n"
@@ -455,6 +447,11 @@ let _outer =
       let (Typ typ) = Account_set.typ in
       typ.value_of_fields ([| x |], typ.constraint_system_auxiliary ())
 
+    let of_account_set x =
+      let (Typ typ) = Account_set.typ in
+      let fields, _aux = typ.value_to_fields x in
+      match fields with [| f |] -> f | _ -> failwith __LOC__
+
     let derive pk =
       Mina_base.Account_id.create pk Mina_base.Token_id.default
       |> fun owner -> Mina_base.Account_id.derive_token_id ~owner
@@ -515,6 +512,19 @@ let _outer =
       ; get_account_set_y_path =
           List.map ~f:convert_path [ first.path; second.path ] |> list_to_fun
       }
+
+    let sparse_source_ledger : Mina_ledger.Sparse_ledger.t =
+      Mina_ledger.Sparse_ledger.of_root ~depth:constraint_constants.ledger_depth
+        source_ledger
+      |> fun x ->
+      Mina_ledger.Sparse_ledger.add_path x path_inner (id_of old_inner_acc)
+        old_inner_acc
+      |> fun x ->
+      Mina_ledger.Sparse_ledger.add_path x path_fee_payer (id_of fee_payer_acc)
+        fee_payer_acc
+      |> fun x ->
+      Mina_ledger.Sparse_ledger.add_path x path_new account_id_new
+        Mina_base.Account.empty
 
     let zkapp_double_witness : Rule_zkapp_command.Zkapp_double_unproved_input.t
         =
@@ -691,7 +701,7 @@ let _outer =
       Promise.block_on_async_exn
       @@ fun () -> zkapp_double zkapp_second_double_witness
 
-    let _stmt, _proof =
+    let stmt, proof =
       Promise.block_on_async_exn
       @@ fun () ->
       merge
@@ -700,5 +710,86 @@ let _outer =
         ; right = stmt1
         ; right_proof = proof1
         }
+
+    let convert_path =
+      let f = function
+        | `Left right_side ->
+            ({ right_side } : Outer_rules_inst.Rule_commit_inst.PathElt.t)
+        | `Right _ ->
+            failwith __LOC__
+      in
+      List.map ~f
+
+    let new_inner_acc_path =
+      ( { right_side =
+            Mina_base.Account.digest
+              { fee_payer_acc with
+                nonce = Unsigned.UInt32.one
+              ; balance =
+                  (let b, _ =
+                     Currency.Balance.add_signed_amount_flagged
+                       fee_payer_acc.balance third_account_update.balance_change
+                   in
+                   b )
+              }
+        }
+        : Outer_rules_inst.Rule_commit_inst.PathElt.t )
+      :: ( { right_side =
+               Mina_base.Account.(
+                 Mina_base.Ledger_hash.merge ~height:0
+                   (digest
+                      { empty with
+                        public_key = Public_key.compress new_kp.public_key
+                      ; balance = Currency.Balance.of_mina_string_exn "1"
+                      } )
+                   (force empty_digest))
+           }
+           : Outer_rules_inst.Rule_commit_inst.PathElt.t )
+      :: ( List.map
+             ~f:(fun
+                  (_, right_side)
+                  :
+                  Outer_rules_inst.Rule_commit_inst.PathElt.t
+                -> { right_side } )
+         @@ List.drop intermediate_ledger_hashes 2 )
+
+    let da_signature =
+      let input =
+        let open Random_oracle.Input.Chunked in
+        append
+          (stmt.target_ledger |> field)
+          (stmt.target_acc_set |> of_account_set |> field)
+      in
+      let payload =
+        Random_oracle.hash
+          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+          (Random_oracle.pack_input input)
+      in
+      Signature_lib.Schnorr.Chunked.sign da_kp.private_key
+        (Random_oracle.Input.Chunked.field payload)
+
+    let da_key =
+      da_kp.public_key |> Public_key.compress
+      |> fun p : Zeko_util.Even_PC.t ->
+      { public_key = p.Public_key.Compressed.Poly.x }
+
+    let witness : Outer_rules_inst.Rule_commit_inst.Witness.t =
+      { txn_snark = Txn_rules.make_unchecked ~proof stmt
+      ; public_key = point_of_string "29421"
+      ; vk_hash = Snark_params.Tick.Field.zero
+      ; slot_range =
+          { lower = Mina_numbers.Global_slot_since_genesis.zero
+          ; upper = Mina_numbers.Global_slot_since_genesis.zero
+          }
+      ; old_inner_acc
+      ; new_inner_acc = old_inner_acc
+      ; old_inner_acc_path = convert_path old_inner_acc_path
+      ; new_inner_acc_path
+      ; da_signature
+      ; da_key
+      ; verify_both_ases
+      }
+
+    let stmt, proof = Promise.block_on_async_exn @@ fun () -> commit witness
   end in
-  ()
+  (stmt, proof)

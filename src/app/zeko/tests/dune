@@ -1,6 +1,11 @@
+(env
+ (_
+  (flags
+   (:standard -w @a-42-40-44-70-45-41))))
+
 (executable
  (name compile_circuits)
- (libraries zeko_circuits compile_simple_real)
+ (libraries zeko_circuits compile_simple)
  (instrumentation
   (backend bisect_ppx))
  (preprocess
@@ -8,15 +13,46 @@
  (modules compile_circuits)
  )
 
+(library
+ (name account_set_data)
+ (libraries zeko_circuits mina_base)
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
+ (modules account_set_data))
+
 (executable
- (name basic_prove_test)
- (libraries zeko_circuits compile_simple_fake)
+ (name test_all_fake)
+ (libraries zeko_circuits compile_simple_fake account_set_data)
  (instrumentation
   (backend bisect_ppx))
  (preprocess
   (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
- (modules basic_prove_test account_set_data)
- )
+ (modules test_all_fake))
+
+(executable
+ (name test_all_real)
+ (libraries zeko_circuits compile_simple_real account_set_data)
+ (instrumentation
+  (backend bisect_ppx))
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving_snarky ppx_snarky ppx_mina ppx_version ppx_jane ppx_compare h_list.ppx))
+ (modules test_all_real))
+
+(executable
+ (name test_pause_fake)
+ (libraries zeko_circuits compile_simple_fake)
+ (instrumentation (backend bisect_ppx))
+ (preprocess
+  (pps ppx_deriving.show ppx_jane ppx_compare))
+ (modules test_pause_fake))
+
+(executable
+ (name test_pause_real)
+ (libraries zeko_circuits compile_simple_real)
+ (instrumentation (backend bisect_ppx))
+ (preprocess
+  (pps ppx_deriving.show ppx_jane ppx_compare))
+ (modules test_pause_real))
 
 (executable
  (name transfers)
