@@ -1962,7 +1962,8 @@ module Make (Inputs : Inputs_intf) = struct
     in
     (* ZEKO NOTE: Don't allow failed transactions. Maybe not necessary because our custom add_check
        doesn't allow failures anyway, but we've added this for good measure. *)
-    assert_ ~pos:__POS__ local_state.success ;
+    Bool.assert_with_failure_status_tbl ~pos:__POS__ local_state.success
+      local_state.failure_status_tbl ;
     let local_state =
       (* Make sure to reset the local_state at the end of a transaction.
          The following fields are already reset
