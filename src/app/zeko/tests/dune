@@ -55,6 +55,22 @@
  (modules test_pause_real))
 
 (executable
+ (name test_zkapp_fake)
+ (libraries zeko_circuits compile_simple_fake account_set_data)
+ (instrumentation (backend bisect_ppx))
+ (preprocess
+  (pps ppx_deriving.show ppx_jane ppx_compare))
+ (modules test_zkapp_fake))
+
+(executable
+ (name test_zkapp_real)
+ (libraries zeko_circuits compile_simple_real account_set_data)
+ (instrumentation (backend bisect_ppx))
+ (preprocess
+  (pps ppx_deriving.show ppx_jane ppx_compare))
+ (modules test_zkapp_real))
+
+(executable
  (name transfers)
  (libraries zeko_circuits graphql_lib)
  (instrumentation
