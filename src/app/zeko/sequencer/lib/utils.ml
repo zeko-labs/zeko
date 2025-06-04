@@ -173,3 +173,10 @@ let signature_kind = function
       Mina_signature_kind.Testnet
   | network_id ->
       Mina_signature_kind.Other_network network_id
+
+(** minimum_fee * e^(q * 0.1 * modifier) *)
+let fee_per_weight_unit ~minimum_fee ~fee_modifier ~jobs_in_queue =
+  minimum_fee
+  *. exp (jobs_in_queue *. 0.1 *. fee_modifier)
+  (* convert to nanomina *)
+  *. 10e8
