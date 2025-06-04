@@ -18,7 +18,7 @@ let rec fold_until_none ~init ~f =
   | Some init' ->
       fold_until_none ~init:init' ~f
 
-(* TODO: optimize epoch ledgers? (many duplcate copies right now *)
+(* TODO: optimize epoch ledgers? (many duplicate copies right now *)
 module Staker = struct
   type t =
     { keypair : Keypair.And_compressed_pk.t; local_state : Local_state.t }
