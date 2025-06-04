@@ -280,15 +280,14 @@ module Sequencer = struct
                      } ) ) )
     |> Or_error.combine_errors |> Result.map ~f:ignore
 
-  (** minimum_fee * e^(q * 0.1 * modifier) *)
-  let current_fee_per_weight_unit t =
-    let jobs_in_queue =
-      Zeko_prover.Client.queue_size t.merger_ctx.provers |> Float.of_int
-    in
-    t.config.minimum_fee
-    *. exp (jobs_in_queue *. 0.1 *. t.config.fee_modifier)
-    (* convert to nanomina *)
-    *. 10e8
+  let calculate_required_fee t weight =
+    let jobs_in_queue = Zeko_prover.Client.queue_size t.merger_ctx.provers in
+    let Config.{ minimum_fee; fee_modifier; _ } = t.config in
+    List.init weight ~f:Fn.id
+    |> List.fold ~init:0. ~f:(fun acc i ->
+           acc
+           +. Utils.fee_per_weight_unit ~minimum_fee ~fee_modifier
+                ~jobs_in_queue:(Float.of_int (jobs_in_queue + i)) )
 
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
@@ -302,8 +301,8 @@ module Sequencer = struct
           let%bind.Deferred.Result () =
             if skip_validity_check then return (Ok ())
             else
-              let weight = User_command.weight command |> Float.of_int in
-              let required_fee = weight *. current_fee_per_weight_unit t in
+              let weight = User_command.weight command in
+              let required_fee = calculate_required_fee t weight in
               let command_fee =
                 User_command.fee command |> Currency.Fee.to_nanomina_int
                 |> Float.of_int
