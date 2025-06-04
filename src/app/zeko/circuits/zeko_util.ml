@@ -292,6 +292,11 @@ module Calls = struct
         -> Account_update.Body.Checked.t
         -> Zkapp_call_forest.Checked.account_update Checked.t =
      fun ~chain account_update ->
+      let* control =
+        make_checked
+        @@ fun () ->
+        Mina_base.Prover_value.create @@ fun () -> Control.None_given
+      in
       let*| hash =
         make_checked
         @@ fun () ->
@@ -300,7 +305,7 @@ module Calls = struct
       in
       { Zkapp_call_forest.Checked.account_update =
           { data = account_update; hash }
-      ; control = (Mina_base.Prover_value.create @@ fun () -> Control.None_given)
+      ; control
       }
     in
     fun ~chain -> function
@@ -310,8 +315,9 @@ module Calls = struct
           let* calls = hash ~chain nested_calls in
           let* tail = hash ~chain tail in
           let* account_update = attach_control_var ~chain account_update in
-          Checked.return
-            (Zkapp_call_forest.Checked.push ~account_update ~calls tail)
+          make_checked
+          @@ fun () ->
+          Zkapp_call_forest.Checked.push ~account_update ~calls tail
       | Raw calls ->
           Checked.return calls
 end
@@ -326,8 +332,10 @@ let make_outputs :
        )
        Checked.t =
  fun ~chain account_update calls ->
-  let* calls = Calls.hash ~chain calls in
+  let* calls = with_label __LOC__ @@ fun () -> Calls.hash ~chain calls in
   let* account_update_digest =
+    with_label __LOC__
+    @@ fun () ->
     make_checked
     @@ fun () ->
     Zkapp_command.Call_forest.Digest.Account_update.Checked.create ~chain
@@ -342,11 +350,11 @@ let make_outputs :
     let+ account_update =
       As_prover.read (Account_update.Body.typ ()) account_update
     in
-    let+| account_update_digest =
+    let+ account_update_digest =
       As_prover.read Zkapp_command.Call_forest.Digest.Account_update.typ
         account_update_digest
     in
-    let calls = Prover_value.get calls.data in
+    let+| calls = make_as_prover @@ fun () -> Prover_value.get calls.data in
     (account_update, account_update_digest, calls)
   in
   let*| auxiliary_output = V.create auxiliary_output in

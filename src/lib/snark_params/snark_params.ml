@@ -234,6 +234,8 @@ module Tick = struct
   let m : Run.field Snarky_backendless.Snark.m = (module Run)
 
   let make_checked c = Run.make_checked c
+
+  let make_as_prover f = Run.make_as_prover f
 end
 
 (* Let n = Tick.Field.size_in_bits.

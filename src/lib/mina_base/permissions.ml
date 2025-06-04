@@ -474,11 +474,6 @@ module Checked = struct
         ~then_:(fst then_.set_verification_key)
         ~else_:(fst else_.set_verification_key)
     in
-    let%map txn_version =
-      Mina_numbers.Txn_version.Checked.if_ b
-        ~then_:(snd then_.set_verification_key)
-        ~else_:(snd else_.set_verification_key)
-    in
     let set_zkapp_uri =
       Auth_required.Checked.if_ b ~then_:then_.set_zkapp_uri
         ~else_:else_.set_zkapp_uri
@@ -505,6 +500,11 @@ module Checked = struct
     in
     let access =
       Auth_required.Checked.if_ b ~then_:then_.access ~else_:else_.access
+    in
+    let%map txn_version =
+      Mina_numbers.Txn_version.Checked.if_ b
+        ~then_:(snd then_.set_verification_key)
+        ~else_:(snd else_.set_verification_key)
     in
     { Poly.edit_state
     ; send

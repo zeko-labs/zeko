@@ -2480,17 +2480,24 @@ module Make_str (A : Wire_types.Concrete) = struct
                   Receipt.Chain_hash.Checked.if_ is_user_command ~then_:r
                     ~else_:current
                 in
-                let permitted_to_access =
+                let%bind permitted_to_access =
+                  make_checked
+                  @@ fun () ->
                   Account.Checked.has_permission
                     ~signature_verifies:is_user_command ~to_:`Access account
                 in
-                let permitted_to_increment_nonce =
+                let%bind permitted_to_increment_nonce =
+                  make_checked
+                  @@ fun () ->
                   Account.Checked.has_permission ~to_:`Increment_nonce account
                 in
-                let permitted_to_send =
-                  Account.Checked.has_permission ~to_:`Send account
+                let%bind permitted_to_send =
+                  make_checked
+                  @@ fun () -> Account.Checked.has_permission ~to_:`Send account
                 in
-                let permitted_to_receive =
+                let%bind permitted_to_receive =
+                  make_checked
+                  @@ fun () ->
                   Account.Checked.has_permission ~to_:`Receive account
                 in
                 let%bind () =
@@ -2663,13 +2670,16 @@ module Make_str (A : Wire_types.Concrete) = struct
                    - the receiver for a coinbase
                    - the first receiver for a fee transfer
                 *)
-                let permitted_to_access =
+                let%bind permitted_to_access =
+                  make_checked
+                  @@ fun () ->
                   Account.Checked.has_permission
                     ~signature_verifies:Boolean.false_ ~to_:`Access account
                 in
                 let%bind permitted_to_receive =
-                  Account.Checked.has_permission ~to_:`Receive account
-                  |> Boolean.( &&& ) permitted_to_access
+                  make_checked (fun () ->
+                      Account.Checked.has_permission ~to_:`Receive account )
+                  >>= Boolean.( &&& ) permitted_to_access
                 in
                 (*Account remains unchanged if balance update is not permitted for payments, fee_transfers and coinbase transactions*)
                 let%bind payment_or_internal_command =
@@ -2903,17 +2913,24 @@ module Make_str (A : Wire_types.Concrete) = struct
                           assert_r1cs not_fee_payer_is_source num_failures
                             num_failures ) )
                 in
-                let permitted_to_access =
+                let%bind permitted_to_access =
+                  make_checked
+                  @@ fun () ->
                   Account.Checked.has_permission
                     ~signature_verifies:is_user_command ~to_:`Access account
                 in
-                let permitted_to_update_delegate =
+                let%bind permitted_to_update_delegate =
+                  make_checked
+                  @@ fun () ->
                   Account.Checked.has_permission ~to_:`Set_delegate account
                 in
-                let permitted_to_send =
-                  Account.Checked.has_permission ~to_:`Send account
+                let%bind permitted_to_send =
+                  make_checked
+                  @@ fun () -> Account.Checked.has_permission ~to_:`Send account
                 in
-                let permitted_to_receive =
+                let%bind permitted_to_receive =
+                  make_checked
+                  @@ fun () ->
                   Account.Checked.has_permission ~to_:`Receive account
                 in
                 (*Account remains unchanged if not permitted to send, receive, or set delegate*)

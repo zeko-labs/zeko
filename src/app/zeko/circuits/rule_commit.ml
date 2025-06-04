@@ -98,10 +98,11 @@ struct
           (let+| content = As_prover.Ref.get content in
            Option.value ~default:Zkapp_account.default content )
     in
+    let* digest =
+      make_checked @@ fun () -> Zkapp_account.Checked.digest content
+    in
     let*| () =
-      with_label __LOC__ (fun () ->
-          Field.Checked.Assert.equal hash
-          @@ Zkapp_account.Checked.digest content )
+      with_label __LOC__ (fun () -> Field.Checked.Assert.equal hash digest)
     in
     content
 
