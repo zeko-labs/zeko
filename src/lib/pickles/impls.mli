@@ -26,7 +26,8 @@ module Step : sig
     val create : pk:Proving_key.t -> vk:Verification_key.t -> t
 
     val generate :
-         prev_challenges:int
+         ?lazy_mode:bool
+      -> prev_challenges:int
       -> Kimchi_pasta_constraint_system.Vesta_constraint_system.t
       -> t
   end
@@ -74,8 +75,8 @@ module Step : sig
 
   type 'proofs_verified statement_var =
     ( (unfinalized_proof_var, 'proofs_verified) Vector.t
-    , Impl.field Snarky_backendless.Cvar.t
-    , (Impl.field Snarky_backendless.Cvar.t, 'proofs_verified) Vector.t )
+    , Impl.Field.t
+    , (Impl.Field.t, 'proofs_verified) Vector.t )
     Import.Types.Step.Statement.t
 
   val input :
@@ -110,7 +111,8 @@ module Wrap : sig
     val create : pk:Proving_key.t -> vk:Verification_key.t -> t
 
     val generate :
-         prev_challenges:int
+         ?lazy_mode:bool
+      -> prev_challenges:int
       -> Kimchi_pasta_constraint_system.Pallas_constraint_system.t
       -> t
   end
@@ -134,23 +136,20 @@ module Wrap : sig
          , Impl.Field.t Composition_types.Scalar_challenge.t
          , Impl.Field.t Pickles_types.Shifted_value.Type1.t
          , ( Impl.Field.t Pickles_types.Shifted_value.Type1.t
-           , Impl.field Snarky_backendless.Cvar.t
-             Snarky_backendless.Snark_intf.Boolean0.t )
+           , Impl.Field.t Snarky_backendless.Snark_intf.Boolean0.t )
            Pickles_types.Opt.t
          , ( Impl.Field.t Composition_types.Scalar_challenge.t
-           , Impl.field Snarky_backendless.Cvar.t
-             Snarky_backendless.Snark_intf.Boolean0.t )
+           , Impl.Field.t Snarky_backendless.Snark_intf.Boolean0.t )
            Pickles_types.Opt.t
          , Impl.Boolean.var
-         , Impl.field Snarky_backendless.Cvar.t
-         , Impl.field Snarky_backendless.Cvar.t
-         , Impl.field Snarky_backendless.Cvar.t
-         , ( Impl.field Snarky_backendless.Cvar.t
-             Kimchi_backend_common.Scalar_challenge.t
+         , Impl.Field.t
+         , Impl.Field.t
+         , Impl.Field.t
+         , ( Impl.Field.t Kimchi_backend_common.Scalar_challenge.t
              Composition_types.Bulletproof_challenge.t
            , Pickles_types.Nat.z Backend.Tick.Rounds.plus_n )
            Pickles_types.Vector.t
-         , Impl.field Snarky_backendless.Cvar.t )
+         , Impl.Field.t )
          Import.Types.Wrap.Statement.In_circuit.t
        , ( Limb_vector.Challenge.Constant.t
          , Limb_vector.Challenge.Constant.t Composition_types.Scalar_challenge.t

@@ -219,36 +219,16 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
         (Wait_condition.nodes_to_initialize
            (Core.String.Map.data all_mina_nodes) )
     in
-    let node_a =
-      Core.String.Map.find_exn (Network.block_producers network) "node-a"
-    in
-    let node_b =
-      Core.String.Map.find_exn (Network.block_producers network) "node-b"
-    in
-    let fish1 =
-      Core.String.Map.find_exn (Network.genesis_keypairs network) "fish1"
-    in
-    let fish2 =
-      Core.String.Map.find_exn (Network.genesis_keypairs network) "fish2"
-    in
-    let timed1 =
-      Core.String.Map.find_exn (Network.genesis_keypairs network) "timed1"
-    in
-    let timed2 =
-      Core.String.Map.find_exn (Network.genesis_keypairs network) "timed2"
-    in
-    let timed3 =
-      Core.String.Map.find_exn (Network.genesis_keypairs network) "timed3"
-    in
-    let timed4 =
-      Core.String.Map.find_exn (Network.genesis_keypairs network) "timed4"
-    in
-    let timed5 =
-      Core.String.Map.find_exn (Network.genesis_keypairs network) "timed5"
-    in
-    let vk_proof =
-      Core.String.Map.find_exn (Network.genesis_keypairs network) "vk-proof"
-    in
+    let node_a = Network.block_producer_exn network "node-a" in
+    let node_b = Network.block_producer_exn network "node-b" in
+    let fish1 = Network.genesis_keypair_exn network "fish1" in
+    let fish2 = Network.genesis_keypair_exn network "fish2" in
+    let timed1 = Network.genesis_keypair_exn network "timed1" in
+    let timed2 = Network.genesis_keypair_exn network "timed2" in
+    let timed3 = Network.genesis_keypair_exn network "timed3" in
+    let timed4 = Network.genesis_keypair_exn network "timed4" in
+    let timed5 = Network.genesis_keypair_exn network "timed5" in
+    let vk_proof = Network.genesis_keypair_exn network "vk-proof" in
     let vk_impossible =
       Core.String.Map.find_exn
         (Network.genesis_keypairs network)
@@ -292,8 +272,9 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
       in
       { Signed_command_payload.Poly.common; body }
     in
+    let signature_kind = Mina_signature_kind.t_DEPRECATED in
     let raw_signature =
-      Signed_command.sign_payload sender.private_key payload
+      Signed_command.sign_payload ~signature_kind sender.private_key payload
       |> Signature.Raw.encode
     in
     let%bind.Async.Deferred zkapp_command_create_accounts =

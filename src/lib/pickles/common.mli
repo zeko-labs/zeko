@@ -51,20 +51,13 @@ val ft_comm :
   -> t_comm:'comm array
   -> 'comm
 
-val dlog_pcs_batch :
-     'total Pickles_types.Nat.t
-     * ('proofs_verified, 'n, 'total) Pickles_types.Nat.Adds.t
-  -> ('a, 'total, Pickles_types.Nat.z) Pickles_types.Pcs_batch.t
-
 val combined_evaluation :
-     (module Snarky_backendless.Snark_intf.Run with type field = 'f)
-  -> xi:'f Snarky_backendless.Cvar.t
-  -> ( 'f Snarky_backendless.Cvar.t
-     , 'f Snarky_backendless.Cvar.t Snarky_backendless.Snark_intf.Boolean0.t )
-     Pickles_types.Opt.t
-     array
-     list
-  -> 'f Snarky_backendless.Cvar.t
+     (module Snarky_backendless.Snark_intf.Run
+        with type field = 'f
+         and type field_var = 'v )
+  -> xi:'v
+  -> ('v, 'v Snarky_backendless.Boolean.t) Pickles_types.Opt.t array list
+  -> 'v
 
 module Max_degree : sig
   val wrap_log2 : int

@@ -43,7 +43,9 @@ module type CONTEXT = sig
 
   val consensus_constants : Consensus.Constants.t
 
-  val compile_config : Mina_compile_config.t
+  val ledger_sync_config : Syncable_ledger.daemon_config
+
+  val proof_cache_db : Proof_cache_tag.cache_db
 end
 
 module Node_status = Node_status
@@ -263,6 +265,10 @@ let get_transition_chain ?heartbeat_timeout ?timeout t =
 let get_best_tip ?heartbeat_timeout ?timeout t peer =
   make_rpc_request ?heartbeat_timeout ?timeout ~rpc:Rpcs.Get_best_tip
     ~label:"best tip" t peer ()
+
+let get_completed_checked_snarks t peer =
+  make_rpc_request ~rpc:Rpcs.Get_completed_snarks
+    ~label:"completed checked snarks" t peer ()
 
 let ban_notify t peer banned_until =
   query_peer t peer.Peer.peer_id Rpcs.Ban_notify banned_until

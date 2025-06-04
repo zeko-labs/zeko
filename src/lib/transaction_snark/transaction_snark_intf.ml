@@ -207,7 +207,6 @@ module type Full = sig
 
     val proof_level : Genesis_constants.Proof_level.t
   end) : S
-  [@@warning "-67"]
 
   val constraint_system_digests :
        constraint_constants:Genesis_constants.Constraint_constants.t
@@ -399,14 +398,13 @@ module type Full = sig
            , unit
            , unit
            , Zkapp_statement.t
-           , (unit * unit * (Nat.N2.n, Nat.N2.n) Pickles.Proof.t)
-             Async.Deferred.t )
+           , (unit * unit * Nat.N2.n Pickles.Proof.t) Async.Deferred.t )
            Pickles.Prover.t
            * ( Pickles.Side_loaded.Verification_key.t
              , Snark_params.Tick.Field.t )
              With_hash.t
              Async.Deferred.t
-      -> chain:Mina_signature_kind.t
+      -> signature_kind:Mina_signature_kind.t
       -> constraint_constants:Genesis_constants.Constraint_constants.t
       -> Single_account_update_spec.t
       -> Zkapp_command.t Async.Deferred.t
@@ -440,8 +438,7 @@ module type Full = sig
            , unit
            , unit
            , Zkapp_statement.t
-           , (unit * unit * (Nat.N2.n, Nat.N2.n) Pickles.Proof.t)
-             Async.Deferred.t )
+           , (unit * unit * Nat.N2.n Pickles.Proof.t) Async.Deferred.t )
            Pickles.Prover.t
            * ( Pickles.Side_loaded.Verification_key.t
              , Snark_params.Tick.Field.t )
@@ -453,8 +450,7 @@ module type Full = sig
       -> Zkapp_command.t Async.Deferred.t
 
     val create_trivial_predicate_snapp :
-         constraint_constants:Genesis_constants.Constraint_constants.t
-      -> ?protocol_state_predicate:Zkapp_precondition.Protocol_state.t
+         ?protocol_state_predicate:Zkapp_precondition.Protocol_state.t
       -> snapp_kp:Signature_lib.Keypair.t
       -> Mina_transaction_logic.For_tests.Transaction_spec.t
       -> Mina_ledger.Ledger.t
@@ -475,7 +471,6 @@ module type Full = sig
 
     val create_trivial_snapp :
          ?unique_id:int
-      -> constraint_constants:Genesis_constants.Constraint_constants.t
       -> unit
       -> [> `VK of
             (Side_loaded_verification_key.t, Tick.Field.t) With_hash.t
@@ -485,9 +480,41 @@ module type Full = sig
               , unit
               , unit
               , Zkapp_statement.t
-              , (unit * unit * (Nat.N2.n, Nat.N2.n) Pickles.Proof.t)
-                Async.Deferred.t )
+              , (unit * unit * Nat.N2.n Pickles.Proof.t) Async.Deferred.t )
               Pickles.Prover.t ]
+
+    module Signature_transfers_spec : sig
+      type t =
+        { fee : Currency.Fee.t
+        ; sender : Signature_lib.Keypair.t * Mina_base.Account.Nonce.t
+        ; fee_payer :
+            (Signature_lib.Keypair.t * Mina_base.Account.Nonce.t) option
+        ; receivers :
+            ( ( Signature_lib.Keypair.t
+              , Signature_lib.Public_key.Compressed.t )
+              Either.t
+            * Currency.Amount.t )
+            list
+        ; amount : Currency.Amount.t
+        ; zkapp_account_keypairs : Signature_lib.Keypair.t list
+        ; memo : Signed_command_memo.t
+        ; new_zkapp_account : bool
+        ; snapp_update : Account_update.Update.t
+              (* Authorization for the update being performed *)
+        ; actions : Tick.Field.t Bounded_types.ArrayN4000.Stable.V1.t list
+        ; events : Tick.Field.t Bounded_types.ArrayN4000.Stable.V1.t list
+        ; transfer_parties_get_actions_events : bool
+        ; call_data : Tick.Field.t
+        ; preconditions : Account_update.Preconditions.t option
+        }
+      [@@deriving sexp]
+    end
+
+    val signature_transfers :
+         ?receiver_auth:Control.Tag.t
+      -> constraint_constants:Genesis_constants.Constraint_constants.t
+      -> Signature_transfers_spec.t
+      -> Zkapp_command.t
 
     module Multiple_transfers_spec : sig
       type t =
