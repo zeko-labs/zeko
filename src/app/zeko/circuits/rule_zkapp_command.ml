@@ -13,7 +13,8 @@ open struct
         lazy
           (let a =
              { a with
-               zkapp = (Zkapp_account.Checked.digest a.zkapp, ref (Some None))
+               zkapp =
+                 (Zkapp_account.Checked.digest a.zkapp, Prover_value.return None)
              }
            in
            Run.run_checked (Account.Checked.digest a) ) )
@@ -117,18 +118,13 @@ module Zkapp_rule_input_witness = struct
   open Mina_base
 
   type t =
-    { stack_frame :
-        ( Token_id.Stable.V2.t
-        , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
-        Stack_frame.Stable.V1.t
+    { stack_frame : (Token_id.t, Zkapp_call_forest.t) Stack_frame.t
     ; call_stack :
-        ( ( ( Token_id.Stable.V2.t
-            , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
-            Stack_frame.Stable.V1.t
-          , Stack_frame.Digest.Stable.V1.t )
+        ( ( (Token_id.t, Zkapp_command.Call_forest.With_hashes.t) Stack_frame.t
+          , Stack_frame.Digest.t )
           With_hash.t
-        , Call_stack_digest.Stable.V1.t )
-        With_stack_hash.Stable.V1.t
+        , Call_stack_digest.t )
+        With_stack_hash.t
         list
     ; source_ledger_sparse : Mina_ledger.Sparse_ledger.t
     ; update_acc_set_witness : update_acc_set_witness
@@ -183,16 +179,13 @@ open struct
         * [ `Compute_in_circuit | `Yes | `No ]
         * Per_account_update.var )
         list ) =
-    let* witness_p =
-      make_checked
-      @@ fun () ->
-      Prover_value.create
-      @@ fun () -> V.unsafe_unwrap witness |> Option.value_exn
-    in
+    let* witness_p = V.as_prover_value witness in
     let* source_ledger_sparse =
       make_checked
       @@ fun () ->
-      Prover_value.map ~f:(fun x -> x.source_ledger_sparse) witness_p
+      Prover_value.map
+        ~f:(fun x -> x.Zkapp_rule_input_witness.source_ledger_sparse)
+        witness_p
     in
     let* stack_frame =
       make_checked
@@ -239,7 +232,7 @@ open struct
         make_checked
         @@ fun () -> Prover_value.map ~f:(fun x -> x.call_stack) witness_p
       in
-      let l : _ Mina_transaction_logic.Zkapp_command_logic.Local_state.t =
+      let l : local_state_var =
         { ledger = (source_ledger, source_ledger_sparse)
         ; stack_frame
         ; call_stack =

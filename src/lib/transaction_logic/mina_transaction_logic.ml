@@ -2499,7 +2499,7 @@ module For_tests = struct
       ?(double_sender_nonce = true)
       { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount }
       : Zkapp_command.t =
-    let signature_kind = Mina_signature_kind.t_DEPRECATED in
+    let signature_kind = Option.value ~default:Mina_signature_kind.t_DEPRECATED chain in
     let sender_pk = Public_key.compress sender.public_key in
     let actual_nonce =
       (* Here, we double the spec'd nonce, because we bump the nonce a second
@@ -2584,38 +2584,18 @@ module For_tests = struct
       ; memo = Signed_command_memo.empty
       }
     in
-<<<<<<< HEAD
-    let zkapp_command = Zkapp_command.of_simple ?chain zkapp_command in
-||||||| b6f5f579c7
-    let zkapp_command = Zkapp_command.of_simple zkapp_command in
-=======
-    let zkapp_command =
-      Zkapp_command.of_simple ~signature_kind ~proof_cache_db zkapp_command
-    in
->>>>>>> upstream/compatible
+    let zkapp_command = Zkapp_command.of_simple ~signature_kind ~proof_cache_db zkapp_command in
     let commitment = Zkapp_command.commitment zkapp_command in
     let full_commitment =
       Zkapp_command.Transaction_commitment.create_complete commitment
         ~memo_hash:(Signed_command_memo.hash zkapp_command.memo)
         ~fee_payer_hash:
-<<<<<<< HEAD
-          (Zkapp_command.Digest.Account_update.create ?chain
-||||||| b6f5f579c7
-          (Zkapp_command.Digest.Account_update.create
-=======
           (Zkapp_command.Digest.Account_update.create ~signature_kind
->>>>>>> upstream/compatible
              (Account_update.of_fee_payer zkapp_command.fee_payer) )
     in
     let account_updates_signature =
       let c = if use_full_commitment then full_commitment else commitment in
-<<<<<<< HEAD
-      Schnorr.Chunked.sign ?signature_kind:chain sender.private_key
-||||||| b6f5f579c7
-      Schnorr.Chunked.sign sender.private_key
-=======
       Schnorr.Chunked.sign ~signature_kind sender.private_key
->>>>>>> upstream/compatible
         (Random_oracle.Input.Chunked.field c)
     in
     let account_updates =
@@ -2633,13 +2613,7 @@ module For_tests = struct
               account_update )
     in
     let signature =
-<<<<<<< HEAD
-      Schnorr.Chunked.sign ?signature_kind:chain sender.private_key
-||||||| b6f5f579c7
-      Schnorr.Chunked.sign sender.private_key
-=======
       Schnorr.Chunked.sign ~signature_kind sender.private_key
->>>>>>> upstream/compatible
         (Random_oracle.Input.Chunked.field full_commitment)
     in
     { zkapp_command with

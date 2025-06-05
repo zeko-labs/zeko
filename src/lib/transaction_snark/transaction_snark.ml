@@ -1427,18 +1427,7 @@ module Make_str (A : Wire_types.Concrete) = struct
 
       let zeko_stack_frame_unhash = Inputs.Stack_frame.unhash
 
-      type zeko_call_stack_t =
-        ( ( ( ( Token_id.Stable.V2.t
-              , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
-              Stack_frame.Stable.V1.t
-            , Stack_frame.Digest.Stable.V1.t )
-            With_hash.t
-          , Call_stack_digest.Stable.V1.t )
-          With_stack_hash.Stable.V1.t
-          list
-          Prover_value.t
-        , Call_stack_digest.Checked.t )
-        With_hash.t
+      type zeko_call_stack_t = Inputs.Call_stack.t
 
       type zeko_call_forest_t = Zkapp_call_forest.Checked.t
 

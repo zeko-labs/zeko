@@ -76,3 +76,6 @@
 (* Constants determining sync ledger query/response size*)
 [%%define sync_ledger_max_subtree_depth 0]
 [%%define sync_ledger_default_subtree_depth 0]
+
+[%%define curve_size 0]
+[%%define default_transaction_fee "0"]

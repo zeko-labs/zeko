@@ -10,6 +10,10 @@ let if_ b ~then_ ~else_ =
   create (fun () ->
       get (if Impl.As_prover.read Boolean.typ b then then_ else else_) )
 
-let map t ~f = create (fun () -> f (get t))
+let map = Typ.prover_value_map
+
+let bind = Typ.prover_value_bind
+
+let return = Typ.prover_value_return
 
 let typ = Typ.prover_value

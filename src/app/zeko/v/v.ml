@@ -19,18 +19,9 @@ let typ : ('a t, 'a) Typ.t =
               t )
     }
 
-let get var _ =
-  match var with
-  | Circuit_mode ->
-      failwith "Shouldn't be possible! MkRef.get run with Circuit_mode."
-  | Proving_mode t ->
-      t
+let get var = As_prover.read typ var
 
-let create (x : 'a As_prover.t) : 'a t Checked.t =
-  let r = ref None in
-  let c = As_prover.map x ~f:(fun x -> r := Some x) |> as_prover in
-  Checked.map c ~f:(fun () ->
-      match !r with None -> Circuit_mode | Some x -> Proving_mode x )
+let create (compute : 'a As_prover.t) : 'a t Checked.t = exists typ ~compute
 
 let unsafe_unwrap : 'a t -> 'a option = function
   | Proving_mode proof ->
@@ -38,12 +29,16 @@ let unsafe_unwrap : 'a t -> 'a option = function
   | Circuit_mode ->
       None
 
-let as_ref x = ref (unsafe_unwrap x)
+let as_prover_value x = exists (Typ.prover_value ()) ~compute:(get x)
 
-let map ~f = function
+let map x ~f =
+  match x with
   | Circuit_mode ->
       Circuit_mode
   | Proving_mode x ->
       Proving_mode (f x)
+
+let bind x ~f =
+  match x with Circuit_mode -> Circuit_mode | Proving_mode x -> f x
 
 let return x = Proving_mode x

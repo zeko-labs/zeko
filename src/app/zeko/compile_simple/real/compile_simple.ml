@@ -68,6 +68,19 @@ type ('branches, 'n_branches) branches_length =
          , 'n_branches Pickles_types.Nat.s )
          branches_length
 
+let rec branches_length_functional :
+          'x 'y 'z.
+             ('x, 'y) branches_length * ('x, 'z) branches_length
+          -> ('y, 'z) Type_equal.t =
+  fun (type x y z) (xyxz : (x, y) branches_length * (x, z) branches_length) :
+      (y, z) Type_equal.t ->
+   match xyxz with
+   | Z, Z ->
+       Type_equal.T
+   | S x, S y ->
+       let T = branches_length_functional (x, y) in
+       T
+
 type 'branches count_branches_result =
   | Count_branches_result :
       ('branches, 'n_branches) branches_length
@@ -124,9 +137,9 @@ let input_for_main (type input)
 let transform_main_one
     ({ out; prevs = One_prev { public_input; proof; proof_must_verify } } :
       _ main_return ) =
+  let*| proof = V.as_prover_value proof in
   Pickles.Inductive_rule.
-    { previous_proof_statements =
-        [ { public_input; proof = V.as_ref proof; proof_must_verify } ]
+    { previous_proof_statements = [ { public_input; proof; proof_must_verify } ]
     ; public_output = out
     ; auxiliary_output = ()
     }
@@ -137,12 +150,12 @@ let transform_main_one_sideloaded ~sideloaded
          One_prev_sideloaded { public_input; proof; proof_must_verify; vk }
      } :
       _ main_return ) =
+  let* proof = V.as_prover_value proof in
   let*| () =
     make_checked (fun () -> Pickles.Side_loaded.in_circuit sideloaded vk)
   in
   Pickles.Inductive_rule.
-    { previous_proof_statements =
-        [ { public_input; proof = V.as_ref proof; proof_must_verify } ]
+    { previous_proof_statements = [ { public_input; proof; proof_must_verify } ]
     ; public_output = out
     ; auxiliary_output = ()
     }
@@ -161,14 +174,16 @@ let transform_main_two
              } )
      } :
       _ main_return ) =
+  let* left_proof = V.as_prover_value left_proof in
+  let*| right_proof = V.as_prover_value right_proof in
   Pickles.Inductive_rule.
     { previous_proof_statements =
         [ { public_input = left_public_input
-          ; proof = V.as_ref left_proof
+          ; proof = left_proof
           ; proof_must_verify = left_proof_must_verify
           }
         ; { public_input = right_public_input
-          ; proof = V.as_ref right_proof
+          ; proof = right_proof
           ; proof_must_verify = right_proof_must_verify
           }
         ]
@@ -191,17 +206,19 @@ let transform_main_two_one_sideloaded ~sideloaded
              } )
      } :
       _ main_return ) =
+  let* left_proof = V.as_prover_value left_proof in
+  let* right_proof = V.as_prover_value right_proof in
   let*| () =
     make_checked (fun () -> Pickles.Side_loaded.in_circuit sideloaded vk)
   in
   Pickles.Inductive_rule.
     { previous_proof_statements =
         [ { public_input = left_public_input
-          ; proof = V.as_ref left_proof
+          ; proof = left_proof
           ; proof_must_verify = left_proof_must_verify
           }
         ; { public_input = right_public_input
-          ; proof = V.as_ref right_proof
+          ; proof = right_proof
           ; proof_must_verify = right_proof_must_verify
           }
         ]
@@ -209,11 +226,13 @@ let transform_main_two_one_sideloaded ~sideloaded
     ; auxiliary_output = ()
     }
 
-type ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return =
+type ('out_var, 'out_t, 'branches, 'tag_branches) branches_to_choices_return =
   | Choices :
-      { rules :
+      { branches_length : ('branches, 'n_branches) branches_length
+      ; rules :
              self:('out_var, 'out_t, self_width, 'tag_branches) Pickles.Tag.t
-          -> ( 'prev_varss
+          -> ( 'n_branches
+             , 'prev_varss
              , 'prev_valuess
              , 'widthss
              , 'heightss
@@ -223,18 +242,19 @@ type ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return =
              , 'out_t
              , unit
              , unit )
-             Pickles_types.Hlist.H4_6.T(Pickles.Inductive_rule.Promise).t
+             Pickles_types.Hlist.H4_6_with_length.T
+               (Pickles.Inductive_rule.Promise)
+             .t
       ; transform_provers :
              ( 'prev_valuess
              , 'widthss
              , 'heightss
              , unit
-             , ('out_t * unit * (self_width, self_width) Pickles.Proof.t)
-               Promise.t )
+             , ('out_t * unit * self_width Pickles.Proof.t) Promise.t )
              Pickles.Provers.t
           -> ('out_t, 'branches) provers
       }
-      -> ('out_var, 'out_t, 'tag_branches, 'branches) branches_to_choices_return
+      -> ('out_var, 'out_t, 'branches, 'tag_branches) branches_to_choices_return
 
 let transform_prover :
        ?pre_prove:('input -> unit)
@@ -263,20 +283,28 @@ let transform_prover :
 (* used to figure out what flags are used *)
 let bad_fixme_feature_flags = ref None
 
-(* TODO: collapse branches *)
+(* TODO: collapse pattern match, maybe with newer ocaml version *)
 let rec branches_to_choices :
     type out_var out_t branches available_branches tag_branches.
        name:string
     -> (out_var, branches, available_branches) Branches.t
-    -> (out_var, out_t, tag_branches, branches) branches_to_choices_return =
+    -> (out_var, out_t, branches, tag_branches) branches_to_choices_return =
  fun ~name -> function
   | [] ->
-      let open Pickles_types.Hlist.H4_6.T (Pickles.Inductive_rule.Promise) in
+      let open
+        Pickles_types.Hlist.H4_6_with_length.T (Pickles.Inductive_rule.Promise) in
       Choices
-        { rules = (fun ~self:_ -> []); transform_provers = (fun [] -> []) }
+        { branches_length = Z
+        ; rules = (fun ~self:_ -> [])
+        ; transform_provers = (fun [] -> [])
+        }
   | { branch_name; tags; main } :: xs -> (
       match branches_to_choices ~name xs with
-      | Choices { rules = f; transform_provers = prev_transform_provers } -> (
+      | Choices
+          { branches_length
+          ; rules = f
+          ; transform_provers = prev_transform_provers
+          } -> (
           let input, handler = input_for_main main in
           let transform_provers (prover :: provers : _ Pickles.Provers.t) :
               _ provers =
@@ -303,7 +331,8 @@ let rec branches_to_choices :
           match tags with
           | No_tags ->
               Choices
-                { transform_provers
+                { branches_length = S branches_length
+                ; transform_provers
                 ; rules =
                     (fun ~self ->
                       let rule : _ Pickles.Inductive_rule.Promise.t =
@@ -330,10 +359,11 @@ let rec branches_to_choices :
                 }
           | One_tag (Tag tag) ->
               Choices
-                { transform_provers
+                { branches_length = S branches_length
+                ; transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main = input >>= main >>| transform_main_one in
+                      let main = input >>= main >>= transform_main_one in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -346,10 +376,11 @@ let rec branches_to_choices :
                 }
           | One_tag_own ->
               Choices
-                { transform_provers
+                { branches_length = S branches_length
+                ; transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main = input >>= main >>| transform_main_one in
+                      let main = input >>= main >>= transform_main_one in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -362,10 +393,11 @@ let rec branches_to_choices :
                 }
           | Two_tags (Tag left_tag, Tag right_tag) ->
               Choices
-                { transform_provers
+                { branches_length = S branches_length
+                ; transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main = input >>= main >>| transform_main_two in
+                      let main = input >>= main >>= transform_main_two in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -378,10 +410,11 @@ let rec branches_to_choices :
                 }
           | Two_tags_one_own (Tag right_tag) ->
               Choices
-                { transform_provers
+                { branches_length = S branches_length
+                ; transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main = input >>= main >>| transform_main_two in
+                      let main = input >>= main >>= transform_main_two in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -394,10 +427,11 @@ let rec branches_to_choices :
                 }
           | Two_tags_own ->
               Choices
-                { transform_provers
+                { branches_length = S branches_length
+                ; transform_provers
                 ; rules =
                     (fun ~self ->
-                      let main = input >>= main >>| transform_main_two in
+                      let main = input >>= main >>= transform_main_two in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
                         ; main =
@@ -427,7 +461,8 @@ let rec branches_to_choices :
                     (module Pickles.Side_loaded.Verification_key.Max_width)
               in
               Choices
-                { transform_provers =
+                { branches_length = S branches_length
+                ; transform_provers =
                     (fun (prover :: provers) ->
                       let pre_prove input =
                         Pickles.Side_loaded.in_prover sideloaded
@@ -472,7 +507,8 @@ let rec branches_to_choices :
                     (module Pickles.Side_loaded.Verification_key.Max_width)
               in
               Choices
-                { transform_provers =
+                { branches_length = S branches_length
+                ; transform_provers =
                     (fun (prover :: provers) ->
                       let pre_prove input =
                         Pickles.Side_loaded.in_prover sideloaded
@@ -516,7 +552,8 @@ let rec branches_to_choices :
                     (module Pickles.Side_loaded.Verification_key.Max_width)
               in
               Choices
-                { transform_provers =
+                { branches_length = S branches_length
+                ; transform_provers =
                     (fun (prover :: provers) ->
                       let pre_prove input =
                         Pickles.Side_loaded.in_prover sideloaded
@@ -573,7 +610,8 @@ let rec branches_to_choices :
               in
 
               Choices
-                { transform_provers =
+                { branches_length = S branches_length
+                ; transform_provers =
                     (fun (prover :: provers) ->
                       let pre_prove input =
                         Pickles.Side_loaded.in_prover left_sideloaded
@@ -599,21 +637,23 @@ let rec branches_to_choices :
                                 ; proof_must_verify = right_proof_must_verify
                                 ; vk = right_vk
                                 } ) ) =
-                          let*| () =
+                          let* () =
                             make_checked (fun () ->
                                 Pickles.Side_loaded.in_circuit left_sideloaded
                                   left_vk ;
                                 Pickles.Side_loaded.in_circuit right_sideloaded
                                   right_vk )
                           in
+                          let* left_proof = V.as_prover_value left_proof in
+                          let*| right_proof = V.as_prover_value right_proof in
                           Pickles.Inductive_rule.
                             { previous_proof_statements =
                                 [ { public_input = left_public_input
-                                  ; proof = V.as_ref left_proof
+                                  ; proof = left_proof
                                   ; proof_must_verify = left_proof_must_verify
                                   }
                                 ; { public_input = right_public_input
-                                  ; proof = V.as_ref right_proof
+                                  ; proof = right_proof
                                   ; proof_must_verify = right_proof_must_verify
                                   }
                                 ]
@@ -662,8 +702,6 @@ let compile (type out_t out_var first_input branches n_available_branches)
     (P.get_callstack 9999 |> get_first_backtrace_entry) ;
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
-  let (Count_branches_result tag_branches) = count_branches branches in
-  let (module N_branches) = branches_length_to_module tag_branches in
   let override_wrap_domain : Pickles_base.Proofs_verified.t option =
     match wrap_domain with
     | None ->
@@ -676,12 +714,34 @@ let compile (type out_t out_var first_input branches n_available_branches)
     | Some `N15 ->
         Some N2
   in
+  let (Count_branches_result tag_branches) = count_branches branches in
+  let (module N_branches) = branches_length_to_module tag_branches in
   match branches_to_choices ~name branches with
-  | Choices { rules; transform_provers } ->
+  | Choices { branches_length; rules; transform_provers } ->
+      (* pretty sure this shouldn't be needed, but dumb ocaml type checker *)
+      let T = branches_length_functional (tag_branches, branches_length) in
+      let choices :
+             self:(out_var, out_t, self_width, N_branches.n) Pickles.Tag.t
+          -> ( _
+             , _
+             , _
+             , _
+             , _
+             , unit
+             , unit
+             , out_var
+             , out_t
+             , unit
+             , unit )
+             Pickles_types.Hlist.H4_6_with_length.T
+               (Pickles.Inductive_rule.Promise)
+             .t =
+        rules
+      in
       let dummy_proof =
         lazy
           Pickles_types.Nat.(
-            Pickles.Proof.dummy N2.n N2.n N2.n
+            Pickles.Proof.dummy N2.n N_branches.n
               ~domain_log2:
                 ( match override_wrap_domain with
                 | None ->
@@ -698,25 +758,14 @@ let compile (type out_t out_var first_input branches n_available_branches)
       in
       assert (Run.in_checked_computation () |> not) ;
       assert (Run.in_prover () |> not) ;
-      let tag, _cache, _proof_module, provers =
+      let ( (tag : (_, _, _, N_branches.n) Pickles.Tag.t)
+          , _cache
+          , _proof_module
+          , provers ) =
         Pickles.compile_promise () ?override_wrap_domain ~cache:Cache_dir.cache
-          ~public_input:(Output out_typ) ~auxiliary_typ:Typ.unit
-          ~branches:(module N_branches)
-          ~choices:rules
+          ~public_input:(Output out_typ) ~auxiliary_typ:Typ.unit ~choices
           ~max_proofs_verified:(module Pickles_types.Nat.N2)
           ~name:("compile_simple of " ^ name)
-          ~constraint_constants:
-            { sub_windows_per_window = -1
-            ; ledger_depth = -1
-            ; work_delay = -1
-            ; block_window_duration_ms = -1
-            ; transaction_capacity = Log_2 (-1)
-            ; pending_coinbase_depth = -1
-            ; coinbase_amount = Unsigned.UInt64.zero
-            ; supercharged_coinbase_factor = -1
-            ; account_creation_fee = Unsigned.UInt64.zero
-            ; fork = None
-            }
       in
       (* FIXME: Don't do this. Make lazy compilation work. Fix Pickles bug. *)
       Promise.block_on_async_exn (fun () ->
@@ -754,9 +803,9 @@ let compile (type out_t out_var first_input branches n_available_branches)
             end
 
             module Proof_V = struct
-              type t = (self_width, self_width) Pickles.Proof.t
+              type t = self_width Pickles.Proof.t
 
-              type var = (self_width, self_width) Pickles.Proof.t V.t
+              type var = t V.t
 
               let typ = V.typ
             end
@@ -795,9 +844,14 @@ let add_plonk_constraint ~label c =
       let feature_flags =
         match
           ( c
-            : _ Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.t
-            )
+            : _
+              Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint
+              .basic )
         with
+        | Boolean _
+        | Equal _
+        | Square _
+        | R1CS _
         | Basic _
         | Poseidon _
         | EC_add_complete _
@@ -842,7 +896,4 @@ let add_plonk_constraint ~label c =
             { feature_flags with runtime_tables = true }
       in
       bad_fixme_feature_flags := Some feature_flags ) ;
-  assert_ ~label
-    { basic = Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.T c
-    ; annotation = None
-    }
+  with_label label @@ fun () -> assert_ c

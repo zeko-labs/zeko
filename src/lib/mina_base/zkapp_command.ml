@@ -894,32 +894,27 @@ let account_updates_deriver obj =
   iso ~map:of_zkapp_command_with_depth ~contramap:to_zkapp_command_with_depth
     inner obj
 
-(* ZEKO NOTE: added ?chain *)
-let deriver ?chain obj =
+let deriver obj =
   let open Fields_derivers_zkapps.Derivers in
   let open Poly in
   let ( !. ) = ( !. ) ~t_fields_annots in
   Fields.make_creator obj
     ~fee_payer:!.Account_update.Fee_payer.deriver
-    ~account_updates:!.(account_updates_deriver ?chain)
+    ~account_updates:!.(account_updates_deriver)
     ~memo:!.Signed_command_memo.deriver
   |> finish "ZkappCommand" ~t_toplevel_annots
 
-(* ZEKO NOTE: added ?chain *)
-let arg_typ ?chain () =
-  Fields_derivers_zkapps.(arg_typ (deriver ?chain @@ Derivers.o ()))
+let arg_typ () =
+  Fields_derivers_zkapps.(arg_typ (deriver @@ Derivers.o ()))
 
-(* ZEKO NOTE: added ?chain *)
-let typ ?chain () =
-  Fields_derivers_zkapps.(typ (deriver ?chain @@ Derivers.o ()))
+let typ () =
+  Fields_derivers_zkapps.(typ (deriver @@ Derivers.o ()))
 
-(* ZEKO NOTE: added ?chain *)
-let to_json ?chain x =
-  Fields_derivers_zkapps.(to_json (deriver ?chain @@ Derivers.o ())) x
+let to_json x =
+  Fields_derivers_zkapps.(to_json (deriver @@ Derivers.o ())) x
 
-(* ZEKO NOTE: added ?chain *)
-let of_json ?chain x =
-  Fields_derivers_zkapps.(of_json (deriver ?chain @@ Derivers.o ())) x
+let of_json x =
+  Fields_derivers_zkapps.(of_json (deriver @@ Derivers.o ())) x
 
 let account_updates_of_json x =
   Fields_derivers_zkapps.(
@@ -930,9 +925,8 @@ let account_updates_of_json x =
 let account_updates_to_json x =
   Fields_derivers_zkapps.(to_json (account_updates_deriver @@ derivers ())) x
 
-(* ZEKO NOTE: added ?chain *)
-let zkapp_command_to_json ?chain x =
-  Fields_derivers_zkapps.(to_json (deriver ?chain @@ derivers ())) x
+let zkapp_command_to_json x =
+  Fields_derivers_zkapps.(to_json (deriver @@ derivers ())) x
 
 let arg_query_string x =
   Fields_derivers_zkapps.Test.Loop.json_to_string_gql @@ to_json x
@@ -1338,7 +1332,7 @@ let zkapp_cost ~proof_segments ~signed_single_segments ~signed_pair_segments
    - in incoming blocks
 *)
 (* ZEKO NOTE: stubbed out since we don't constrain size *)
-let valid_size ~genesis_constants:_ (_ : t) : unit Or_error.t =
+let valid_size ~genesis_constants:_ _ : unit Or_error.t =
   Or_error.return ()
 
 let has_zero_vesting_period

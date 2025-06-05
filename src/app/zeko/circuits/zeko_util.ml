@@ -295,13 +295,13 @@ module Calls = struct
       let* control =
         make_checked
         @@ fun () ->
-        Mina_base.Prover_value.create @@ fun () -> Control.None_given
+        Mina_base.Prover_value.create @@ fun () -> Control.Poly.None_given
       in
       let*| hash =
         make_checked
         @@ fun () ->
-        Zkapp_command.Call_forest.Digest.Account_update.Checked.create ~chain
-          account_update
+        Zkapp_command.Call_forest.Digest.Account_update.Checked.create
+          ~signature_kind:chain account_update
       in
       { Zkapp_call_forest.Checked.account_update =
           { data = account_update; hash }
@@ -317,7 +317,8 @@ module Calls = struct
           let* account_update = attach_control_var ~chain account_update in
           make_checked
           @@ fun () ->
-          Zkapp_call_forest.Checked.push ~account_update ~calls tail
+          Zkapp_call_forest.Checked.push ~signature_kind:chain ~account_update
+            ~calls tail
       | Raw calls ->
           Checked.return calls
 end
@@ -338,8 +339,8 @@ let make_outputs :
     @@ fun () ->
     make_checked
     @@ fun () ->
-    Zkapp_command.Call_forest.Digest.Account_update.Checked.create ~chain
-      account_update
+    Zkapp_command.Call_forest.Digest.Account_update.Checked.create
+      ~signature_kind:chain account_update
   in
   let public_output : Zkapp_statement.Checked.t =
     { account_update = (account_update_digest :> Field.Var.t)
@@ -361,17 +362,15 @@ let make_outputs :
   (public_output, auxiliary_output)
 
 let assert_equal :
-    ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t =
- fun ?label (Typ typ) x y ->
+    label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t =
+ fun ~label (Typ typ) x y ->
   let x_fields, _ = typ.var_to_fields x in
   let y_fields, _ = typ.var_to_fields y in
-  let constraints =
-    Array.map2_exn ~f:(Constraint.equal ?label) x_fields y_fields
-  in
-  Array.to_list constraints |> assert_all ?label
+  let constraints = Array.map2_exn ~f:Constraint.equal x_fields y_fields in
+  with_label label @@ fun () -> Array.to_list constraints |> assert_all
 
-let assert_equal_safer ?label typ x y =
-  let*| () = assert_equal ?label typ x y in
+let assert_equal_safer ~label typ x y =
+  let*| () = assert_equal ~label typ x y in
   x
 
 let var_equal : ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t =

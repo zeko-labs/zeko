@@ -286,7 +286,10 @@ module type Full = sig
 
       type zeko_call_stack_t =
         ( ( ( ( Token_id.Stable.V2.t
-              , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
+              , ( Account_update.t
+                , Zkapp_command.Digest.Account_update.t
+                , Zkapp_command.Digest.Forest.t )
+                Zkapp_command.Call_forest.t )
               Stack_frame.Stable.V1.t
             , Stack_frame.Digest.Stable.V1.t )
             With_hash.t

@@ -95,7 +95,7 @@ struct
     let* content =
       exists Zkapp_account.typ
         ~compute:
-          (let+| content = As_prover.Ref.get content in
+          (let+| content = As_prover.read (Typ.prover_value ()) content in
            Option.value ~default:Zkapp_account.default content )
     in
     let* digest =
@@ -171,6 +171,7 @@ struct
               (Random_oracle.Checked.pack_input input) )
       in
       Signature_lib.Schnorr.Chunked.Checked.assert_verifies
+        ~signature_kind:chain_l1
         (module Shifted)
         da_signature da_key_uncompressed
         (Random_oracle.Input.Chunked.field payload)
@@ -286,7 +287,7 @@ struct
     (* We check that the above values match with what we got from ase_inner. *)
     let* old_inner_action_state =
       let*| () =
-        assert_equal Inner_action_state.typ
+        assert_equal ~label:__LOC__ Inner_action_state.typ
           (Inner_action_state.With_length.state_var old_inner_action_state)
           old_inner_action_state'
       in
@@ -294,7 +295,7 @@ struct
     in
     let* new_inner_action_state =
       let*| () =
-        assert_equal Inner_action_state.typ
+        assert_equal ~label:__LOC__ Inner_action_state.typ
           (Inner_action_state.With_length.state_var new_inner_action_state)
           new_inner_action_state'
       in

@@ -58,6 +58,12 @@ struct
       Slot_span.Checked.mul idx disable_period
       >>= Slot.Checked.add disable_offset_upper
     in
+    let* data_data =
+      exists (Typ.prover_value ())
+        ~compute:
+          (let+| hash = As_prover.read_var disabled_vk in
+           { With_hash.data = None; hash } )
+    in
     let account_update =
       { default_account_update with
         public_key
@@ -73,7 +79,7 @@ struct
           ; verification_key =
               Zkapp_basic.Set_or_keep.Checked.make_unsafe Boolean.true_
                 ( { is_some = Boolean.true_
-                  ; data = Data_as_hash.make_unsafe disabled_vk (ref None)
+                  ; data = Data_as_hash.make_unsafe disabled_vk data_data
                   }
                   : _ Zkapp_basic.Flagged_option.t )
           }
