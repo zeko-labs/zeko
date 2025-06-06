@@ -14,7 +14,8 @@ open struct
           (let a =
              { a with
                zkapp =
-                 (Zkapp_account.Checked.digest a.zkapp, Prover_value.return None)
+                 ( Zkapp_account.Checked.digest a.zkapp
+                 , Typ.prover_value_return None )
              }
            in
            Run.run_checked (Account.Checked.digest a) ) )
@@ -183,13 +184,13 @@ open struct
     let* source_ledger_sparse =
       make_checked
       @@ fun () ->
-      Prover_value.map
+      Typ.prover_value_map
         ~f:(fun x -> x.Zkapp_rule_input_witness.source_ledger_sparse)
         witness_p
     in
     let* stack_frame =
       make_checked
-      @@ fun () -> Prover_value.map ~f:(fun x -> x.stack_frame) witness_p
+      @@ fun () -> Typ.prover_value_map ~f:(fun x -> x.stack_frame) witness_p
     in
     let module Global_state = struct
       type t =
@@ -230,7 +231,7 @@ open struct
       in
       let* data =
         make_checked
-        @@ fun () -> Prover_value.map ~f:(fun x -> x.call_stack) witness_p
+        @@ fun () -> Typ.prover_value_map ~f:(fun x -> x.call_stack) witness_p
       in
       let l : local_state_var =
         { ledger = (source_ledger, source_ledger_sparse)
