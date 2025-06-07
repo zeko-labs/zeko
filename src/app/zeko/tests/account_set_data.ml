@@ -71,6 +71,7 @@ module Merkle_tree = struct
   type level_32 = level_31 level_s
   type level_33 = level_32 level_s
   type level_34 = level_33 level_s
+  type level_35 = level_34 level_s
   let level_1 : level_1 level_witness = Level_s Level_z
   let level_2 : level_2 level_witness = Level_s level_1
   let level_3 : level_3 level_witness = Level_s level_2
@@ -105,6 +106,7 @@ module Merkle_tree = struct
   let level_32 : level_32 level_witness = Level_s level_31
   let level_33 : level_33 level_witness = Level_s level_32
   let level_34 : level_34 level_witness = Level_s level_33
+  let level_35 : level_35 level_witness = Level_s level_34
   end
 
   [@@@ocamlformat "enable"]
@@ -515,7 +517,7 @@ module Merkle_tree = struct
          Right_loc (path_to_location xs)
 end
 
-let full_level = Merkle_tree.level_34
+let full_level = Merkle_tree.level_35
 
 let hash_simple : field list -> field =
  fun xs -> Merkle_tree.hash_of full_level (Merkle_tree.of_list full_level xs)
