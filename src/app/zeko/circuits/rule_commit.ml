@@ -106,7 +106,9 @@ struct
     in
     content
 
-  let%snarkydef_ main (w : Witness.t V.t) =
+  let main (w : Witness.t V.t) =
+    with_label __LOC__
+    @@ fun () ->
     let* ({ txn_snark
           ; public_key
           ; vk_hash

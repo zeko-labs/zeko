@@ -3,6 +3,8 @@ open Signature_lib
 open Snark_params.Tick
 open Zeko_circuits
 
+let signature_kind = Mina_signature_kind.Testnet
+
 let list_to_fun l =
   let l = ref l in
   fun () ->
@@ -423,7 +425,7 @@ let _txn_stmt, _txn_proof =
         |> Mina_base.Zkapp_command.Call_forest.accumulate_hashes
              ~hash_account_update:
                (Mina_base.Zkapp_command.Call_forest.Digest.Account_update
-                .create_body ?chain:None )
+                .create_body ~signature_kind )
         |> Mina_base.Zkapp_command.Call_forest.hash
       in
       Mina_base.Zkapp_command.Transaction_commitment.create_complete
@@ -431,10 +433,11 @@ let _txn_stmt, _txn_proof =
         ~memo_hash:Field.zero
         ~fee_payer_hash:
           (Mina_base.Zkapp_command.Digest.Account_update.create_body
-             first_account_update )
+             ~signature_kind first_account_update )
 
     let signature =
-      Signature_lib.Schnorr.Chunked.sign fee_payer_kp.private_key
+      Signature_lib.Schnorr.Chunked.sign ~signature_kind
+        fee_payer_kp.private_key
         (Random_oracle.Input.Chunked.field full_transaction_commitment)
 
     let () =
@@ -554,22 +557,28 @@ let _txn_stmt, _txn_proof =
           }
       ; first =
           (let account_updates_data =
-             Mina_base.Zkapp_command.Call_forest.of_account_updates
-               ~account_update_depth:(fun _ -> 0)
-               [ { Mina_base.Account_update.body = first_account_update
-                 ; authorization = Signature signature
+             List.map ~f:Mina_base.Account_update.reset_aux
+               [ { Mina_base.Account_update.Poly.body = first_account_update
+                 ; authorization = Mina_base.Control.Poly.Signature signature
+                 ; aux = ()
                  }
-               ; { Mina_base.Account_update.body = second_account_update
+               ; { body = second_account_update
                  ; authorization = None_given
+                 ; aux = ()
                  }
-               ; { Mina_base.Account_update.body = third_account_update
+               ; { body = third_account_update
                  ; authorization = Signature signature
+                 ; aux = ()
                  }
-               ; { Mina_base.Account_update.body = fourth_account_update
+               ; { body = fourth_account_update
                  ; authorization = None_given
+                 ; aux = ()
                  }
                ]
-             |> Mina_base.Zkapp_command.Call_forest.accumulate_hashes'
+             |> Mina_base.Zkapp_command.Call_forest.of_account_updates
+                  ~account_update_depth:(fun _ -> 0)
+             |> Mina_base.Zkapp_command.Call_forest.accumulate_hashes_predicated
+                  ~signature_kind
            in
            { account_updates_data
            ; memo_hash = Field.zero
@@ -579,10 +588,12 @@ let _txn_stmt, _txn_proof =
            } )
       ; second =
           { account_updates_data =
-              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes_predicated
+                ~signature_kind []
           ; memo_hash = Field.zero
           ; account_updates =
-              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes_predicated
+                ~signature_kind []
               |> Mina_base.Zkapp_command.Call_forest.hash
           ; shift_action_state = false
           }
@@ -659,17 +670,22 @@ let _txn_stmt, _txn_proof =
                   { caller = Mina_base.Token_id.default
                   ; caller_caller = Mina_base.Token_id.default
                   ; calls =
-                      Mina_base.Zkapp_command.Call_forest.of_account_updates
-                        ~account_update_depth:(fun _ -> 0)
-                        [ { Mina_base.Account_update.body = third_account_update
-                          ; authorization = Signature signature
+                      List.map ~f:Mina_base.Account_update.reset_aux
+                        [ { Mina_base.Account_update.Poly.body =
+                              third_account_update
+                          ; authorization =
+                              Mina_base.Control.Poly.Signature signature
+                          ; aux = ()
                           }
-                        ; { Mina_base.Account_update.body =
-                              fourth_account_update
+                        ; { body = fourth_account_update
                           ; authorization = None_given
+                          ; aux = ()
                           }
                         ]
-                      |> Mina_base.Zkapp_command.Call_forest.accumulate_hashes'
+                      |> Mina_base.Zkapp_command.Call_forest.of_account_updates
+                           ~account_update_depth:(fun _ -> 0)
+                      |> Mina_base.Zkapp_command.Call_forest
+                         .accumulate_hashes_predicated ~signature_kind
                   }
               ; call_stack = []
               ; source_ledger_sparse = sparse_source_ledger
@@ -679,19 +695,23 @@ let _txn_stmt, _txn_proof =
           }
       ; first =
           { account_updates_data =
-              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes_predicated
+                ~signature_kind []
           ; memo_hash = Field.zero
           ; account_updates =
-              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes_predicated
+                ~signature_kind []
               |> Mina_base.Zkapp_command.Call_forest.hash
           ; shift_action_state = false
           }
       ; second =
           { account_updates_data =
-              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes_predicated
+                ~signature_kind []
           ; memo_hash = Field.zero
           ; account_updates =
-              Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              Mina_base.Zkapp_command.Call_forest.accumulate_hashes_predicated
+                ~signature_kind []
               |> Mina_base.Zkapp_command.Call_forest.hash
           ; shift_action_state = false
           }
@@ -765,7 +785,7 @@ let _txn_stmt, _txn_proof =
           ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
           (Random_oracle.pack_input input)
       in
-      Signature_lib.Schnorr.Chunked.sign da_kp.private_key
+      Signature_lib.Schnorr.Chunked.sign ~signature_kind da_kp.private_key
         (Random_oracle.Input.Chunked.field payload)
 
     let da_key =
