@@ -57,7 +57,8 @@ let time_promise : string -> (unit -> 'a Promise.t) -> 'a Promise.t =
   let start = Time.now () in
   let@ x = f () |> Promise.( >>| ) in
   let stop = Time.now () in
-  printf "%s: %s\n%!" label (Time.Span.to_string_hum (Time.diff stop start)) ;
+  printf "compile_simple.real: %s: %s\n%!" label
+    (Time.Span.to_string_hum (Time.diff stop start)) ;
   x
 
 type ('branches, 'n_branches) branches_length =
@@ -698,7 +699,7 @@ let compile (type out_t out_var first_input branches n_available_branches)
        with type out_t = out_t
         and type out_var = out_var
         and type branches = (first_input, branches) cons_branch ) =
-  printf "(compile_simple) called for circuit %s from %s\n%!" name
+  printf "compile_simple.real: %s at %s\n%!" name
     (P.get_callstack 9999 |> get_first_backtrace_entry) ;
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
