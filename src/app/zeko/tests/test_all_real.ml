@@ -793,6 +793,10 @@ let _txn_stmt, _txn_proof =
       |> fun p : Zeko_util.Even_PC.t ->
       { public_key = p.Public_key.Compressed.Poly.x }
 
+    let () = assert (Int.(List.length old_inner_acc_path = 35))
+
+    let () = assert (Int.(List.length new_inner_acc_path = 35))
+
     let witness : Outer_rules_inst.Rule_commit_inst.Witness.t =
       { txn_snark = Txn_rules.make_unchecked ~proof stmt
       ; public_key = point_of_string "29421"

@@ -64,8 +64,7 @@ struct
     SnarkList
       (PathElt)
       (struct
-        let length =
-          Genesis_constants.Compiled.constraint_constants.ledger_depth
+        let length = Account_set.height
       end)
 
   module Witness = struct
@@ -88,7 +87,7 @@ struct
   let implied_root (account : Account.var) (path : Path.var) : F.var Checked.t =
     let* init = Account.Checked.digest account in
     Checked.List.foldi path ~init ~f:(fun height acc PathElt.{ right_side } ->
-        Ledger_hash.merge_var ~height acc right_side |> Checked.return )
+        make_checked @@ fun () -> Ledger_hash.merge_var ~height acc right_side )
 
   let get_zkapp (a : Account.var) : Zkapp_account.Checked.t Checked.t =
     let hash, content = a.zkapp in
@@ -122,8 +121,10 @@ struct
           ; slot_range
           } :
            Witness.var ) =
-      exists ~compute:(V.get w) Witness.typ
+      with_label __LOC__ @@ fun () -> exists ~compute:(V.get w) Witness.typ
     in
+    with_label __LOC__
+    @@ fun () ->
     (* Calculate the root ledger hashes, to be checked against txn snark. *)
     let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
@@ -142,7 +143,8 @@ struct
          , verify_txn_snark ) =
       Txn_rules.get txn_snark
     in
-
+    with_label __LOC__
+    @@ fun () ->
     (* The local states must be empty, ensuring that there is no incomplete zkapp transaction being committed. *)
     let* () =
       Txn_state.Local_state.(
@@ -155,6 +157,8 @@ struct
 
     (* DA check, simply see if public key in question has signed our ledger. *)
     let* () =
+      with_label __LOC__
+      @@ fun () ->
       (* TODO: Is this correct? *)
       let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
       let* da_key_uncompressed =
@@ -218,7 +222,8 @@ struct
       assert_equal_safer ~label:__LOC__ Ledger_hash.typ target_ledger
         (Ledger_hash.var_of_hash_packed implied_root_new)
     in
-
+    with_label __LOC__
+    @@ fun () ->
     (* We check that we're dealing with the correct account. *)
     let* () =
       with_label __LOC__ (fun () ->
