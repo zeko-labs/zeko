@@ -216,11 +216,8 @@ let to_simple (t : t) : Simple.t =
 
 let all_account_updates ~signature_kind t : _ Call_forest.t =
   let p = t.Poly.fee_payer in
-  let body = Account_update.Body.of_fee_payer p.body in
-  let account_update =
-    Account_update.with_aux ~body
-      ~authorization:(Control.Poly.Signature p.authorization)
-  in
+  (* ZEKO NOTE: use the logic that replaces empty public key with dummy fee payer *)
+  let account_update = Account_update.Fee_payer.to_account_update p in
   let fee_payer_digest : Digest.Account_update.t =
     Digest.Account_update.create ~signature_kind account_update
   in
@@ -900,21 +897,17 @@ let deriver obj =
   let ( !. ) = ( !. ) ~t_fields_annots in
   Fields.make_creator obj
     ~fee_payer:!.Account_update.Fee_payer.deriver
-    ~account_updates:!.(account_updates_deriver)
+    ~account_updates:!.account_updates_deriver
     ~memo:!.Signed_command_memo.deriver
   |> finish "ZkappCommand" ~t_toplevel_annots
 
-let arg_typ () =
-  Fields_derivers_zkapps.(arg_typ (deriver @@ Derivers.o ()))
+let arg_typ () = Fields_derivers_zkapps.(arg_typ (deriver @@ Derivers.o ()))
 
-let typ () =
-  Fields_derivers_zkapps.(typ (deriver @@ Derivers.o ()))
+let typ () = Fields_derivers_zkapps.(typ (deriver @@ Derivers.o ()))
 
-let to_json x =
-  Fields_derivers_zkapps.(to_json (deriver @@ Derivers.o ())) x
+let to_json x = Fields_derivers_zkapps.(to_json (deriver @@ Derivers.o ())) x
 
-let of_json x =
-  Fields_derivers_zkapps.(of_json (deriver @@ Derivers.o ())) x
+let of_json x = Fields_derivers_zkapps.(of_json (deriver @@ Derivers.o ())) x
 
 let account_updates_of_json x =
   Fields_derivers_zkapps.(
@@ -1332,8 +1325,7 @@ let zkapp_cost ~proof_segments ~signed_single_segments ~signed_pair_segments
    - in incoming blocks
 *)
 (* ZEKO NOTE: stubbed out since we don't constrain size *)
-let valid_size ~genesis_constants:_ _ : unit Or_error.t =
-  Or_error.return ()
+let valid_size ~genesis_constants:_ _ : unit Or_error.t = Or_error.return ()
 
 let has_zero_vesting_period
     (t :

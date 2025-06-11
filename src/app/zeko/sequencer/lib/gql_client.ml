@@ -56,7 +56,7 @@ let fetch_action_state uri pk =
   |> Field.of_string
 
 let fetch_actions uri ?from_action_state ?end_action_state pk :
-    (Account_update.Actions.t * int) list Deferred.t =
+    (Field.t array list * int) list Deferred.t =
   let ok_exn = function
     | Ppx_deriving_yojson_runtime.Result.Ok x ->
         x

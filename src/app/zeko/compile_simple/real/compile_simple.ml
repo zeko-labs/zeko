@@ -742,7 +742,7 @@ let compile (type out_t out_var first_input branches n_available_branches)
       let dummy_proof =
         lazy
           Pickles_types.Nat.(
-            Pickles.Proof.dummy N2.n N_branches.n
+            Pickles.Proof.dummy N2.n N2.n
               ~domain_log2:
                 ( match override_wrap_domain with
                 | None ->

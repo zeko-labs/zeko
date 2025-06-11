@@ -1400,7 +1400,10 @@ module Body = struct
 
   let of_fee_payer (t : Fee_payer.t) : t =
     if Public_key.Compressed.(equal empty t.public_key) then
-      { dummy with public_key = force key_123456789 }
+      { dummy with
+        public_key = force key_123456789
+      ; authorization_kind = None_given
+      }
     else of_fee_payer_original t
 
   let to_simple_fee_payer (t : Fee_payer.t) : Simple.t =

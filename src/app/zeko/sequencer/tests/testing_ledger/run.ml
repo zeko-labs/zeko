@@ -36,9 +36,7 @@ let run ~logger ~port ~db_dir ~genesis_account ~block_period ~network_id
     |> ignore ) ;
 
   let graphql_callback =
-    Graphql_cohttp_async.make_callback
-      (fun ~with_seq_no:_ _req -> t)
-      (Gql.schema ~chain:(Sequencer_lib.Utils.signature_kind network_id))
+    Graphql_cohttp_async.make_callback (fun ~with_seq_no:_ _req -> t) Gql.schema
   in
   let () =
     Cohttp_async.Server.create_expert

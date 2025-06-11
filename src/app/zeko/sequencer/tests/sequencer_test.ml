@@ -142,7 +142,10 @@ module Sequencer_test_spec = struct
             ~account_set_hash ~pause_key:sequencer_pk ~sequencer:sequencer_pk
             ~da_key ()
         in
-        let%bind _ = Gql_client.send_zkapp gql_uri command in
+        let%bind _ =
+          Gql_client.send_zkapp gql_uri
+            (Zkapp_command.read_all_proofs_from_disk command)
+        in
         let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
         return () ) ;
 
@@ -361,10 +364,10 @@ let () =
           account_updates =
             Zkapp_command.Call_forest.map command.account_updates
               ~f:(fun account_update ->
-                match Account_update.authorization account_update with
-                | Signature _ ->
+                match Account_update.Poly.authorization account_update with
+                | Control.Poly.Signature _ ->
                     { account_update with
-                      authorization = Signature Signature.dummy
+                      authorization = Control.Poly.Signature Signature.dummy
                     }
                 | _ ->
                     account_update )

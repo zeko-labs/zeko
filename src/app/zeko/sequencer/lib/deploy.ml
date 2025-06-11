@@ -133,7 +133,7 @@ module Z = struct
   end
 end
 
-let deploy_command_exn ?signature_kind ~(signer : Keypair.t)
+let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
     ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~(zkapp : Keypair.t)
     ~(initial_ledger : L.t) ~account_set_hash
     ~(account_creation_fee : Currency.Fee.t) ~pause_key ~sequencer ~da_key () =
@@ -142,7 +142,8 @@ let deploy_command_exn ?signature_kind ~(signer : Keypair.t)
       initial_ledger ()
   in
   let zkapp_update =
-    { body =
+    Account_update.with_aux
+      ~body:
         { Body.dummy with
           public_key = Public_key.compress zkapp.public_key
         ; implicit_account_creation_fee = false
@@ -150,11 +151,11 @@ let deploy_command_exn ?signature_kind ~(signer : Keypair.t)
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
-    ; authorization = Signature Signature.dummy
-    }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
   in
   let sender_update =
-    { body =
+    Account_update.with_aux
+      ~body:
         { Body.dummy with
           public_key = Public_key.compress signer.public_key
         ; balance_change =
@@ -164,8 +165,15 @@ let deploy_command_exn ?signature_kind ~(signer : Keypair.t)
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
-    ; authorization = Signature Signature.dummy
-    }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+  in
+  let call_forest =
+    Zkapp_command.Call_forest.accumulate_hashes
+      ~hash_account_update:
+        (Zkapp_command.Call_forest.Digest.Account_update.create ~signature_kind)
+    @@ Zkapp_command.Call_forest.of_account_updates
+         ~account_update_depth:(fun _ -> 0)
+         [ zkapp_update; sender_update ]
   in
   let command : Zkapp_command.t =
     { fee_payer =
@@ -177,15 +185,8 @@ let deploy_command_exn ?signature_kind ~(signer : Keypair.t)
             }
         ; authorization = Signature.dummy
         }
-    ; account_updates =
-        Zkapp_command.Call_forest.accumulate_hashes
-          ~hash_account_update:
-            (Zkapp_command.Call_forest.Digest.Account_update.create
-               ?chain:signature_kind )
-        @@ Zkapp_command.Call_forest.of_account_updates
-             ~account_update_depth:(fun _ -> 0)
-             [ zkapp_update; sender_update ]
+    ; account_updates = call_forest
     ; memo = Signed_command_memo.empty
     }
   in
-  return (Utils.sign_zkapp_command ?signature_kind command [ zkapp; signer ])
+  return (Utils.sign_zkapp_command ~signature_kind command [ zkapp; signer ])

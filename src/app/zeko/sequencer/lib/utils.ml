@@ -50,7 +50,7 @@ let update_state pk command state =
   let open Zkapp_basic in
   let account_id = Account_id.create pk Token_id.default in
   match
-    Zkapp_command.account_updates command
+    Zkapp_command.Poly.account_updates command
     |> Zkapp_command.Call_forest.to_list
     |> List.find ~f:(fun account_update ->
            Account_update.account_id account_update
@@ -59,7 +59,7 @@ let update_state pk command state =
   | None ->
       `Skipped
   | Some account_update -> (
-      let body = Account_update.body account_update in
+      let body = Account_update.Poly.body account_update in
       let preconditions =
         body |> Account_update.Body.preconditions
         |> Account_update.Preconditions.account
@@ -102,14 +102,14 @@ let get_synced_outer_action_state_exn l =
   in
   outer_action_state
 
-let sign_zkapp_command ?signature_kind (command : Zkapp_command.t)
+let sign_zkapp_command ~signature_kind (command : Zkapp_command.t)
     (signers : Keypair.t list) : Zkapp_command.t =
   let full_commitment =
     Zkapp_command.Transaction_commitment.create_complete
       (Zkapp_command.commitment command)
       ~memo_hash:(Signed_command_memo.hash command.memo)
       ~fee_payer_hash:
-        (Zkapp_command.Digest.Account_update.create ?chain:signature_kind
+        (Zkapp_command.Digest.Account_update.create ~signature_kind
            (Account_update.of_fee_payer command.fee_payer) )
   in
   let sign_raw (pk : Public_key.Compressed.t) msg =
@@ -118,7 +118,7 @@ let sign_zkapp_command ?signature_kind (command : Zkapp_command.t)
           Public_key.Compressed.equal (Public_key.compress kp.public_key) pk )
     with
     | Some kp ->
-        Signature_lib.Schnorr.Chunked.sign ?signature_kind kp.private_key
+        Signature_lib.Schnorr.Chunked.sign ~signature_kind kp.private_key
           (Random_oracle.Input.Chunked.field msg)
     | None ->
         failwithf "key not found: %s\n"
@@ -138,7 +138,7 @@ let sign_zkapp_command ?signature_kind (command : Zkapp_command.t)
             ( match tree.account_update.body.authorization_kind with
             | Signature ->
                 assert tree.account_update.body.use_full_commitment ;
-                Signature
+                Control.Poly.Signature
                   (sign_raw tree.account_update.body.public_key full_commitment)
             | _ ->
                 tree.account_update.authorization )
@@ -161,10 +161,10 @@ let sign_zkapp_command ?signature_kind (command : Zkapp_command.t)
   ; account_updates = sign_forest command.account_updates
   }
 
-let rehash_forest ~chain =
+let rehash_forest ~signature_kind =
   Zkapp_command.Call_forest.accumulate_hashes
     ~hash_account_update:
-      (Zkapp_command.Call_forest.Digest.Account_update.create ~chain)
+      (Zkapp_command.Call_forest.Digest.Account_update.create ~signature_kind)
 
 let signature_kind = function
   | "mainnet" ->

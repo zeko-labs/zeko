@@ -12,6 +12,7 @@ type t =
   ; signer : Keypair.t
   ; logger : Logger.t
   ; chain : Mina_signature_kind.t
+  ; proof_cache_db : Proof_cache_tag.cache_db
   }
 
 (** 1. Check that [root ledger_openings = diff.source_ledger_hash].
@@ -99,7 +100,9 @@ let post_diff t ~ledger_openings ~diff =
          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
          [| target_ledger_hash |]
   in
-  let signature = Schnorr.Chunked.sign t.signer.private_key message in
+  let signature =
+    Schnorr.Chunked.sign ~signature_kind:t.chain t.signer.private_key message
+  in
 
   (* 6 *)
   let get_account ledger account_id =
@@ -136,15 +139,20 @@ let post_diff t ~ledger_openings ~diff =
           (Account_id.Map.set Account_id.Map.empty ~key:account_id
              ~data:new_receipt_chain_hash )
     | Some (Zkapp_command command, _) ->
+        let command =
+          Zkapp_command.write_all_proofs_to_disk ~signature_kind:t.chain
+            ~proof_cache_db:t.proof_cache_db command
+        in
         let _commitment, full_transaction_commitment =
-          Zkapp_command.get_transaction_commitments ~chain:t.chain command
+          Zkapp_command.get_transaction_commitments ~signature_kind:t.chain
+            command
         in
         let%bind.Result _, acc =
           List.fold_result (Zkapp_command.all_account_updates_list command)
             ~init:(Unsigned.UInt32.zero, Account_id.Map.empty)
             ~f:(fun (index, acc) account_update ->
               (* Receipt chain hash is updated only for account updates authorised with Proof or Signature *)
-              match Account_update.authorization account_update with
+              match Account_update.Poly.authorization account_update with
               | None_given ->
                   Ok (Unsigned.UInt32.succ index, acc)
               | Proof _ | Signature _ ->
@@ -244,7 +252,8 @@ let get_signature t ~ledger_hash =
          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
          [| ledger_hash |]
   in
-  Some (Schnorr.Chunked.sign t.signer.private_key message)
+  Some
+    (Schnorr.Chunked.sign ~signature_kind:t.chain t.signer.private_key message)
 
 let get_ledger_hashes_chain t
     ({ source = source_opt; target; max_length = max_length_opt } :
@@ -349,6 +358,7 @@ let create_server ~chain ~sync_arg ~port ~logger ~db_dir ~signer_sk
         Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn signer_sk
     ; logger
     ; chain
+    ; proof_cache_db = Proof_cache_tag.create_identity_db ()
     }
   in
 

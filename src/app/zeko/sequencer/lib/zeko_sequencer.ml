@@ -21,7 +21,7 @@ module Sequencer = struct
       ; signer : Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
-      ; network_id : string
+      ; network_id : Mina_signature_kind.t
       ; deposit_delay_blocks : int
       ; da_key : Even_PC.t
       ; fee_modifier : float
@@ -68,6 +68,7 @@ module Sequencer = struct
         ; state : State.t
         ; archive : Archive.t
         ; logger : Logger.t
+        ; proof_cache_db : Proof_cache_tag.cache_db
         }
 
       let save_state t = Db.set t.kvdb ~data:t.state
@@ -136,6 +137,7 @@ module Sequencer = struct
            ; state
            ; archive
            ; logger
+           ; proof_cache_db
            } as ctx :
             Context.t ) { new_inner_ledger; processed_actions_pointer }
           txn_snark =
@@ -163,7 +165,7 @@ module Sequencer = struct
           ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
 
         let%bind command =
-          Committer.prove_commit ~provers ~executor ~archive
+          Committer.prove_commit ~proof_cache_db ~provers ~executor ~archive
             ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
             commit_witness
         in
@@ -247,7 +249,7 @@ module Sequencer = struct
 
   let apply_events_and_actions t command =
     let ledger = L.of_database t.ledger in
-    Zkapp_command.(Call_forest.to_list (account_updates command))
+    Zkapp_command.(Call_forest.to_list (Poly.account_updates command))
     |> List.map ~f:(fun update ->
            let%bind.Result account =
              match
@@ -273,8 +275,10 @@ module Sequencer = struct
                      { status = Applied
                      ; hash =
                          Mina_transaction.Transaction_hash.hash_command
-                           (Zkapp_command command)
-                     ; memo = Zkapp_command.memo command
+                           (Zkapp_command
+                              (Zkapp_command.read_all_proofs_from_disk command)
+                           )
+                     ; memo = Zkapp_command.Poly.memo command
                      ; authorization_kind =
                          Account_update.Body.authorization_kind update.body
                      } ) ) )
@@ -335,8 +339,7 @@ module Sequencer = struct
               in
               match%bind
                 try_with (fun () ->
-                    Verifier.verify_command
-                      ~signature_kind:(Utils.signature_kind t.config.network_id)
+                    Verifier.verify_command ~signature_kind:t.config.network_id
                       { data = verifiable; status = Applied } )
                 >>| Result.map_error ~f:Error.of_exn
                 >>| Result.join
@@ -357,7 +360,8 @@ module Sequencer = struct
               @@ Public_key.compress t.config.signer.public_key
             in
             return
-              (Zeko_transaction_logic.apply_user_command_unchecked ~sequencer_pk
+              (Zeko_transaction_logic.apply_user_command_unchecked
+                 ~signature_kind:t.config.network_id ~sequencer_pk
                  ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
                  ~constraint_constants ~global_slot l t.imt command )
           in
@@ -393,7 +397,7 @@ module Sequencer = struct
               ~changed_accounts
               ~command_with_action_step_flags:
                 (Some
-                   ( command
+                   ( User_command.read_all_proofs_from_disk command
                    , match command with
                      | Signed_command _ ->
                          []
@@ -467,7 +471,7 @@ module Sequencer = struct
       List.fold all_new_actions ~init:(old_synced_outer_action_state, [])
         ~f:(fun (curr_state, curr_actions) (action, block_height) ->
           if block_height + t.config.deposit_delay_blocks <= current_height then
-            ( Zkapp_account.Actions.push_events curr_state action
+            ( Zkapp_account.Actions_impl.(push_hash curr_state (hash action))
             , action :: curr_actions )
           else (curr_state, curr_actions) )
     in
@@ -480,35 +484,46 @@ module Sequencer = struct
           Zeko_prover.Client.inner_sync t.snark_q.provers
             ~public_key:Zeko_constants.inner_public_key
             ~ase_elms:
-              (List.map processed_new_actions ~f:Account_update.Actions.hash)
+              (List.map processed_new_actions ~f:Zkapp_account.Actions_impl.hash)
             ~ase_source:
               ( { action_state = old_synced_outer_action_state
                 ; length = old_deposits_length
                 }
                 : C.Ase.With_length.Stmt.t )
         in
+        let proof_cache_db = t.merger_ctx.proof_cache_db in
         (* see #286 *)
         match Is_compile_simple_real.is_compile_simple_real with
         | Some eq ->
             let proof_eq, _ = Type_equal.detuple2 eq in
             let account_update : Account_update.t =
-              { body; authorization = Proof (Type_equal.conv proof_eq proof) }
+              Account_update.with_aux ~body
+                ~authorization:
+                  (Control.Poly.Proof
+                     (Proof_cache_tag.write_proof_to_disk proof_cache_db
+                        (Type_equal.conv proof_eq proof) ) )
             in
             Zkapp_command.Call_forest.Tree.
-              { account_update; account_update_digest; calls }
+              { account_update
+              ; account_update_digest
+              ; calls =
+                  Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+                    ~proof_cache_db calls
+              }
         | None ->
             let account_update : Account_update.t =
-              { body = { body with authorization_kind = None_given }
-              ; authorization = None_given
-              }
+              Account_update.with_aux
+                ~body:{ body with authorization_kind = None_given }
+                ~authorization:Control.Poly.None_given
             in
             Zkapp_command.Call_forest.Tree.
               { account_update
               ; account_update_digest =
                   Zkapp_command.Digest.Account_update.create
-                    ~chain:(Utils.signature_kind t.config.network_id)
-                    account_update
-              ; calls
+                    ~signature_kind:t.config.network_id account_update
+              ; calls =
+                  Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+                    ~proof_cache_db calls
               }
       in
       let fee = Currency.Fee.of_mina_int_exn 0 in
@@ -651,7 +666,10 @@ module Sequencer = struct
               Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
             with
             | Some (Zkapp_command command, _) ->
-                apply_events_and_actions t command
+                apply_events_and_actions t
+                  (Zkapp_command.write_all_proofs_to_disk
+                     ~signature_kind:t.config.network_id
+                     ~proof_cache_db:t.merger_ctx.proof_cache_db command )
             | _ ->
                 Ok ( (* No events nor actions to add *) )
           in
@@ -708,7 +726,7 @@ module Sequencer = struct
         ; archive_uri
         ; zkapp_pk
         ; signer
-        ; network_id = l2_network_id
+        ; network_id = Utils.signature_kind l2_network_id
         ; deposit_delay_blocks
         ; da_key
         ; fee_modifier
@@ -731,6 +749,7 @@ module Sequencer = struct
         ~signer ~kvdb ()
     in
     let archive = Archive.create ~kvdb in
+    let proof_cache_db = Proof_cache_tag.create_identity_db () in
     let merger_ctx =
       Merger.Context.
         { provers
@@ -741,6 +760,7 @@ module Sequencer = struct
         ; state = Merger.Context.load_state kvdb
         ; archive
         ; logger
+        ; proof_cache_db
         }
     in
     let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
@@ -763,7 +783,7 @@ module Sequencer = struct
       if is_empty t then bootstrap ~logger t da_config else return ()
     in
     let%bind () =
-      Committer.recommit_all ~logger ~provers:t.snark_q.provers
+      Committer.recommit_all ~logger ~proof_cache_db ~provers:t.snark_q.provers
         ~executor:t.merger_ctx.executor ~archive ~kvdb ~zkapp_pk:config.zkapp_pk
         ~archive_uri:config.archive_uri
     in

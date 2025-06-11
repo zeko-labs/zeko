@@ -36,7 +36,7 @@ let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
   let graphql_callback =
     Graphql_cohttp_async.make_callback
       (fun ~with_seq_no:_ _req -> sequencer)
-      (Gql.schema ~chain:(Utils.signature_kind l2_network_id))
+      Gql.schema
   in
   let () =
     Cohttp_async.Server.create_expert

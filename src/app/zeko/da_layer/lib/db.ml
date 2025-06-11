@@ -19,7 +19,7 @@ end
 
 module Key_value = struct
   type _ t =
-    | Diff : (Ledger_hash.t * Diff.t) t
+    | Diff : (Ledger_hash.t * Diff.Stable.V2.t) t
     | Diff_index : (unit * Index.t) t
     | Migration : (unit * int) t
 

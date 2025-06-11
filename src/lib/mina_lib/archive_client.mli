@@ -4,7 +4,6 @@ open Pipe_lib
 val dispatch :
      ?max_tries:int
   -> logger:Logger.t
-  -> compile_config:Mina_compile_config.t
   -> Host_and_port.t Cli_lib.Flag.Types.with_name
   -> Archive_lib.Diff.t
   -> (unit, Error.t) result Async.Deferred.t

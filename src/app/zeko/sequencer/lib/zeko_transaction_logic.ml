@@ -203,11 +203,20 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
               { ledger_path_handler = source_ledger; update_acc_set_witness }
         } )
 
-let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
-    ~global_slot ledger imt (command : Zkapp_command.t) =
+let apply_zkapp_command_unchecked ~signature_kind ~sequencer_pk ~zeko_env
+    ~constraint_constants ~global_slot ledger imt (command : Zkapp_command.t) =
   let hash_local_state l =
     Zkapp_command_logic.Local_state.
       { l with call_stack = Inputs.Call_stack.with_hash l.call_stack }
+  in
+  let read_stack_frame stack_frame =
+    Stack_frame.
+      { caller = stack_frame.caller
+      ; caller_caller = stack_frame.caller_caller
+      ; calls =
+          Zkapp_command.Call_forest.map stack_frame.calls
+            ~f:Account_update.read_all_proofs_from_disk
+      }
   in
   let source_ledger =
     let accounts_referenced =
@@ -235,7 +244,9 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
       ; will_succeed = true
       } )
   in
-  let all_account_updates = Zkapp_command.all_account_updates command in
+  let all_account_updates =
+    Zkapp_command.all_account_updates ~signature_kind command
+  in
   let perform eff = perform ~zeko_env ~global_slot eff in
   let witnesses_rev =
     let l = hash_local_state (snd state) in
@@ -255,8 +266,13 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                   ; witness =
                       (let l = snd state in
                        Zkapp_rule_input_witness.
-                         { stack_frame = l.stack_frame
-                         ; call_stack = Inputs.Call_stack.with_hash l.call_stack
+                         { stack_frame = read_stack_frame l.stack_frame
+                         ; call_stack =
+                             Inputs.Call_stack.with_hash l.call_stack
+                             |> List.map
+                                  ~f:
+                                    (With_stack_hash.map
+                                       ~f:(With_hash.map ~f:read_stack_frame) )
                          ; source_ledger_sparse = source_ledger
                          ; update_acc_set_witness = imt_witness
                          } )
@@ -265,9 +281,13 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                   Per_account_update.
                     { account_updates =
                         Zkapp_command.Call_forest.hash all_account_updates
-                    ; account_updates_data = all_account_updates
+                    ; account_updates_data =
+                        Zkapp_command.Call_forest.map
+                          ~f:Account_update.read_all_proofs_from_disk
+                          all_account_updates
                     ; memo_hash =
-                        Signed_command_memo.hash @@ Zkapp_command.memo command
+                        Signed_command_memo.hash
+                        @@ Zkapp_command.Poly.memo command
                     ; shift_action_state =
                         (* This should come from env, but would ruin later *)
                         true
@@ -308,8 +328,13 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
               ; witness =
                   (let l = snd state in
                    Zkapp_rule_input_witness.
-                     { stack_frame = l.stack_frame
-                     ; call_stack = Inputs.Call_stack.with_hash l.call_stack
+                     { stack_frame = read_stack_frame l.stack_frame
+                     ; call_stack =
+                         Inputs.Call_stack.with_hash l.call_stack
+                         |> List.map
+                              ~f:
+                                (With_stack_hash.map
+                                   ~f:(With_hash.map ~f:read_stack_frame) )
                      ; source_ledger_sparse
                      ; update_acc_set_witness = imt_witness
                      } )
@@ -317,17 +342,14 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
           in
           let empty_start_data =
             Per_account_update.
-              { account_updates_data =
-                  Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
+              { account_updates_data = []
               ; memo_hash = Field.zero
-              ; account_updates =
-                  Mina_base.Zkapp_command.Call_forest.accumulate_hashes' []
-                  |> Mina_base.Zkapp_command.Call_forest.hash
+              ; account_updates = [] |> Mina_base.Zkapp_command.Call_forest.hash
               ; shift_action_state = true
               }
           in
-          match Account_update.authorization account_update with
-          | None_given | Signature _ ->
+          match Account_update.Poly.authorization account_update with
+          | Control.Poly.None_given | Signature _ ->
               Ok
                 (fun ~imt_hash ~imt_witness ->
                   Txn_snark_witness.Zkapp_command_segment.Single_unproved
@@ -353,7 +375,9 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
                       { base = incomplete_base ~imt_hash ~imt_witness
                       ; first = empty_start_data
                       ; vk = vk.data
-                      ; zkapp_proof = Compile_simple.Proof.of_pickles proof
+                      ; zkapp_proof =
+                          Compile_simple.Proof.of_pickles
+                            (Proof_cache_tag.read_proof_from_disk proof)
                       } )
         in
         let witnesses_rev = (account_id, w) :: witnesses_rev in
@@ -366,7 +390,7 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
   let%bind.Result failures, witnesses_rev =
     step_all state witnesses_rev
       (Zkapp_command.Call_forest.to_list
-         (Zkapp_command.account_updates command) )
+         (Zkapp_command.Poly.account_updates command) )
   in
   let witnesses = List.rev witnesses_rev in
   let%bind.Result () =
@@ -427,8 +451,8 @@ let apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
      let witnesses = pair_unproved witnesses in *)
   Ok (source_ledger, witnesses)
 
-let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
-    ~global_slot ledger imt (command : User_command.t) =
+let apply_user_command_unchecked ~signature_kind ~sequencer_pk ~zeko_env
+    ~constraint_constants ~global_slot ledger imt (command : User_command.t) =
   match command with
   | Signed_command ({ payload = { body = Payment _; _ }; _ } as command) ->
       let%map.Result source_ledger, w =
@@ -438,7 +462,7 @@ let apply_user_command_unchecked ~sequencer_pk ~zeko_env ~constraint_constants
       (source_ledger, [ Txn_snark_witness.Signed_command w ])
   | Zkapp_command command ->
       let%map.Result source_ledger, w =
-        apply_zkapp_command_unchecked ~sequencer_pk ~zeko_env
+        apply_zkapp_command_unchecked ~signature_kind ~sequencer_pk ~zeko_env
           ~constraint_constants ~global_slot ledger imt command
       in
       (source_ledger, List.map w ~f:(fun w -> Txn_snark_witness.Zkapp_command w))

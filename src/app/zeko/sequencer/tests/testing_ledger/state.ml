@@ -39,6 +39,7 @@ type t =
   ; signature_kind : Mina_signature_kind.t
   ; disable_proofs : bool
   ; logger : Logger.t
+  ; proof_cache_db : Proof_cache_tag.cache_db
   }
 
 let db t = t.db
@@ -66,7 +67,9 @@ let apply_command t ~command =
   Ledger.Mask.Attached.commit l ;
 
   let txn_hash =
-    Transaction_hash.to_base58_check @@ Transaction_hash.hash_command command
+    Transaction_hash.to_base58_check
+    @@ Transaction_hash.hash_command
+         (User_command.read_all_proofs_from_disk command)
   in
   Hashtbl.add_exn t.commands ~key:txn_hash
     ~data:
@@ -83,7 +86,8 @@ let apply_command t ~command =
     match (status, command) with
     | Applied, Zkapp_command zkapp_command ->
         Zkapp_command.(
-          Call_forest.iteri (account_updates zkapp_command) ~f:(fun _ update ->
+          Call_forest.iteri (Poly.account_updates zkapp_command)
+            ~f:(fun _ update ->
               let account =
                 let account_id =
                   Account_id.create
@@ -103,11 +107,13 @@ let apply_command t ~command =
                      { status = Applied
                      ; hash =
                          Mina_transaction.Transaction_hash.hash_command
-                           (Zkapp_command zkapp_command)
-                     ; memo = Zkapp_command.memo zkapp_command
+                           (Zkapp_command
+                              (Zkapp_command.read_all_proofs_from_disk
+                                 zkapp_command ) )
+                     ; memo = Zkapp_command.Poly.memo zkapp_command
                      ; authorization_kind =
                          Account_update.Body.authorization_kind
-                         @@ Account_update.body update
+                         @@ Account_update.Poly.body update
                      } ) ))
     | _ ->
         ()
@@ -154,7 +160,7 @@ let add_command_to_pool t ~(command : User_command.Valid.t) =
               [%log info] "added command to pool: %s"
                 Transaction_hash.(
                   to_base58_check
-                  @@ User_command_with_valid_signature.hash command) ;
+                  @@ User_command_with_valid_signature.transaction_hash command) ;
               `Enqueued ) )
 
 let create_pool ~logger () =
@@ -178,7 +184,8 @@ let create_new_block t =
       | Error err ->
           [%log error] "Failed to apply command %s: %s"
             ( Transaction_hash.to_base58_check
-            @@ Transaction_hash.hash_command command )
+            @@ Transaction_hash.hash_command
+                 (User_command.read_all_proofs_from_disk command) )
             (Error.to_string_hum err) ) ;
   t.pool <- create_pool ~logger ()
 
@@ -197,6 +204,7 @@ let create ~logger ~disable_proofs ~block_period ~db_dir ~signature_kind () =
     ; signature_kind
     ; disable_proofs
     ; logger
+    ; proof_cache_db = Proof_cache_tag.create_identity_db ()
     }
   in
   match block_period with
