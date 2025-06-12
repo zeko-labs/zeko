@@ -29,6 +29,35 @@ module Sequencer = struct
       }
   end
 
+  module State = struct
+    type t = Kvdb_base.t
+
+    module Fee_excess = struct
+      include Kvdb_base.Make_singleton (struct
+        type t = Currency.Fee.t [@@deriving yojson]
+
+        let key = "fee_excess"
+      end)
+
+      let get t = get t |> Option.value ~default:Currency.Fee.zero
+
+      let add t fee =
+        let old_fee_excess = get t in
+        set t
+          ~data:
+            ( Currency.Fee.add old_fee_excess fee
+            |> Option.value_exn ~message:"Fee excess overflow" )
+
+      let reset t = set t ~data:Currency.Fee.zero
+    end
+
+    module Last_committed_ledger = Kvdb_base.Make_singleton (struct
+      type t = Sparse_ledger.t [@@deriving yojson]
+
+      let key = "last_committed_ledger"
+    end)
+  end
+
   let keypair = Keypair.create ()
 
   let sok_digest =
@@ -38,65 +67,16 @@ module Sequencer = struct
 
   module Merger = struct
     module Context = struct
-      module State = struct
-        type t =
-          { mutable previous_committed_ledger : Sparse_ledger.t option
-          ; mutable previous_committed_ledger_hash : Ledger_hash.t option
-          ; mutable fee_excess : Currency.Fee.t
-          }
-        [@@deriving yojson]
-
-        let create () =
-          { previous_committed_ledger = None
-          ; previous_committed_ledger_hash = None
-          ; fee_excess = Currency.Fee.zero
-          }
-      end
-
-      module Db = Kvdb_base.Make_singleton (struct
-        type t = State.t [@@deriving yojson]
-
-        let key = "context_state"
-      end)
-
       type t =
         { provers : Zeko_prover.Client.t
         ; da_client : Da_layer.Client.t
         ; executor : Executor.t
         ; config : Config.t
-        ; kvdb : Committer.Store.Kvdb.t
-        ; state : State.t
+        ; sequencer_state : State.t
+        ; db_pool : Relational_db.Db.pool
         ; archive : Archive.t
         ; logger : Logger.t
         }
-
-      let save_state t = Db.set t.kvdb ~data:t.state
-
-      let load_state kvdb =
-        match Db.get kvdb with Some state -> state | None -> State.create ()
-
-      let committed t ledger =
-        t.state.previous_committed_ledger <- Some ledger ;
-        t.state.previous_committed_ledger_hash <-
-          Some (Sparse_ledger.merkle_root ledger) ;
-        t.state.fee_excess <- Currency.Fee.zero ;
-        save_state t
-
-      let set_last_committed_ledger t ledger =
-        t.state.previous_committed_ledger <- Some ledger ;
-        t.state.previous_committed_ledger_hash <-
-          Some (Sparse_ledger.merkle_root ledger) ;
-        save_state t
-
-      let add_fee_excess t fee_excess =
-        t.state.fee_excess <-
-          Currency.Fee.add t.state.fee_excess fee_excess
-          |> Option.value_exn ~message:"Fee excess overflow" ;
-        save_state t
-
-      let reset_fee_excess t =
-        t.state.fee_excess <- Currency.Fee.zero ;
-        save_state t
     end
 
     module Merge = struct
@@ -127,16 +107,19 @@ module Sequencer = struct
         }
       [@@deriving yojson]
 
+      type out = unit -> (unit, Caqti_error.t) Result.t Deferred.t
+
       let process
           ({ da_client
            ; provers
            ; executor
            ; config
-           ; kvdb
-           ; state
+           ; sequencer_state
            ; archive
            ; logger
-           } as ctx :
+           ; db_pool
+           ; _
+           } :
             Context.t ) { new_inner_ledger; processed_actions_pointer }
           txn_snark =
         let%bind count, signature =
@@ -147,8 +130,8 @@ module Sequencer = struct
         [%log info] "Received %d signatures from da layer" count ;
         assert (count > 0) ;
         let old_inner_ledger =
-          Option.value_exn state.previous_committed_ledger
-            ~message:"No previous committed ledger"
+          State.Last_committed_ledger.get sequencer_state
+          |> Option.value_exn ~message:"No previous committed ledger"
         in
         let commit_witness : Committer.Commit_witness.t =
           { old_inner_ledger
@@ -158,18 +141,25 @@ module Sequencer = struct
           ; txn_snark
           }
         in
-        Committer.Store.store_commit kvdb commit_witness
-          ~source:(Sparse_ledger.merkle_root old_inner_ledger)
-          ~target:(Sparse_ledger.merkle_root new_inner_ledger) ;
-
         let%bind command =
           Committer.prove_commit ~provers ~executor ~archive
             ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
             commit_witness
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
-        Context.committed ctx new_inner_ledger ;
-        return ()
+        State.Last_committed_ledger.set sequencer_state ~data:new_inner_ledger ;
+        return (fun () ->
+            let open Relational_db in
+            Pool.use
+              (fun conn ->
+                Committer.Commit_table.insert conn
+                  { source_ledger_hash =
+                      Sparse_ledger.merkle_root old_inner_ledger
+                  ; target_ledger_hash =
+                      Sparse_ledger.merkle_root new_inner_ledger
+                  ; witness = commit_witness
+                  } )
+              db_pool )
     end
 
     module M = struct
@@ -195,6 +185,7 @@ module Sequencer = struct
     { ledger : L.Db.t
     ; imt : Indexed_merkle_tree.Db.t
     ; db_pool : Relational_db.Db.pool
+    ; state : State.t
     ; logger : Logger.t
     ; archive : Archive.t
     ; config : Config.t
@@ -370,7 +361,7 @@ module Sequencer = struct
           in
 
           (* Accumulate fee *)
-          Merger.Context.add_fee_excess t.merger_ctx (User_command.fee command) ;
+          State.Fee_excess.add t.state (User_command.fee command) ;
 
           (* Post transaction to the DA layer *)
           let changed_accounts =
@@ -412,7 +403,7 @@ module Sequencer = struct
     let%bind.Deferred.Result witness, (source_ledger, diff) =
       return
       @@
-      let fee = t.merger_ctx.state.fee_excess in
+      let fee = State.Fee_excess.get t.state in
       let receiver_pk =
         Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
       in
@@ -422,7 +413,7 @@ module Sequencer = struct
         Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk ~fee
           ~constraint_constants ~global_slot ledger t.imt
       in
-      Merger.Context.reset_fee_excess t.merger_ctx ;
+      State.Fee_excess.reset t.state ;
 
       (* Post transaction to the DA layer *)
       let changed_accounts =
@@ -551,11 +542,6 @@ module Sequencer = struct
     let%bind processed_actions, processed_actions_pointer =
       update_inner_account t
     in
-    let target_ledger =
-      Sparse_ledger.of_ledger_subset_exn
-        L.(of_database t.ledger)
-        [ Zeko_constants.inner_account_id ]
-    in
     let tree_leaves =
       Merger.M.current_tree t.merger
       |> Option.map ~f:(fun tree -> Merger.M.Tree.base_jobs_count tree.value)
@@ -565,6 +551,11 @@ module Sequencer = struct
     if tree_leaves = 0 || (tree_leaves = 1 && processed_actions = 1) then
       return ([%log info] "Nothing to commit")
     else
+      let target_ledger =
+        Sparse_ledger.of_ledger_subset_exn
+          L.(of_database t.ledger)
+          [ Zeko_constants.inner_account_id ]
+      in
       Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
         ~commit_witness:
           { new_inner_ledger = target_ledger; processed_actions_pointer }
@@ -677,7 +668,7 @@ module Sequencer = struct
         L.(of_database t.ledger)
         [ Zeko_constants.inner_account_id ]
     in
-    Merger.Context.set_last_committed_ledger t.merger_ctx sparse_ledger ;
+    State.Last_committed_ledger.set t.state ~data:sparse_ledger ;
     return ()
 
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
@@ -736,8 +727,8 @@ module Sequencer = struct
         ; da_client
         ; executor
         ; config
-        ; kvdb
-        ; state = Merger.Context.load_state kvdb
+        ; sequencer_state = kvdb
+        ; db_pool
         ; archive
         ; logger
         }
@@ -747,6 +738,7 @@ module Sequencer = struct
       { ledger
       ; imt
       ; db_pool
+      ; state = kvdb
       ; logger
       ; archive
       ; config
@@ -763,8 +755,8 @@ module Sequencer = struct
     in
     let%bind () =
       Committer.recommit_all ~logger ~provers:t.snark_q.provers
-        ~executor:t.merger_ctx.executor ~archive ~kvdb ~zkapp_pk:config.zkapp_pk
-        ~archive_uri:config.archive_uri
+        ~executor:t.merger_ctx.executor ~archive ~db_pool
+        ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
     in
     let%bind () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)

@@ -4,6 +4,7 @@
 /src/app/zeko/compile_simple/ @L-as
 /src/app/zeko/tests/ @L-as
 /src/app/zeko/v/ @L-as
-/src/app/zeko/da_layer/ @L-as @MartinOndejka
+/src/app/zeko/da_layer/ @MartinOndejka
+/src/app/zeko/da_layer/core.ml @L-as
 /src/app/zeko/sequencer/ @MartinOndejka
 /src/app/lib/ @L-as @MartinOndejka

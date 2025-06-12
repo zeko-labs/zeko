@@ -163,6 +163,8 @@ let create_pool ~logger () =
     ~time_controller:(Block_time.Controller.basic ~logger)
     ~slot_tx_end:None
 
+let clear_pool t = t.pool <- create_pool ~logger:t.logger ()
+
 let create_new_block t =
   let logger = t.logger in
   t.block_height <- t.block_height + 1 ;
@@ -180,7 +182,7 @@ let create_new_block t =
             ( Transaction_hash.to_base58_check
             @@ Transaction_hash.hash_command command )
             (Error.to_string_hum err) ) ;
-  t.pool <- create_pool ~logger ()
+  clear_pool t
 
 let create ~logger ~disable_proofs ~block_period ~db_dir ~signature_kind () =
   let db =
