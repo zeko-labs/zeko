@@ -1,13 +1,13 @@
 (executable
  (name sequencer_test)
- (libraries sequencer_lib is_compile_simple_real_real)
+ (libraries sequencer_lib is_compile_simple_real_real initialize_state)
  (preprocess
   (pps ppx_let ppx_jane ppx_mina))
  (modules sequencer_test))
 
 (executable
  (name sequencer_test_fake)
- (libraries sequencer_lib is_compile_simple_real_fake)
+ (libraries sequencer_lib is_compile_simple_real_fake initialize_state)
  (preprocess
   (pps ppx_let ppx_jane ppx_mina))
  (modules sequencer_test_fake))
