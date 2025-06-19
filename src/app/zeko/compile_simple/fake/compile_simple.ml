@@ -125,8 +125,6 @@ module Proof_valid = struct
 
   type t = bool t_
 
-  let return x = Immediate x
-
   let immediate x = Immediate x
 
   let to_promise : 'a t_ -> 'a Promise.t = function
@@ -135,22 +133,12 @@ module Proof_valid = struct
     | Sideloaded dv ->
         dv
 
-  let bind (m : 'a t_) ~(f : 'a -> 'b t_) : 'b t_ =
+  let map (m : 'a t_) ~(f : 'a -> 'b) : 'b t_ =
     match m with
     | Immediate v ->
-        f v
+        Immediate (f v)
     | Sideloaded dv ->
-        Sideloaded (Promise.bind dv ~f:(fun v -> to_promise (f v)))
-
-  include Monad.Make (struct
-    type nonrec 'a t = 'a t_
-
-    let return = return
-
-    let bind = bind
-
-    let map = `Define_using_bind
-  end)
+        Sideloaded (Promise.map dv ~f)
 
   let ( &&& ) (a : t) (b : t) =
     match (a, b) with
