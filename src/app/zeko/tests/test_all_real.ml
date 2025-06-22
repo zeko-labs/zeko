@@ -60,7 +60,7 @@ let ase_with_length, ase_with_length_proof =
   end in
   (trans4, proof4)
 
-let ase_without_length =
+let _ase_without_length =
   let open struct
     let trans0, proof0 =
       Promise.block_on_async_exn
@@ -193,16 +193,18 @@ let _txn_stmt, _txn_proof =
     let Compile_simple.[ prove_both ] = Rule_commit.Verify_both_ases.provers
 
     let ase_outer =
-      let stmt, proof = ase_without_length in
-      Rule_commit.Ase_outer_inst.make ~proof_source:stmt.source
-        ~proof_target:stmt.target ~proof stmt.source
-        [ Field.of_string "849812849581123" ]
+      let default = Mina_base.Zkapp_account.Actions.empty_state_element in
+      Rule_commit.Ase_outer_inst.make ~proof_source:default
+        ~proof_target:default default []
 
     let ase_inner =
-      let stmt, proof = (ase_with_length, ase_with_length_proof) in
-      Rule_commit.Ase_inner_inst.make ~proof_source:stmt.source
-        ~proof_target:stmt.target ~proof stmt.source
-        [ Field.of_string "849812849581123" ]
+      let default : Ase.With_length.Stmt.t =
+        { action_state = Mina_base.Zkapp_account.Actions.empty_state_element
+        ; length = Unsigned.UInt32.zero
+        }
+      in
+      Rule_commit.Ase_inner_inst.make ~proof_source:default
+        ~proof_target:default default []
 
     let verify_both_ases_stmt, verify_both_ases_proof =
       Promise.block_on_async_exn @@ fun () -> prove_both (ase_outer, ase_inner)
@@ -218,9 +220,8 @@ let _txn_stmt, _txn_proof =
           Some
             { Mina_base.Zkapp_account.default with
               app_state =
-                [ ase_with_length.source.action_state
-                ; Unsigned.UInt32.to_string ase_with_length.source.length
-                  |> Field.of_string
+                [ Mina_base.Zkapp_account.Actions.empty_state_element
+                ; Field.zero
                 ; Field.zero
                 ; Field.zero
                 ; Field.zero
@@ -229,7 +230,7 @@ let _txn_stmt, _txn_proof =
                 ; Field.zero
                 ]
             ; action_state =
-                (let f = ase_with_length.source.action_state in
+                (let f = Mina_base.Zkapp_account.Actions.empty_state_element in
                  [ f; f; f; f; f ] )
             }
       }
