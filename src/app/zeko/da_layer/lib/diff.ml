@@ -6,16 +6,15 @@ open Mina_ledger
 module Stable = struct
   [@@@with_top_version_tag]
 
+  [@@@no_toplevel_latest_type]
+
   module V2 = struct
     type t =
       { source_ledger_hash : Ledger_hash.Stable.V1.t
-            (** Source ledger hash of the diff *)
       ; changed_accounts : (int * Account.Stable.V2.t) list
-            (** List of changed accounts with corresponding index in the ledger *)
       ; command_with_action_step_flags :
           (User_command.Stable.V2.t * bool list) option
-            (** Optionally add command with corresponding action steps to store the history *)
-      ; timestamp : Block_time.Stable.V1.t  (** Timestamp of the diff *)
+      ; timestamp : Block_time.Stable.V1.t
       }
     [@@deriving yojson, fields, sexp_of, compare]
 
@@ -25,12 +24,9 @@ module Stable = struct
   module V1 = struct
     type t =
       { source_ledger_hash : Ledger_hash.Stable.V1.t
-            (** Source ledger hash of the diff *)
       ; changed_accounts : (int * Account.Stable.V2.t) list
-            (** List of changed accounts with corresponding index in the ledger *)
       ; command_with_action_step_flags :
           (User_command.Stable.V2.t * bool list) option
-            (** Optionally add command with corresponding action steps to store the history *)
       }
     [@@deriving yojson, fields, sexp]
 
@@ -42,6 +38,14 @@ module Stable = struct
       }
   end
 end]
+
+type t =
+  { source_ledger_hash : Ledger_hash.t
+  ; changed_accounts : (int * Account.t) list
+  ; command_with_action_step_flags : (User_command.t * bool list) option
+  ; timestamp : Block_time.t
+  }
+[@@deriving to_yojson, fields, sexp_of]
 
 let create ~source_ledger_hash ~changed_accounts ~command_with_action_step_flags
     =

@@ -41,9 +41,9 @@ module Step = struct
 
     let create = Fields.create
 
-    let generate ~prev_challenges cs =
+    let generate ?(lazy_mode = false) ~prev_challenges cs =
       let open Tick.Keypair in
-      let keypair = create ~prev_challenges cs in
+      let keypair = create ~lazy_mode ~prev_challenges cs in
       { pk = pk keypair; vk = vk keypair }
   end
 
@@ -143,10 +143,8 @@ module Step = struct
 
   type 'proofs_verified statement_var =
     ( (unfinalized_proof_var, 'proofs_verified) Pickles_types.Vector.t
-    , Impl.field Snarky_backendless.Cvar.t
-    , ( Impl.field Snarky_backendless.Cvar.t
-      , 'proofs_verified )
-      Pickles_types.Vector.t )
+    , Impl.Field.t
+    , (Impl.Field.t, 'proofs_verified) Pickles_types.Vector.t )
     Import.Types.Step.Statement.t
 
   let input ~proofs_verified =
@@ -183,9 +181,9 @@ module Wrap = struct
 
     let create = Fields.create
 
-    let generate ~prev_challenges cs =
+    let generate ?(lazy_mode = false) ~prev_challenges cs =
       let open Tock.Keypair in
-      let keypair = create ~prev_challenges cs in
+      let keypair = create ~lazy_mode ~prev_challenges cs in
       { pk = pk keypair; vk = vk keypair }
   end
 

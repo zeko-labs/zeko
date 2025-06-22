@@ -64,8 +64,7 @@ struct
     SnarkList
       (PathElt)
       (struct
-        let length =
-          Genesis_constants.Compiled.constraint_constants.ledger_depth
+        let length = Account_set.height
       end)
 
   module Witness = struct
@@ -88,24 +87,27 @@ struct
   let implied_root (account : Account.var) (path : Path.var) : F.var Checked.t =
     let* init = Account.Checked.digest account in
     Checked.List.foldi path ~init ~f:(fun height acc PathElt.{ right_side } ->
-        Ledger_hash.merge_var ~height acc right_side |> Checked.return )
+        make_checked @@ fun () -> Ledger_hash.merge_var ~height acc right_side )
 
   let get_zkapp (a : Account.var) : Zkapp_account.Checked.t Checked.t =
     let hash, content = a.zkapp in
     let* content =
       exists Zkapp_account.typ
         ~compute:
-          (let+| content = As_prover.Ref.get content in
+          (let+| content = As_prover.read (Typ.prover_value ()) content in
            Option.value ~default:Zkapp_account.default content )
     in
+    let* digest =
+      make_checked @@ fun () -> Zkapp_account.Checked.digest content
+    in
     let*| () =
-      with_label __LOC__ (fun () ->
-          Field.Checked.Assert.equal hash
-          @@ Zkapp_account.Checked.digest content )
+      with_label __LOC__ (fun () -> Field.Checked.Assert.equal hash digest)
     in
     content
 
-  let%snarkydef_ main (w : Witness.t V.t) =
+  let main (w : Witness.t V.t) =
+    with_label __LOC__
+    @@ fun () ->
     let* ({ txn_snark
           ; public_key
           ; vk_hash
@@ -119,8 +121,10 @@ struct
           ; slot_range
           } :
            Witness.var ) =
-      exists ~compute:(V.get w) Witness.typ
+      with_label __LOC__ @@ fun () -> exists ~compute:(V.get w) Witness.typ
     in
+    with_label __LOC__
+    @@ fun () ->
     (* Calculate the root ledger hashes, to be checked against txn snark. *)
     let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
@@ -139,7 +143,8 @@ struct
          , verify_txn_snark ) =
       Txn_rules.get txn_snark
     in
-
+    with_label __LOC__
+    @@ fun () ->
     (* The local states must be empty, ensuring that there is no incomplete zkapp transaction being committed. *)
     let* () =
       Txn_state.Local_state.(
@@ -152,6 +157,8 @@ struct
 
     (* DA check, simply see if public key in question has signed our ledger. *)
     let* () =
+      with_label __LOC__
+      @@ fun () ->
       (* TODO: Is this correct? *)
       let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
       let* da_key_uncompressed =
@@ -170,6 +177,7 @@ struct
               (Random_oracle.Checked.pack_input input) )
       in
       Signature_lib.Schnorr.Chunked.Checked.assert_verifies
+        ~signature_kind:chain_l1
         (module Shifted)
         da_signature da_key_uncompressed
         (Random_oracle.Input.Chunked.field payload)
@@ -214,7 +222,8 @@ struct
       assert_equal_safer ~label:__LOC__ Ledger_hash.typ target_ledger
         (Ledger_hash.var_of_hash_packed implied_root_new)
     in
-
+    with_label __LOC__
+    @@ fun () ->
     (* We check that we're dealing with the correct account. *)
     let* () =
       with_label __LOC__ (fun () ->
@@ -285,7 +294,7 @@ struct
     (* We check that the above values match with what we got from ase_inner. *)
     let* old_inner_action_state =
       let*| () =
-        assert_equal Inner_action_state.typ
+        assert_equal ~label:__LOC__ Inner_action_state.typ
           (Inner_action_state.With_length.state_var old_inner_action_state)
           old_inner_action_state'
       in
@@ -293,7 +302,7 @@ struct
     in
     let* new_inner_action_state =
       let*| () =
-        assert_equal Inner_action_state.typ
+        assert_equal ~label:__LOC__ Inner_action_state.typ
           (Inner_action_state.With_length.state_var new_inner_action_state)
           new_inner_action_state'
       in

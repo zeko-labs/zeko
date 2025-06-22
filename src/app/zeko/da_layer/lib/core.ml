@@ -11,8 +11,8 @@ open Signature_lib
     6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
     7. Attach timestamp.
     8. Store the diff under the [target_ledger_hash]. *)
-let post_diff ~logger ~kvdb ~network_id ~(signer : Keypair.t) ~ledger_openings
-    ~diff =
+let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
+    ~ledger_openings ~diff =
   (* 1 *)
   let%bind.Result () =
     match
@@ -88,7 +88,9 @@ let post_diff ~logger ~kvdb ~network_id ~(signer : Keypair.t) ~ledger_openings
          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
          [| target_ledger_hash |]
   in
-  let signature = Schnorr.Chunked.sign signer.private_key message in
+  let signature =
+    Schnorr.Chunked.sign ~signature_kind:network_id signer.private_key message
+  in
 
   (* 6 *)
   let get_account ledger account_id =
@@ -125,15 +127,20 @@ let post_diff ~logger ~kvdb ~network_id ~(signer : Keypair.t) ~ledger_openings
           (Account_id.Map.set Account_id.Map.empty ~key:account_id
              ~data:new_receipt_chain_hash )
     | Some (Zkapp_command command, _) ->
+        let command =
+          Zkapp_command.write_all_proofs_to_disk ~signature_kind:network_id
+            ~proof_cache_db command
+        in
         let _commitment, full_transaction_commitment =
-          Zkapp_command.get_transaction_commitments ~chain:network_id command
+          Zkapp_command.get_transaction_commitments ~signature_kind:network_id
+            command
         in
         let%bind.Result _, acc =
           List.fold_result (Zkapp_command.all_account_updates_list command)
             ~init:(Unsigned.UInt32.zero, Account_id.Map.empty)
             ~f:(fun (index, acc) account_update ->
               (* Receipt chain hash is updated only for account updates authorised with Proof or Signature *)
-              match Account_update.authorization account_update with
+              match Account_update.Poly.authorization account_update with
               | None_given ->
                   Ok (Unsigned.UInt32.succ index, acc)
               | Proof _ | Signature _ ->

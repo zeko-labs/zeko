@@ -12,7 +12,7 @@ pkgs.mkShell {
     postgresql.out
     sodium-static.out
     sodium-static.dev
-    go_1_21
+    go_1_19
     capnproto
     zlib.dev
     bzip2.dev
@@ -21,6 +21,7 @@ pkgs.mkShell {
     wasm-pack
     lmdb
     rosetta-cli
+    rocksdb.tools
   ];
   OPAMSWITCH = "mina";
   MINA_ROCKSDB = "${pkgs.rocksdb-mina}/lib/librocksdb.a";

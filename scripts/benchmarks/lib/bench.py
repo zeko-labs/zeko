@@ -4,6 +4,7 @@ from abc import ABC
 import parse
 from pathlib import Path
 import io
+import json
 import os
 from enum import Enum
 import logging
@@ -115,12 +116,16 @@ class Benchmark(abc.ABC):
                     result = self.influx_client.query_moving_average(
                         name, branch, str(field), self.branch_header())
 
-                    if not any(result):
+                    print(f"result: {result}")
+                    
+                    records = result[-1].records if (result is not None) and (len(result) > 0) else []
+
+                    if len(records) < self.influx_client.moving_average_size :
                         logger.warning(
-                            f"Skipping comparison for {name} as there are no historical data available yet"
+                            f"Skipping comparison for {name} as there are no enough ({self.influx_client.moving_average_size}) historical data available yet"
                         )
                     else:
-                        average = float(result[-1].records[-1]["_value"])
+                        average = float(records[-1]["_value"])
 
                         current_red_threshold = average * red_threshold
                         current_yellow_threshold = average * yellow_threshold
@@ -154,6 +159,7 @@ class BenchmarkType(Enum):
     heap_usage = 'heap-usage'
     zkapp = 'zkapp'
     ledger_export = 'ledger-export'
+    ledger_apply = 'ledger-apply'
 
     def __str__(self):
         return self.value
@@ -161,7 +167,7 @@ class BenchmarkType(Enum):
 
 class JaneStreetBenchmark(Benchmark, ABC):
     """
-        Abstract class for native ocaml benchmarks which has the same format
+        Abstract class for native ocaml benchmarks with unified format
 
     """
     name = MeasurementColumn("Name", 0)
@@ -170,9 +176,11 @@ class JaneStreetBenchmark(Benchmark, ABC):
     minor_words_per_runs = FieldColumn("mWd/Run", 3, "w")
     major_words_per_runs = FieldColumn("mjWd/Run", 4, "w")
     promotions_per_runs = FieldColumn("Prom/Run", 5, "w")
-    branch = TagColumn("gitbranch", 6)
+    category = TagColumn("category", 6)
+    branch = TagColumn("gitbranch", 7)
 
     def __init__(self, kind):
+        self.kind = kind
         Benchmark.__init__(self, kind)
 
     def headers(self):
@@ -181,7 +189,9 @@ class JaneStreetBenchmark(Benchmark, ABC):
             MinaBaseBenchmark.cycles_per_runs,
             MinaBaseBenchmark.minor_words_per_runs,
             MinaBaseBenchmark.major_words_per_runs,
-            MinaBaseBenchmark.promotions_per_runs, MinaBaseBenchmark.branch
+            MinaBaseBenchmark.promotions_per_runs, 
+            MinaBaseBenchmark.category, 
+            MinaBaseBenchmark.branch
         ]
 
     def fields(self):
@@ -242,6 +252,7 @@ class JaneStreetBenchmark(Benchmark, ABC):
                         rows[
                             5] += " " + MinaBaseBenchmark.promotions_per_runs.format_unit(
                             )
+                        rows.append(MinaBaseBenchmark.category.name)
                         rows.append("gitbranch")
 
                     else:
@@ -256,18 +267,25 @@ class JaneStreetBenchmark(Benchmark, ABC):
                             else:
                                 raise Exception(
                                     "Time can be expressed only in us or ns")
+
                         else:
                             # us
                             rows[1] = time[:-2]
-                            # kc
+
+                        if rows[2].endswith("kc"):
                             rows[2] = rows[2][:-2]
-                            # w
-                            rows[3] = rows[3][:-1]
-                            # w
-                            rows[4] = rows[4][:-1]
-                            # w
-                            rows[5] = rows[5][:-1]
-                            rows.append(branch)
+                        else:
+                            #c
+                            rows[2] = rows[2][:-1]
+                        # w
+                        rows[3] = rows[3][:-1]
+                        # w
+                        rows[4] = rows[4][:-1]
+                        # w
+                        rows[5] = rows[5][:-1]
+
+                        rows.append(str(self.kind))
+                        rows.append(branch)
 
                     csvwriter.writerow(rows[:])
 
@@ -288,11 +306,12 @@ class JaneStreetBenchmark(Benchmark, ABC):
         ends = []
         files = []
         for i, e in enumerate(lines):
-            if "Running" in e:
+            if "Estimated testing" in e:
                 starts.append(i)
 
         if not any(starts):
             self.export_to_csv(lines, output_filename, influxdb, branch)
+            files.append(output_filename)
         else:
             for start in starts[1:]:
                 ends.append(start)
@@ -301,7 +320,7 @@ class JaneStreetBenchmark(Benchmark, ABC):
 
             for start, end in zip(starts, ends):
                 name = parse.parse('Running inline tests in library "{}"',
-                                   lines[start].strip())[0]
+                                   lines[start-1].strip())[0]
                 file = f'{name}_{output_filename}'
                 logger.info(f"exporting {file}..")
                 self.export_to_csv(lines[start:end], f'{file}', influxdb,
@@ -360,6 +379,70 @@ class LedgerExportBenchmark(JaneStreetBenchmark):
     def default_path(self):
         return "mina-ledger-export-benchmark"
 
+
+class LedgerApplyBenchmark(Benchmark):
+    """
+     Concrete implementation of Benchmark for ledger test apply benchmark.
+     It requires input json file with benchmark data in format
+     {
+        "final_time":"0.4000" # In ms
+        , "preparation_steps_mean": "0.432"
+     }
+    """
+
+    name = MeasurementColumn("Name", 0)
+    time = FieldColumn("time",  1, "ms")
+    preps_mean = FieldColumn("preps mean",  2, "")
+    category = TagColumn("category", 3)
+    branch = TagColumn("gitbranch", 4)
+
+    def __init__(self, benchmark_input_json):
+        Benchmark.__init__(self, BenchmarkType.ledger_apply)
+        self.benchmark_input_json = benchmark_input_json
+
+    def run(self, path=None):
+        pass
+
+    def fields(self):
+        return [
+            self.time, self.preps_mean
+        ]
+
+    def name_header(self):
+        return self.name
+
+    def branch_header(self):
+        return self.branch
+
+    def default_path(self):
+        return "mina"
+
+    def headers(self):
+        return [
+            LedgerApplyBenchmark.name, LedgerApplyBenchmark.time,
+            LedgerApplyBenchmark.preps_mean, LedgerApplyBenchmark.category,
+            LedgerApplyBenchmark.branch
+        ]
+
+    def parse(self, content, output_filename, influxdb, branch):
+
+        final_time_header = "final_time"
+        preparation_steps_mean_header = "preparation_steps_mean"
+
+        with open(self.benchmark_input_json) as f:
+            data = json.load(f)
+            final_time = data[final_time_header]
+            preparation_steps_mean = data[preparation_steps_mean_header]
+
+            with open(output_filename, 'w') as csvfile:
+                if influxdb:
+                    csvfile.write(
+                        self.headers_to_influx(self.headers()) + "\n")
+                csvwriter = csv.writer(csvfile)
+                csvwriter.writerow((self.name.name, self.time.name,self.preps_mean.name, self.category.name, self.branch.name))
+                csvwriter.writerow(("ledger-apply",final_time, preparation_steps_mean,"ledger-apply", branch))
+
+        return [output_filename]
 
 class ZkappLimitsBenchmark(Benchmark):
     """

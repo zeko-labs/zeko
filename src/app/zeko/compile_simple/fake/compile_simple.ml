@@ -257,11 +257,13 @@ let branches_to_provers name tag out_typ =
     function
     | Branches.({ branch_name; tags; main } :: rest) ->
         let prover input =
-          printf "Fake proving %s.%s\n" name branch_name ;
+          printf "compile_simple.fake: proving %s.%s\n" name branch_name ;
           let recursion_valid, out =
             Snark_params.Tick.run_and_check_exn
             @@
             let open Checked in
+            exists Typ.unit ~compute:(fun _ -> ())
+            >>= fun () ->
             main (V.return input)
             >>| fun { out; prevs } ->
             let open As_prover in
@@ -273,7 +275,7 @@ let branches_to_provers name tag out_typ =
           let%map recursion_valid = Proof_valid.to_promise recursion_valid in
           if not recursion_valid then
             failwith "compile_simple [fake]: recursive proof invalid" ;
-          printf "Fake proving %s.%s done\n" name branch_name ;
+          printf "compile_simple.fake: %s.%s done\n" name branch_name ;
           let fake_proof = make_fake_proof tag out_typ out in
           (out, fake_proof)
         in
@@ -321,12 +323,13 @@ let compile (type out_t out_var first_input branches n_available_branches)
         and type out_var = out_var
         and type branches = (first_input, branches) cons_branch ) =
   ignore wrap_domain ;
-  printf "(compile_simple [fake]) called for circuit %s from %s\n%!" name
+  printf "compile_simple.fake: called for circuit %s from %s\n%!" name
     (P.get_callstack 9999 |> get_first_backtrace_entry) ;
   (* ZEKO NOTE: ZEKO FIXME: Add back! didn't work very likely because of snarky bug that should be fixed *)
   (* assert (Run.in_checked_computation () |> not) ; *)
   (* assert (Run.in_prover () |> not) ; *)
   let circuit_hash = hash_branches branches in
+  printf "compile_simple.fake: hashed %s\n" name ;
   let tag = Tag { circuit_hash; typ = out_typ } in
   let r :
       (module Result
@@ -375,8 +378,4 @@ let compile (type out_t out_var first_input branches n_available_branches)
   r
 
 (* FIXME: check constraint *)
-let add_plonk_constraint ~label c =
-  assert_ ~label
-    { basic = Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.T c
-    ; annotation = None
-    }
+let add_plonk_constraint ~label:_ _ = Checked.return ()

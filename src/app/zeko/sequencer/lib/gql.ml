@@ -966,9 +966,9 @@ module Types = struct
       let conv
           (x :
             ( Zeko_sequencer.t
-            , Zkapp_command.t )
+            , Zkapp_command.Stable.Latest.t )
             Fields_derivers_graphql.Schema.typ ) :
-          (Zeko_sequencer.t, Zkapp_command.t) typ =
+          (Zeko_sequencer.t, Zkapp_command.Stable.Latest.t) typ =
         Obj.magic x
       in
       obj "ZkappCommandResult" ~fields:(fun _ ->
@@ -1273,23 +1273,24 @@ module Types = struct
     end
 
     module SendZkappInput = struct
-      type input = Mina_base.Zkapp_command.t
+      type input = Mina_base.Zkapp_command.Stable.Latest.t
 
-      let arg_typ ~chain =
+      let arg_typ =
         let conv
             (x :
-              Mina_base.Zkapp_command.t
+              Mina_base.Zkapp_command.Stable.Latest.t
               Fields_derivers_graphql.Schema.Arg.arg_typ ) :
-            Mina_base.Zkapp_command.t Graphql_async.Schema.Arg.arg_typ =
+            Mina_base.Zkapp_command.Stable.Latest.t
+            Graphql_async.Schema.Arg.arg_typ =
           Obj.magic x
         in
         let arg_typ =
-          { arg_typ = Mina_base.Zkapp_command.arg_typ ~chain () |> conv
+          { arg_typ = Mina_base.Zkapp_command.arg_typ () |> conv
           ; to_json =
               (function
               | x ->
                   Yojson.Safe.to_basic
-                    (Mina_base.Zkapp_command.zkapp_command_to_json ~chain x) )
+                    (Mina_base.Zkapp_command.zkapp_command_to_json x) )
           }
         in
         obj "SendZkappInput" ~coerce:Fn.id
@@ -1682,15 +1683,18 @@ module Mutations = struct
             Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash)
         )
 
-  let send_zkapp ~chain =
+  let send_zkapp =
     io_field "sendZkapp" ~doc:"Send a zkApp transaction"
       ~typ:(non_null Types.Payload.send_zkapp)
       ~args:
-        Arg.
-          [ arg "input"
-              ~typ:(non_null (Types.Input.SendZkappInput.arg_typ ~chain))
-          ]
-      ~resolve:(fun { ctx = sequencer; _ } () zkapp_command ->
+        Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
+      ~resolve:(fun { ctx = sequencer; _ } () zkapp_command_stable ->
+        let zkapp_command =
+          Zkapp_command.write_all_proofs_to_disk
+            ~signature_kind:sequencer.config.network_id
+            ~proof_cache_db:sequencer.merger_ctx.proof_cache_db
+            zkapp_command_stable
+        in
         match%bind
           Zeko_sequencer.apply_user_command sequencer
             (Zkapp_command zkapp_command)
@@ -1708,7 +1712,7 @@ module Mutations = struct
               >>| Result.map_error ~f:(fun e -> Caqti_error.show e)
             in
             let cmd =
-              { Types.Zkapp_command.With_status.data = zkapp_command
+              { Types.Zkapp_command.With_status.data = zkapp_command_stable
               ; status = Applied
               }
             in
@@ -1749,12 +1753,8 @@ module Mutations = struct
              ~key ~claim ;
         return (Ok key) )
 
-  let commands ~chain =
-    [ send_payment
-    ; send_zkapp ~chain
-    ; prove_transfer_request
-    ; prove_transfer_claim
-    ]
+  let commands =
+    [ send_payment; send_zkapp; prove_transfer_request; prove_transfer_claim ]
 end
 
 module Queries = struct
@@ -1791,7 +1791,15 @@ module Queries = struct
       ~typ:(non_null string)
       ~args:Arg.[]
       ~resolve:(fun { ctx = sequencer; _ } () ->
-        "zeko:" ^ Zeko_sequencer.(sequencer.config.network_id) )
+        "zeko:"
+        ^
+        match Zeko_sequencer.(sequencer.config.network_id) with
+        | Mina_signature_kind.Testnet ->
+            "testnet"
+        | Mina_signature_kind.Mainnet ->
+            "mainnet"
+        | Mina_signature_kind.Other_network other ->
+            other )
 
   let fee_per_weight_unit =
     field "feePerWeightUnit" ~doc:"Current fee per weight unit"
@@ -1890,10 +1898,12 @@ module Queries = struct
         with
         | None ->
             None
-        | Some (_, Ok account_update) ->
+        | Some (_, Ok call_forest) ->
             Some
               ( Yojson.Safe.to_string
-              @@ Zkapp_command.account_updates_to_json account_update )
+              @@ Zkapp_command.account_updates_to_json
+                   (Zkapp_command.Call_forest.map call_forest
+                      ~f:Account_update.read_all_proofs_from_disk ) )
         | Some (_, Error msg) ->
             Some msg )
 
@@ -1970,6 +1980,5 @@ module Queries = struct
     @ Archive.commands
 end
 
-let schema ~chain =
-  Graphql_async.Schema.(
-    schema Queries.commands ~mutations:(Mutations.commands ~chain))
+let schema =
+  Graphql_async.Schema.(schema Queries.commands ~mutations:Mutations.commands)

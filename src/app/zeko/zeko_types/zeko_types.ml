@@ -174,17 +174,13 @@ end
 module Zkapp_rule_input_witness = struct
   type t = Rule_zkapp_command.Zkapp_rule_input_witness.t =
     { stack_frame :
-        ( Token_id.Stable.V2.t
-        , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
-        Stack_frame.Stable.V1.t
+        (Token_id.t, Zkapp_command.Call_forest.With_hashes.t) Stack_frame.t
     ; call_stack :
-        ( ( ( Token_id.Stable.V2.t
-            , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
-            Stack_frame.Stable.V1.t
-          , Stack_frame.Digest.Stable.V1.t )
+        ( ( (Token_id.t, Zkapp_command.Call_forest.With_hashes.t) Stack_frame.t
+          , Stack_frame.Digest.t )
           With_hash.t
-        , Call_stack_digest.Stable.V1.t )
-        With_stack_hash.Stable.V1.t
+        , Call_stack_digest.t )
+        With_stack_hash.t
         list
     ; source_ledger_sparse : Mina_ledger.Sparse_ledger.t
     ; update_acc_set_witness : Acc_set_witness.t
@@ -209,10 +205,23 @@ module Zkapp_rule_input_witness = struct
     }
   [@@deriving yojson]
 
-  let of_serializable
+  let of_serializable ~proof_cache_db
       ({ stack_frame; call_stack; source_ledger_sparse; update_acc_set_witness } :
         serializable ) : t =
-    { stack_frame
+    let write_stack_frame stack_frame =
+      Stack_frame.
+        { caller = stack_frame.caller
+        ; caller_caller = stack_frame.caller_caller
+        ; calls =
+            Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+              ~proof_cache_db stack_frame.calls
+        }
+    in
+    let call_stack =
+      List.map call_stack
+        ~f:(With_stack_hash.map ~f:(With_hash.map ~f:write_stack_frame))
+    in
+    { stack_frame = write_stack_frame stack_frame
     ; call_stack
     ; source_ledger_sparse
     ; update_acc_set_witness =
@@ -271,14 +280,14 @@ module Zkapp_rule_input = struct
     }
   [@@deriving yojson]
 
-  let of_serializable
+  let of_serializable ~proof_cache_db
       ({ source_ledger; source_local_state; sequencer; source_acc_set; witness } :
         serializable ) : t =
     { source_ledger
     ; source_local_state
     ; sequencer
     ; source_acc_set
-    ; witness = Zkapp_rule_input_witness.of_serializable witness
+    ; witness = Zkapp_rule_input_witness.of_serializable ~proof_cache_db witness
     }
 end
 
@@ -286,10 +295,28 @@ module Per_account_update = struct
   type t = Rule_zkapp_command.Per_account_update.t =
     { account_updates : Zkapp_command.Digest.Forest.t
     ; memo_hash : F.t
-    ; account_updates_data : Mina_base.Zkapp_command.Call_forest.With_hashes.t
+    ; account_updates_data : Zkapp_command.Call_forest.With_hashes.t
+    ; shift_action_state : bool
+    }
+
+  type serializable =
+    { account_updates : Zkapp_command.Digest.Forest.t
+    ; memo_hash : F.t
+    ; account_updates_data : Zkapp_command.Call_forest.With_hashes.Stable.V1.t
     ; shift_action_state : bool
     }
   [@@deriving yojson]
+
+  let of_serializable ~proof_cache_db
+      ({ account_updates; memo_hash; account_updates_data; shift_action_state } :
+        serializable ) : t =
+    { account_updates
+    ; memo_hash
+    ; account_updates_data =
+        Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+          ~proof_cache_db account_updates_data
+    ; shift_action_state
+    }
 end
 
 module Verification_key = struct
@@ -312,15 +339,16 @@ module Zkapp_single_proved_input = struct
     { base : Zkapp_rule_input.serializable
     ; vk : Verification_key.serializable
     ; zkapp_proof : Proof.t
-    ; first : Per_account_update.t
+    ; first : Per_account_update.serializable
     }
   [@@deriving yojson]
 
-  let of_serializable ({ base; vk; zkapp_proof; first } : serializable) : t =
-    { base = Zkapp_rule_input.of_serializable base
+  let of_serializable ~proof_cache_db
+      ({ base; vk; zkapp_proof; first } : serializable) : t =
+    { base = Zkapp_rule_input.of_serializable ~proof_cache_db base
     ; vk = Verification_key.of_serializable vk
     ; zkapp_proof
-    ; first
+    ; first = Per_account_update.of_serializable ~proof_cache_db first
     }
 end
 
@@ -329,11 +357,15 @@ module Zkapp_single_unproved_input = struct
     { base : Zkapp_rule_input.t; first : Per_account_update.t }
 
   type serializable =
-    { base : Zkapp_rule_input.serializable; first : Per_account_update.t }
+    { base : Zkapp_rule_input.serializable
+    ; first : Per_account_update.serializable
+    }
   [@@deriving yojson]
 
-  let of_serializable ({ base; first } : serializable) : t =
-    { base = Zkapp_rule_input.of_serializable base; first }
+  let of_serializable ~proof_cache_db ({ base; first } : serializable) : t =
+    { base = Zkapp_rule_input.of_serializable ~proof_cache_db base
+    ; first = Per_account_update.of_serializable ~proof_cache_db first
+    }
 end
 
 module Zkapp_double_unproved_input = struct
@@ -345,13 +377,17 @@ module Zkapp_double_unproved_input = struct
 
   type serializable =
     { base : Zkapp_rule_input.serializable
-    ; first : Per_account_update.t
-    ; second : Per_account_update.t
+    ; first : Per_account_update.serializable
+    ; second : Per_account_update.serializable
     }
   [@@deriving yojson]
 
-  let of_serializable ({ base; first; second } : serializable) : t =
-    { base = Zkapp_rule_input.of_serializable base; first; second }
+  let of_serializable ~proof_cache_db ({ base; first; second } : serializable) :
+      t =
+    { base = Zkapp_rule_input.of_serializable ~proof_cache_db base
+    ; first = Per_account_update.of_serializable ~proof_cache_db first
+    ; second = Per_account_update.of_serializable ~proof_cache_db second
+    }
 end
 
 module Sparse_ledger_handler = struct

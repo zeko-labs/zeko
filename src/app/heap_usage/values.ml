@@ -11,12 +11,8 @@ let account : Mina_base.Account.t =
      the zkapp_uri field is not currently bounded in size
   *)
   let zkapp_account : Mina_base.Zkapp_account.t =
-    let app_state =
-      Pickles_types.Vector.to_list Mina_base.Zkapp_account.default.app_state
-      |> Pickles_types.Vector.Vector_8.of_list_exn
-    in
     { Mina_base.Zkapp_account.default with
-      app_state
+      app_state = Mina_base.Zkapp_account.default.app_state
     ; verification_key =
         Some
           With_hash.
@@ -33,11 +29,11 @@ let account : Mina_base.Account.t =
   }
 
 (* beefy zkapp command with all proof updates *)
-let zkapp_command ~genesis_constants ~constraint_constants =
+let zkapp_command ~proof_cache_db ~genesis_constants ~constraint_constants =
   let num_updates = 16 in
   let%map.Async.Deferred _, zkapp_commands =
-    Snark_profiler_lib.create_ledger_and_zkapps ~genesis_constants
-      ~constraint_constants ~min_num_updates:num_updates
+    Snark_profiler_lib.create_ledger_and_zkapps ~proof_cache_db
+      ~genesis_constants ~constraint_constants ~min_num_updates:num_updates
       ~num_proof_updates:num_updates ~max_num_updates:num_updates ()
   in
   List.hd_exn zkapp_commands
@@ -47,8 +43,8 @@ let zkapp_proof ~zkapp_command =
     (Mina_base.Zkapp_command.all_account_updates_list zkapp_command)
     ~init:None
     ~f:(fun _acc a ->
-      match a.Mina_base.Account_update.authorization with
-      | Proof proof ->
+      match a.Mina_base.Account_update.Poly.authorization with
+      | Mina_base.Control.Poly.Proof proof ->
           Stop (Some proof)
       | _ ->
           Continue None )
@@ -57,16 +53,17 @@ let zkapp_proof ~zkapp_command =
 
 let dummy_proof =
   Pickles.Proof.dummy Pickles_types.Nat.N2.n Pickles_types.Nat.N2.n
-    Pickles_types.Nat.N2.n ~domain_log2:16
+    ~domain_log2:16
 
 let dummy_vk = Mina_base.Side_loaded_verification_key.dummy
 
-let verification_key ~constraint_constants =
-  let `VK vk, `Prover _ =
-    Transaction_snark.For_tests.create_trivial_snapp ~constraint_constants ()
-  in
-  let%map.Async.Deferred vk = vk in
-  With_hash.data vk
+let verification_key =
+  lazy
+    (let `VK vk, `Prover _ =
+       Transaction_snark.For_tests.create_trivial_snapp ()
+     in
+     let%map.Async.Deferred vk = vk in
+     With_hash.data vk )
 
 let applied = Mina_base.Transaction_status.Applied
 
@@ -230,7 +227,7 @@ let scan_state_base_node_zkapp ~constraint_constants ~zkapp_command =
   in
   mk_scan_state_base_node varying ~constraint_constants
 
-let scan_state_merge_node :
+let scan_state_merge_node ~proof_cache_db :
     Transaction_snark_scan_state.Ledger_proof_with_sok_message.t
     Parallel_scan.Merge.t =
   let weight1 : Parallel_scan.Weight.t = { base = 42; merge = 99 } in
@@ -251,7 +248,8 @@ let scan_state_merge_node :
         { without_sok with sok_digest = Mina_base.Sok_message.digest sok_msg }
       in
       let ledger_proof = Transaction_snark.create ~statement ~proof in
-      (ledger_proof, sok_msg)
+      ( Ledger_proof.Cached.write_proof_to_disk ~proof_cache_db ledger_proof
+      , sok_msg )
     in
     let right =
       let sok_msg : Mina_base.Sok_message.t =
@@ -267,7 +265,8 @@ let scan_state_merge_node :
         { without_sok with sok_digest = Mina_base.Sok_message.digest sok_msg }
       in
       let ledger_proof = Transaction_snark.create ~statement ~proof in
-      (ledger_proof, sok_msg)
+      ( Ledger_proof.Cached.write_proof_to_disk ~proof_cache_db ledger_proof
+      , sok_msg )
     in
     Full { left; right; seq_no = 1; status = Todo }
   in
@@ -686,7 +685,7 @@ let staged_ledger_diff =
     }
       |json}
   in
-  Staged_ledger_diff.of_yojson json |> Result.ok_or_failwith
+  Staged_ledger_diff.Stable.Latest.of_yojson json |> Result.ok_or_failwith
 
 let merkle_path
     ~(constraint_constants : Genesis_constants.Constraint_constants.t) =

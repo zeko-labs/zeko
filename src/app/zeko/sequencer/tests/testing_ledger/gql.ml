@@ -920,8 +920,11 @@ module Types = struct
 
     let zkapp_command =
       let conv
-          (x : (State.t, Zkapp_command.t) Fields_derivers_graphql.Schema.typ) :
-          (State.t, Zkapp_command.t) typ =
+          (x :
+            ( State.t
+            , Zkapp_command.Stable.Latest.t )
+            Fields_derivers_graphql.Schema.typ ) :
+          (State.t, Zkapp_command.Stable.Latest.t) typ =
         Obj.magic x
       in
       obj "ZkappCommandResult" ~fields:(fun _ ->
@@ -1219,23 +1222,24 @@ module Types = struct
     end
 
     module SendZkappInput = struct
-      type input = Mina_base.Zkapp_command.t
+      type input = Mina_base.Zkapp_command.Stable.Latest.t
 
-      let arg_typ ~chain =
+      let arg_typ =
         let conv
             (x :
-              Mina_base.Zkapp_command.t
+              Mina_base.Zkapp_command.Stable.Latest.t
               Fields_derivers_graphql.Schema.Arg.arg_typ ) :
-            Mina_base.Zkapp_command.t Graphql_async.Schema.Arg.arg_typ =
+            Mina_base.Zkapp_command.Stable.Latest.t
+            Graphql_async.Schema.Arg.arg_typ =
           Obj.magic x
         in
         let arg_typ =
-          { arg_typ = Mina_base.Zkapp_command.arg_typ ~chain () |> conv
+          { arg_typ = Mina_base.Zkapp_command.arg_typ () |> conv
           ; to_json =
               (function
               | x ->
                   Yojson.Safe.to_basic
-                    (Mina_base.Zkapp_command.zkapp_command_to_json ~chain x) )
+                    (Mina_base.Zkapp_command.zkapp_command_to_json x) )
           }
         in
         obj "SendZkappInput" ~coerce:Fn.id
@@ -1594,15 +1598,17 @@ module Mutations = struct
         in
         Deferred.Result.return (Types.User_command.mk_payment cmd_with_hash) )
 
-  let send_zkapp ~chain =
+  let send_zkapp =
     io_field "sendZkapp" ~doc:"Send a zkApp transaction"
       ~typ:(non_null Types.Payload.send_zkapp)
       ~args:
-        Arg.
-          [ arg "input"
-              ~typ:(non_null (Types.Input.SendZkappInput.arg_typ ~chain))
-          ]
-      ~resolve:(fun { ctx = t; _ } () zkapp_command ->
+        Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
+      ~resolve:(fun { ctx = t; _ } () zkapp_command_stable ->
+        let zkapp_command =
+          Zkapp_command.write_all_proofs_to_disk
+            ~signature_kind:t.signature_kind ~proof_cache_db:t.proof_cache_db
+            zkapp_command_stable
+        in
         let%bind.Deferred.Result command =
           verify_command t (Zkapp_command zkapp_command)
         in
@@ -1616,7 +1622,9 @@ module Mutations = struct
               return (Error (Error.to_string_hum err))
         in
         let cmd =
-          { Types.Zkapp_command.With_status.data = zkapp_command; status }
+          { Types.Zkapp_command.With_status.data = zkapp_command_stable
+          ; status
+          }
         in
         let cmd_with_hash =
           Types.Zkapp_command.With_status.map cmd ~f:(fun cmd ->
@@ -1658,13 +1666,8 @@ module Mutations = struct
       ~args:Arg.[]
       ~resolve:(fun { ctx = t; _ } () -> State.clear_pool t ; "Cleared")
 
-  let commands ~chain =
-    [ send_payment
-    ; send_zkapp ~chain
-    ; create_account
-    ; create_new_block
-    ; clear_pool
-    ]
+  let commands =
+    [ send_payment; send_zkapp; create_account; create_new_block; clear_pool ]
 end
 
 module Queries = struct
@@ -1752,7 +1755,8 @@ module Queries = struct
               None
         in
         let cmd =
-          { Types.Zkapp_command.With_status.data = command
+          { Types.Zkapp_command.With_status.data =
+              Zkapp_command.read_all_proofs_from_disk command
           ; status =
               ( match status with
               | Applied ->
@@ -1851,7 +1855,8 @@ module Queries = struct
                    with
                    | Some true | None ->
                        let cmd =
-                         { Types.Zkapp_command.With_status.data = cmd
+                         { Types.Zkapp_command.With_status.data =
+                             Zkapp_command.read_all_proofs_from_disk cmd
                          ; status = Enqueued
                          }
                        in
@@ -1943,6 +1948,5 @@ module Queries = struct
     @ Archive.commands
 end
 
-let schema ~chain =
-  Graphql_async.Schema.(
-    schema Queries.commands ~mutations:(Mutations.commands ~chain))
+let schema =
+  Graphql_async.Schema.(schema Queries.commands ~mutations:Mutations.commands)

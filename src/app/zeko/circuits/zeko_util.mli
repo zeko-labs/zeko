@@ -171,10 +171,10 @@ module Slot_range : sig
 end
 
 val assert_equal :
-  ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t
+  label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t
 
 val assert_equal_safer :
-  ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> 'var Checked.t
+  label:string -> ('var, 't) Typ.t -> 'var -> 'var -> 'var Checked.t
 
 val var_equal : ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t
 

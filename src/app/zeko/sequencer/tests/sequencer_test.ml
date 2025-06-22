@@ -148,7 +148,10 @@ module Sequencer_test_spec = struct
             ~account_set_hash ~pause_key:sequencer_pk ~sequencer:sequencer_pk
             ~da_key ()
         in
-        let%bind _ = Gql_client.send_zkapp gql_uri command in
+        let%bind _ =
+          Gql_client.send_zkapp gql_uri
+            (Zkapp_command.read_all_proofs_from_disk command)
+        in
         let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
         return () ) ;
 
@@ -204,25 +207,26 @@ let () =
       let zkapp_command_with_real_proof =
         let fee_signer = List.hd_exn accounts in
         let account_creation_fee =
-          Account_update.
-            { body =
-                { Account_update.Body.dummy with
-                  public_key = Public_key.compress fee_signer.public_key
-                ; balance_change =
-                    Currency.Amount.Signed.of_fee @@ Currency.Fee.Signed.negate
-                    @@ Currency.Fee.Signed.of_unsigned
-                         constraint_constants.account_creation_fee
-                ; authorization_kind = Signature
-                ; use_full_commitment = true
-                }
-            ; authorization = Signature Signature.dummy
-            }
+          Account_update.with_aux
+            ~body:
+              { Account_update.Body.dummy with
+                public_key = Public_key.compress fee_signer.public_key
+              ; balance_change =
+                  Currency.Amount.Signed.of_fee @@ Currency.Fee.Signed.negate
+                  @@ Currency.Fee.Signed.of_unsigned
+                       constraint_constants.account_creation_fee
+              ; authorization_kind = Signature
+              ; use_full_commitment = true
+              }
+            ~authorization:(Control.Poly.Signature Signature.dummy)
         in
         let open Initialize_state.Test_module in
         (* First one is the inner account *)
         let call_forest =
-          Zkapp_command.Call_forest.cons account_creation_fee
-          @@ Zkapp_command.Call_forest.cons Deploy_account_update.account_update
+          Zkapp_command.Call_forest.cons ~signature_kind:l2_signature_kind
+            account_creation_fee
+          @@ Zkapp_command.Call_forest.cons ~signature_kind:l2_signature_kind
+               Deploy_account_update.account_update
           @@ Zkapp_command.Call_forest.cons_tree
                Initialize_account_update.account_update
           @@ Zkapp_command.Call_forest.cons_tree
@@ -230,18 +234,17 @@ let () =
         in
         User_command.Zkapp_command
           (Utils.sign_zkapp_command ~signature_kind:l2_signature_kind
-             Zkapp_command.
-               { fee_payer =
-                   { body =
-                       { Account_update.Body.Fee_payer.dummy with
-                         public_key = Public_key.compress fee_signer.public_key
-                       ; fee = Currency.Fee.of_mina_int_exn 1
-                       }
-                   ; authorization = Signature.dummy
-                   }
-               ; account_updates = call_forest
-               ; memo = Signed_command_memo.empty
-               }
+             { fee_payer =
+                 { body =
+                     { Account_update.Body.Fee_payer.dummy with
+                       public_key = Public_key.compress fee_signer.public_key
+                     ; fee = Currency.Fee.of_mina_int_exn 1
+                     }
+                 ; authorization = Signature.dummy
+                 }
+             ; account_updates = call_forest
+             ; memo = Signed_command_memo.empty
+             }
              [ fee_signer; Keypair.of_private_key_exn sk ] )
       in
       let batch1, batch2 = List.split_n commands 3 in
@@ -395,10 +398,10 @@ let () =
           account_updates =
             Zkapp_command.Call_forest.map command.account_updates
               ~f:(fun account_update ->
-                match Account_update.authorization account_update with
-                | Signature _ ->
+                match Account_update.Poly.authorization account_update with
+                | Control.Poly.Signature _ ->
                     { account_update with
-                      authorization = Signature Signature.dummy
+                      authorization = Control.Poly.Signature Signature.dummy
                     }
                 | _ ->
                     account_update )

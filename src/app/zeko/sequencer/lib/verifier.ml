@@ -35,7 +35,7 @@ let invalid_to_error (invalid : invalid) : Error.t =
   | `Invalid_proof err ->
       Error.tag ~tag:"Invalid_proof" err
 
-let check ?signature_kind :
+let check ~signature_kind :
        User_command.Verifiable.t With_status.t
     -> [ `Valid of User_command.Valid.t
        | `Valid_assuming of User_command.Valid.t * _ list
@@ -44,7 +44,7 @@ let check ?signature_kind :
       if not (Signed_command.check_valid_keys c) then
         `Invalid_keys (Signed_command.public_keys c)
       else
-        match Signed_command.check_only_for_signature ?signature_kind c with
+        match Signed_command.check_only_for_signature ~signature_kind c with
         | Some c ->
             `Valid (User_command.Signed_command c)
         | None ->
@@ -65,8 +65,7 @@ let check ?signature_kind :
             Zkapp_command.Transaction_commitment.create_complete tx_commitment
               ~memo_hash:(Signed_command_memo.hash memo)
               ~fee_payer_hash:
-                (Zkapp_command.Digest.Account_update.create
-                   ?chain:signature_kind
+                (Zkapp_command.Digest.Account_update.create ~signature_kind
                    (Account_update.of_fee_payer fee_payer) )
           in
           let check_signature s pk msg =
@@ -76,7 +75,7 @@ let check ?signature_kind :
             | Some pk ->
                 if
                   not
-                    (Signature_lib.Schnorr.Chunked.verify ?signature_kind s
+                    (Signature_lib.Schnorr.Chunked.verify ~signature_kind s
                        (Backend.Tick.Inner_curve.of_affine pk)
                        (Random_oracle_input.Chunked.field msg) )
                 then
@@ -138,7 +137,7 @@ let check ?signature_kind :
           let v : User_command.Valid.t =
             (* Verification keys should be present if it reaches here *)
             let zkapp_command =
-              Zkapp_command.Valid.of_verifiable zkapp_command_with_vk
+              Zkapp_command.Valid.For_tests.of_verifiable zkapp_command_with_vk
             in
             User_command.Poly.Zkapp_command zkapp_command
           in
@@ -148,23 +147,23 @@ let check ?signature_kind :
           | _ :: _ ->
               `Valid_assuming (v, valid_assuming) )
 
-let verify_command ?signature_kind
+let verify_command ~signature_kind
     (command : User_command.Verifiable.t With_status.t) :
-    [ `Valid of Mina_base.User_command.Valid.t
+    [ `Valid of User_command.Valid.t
     | `Valid_assuming of
       ( Pickles.Side_loaded.Verification_key.t
-      * Mina_base.Zkapp_statement.t
-      * Pickles.Side_loaded.Proof.t )
+      * Zkapp_statement.t
+      * Proof_cache_tag.t )
       list
     | invalid ]
     Deferred.Or_error.t =
-  let checked_command = check ?signature_kind command in
+  let checked_command = check ~signature_kind command in
   let to_verify =
     match checked_command with
     | `Valid _ ->
         []
     | `Valid_assuming (_, xs) ->
-        xs
+        List.map xs ~f:(Tuple3.map_trd ~f:Proof_cache_tag.read_proof_from_disk)
     | `Invalid_keys _
     | `Invalid_signature _
     | `Invalid_proof _

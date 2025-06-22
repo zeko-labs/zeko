@@ -13,7 +13,9 @@ open struct
         lazy
           (let a =
              { a with
-               zkapp = (Zkapp_account.Checked.digest a.zkapp, ref (Some None))
+               zkapp =
+                 ( Zkapp_account.Checked.digest a.zkapp
+                 , Typ.prover_value_return None )
              }
            in
            Run.run_checked (Account.Checked.digest a) ) )
@@ -117,18 +119,13 @@ module Zkapp_rule_input_witness = struct
   open Mina_base
 
   type t =
-    { stack_frame :
-        ( Token_id.Stable.V2.t
-        , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
-        Stack_frame.Stable.V1.t
+    { stack_frame : (Token_id.t, Zkapp_call_forest.t) Stack_frame.t
     ; call_stack :
-        ( ( ( Token_id.Stable.V2.t
-            , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
-            Stack_frame.Stable.V1.t
-          , Stack_frame.Digest.Stable.V1.t )
+        ( ( (Token_id.t, Zkapp_command.Call_forest.With_hashes.t) Stack_frame.t
+          , Stack_frame.Digest.t )
           With_hash.t
-        , Call_stack_digest.Stable.V1.t )
-        With_stack_hash.Stable.V1.t
+        , Call_stack_digest.t )
+        With_stack_hash.t
         list
     ; source_ledger_sparse : Mina_ledger.Sparse_ledger.t
     ; update_acc_set_witness : update_acc_set_witness
@@ -183,14 +180,18 @@ open struct
         * [ `Compute_in_circuit | `Yes | `No ]
         * Per_account_update.var )
         list ) =
-    let witness_p =
-      Prover_value.create
-      @@ fun () -> V.unsafe_unwrap witness |> Option.value_exn
+    let* witness_p = V.as_prover_value witness in
+    let* source_ledger_sparse =
+      make_checked
+      @@ fun () ->
+      Typ.prover_value_map
+        ~f:(fun x -> x.Zkapp_rule_input_witness.source_ledger_sparse)
+        witness_p
     in
-    let source_ledger_sparse =
-      Prover_value.map ~f:(fun x -> x.source_ledger_sparse) witness_p
+    let* stack_frame =
+      make_checked
+      @@ fun () -> Typ.prover_value_map ~f:(fun x -> x.stack_frame) witness_p
     in
-    let stack_frame = Prover_value.map ~f:(fun x -> x.stack_frame) witness_p in
     let module Global_state = struct
       type t =
         { fee_excess : Currency.Amount.Signed.var
@@ -228,13 +229,15 @@ open struct
         Transaction_snark.Base.Zkapp_command_snark.zeko_stack_frame_unhash
           source_local_state.stack_frame_digest stack_frame
       in
-      let l : _ Mina_transaction_logic.Zkapp_command_logic.Local_state.t =
+      let* data =
+        make_checked
+        @@ fun () -> Typ.prover_value_map ~f:(fun x -> x.call_stack) witness_p
+      in
+      let l : local_state_var =
         { ledger = (source_ledger, source_ledger_sparse)
         ; stack_frame
         ; call_stack =
-            { With_hash.hash = source_local_state.call_stack_digest
-            ; data = Prover_value.map ~f:(fun x -> x.call_stack) witness_p
-            }
+            { With_hash.hash = source_local_state.call_stack_digest; data }
         ; transaction_commitment = source_local_state.transaction_commitment
         ; full_transaction_commitment =
             source_local_state.full_transaction_commitment
@@ -370,6 +373,9 @@ open struct
       >>| Option.value ~default:Slot_range.(constant typ infinite)
     in
     let target_ledger, _ = l.ledger in
+    let* stack_frame_digest =
+      make_checked @@ fun () -> force l.stack_frame.hash
+    in
     let out : Zeko_stmt.var =
       { source_ledger
       ; target_ledger
@@ -382,7 +388,7 @@ open struct
           { transaction_commitment = l.transaction_commitment
           ; full_transaction_commitment = l.full_transaction_commitment
           ; account_update_index = l.account_update_index
-          ; stack_frame_digest = force l.stack_frame.hash
+          ; stack_frame_digest
           ; call_stack_digest = l.call_stack.hash
           ; excess = l.excess
           }
@@ -446,11 +452,11 @@ let single_proved input =
     ~gen_prevs:(fun vks proof_must_verify_list public_input_list ->
       match (vks, proof_must_verify_list, public_input_list) with
       | [ vk_hash ], [ proof_must_verify ], [ public_input ] ->
-          let*| () =
-            assert_equal ~label:__LOC__ F.typ
-              (Compile_simple.Verification_key.hash_var vk)
-              vk_hash
+          let* vk_hash' =
+            make_checked
+            @@ fun () -> Compile_simple.Verification_key.hash_var vk
           in
+          let*| () = assert_equal ~label:__LOC__ F.typ vk_hash vk_hash' in
           Compile_simple.One_prev_sideloaded
             { public_input; proof = zkapp_proof; proof_must_verify; vk }
       | _ ->

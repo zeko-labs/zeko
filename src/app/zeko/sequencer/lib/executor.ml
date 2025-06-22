@@ -54,8 +54,9 @@ let process_command ~logger t (command : Zkapp_command.t) =
       }
     in
     let command =
-      Utils.sign_zkapp_command ~signature_kind:t.signature_kind command
-        [ t.signer ]
+      Zkapp_command.read_all_proofs_from_disk
+      @@ Utils.sign_zkapp_command ~signature_kind:t.signature_kind command
+           [ t.signer ]
     in
     let err_to_string = function
       | `Failed_request err ->

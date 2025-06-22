@@ -10,19 +10,19 @@ include struct
 
   type _ t +=
     | Prev_state : Protocol_state.Value.t t
-    | Prev_state_proof : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t t
+    | Prev_state_proof : Nat.N2.n Pickles.Proof.t t
     | Transition : Snark_transition.Value.t t
     | Txn_snark : Transaction_snark.Statement.With_sok.t t
-    | Txn_snark_proof : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t t
+    | Txn_snark_proof : Nat.N2.n Pickles.Proof.t t
 end
 
 module Witness = struct
   type t =
     { prev_state : Protocol_state.Value.t
-    ; prev_state_proof : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t
+    ; prev_state_proof : Nat.N2.n Pickles.Proof.t
     ; transition : Snark_transition.Value.t
     ; txn_snark : Transaction_snark.Statement.With_sok.t
-    ; txn_snark_proof : (Nat.N2.n, Nat.N2.n) Pickles.Proof.t
+    ; txn_snark_proof : Nat.N2.n Pickles.Proof.t
     }
 end
 
@@ -160,13 +160,13 @@ let%snarkydef_ step ~(logger : Logger.t)
            , previous_state_body_hash ) =
     let%bind prev_state_ref =
       with_label __LOC__ (fun () ->
-          exists (Typ.Internal.ref ()) ~request:(As_prover.return Prev_state) )
+          exists (Typ.prover_value ()) ~request:(As_prover.return Prev_state) )
     in
     let%bind t =
       with_label __LOC__ (fun () ->
           exists
             (Protocol_state.typ ~constraint_constants)
-            ~compute:(As_prover.Ref.get prev_state_ref) )
+            ~compute:(As_prover.read (Typ.prover_value ()) prev_state_ref) )
     in
     let%map previous_state_hash, body = Protocol_state.hash_checked t in
     let previous_blockchain_proof_input =
@@ -366,10 +366,10 @@ let%snarkydef_ step ~(logger : Logger.t)
     with_label __LOC__ (fun () -> Boolean.Assert.any [ is_base_case; success ])
   in
   let%bind previous_blockchain_proof =
-    exists (Typ.Internal.ref ()) ~request:(As_prover.return Prev_state_proof)
+    exists (Typ.prover_value ()) ~request:(As_prover.return Prev_state_proof)
   in
   let%map txn_snark_proof =
-    exists (Typ.Internal.ref ()) ~request:(As_prover.return Txn_snark_proof)
+    exists (Typ.prover_value ()) ~request:(As_prover.return Txn_snark_proof)
   in
   ( { Pickles.Inductive_rule.Previous_proof_statement.public_input =
         previous_blockchain_proof_input
@@ -431,7 +431,7 @@ let rule ~proof_level ~constraint_constants transaction_snark self :
 module type S = sig
   module Proof :
     Pickles.Proof_intf
-      with type t = (Nat.N2.n, Nat.N2.n) Pickles.Proof.t
+      with type t = Nat.N2.n Pickles.Proof.t
        and type statement = Protocol_state.Value.t
 
   val tag : tag
@@ -484,12 +484,8 @@ end) : S = struct
       ~public_input:(Input Statement.typ)
       ~override_wrap_domain:Pickles_base.Proofs_verified.N1
       ~auxiliary_typ:Typ.unit
-      ~branches:(module Nat.N1)
       ~max_proofs_verified:(module Nat.N2)
       ~name:"blockchain-snark"
-      ~constraint_constants:
-        (Genesis_constants.Constraint_constants.to_snark_keys_header
-           constraint_constants )
       ~choices:(fun ~self ->
         [ rule ~proof_level ~constraint_constants T.tag self ] )
 

@@ -142,7 +142,7 @@ module Output = struct
     | Call_forest of
         ( Account_update.Body.t
         * Zkapp_command.Digest.Account_update.t
-        * ( Account_update.t
+        * ( Account_update.Stable.V1.t
           , Zkapp_command.Digest.Account_update.t
           , Zkapp_command.Digest.Forest.t )
           Zkapp_command.Call_forest.t )
@@ -150,7 +150,8 @@ module Output = struct
   [@@deriving yojson]
 end
 
-let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
+let prove ?fake_proving_time ~logger ~proof_cache_db :
+    Input.t -> Output.t Deferred.t = function
   | Ping ->
       return Output.Pong
   | Txn_snark (Signed_command input) ->
@@ -165,7 +166,8 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
       let%map stmt, proof =
         time ?fake_proving_time ~logger
           "Txn_rules.single_unproved_zkapp_command"
-          ( prove (Zkapp_single_unproved_input.of_serializable input)
+          ( prove
+              (Zkapp_single_unproved_input.of_serializable ~proof_cache_db input)
           |> Promise.to_deferred )
       in
       Output.Txn_snark (stmt, proof)
@@ -174,7 +176,8 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
       let%map stmt, proof =
         time ?fake_proving_time ~logger
           "Txn_rules.double_unproved_zkapp_command"
-          ( prove (Zkapp_double_unproved_input.of_serializable input)
+          ( prove
+              (Zkapp_double_unproved_input.of_serializable ~proof_cache_db input)
           |> Promise.to_deferred )
       in
       Output.Txn_snark (stmt, proof)
@@ -182,7 +185,8 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
       let Compile_simple.[ _; _; _; prove; _ ] = Txn_rules.provers in
       let%map stmt, proof =
         time ?fake_proving_time ~logger "Txn_rules.single_proved_zkapp_command"
-          ( prove (Zkapp_single_proved_input.of_serializable input)
+          ( prove
+              (Zkapp_single_proved_input.of_serializable ~proof_cache_db input)
           |> Promise.to_deferred )
       in
       Output.Txn_snark (stmt, proof)
@@ -206,7 +210,12 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
           ( prove (Inner_sync.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
       in
-      Output.Call_forest (parent_with_calls, proof)
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
   | Ase (With_length (source, elems)) ->
       let%map snark =
         time ?fake_proving_time ~logger "Folder_with_length.fold"
@@ -243,9 +252,15 @@ let prove ?fake_proving_time ~logger : Input.t -> Output.t Deferred.t = function
           ( prove (Outer_commit.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
       in
-      Output.Call_forest (parent_with_calls, proof)
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
 
 let run ?fake_proving_time ~logger ~port () =
+  let proof_cache_db = Proof_cache_tag.create_identity_db () in
   ignore
   @@ Tcp.Server.create (Tcp.Where_to_listen.of_port port)
        ~on_handler_error:`Ignore (fun s r w ->
@@ -264,7 +279,8 @@ let run ?fake_proving_time ~logger ~port () =
                     | Ok input -> (
                         match%bind
                           try_with (fun () ->
-                              prove ?fake_proving_time ~logger input )
+                              prove ?fake_proving_time ~logger ~proof_cache_db
+                                input )
                         with
                         | Ok output ->
                             return output

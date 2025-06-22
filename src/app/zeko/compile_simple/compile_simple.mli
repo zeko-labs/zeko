@@ -53,5 +53,5 @@ val add_plonk_constraint :
      label:string
   -> ( Snark_params.Tick.Field.Var.t
      , Snark_params.Tick.Field.t )
-     Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.t
+     Kimchi_backend_common.Plonk_constraint_system.Plonk_constraint.basic
   -> unit Snark_params.Tick.Checked.t

@@ -12,6 +12,7 @@ type t =
   ; signer : Keypair.t
   ; logger : Logger.t
   ; chain : Mina_signature_kind.t
+  ; proof_cache_db : Proof_cache_tag.cache_db
   }
 
 let sync t ~node_location ~ledger_hash =
@@ -30,8 +31,8 @@ let sync t ~node_location ~ledger_hash =
       let diff = Diff.drop_time diff in
       let ledger_openings = Client.get_openings ~diff ~ledger in
       match
-        Core.post_diff ~logger ~kvdb:t.db ~network_id:t.chain ~signer:t.signer
-          ~ledger_openings ~diff
+        Core.post_diff ~logger ~proof_cache_db:t.proof_cache_db ~kvdb:t.db
+          ~network_id:t.chain ~signer:t.signer ~ledger_openings ~diff
       with
       | Ok _signature ->
           return (Ok ())
@@ -50,7 +51,8 @@ let get_signature t ~ledger_hash =
          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
          [| ledger_hash |]
   in
-  Some (Schnorr.Chunked.sign t.signer.private_key message)
+  Some
+    (Schnorr.Chunked.sign ~signature_kind:t.chain t.signer.private_key message)
 
 let get_ledger_hashes_chain t
     ({ source = source_opt; target; max_length = max_length_opt } :
@@ -87,8 +89,9 @@ let implementations t =
         Rpc.Rpc.implement Rpc_def.Post_diff.V1.t
           (fun () { ledger_openings; diff } ->
             match
-              Core.post_diff ~logger:t.logger ~kvdb:t.db ~network_id:t.chain
-                ~signer:t.signer ~ledger_openings ~diff
+              Core.post_diff ~logger:t.logger ~proof_cache_db:t.proof_cache_db
+                ~kvdb:t.db ~network_id:t.chain ~signer:t.signer ~ledger_openings
+                ~diff
             with
             | Ok signature ->
                 let pk = Public_key.compress t.signer.public_key in
@@ -158,6 +161,7 @@ let create_server ~chain ~sync_arg ~port ~logger ~db_dir ~signer_sk
         Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn signer_sk
     ; logger
     ; chain
+    ; proof_cache_db = Proof_cache_tag.create_identity_db ()
     }
   in
 

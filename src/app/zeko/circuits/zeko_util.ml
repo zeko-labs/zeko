@@ -290,29 +290,35 @@ module Calls = struct
     let attach_control_var :
            chain:Mina_signature_kind.t
         -> Account_update.Body.Checked.t
-        -> Zkapp_call_forest.Checked.account_update =
+        -> Zkapp_call_forest.Checked.account_update Checked.t =
      fun ~chain account_update ->
-      { account_update =
-          { data = account_update
-          ; hash =
-              Zkapp_command.Call_forest.Digest.Account_update.Checked.create
-                ~chain account_update
-          }
-      ; control =
-          (let@ () = Mina_base.Prover_value.create in
-           Control.None_given )
+      let* control =
+        make_checked
+        @@ fun () ->
+        Mina_base.Prover_value.create @@ fun () -> Control.Poly.None_given
+      in
+      let*| hash =
+        make_checked
+        @@ fun () ->
+        Zkapp_command.Call_forest.Digest.Account_update.Checked.create
+          ~signature_kind:chain account_update
+      in
+      { Zkapp_call_forest.Checked.account_update =
+          { data = account_update; hash }
+      ; control
       }
     in
     fun ~chain -> function
       | [] ->
-          Checked.return (Zkapp_call_forest.Checked.empty ())
+          make_checked Zkapp_call_forest.Checked.empty
       | (account_update, nested_calls) :: tail ->
           let* calls = hash ~chain nested_calls in
           let* tail = hash ~chain tail in
-          Checked.return
-            (Zkapp_call_forest.Checked.push
-               ~account_update:(attach_control_var ~chain account_update)
-               ~calls tail )
+          let* account_update = attach_control_var ~chain account_update in
+          make_checked
+          @@ fun () ->
+          Zkapp_call_forest.Checked.push ~signature_kind:chain ~account_update
+            ~calls tail
       | Raw calls ->
           Checked.return calls
 end
@@ -327,10 +333,14 @@ let make_outputs :
        )
        Checked.t =
  fun ~chain account_update calls ->
-  let* calls = Calls.hash ~chain calls in
-  let account_update_digest =
-    Zkapp_command.Call_forest.Digest.Account_update.Checked.create ~chain
-      account_update
+  let* calls = with_label __LOC__ @@ fun () -> Calls.hash ~chain calls in
+  let* account_update_digest =
+    with_label __LOC__
+    @@ fun () ->
+    make_checked
+    @@ fun () ->
+    Zkapp_command.Call_forest.Digest.Account_update.Checked.create
+      ~signature_kind:chain account_update
   in
   let public_output : Zkapp_statement.Checked.t =
     { account_update = (account_update_digest :> Field.Var.t)
@@ -341,28 +351,26 @@ let make_outputs :
     let+ account_update =
       As_prover.read (Account_update.Body.typ ()) account_update
     in
-    let+| account_update_digest =
+    let+ account_update_digest =
       As_prover.read Zkapp_command.Call_forest.Digest.Account_update.typ
         account_update_digest
     in
-    let calls = Prover_value.get calls.data in
+    let+| calls = make_as_prover @@ fun () -> Prover_value.get calls.data in
     (account_update, account_update_digest, calls)
   in
   let*| auxiliary_output = V.create auxiliary_output in
   (public_output, auxiliary_output)
 
 let assert_equal :
-    ?label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t =
- fun ?label (Typ typ) x y ->
+    label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t =
+ fun ~label (Typ typ) x y ->
   let x_fields, _ = typ.var_to_fields x in
   let y_fields, _ = typ.var_to_fields y in
-  let constraints =
-    Array.map2_exn ~f:(Constraint.equal ?label) x_fields y_fields
-  in
-  Array.to_list constraints |> assert_all ?label
+  let constraints = Array.map2_exn ~f:Constraint.equal x_fields y_fields in
+  with_label label @@ fun () -> Array.to_list constraints |> assert_all
 
-let assert_equal_safer ?label typ x y =
-  let*| () = assert_equal ?label typ x y in
+let assert_equal_safer ~label typ x y =
+  let*| () = assert_equal ~label typ x y in
   x
 
 let var_equal : ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t =

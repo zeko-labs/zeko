@@ -154,7 +154,10 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
       in
 
       print_endline "(* Deploy contract *)" ;
-      match%bind Sequencer_lib.Gql_client.send_zkapp l1_uri command with
+      match%bind
+        Sequencer_lib.Gql_client.send_zkapp l1_uri
+          (Zkapp_command.read_all_proofs_from_disk command)
+      with
       | Ok _ ->
           Deferred.unit
       | Error (`Failed_request err) ->

@@ -1,6 +1,6 @@
 open Snark_params.Tick
 
-type 'a t
+type 'a t = 'a Typ.prover_value
 
 val get : 'a t -> 'a
 

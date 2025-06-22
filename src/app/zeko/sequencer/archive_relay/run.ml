@@ -7,9 +7,6 @@ open Cli_lib
 
 let constraint_constants = Zeko_constants.constraint_constants
 
-(* FIXME: Don't use Mina_compile_config.For_tests.t *)
-let compile_config = Mina_compile_config.For_unit_tests.t
-
 let compile_time_genesis =
   let consensus_constants =
     let protocol_constants : Genesis_constants.Protocol.t =
@@ -66,9 +63,11 @@ type t =
   ; zeko_uri : Uri.t
   ; da_config : Da_layer.Client.Config.t
   ; mutable db : Ledger.Db.t
+  ; proof_cache_db : Proof_cache_tag.cache_db
+  ; chain : Mina_signature_kind.t
   }
 
-let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache =
+let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache ~chain =
   let db =
     Ledger.Db.create ~directory_name:ledger_cache
       ~depth:constraint_constants.ledger_depth ()
@@ -78,6 +77,8 @@ let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache =
   ; zeko_uri
   ; da_config = Da_layer.Client.Config.of_string_list da_nodes
   ; db
+  ; proof_cache_db = Proof_cache_tag.create_identity_db ()
+  ; chain
   }
 
 let reset_ledger_cache t () =
@@ -119,6 +120,10 @@ let sync_archive (t : t) ~hash =
       | None ->
           return ()
       | Some (command, _) -> (
+          let command =
+            User_command.write_all_proofs_to_disk ~signature_kind:t.chain
+              ~proof_cache_db:t.proof_cache_db command
+          in
           let kvdb = Ledger.Db.zeko_kvdb t.db in
           let new_protocol_state, diff =
             Archive_lib.Diff.Builder.zeko_transaction_added
@@ -135,7 +140,7 @@ let sync_archive (t : t) ~hash =
           in
           Protocol_state.set kvdb ~data:new_protocol_state ;
           match%bind
-            Archive_client.dispatch ~logger ~compile_config t.archive_uri
+            Archive_client.dispatch ~logger t.archive_uri
               (Archive_lib.Diff.Transition_frontier diff)
           with
           | Ok () ->
@@ -251,6 +256,8 @@ let () =
           flag "--ledger-cache"
             (optional_with_default "ledger_cache" string)
             ~doc:"Ledger cache"
+        and network_id =
+          flag "--network-id" (required string) ~doc:"Network id"
         in
         let logger = Logger.create () in
         Stdout_log.setup log_json log_level ;
@@ -261,6 +268,16 @@ let () =
             ; name = "archive-uri"
             }
         in
-
-        let t = create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache in
+        let chain =
+          match network_id with
+          | "testnet" ->
+              Mina_signature_kind.Testnet
+          | "mainnet" ->
+              Mina_signature_kind.Mainnet
+          | _ ->
+              Mina_signature_kind.Other_network network_id
+        in
+        let t =
+          create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache ~chain
+        in
         run t ~sync_period )

@@ -104,8 +104,9 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
       let body = Signed_command_payload.Body.Payment payment_payload in
       { Signed_command_payload.Poly.common; body }
     in
+    let signature_kind = Mina_signature_kind.t_DEPRECATED in
     let raw_signature =
-      Signed_command.sign_payload sender.private_key payload
+      Signed_command.sign_payload ~signature_kind sender.private_key payload
       |> Signature.Raw.encode
     in
     match expected_failure with
@@ -139,18 +140,10 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
            ( Wait_condition.nodes_to_initialize
            @@ (Network.all_mina_nodes network |> Core.String.Map.data) ) )
     in
-    let node =
-      Core.String.Map.find_exn (Network.block_producers network) "node-a"
-    in
+    let node = Network.block_producer_exn network "node-a" in
     let constraint_constants = Network.constraint_constants network in
-    let fish1_kp =
-      (Core.String.Map.find_exn (Network.genesis_keypairs network) "fish1")
-        .keypair
-    in
-    let fish2_kp =
-      (Core.String.Map.find_exn (Network.genesis_keypairs network) "fish2")
-        .keypair
-    in
+    let fish1_kp = (Network.genesis_keypair_exn network "fish1").keypair in
+    let fish2_kp = (Network.genesis_keypair_exn network "fish2").keypair in
     let num_zkapp_accounts = 3 in
     let zkapp_keypairs =
       List.init num_zkapp_accounts ~f:(fun _ -> Signature_lib.Keypair.create ())
@@ -354,7 +347,7 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
           }
         in
         Transaction_snark.For_tests.single_account_update
-          ~chain:Mina_signature_kind.(Other_network "Invalid")
+          ~signature_kind:Mina_signature_kind.(Other_network "Invalid")
           ~constraint_constants spec
       in
       ( snapp_update
@@ -380,12 +373,13 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
         { p with
           account_updates =
             Call_forest.map p.account_updates ~f:(fun other_p ->
-                match other_p.Account_update.authorization with
-                | Proof _ ->
+                match other_p.Account_update.Poly.authorization with
+                | Control.Poly.Proof _ ->
                     { other_p with
                       authorization =
-                        Control.Proof
-                          (Lazy.force Mina_base.Proof.blockchain_dummy)
+                        Control.Poly.Proof
+                          (Lazy.force
+                             Mina_base.Proof.For_tests.blockchain_dummy_tag )
                     }
                 | _ ->
                     other_p )
@@ -612,12 +606,8 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
          for the app state, we apply this principle element-wise
       *)
       let app_states_compat =
-        let fs_requested =
-          Pickles_types.Vector.Vector_8.to_list requested_update.app_state
-        in
-        let fs_ledger =
-          Pickles_types.Vector.Vector_8.to_list ledger_update.app_state
-        in
+        let fs_requested = Zkapp_state.V.to_list requested_update.app_state in
+        let fs_ledger = Zkapp_state.V.to_list ledger_update.app_state in
         List.for_all2_exn fs_requested fs_ledger ~f:(fun req ledg ->
             compatible req ledg ~equal:Pickles.Backend.Tick.Field.equal )
       in
@@ -767,6 +757,40 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
            zkapp_command_insufficient_fee "Insufficient fee" )
     in
     let%bind () = wait_for t (Wait_condition.blocks_to_be_produced 1) in
+    let%bind.Deferred () =
+      (* Wait for the start of the next slot, attempting to submit all commands
+         within the same slot.
+         In particular, this has the goal of reducing flakiness around the
+         'insufficient replace fee' test, which becomes an 'invalid nonce'
+         failure if the first transaction has already been included.
+
+         Note that this *isn't* redundant with the block waiting above, because
+         the block will be produced part-way through a slot, and will further
+         take us some time to receive the message about that block production
+         due to polling.
+      *)
+      let next_slot_time =
+        let genesis_timestamp =
+          constants.genesis_constants.protocol.genesis_state_timestamp
+          |> Int64.to_float |> Time.Span.of_ms |> Time.of_span_since_epoch
+        in
+        let block_duration_ms =
+          constants.constraint_constants.block_window_duration_ms
+          |> Int.to_float
+        in
+        let current_slot_span_ms =
+          Time.(diff (now ()) genesis_timestamp) |> Time.Span.to_ms
+        in
+        let target_slot =
+          block_duration_ms /. current_slot_span_ms |> Float.round_up
+        in
+        let target_slot_span_ms =
+          target_slot *. current_slot_span_ms |> Time.Span.of_ms
+        in
+        Time.add genesis_timestamp target_slot_span_ms
+      in
+      after Time.(diff (now ()) next_slot_time)
+    in
     (* Won't be accepted until the previous transactions are applied *)
     let%bind () =
       section_hard "Send a zkApp transaction to update all fields"
@@ -775,16 +799,16 @@ module Make (Inputs : Intf.Test.Inputs_intf) = struct
            zkapp_command_update_all )
     in
     let%bind () =
-      section_hard "Send a zkapp with an invalid proof"
-        (send_invalid_zkapp ~logger
-           (Network.Node.get_ingress_uri node)
-           zkapp_command_invalid_proof "Invalid_proof" )
-    in
-    let%bind () =
       section_hard "Send a zkapp with an insufficient replace fee"
         (send_invalid_zkapp ~logger
            (Network.Node.get_ingress_uri node)
            zkapp_command_insufficient_replace_fee "Insufficient_replace_fee" )
+    in
+    let%bind () =
+      section_hard "Send a zkapp with an invalid proof"
+        (send_invalid_zkapp ~logger
+           (Network.Node.get_ingress_uri node)
+           zkapp_command_invalid_proof "Invalid_proof" )
     in
     let%bind () =
       section_hard "Send a zkApp transaction with an invalid nonce"

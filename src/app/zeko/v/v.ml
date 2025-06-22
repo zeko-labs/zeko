@@ -38,12 +38,16 @@ let unsafe_unwrap : 'a t -> 'a option = function
   | Circuit_mode ->
       None
 
-let as_ref x = ref (unsafe_unwrap x)
+let as_prover_value x = exists (Typ.prover_value ()) ~compute:(get x)
 
-let map ~f = function
+let map x ~f =
+  match x with
   | Circuit_mode ->
       Circuit_mode
   | Proving_mode x ->
       Proving_mode (f x)
+
+let bind x ~f =
+  match x with Circuit_mode -> Circuit_mode | Proving_mode x -> f x
 
 let return x = Proving_mode x

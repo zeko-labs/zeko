@@ -135,7 +135,8 @@ module Builder = struct
                  (Time.diff account_created_time accounts_accessed_time) ) )
         ] ;
     Transition_frontier.Breadcrumb_added
-      { block = block_with_hash
+      { block =
+          With_hash.map ~f:Mina_block.read_all_proofs_from_disk block_with_hash
       ; accounts_accessed
       ; accounts_created
       ; tokens_used
@@ -273,7 +274,7 @@ module Builder = struct
     in
     ( protocol_state
     , Transition_frontier.Breadcrumb_added
-        { block
+        { block = With_hash.map ~f:Mina_block.read_all_proofs_from_disk block
         ; accounts_created =
             List.map accounts_created ~f:(fun acct_id ->
                 (acct_id, constraint_constants.account_creation_fee) )
