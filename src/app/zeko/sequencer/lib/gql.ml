@@ -1803,10 +1803,18 @@ module Queries = struct
 
   let fee_per_weight_unit =
     field "feePerWeightUnit" ~doc:"Current fee per weight unit"
-      ~args:Arg.[]
+      ~args:
+        Arg.
+          [ arg "weight"
+              ~doc:
+                "Weight of the transaction, default value is 1, which is the \
+                 weight of payment"
+              ~typ:int
+          ]
       ~typ:(non_null float)
-      ~resolve:(fun { ctx = sequencer; _ } () ->
-        Zeko_sequencer.current_fee_per_weight_unit sequencer )
+      ~resolve:(fun { ctx = sequencer; _ } () weight ->
+        Zeko_sequencer.calculate_required_fee sequencer
+          (Option.value ~default:1 weight) )
 
   let account =
     field "account" ~doc:"Find any account via a public key and token"

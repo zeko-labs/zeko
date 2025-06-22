@@ -391,7 +391,8 @@ let rec get_signature t ~da_key ~ledger_hash =
     let%bind () =
       Deferred.any [ Condition.wait t.pushed_signature; Ivar.read t.stop ]
     in
-    get_signature t ~da_key ~ledger_hash
+    if Ivar.is_full t.stop then failwith "Da layer client stopped"
+    else get_signature t ~da_key ~ledger_hash
 
 (** Useful for querying data, will fallback to the next node in list in case the first one fails *)
 let try_all_nodes ~config ~f =

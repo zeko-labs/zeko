@@ -120,11 +120,44 @@ let match_tag_prev : 'var tag -> 'var prev -> bool As_prover.t =
         let open Field in
         equal circuit_hash circuit_hash' && equal out_hash out_hash' )
 
+module Proof_valid = struct
+  type 'a t_ = Immediate of 'a | Sideloaded of 'a Promise.t
+
+  type t = bool t_
+
+  let immediate x = Immediate x
+
+  let to_promise : 'a t_ -> 'a Promise.t = function
+    | Immediate v ->
+        Promise.return v
+    | Sideloaded dv ->
+        dv
+
+  let map (m : 'a t_) ~(f : 'a -> 'b) : 'b t_ =
+    match m with
+    | Immediate v ->
+        Immediate (f v)
+    | Sideloaded dv ->
+        Sideloaded (Promise.map dv ~f)
+
+  let ( &&& ) (a : t) (b : t) =
+    match (a, b) with
+    | Immediate x, Immediate y ->
+        Immediate (x && y)
+    | Immediate _, Sideloaded _
+    | Sideloaded _, Immediate _
+    | Sideloaded _, Sideloaded _ ->
+        let open Promise.Let_syntax in
+        Sideloaded
+          ( Promise.all [ to_promise a; to_promise b ]
+          >>| function [ x; y ] -> x && y | _ -> failwith "Unreachable" )
+end
+
 let match_sideloaded_tag_prev :
        'input
     -> ('var, 't, 'input) sideloaded_tag
     -> 'var prev_sideloaded
-    -> bool As_prover.t =
+    -> Proof_valid.t As_prover.t =
  fun input { typ = Typ typ; extract_vk; _ }
      { public_input; proof; proof_must_verify; vk } ->
   let open As_prover in
@@ -137,34 +170,36 @@ let match_sideloaded_tag_prev :
   read Verification_key.typ vk
   >>= fun vk ->
   As_prover.return
-    ( (not proof_must_verify)
-    ||
-    match (vk, proof, extract_vk input) with
-    | Real_vk vk, Real_proof proof, Real_vk vk' ->
-        Or_error.is_ok
-          ( Promise.block_on_async_exn
-          @@ fun () ->
-          Pickles.Side_loaded.verify_promise ~typ:(Typ typ)
-            [ (vk, public_input, proof) ] )
-        && Pickles.Side_loaded.Verification_key.equal vk vk'
-    | ( Fake_vk { circuit_hash }
-      , Fake_proof { circuit_hash = circuit_hash'; out_hash }
-      , Fake_vk { circuit_hash = circuit_hash'' } ) ->
-        let fields, _aux = typ.value_to_fields public_input in
-        let out_hash' =
-          Random_oracle.hash
-            ~init:(Hash_prefix_create.salt "fake proof hash")
-            fields
-        in
-        let open Field in
-        equal circuit_hash circuit_hash'
-        && equal circuit_hash circuit_hash''
-        && equal out_hash out_hash'
-    | Fake_vk _, Real_proof _, _
-    | Real_vk _, Fake_proof _, _
-    | Fake_vk _, _, Real_vk _
-    | Real_vk _, _, Fake_vk _ ->
-        false )
+    (Proof_valid.map
+       ~f:(fun proof_valid -> (not proof_must_verify) || proof_valid)
+       ( match (vk, proof, extract_vk input) with
+       | Real_vk vk, Real_proof proof, Real_vk vk' ->
+           let open Promise.Let_syntax in
+           Proof_valid.Sideloaded
+             ( Pickles.Side_loaded.verify_promise ~typ:(Typ typ)
+                 [ (vk, public_input, proof) ]
+             >>| fun proof_valid ->
+             Or_error.is_ok proof_valid
+             && Pickles.Side_loaded.Verification_key.equal vk vk' )
+       | ( Fake_vk { circuit_hash }
+         , Fake_proof { circuit_hash = circuit_hash'; out_hash }
+         , Fake_vk { circuit_hash = circuit_hash'' } ) ->
+           let fields, _aux = typ.value_to_fields public_input in
+           let out_hash' =
+             Random_oracle.hash
+               ~init:(Hash_prefix_create.salt "fake proof hash")
+               fields
+           in
+           let open Field in
+           Immediate
+             ( equal circuit_hash circuit_hash'
+             && equal circuit_hash circuit_hash''
+             && equal out_hash out_hash' )
+       | Fake_vk _, Real_proof _, _
+       | Real_vk _, Fake_proof _, _
+       | Fake_vk _, _, Real_vk _
+       | Real_vk _, _, Fake_vk _ ->
+           Immediate false ) )
 
 let match_tags_prevs :
       'self_var 'prevs 'input.
@@ -172,44 +207,48 @@ let match_tags_prevs :
       -> 'self_var tag
       -> ('self_var, 'prevs, 'input) tags
       -> 'prevs prevs
-      -> bool As_prover.t =
+      -> Proof_valid.t As_prover.t =
   fun (type self_var prevs_ input) (input : input) (self_tag : self_var tag)
       (tags : (self_var, prevs_, input) tags) (prevs : prevs_ prevs) :
-      bool As_prover.t ->
+      Proof_valid.t As_prover.t ->
    match (tags, prevs) with
    | No_tags, No_prevs ->
-       As_prover.return true
+       As_prover.return (Proof_valid.immediate true)
    | One_tag tag, One_prev prev ->
-       match_tag_prev tag prev
+       match_tag_prev tag prev |> As_prover.map ~f:Proof_valid.immediate
    | One_tag_own, One_prev prev ->
-       match_tag_prev self_tag prev
+       match_tag_prev self_tag prev |> As_prover.map ~f:Proof_valid.immediate
    | One_tag_sideloaded tag, One_prev_sideloaded prev ->
        match_sideloaded_tag_prev input tag prev
    | Two_tags (tag0, tag1), Two_prevs (prev0, prev1) ->
        As_prover.map2 ~f:( && )
          (match_tag_prev tag0 prev0)
          (match_tag_prev tag1 prev1)
+       |> As_prover.map ~f:Proof_valid.immediate
    | Two_tags_one_own tag1, Two_prevs (prev0, prev1) ->
        As_prover.map2 ~f:( && )
          (match_tag_prev self_tag prev0)
          (match_tag_prev tag1 prev1)
+       |> As_prover.map ~f:Proof_valid.immediate
    | ( Two_tags_one_sideloaded (tag0, tag1)
      , Two_prevs_one_sideloaded (prev0, prev1) ) ->
-       As_prover.map2 ~f:( && )
+       As_prover.map2 ~f:Proof_valid.( &&& )
          (match_sideloaded_tag_prev input tag0 prev0)
-         (match_tag_prev tag1 prev1)
+         (match_tag_prev tag1 prev1 |> As_prover.map ~f:Proof_valid.immediate)
    | Two_tags_own, Two_prevs (prev0, prev1) ->
        As_prover.map2 ~f:( && )
          (match_tag_prev self_tag prev0)
          (match_tag_prev self_tag prev1)
+       |> As_prover.map ~f:Proof_valid.immediate
    | Two_tags_sideloaded (tag0, tag1), Two_prevs_sideloaded (prev0, prev1) ->
-       As_prover.map2 ~f:( && )
+       As_prover.map2 ~f:Proof_valid.( &&& )
          (match_sideloaded_tag_prev input tag0 prev0)
          (match_sideloaded_tag_prev input tag1 prev1)
    | Two_tags_sideloaded_own tag0, Two_prevs_one_sideloaded (prev0, prev1) ->
-       As_prover.map2 ~f:( && )
+       As_prover.map2 ~f:Proof_valid.( &&& )
          (match_sideloaded_tag_prev input tag0 prev0)
-         (match_tag_prev self_tag prev1)
+         ( match_tag_prev self_tag prev1
+         |> As_prover.map ~f:Proof_valid.immediate )
 
 let branches_to_provers name tag out_typ =
   let rec go :
@@ -232,11 +271,13 @@ let branches_to_provers name tag out_typ =
             >>= fun recursion_valid ->
             read out_typ out >>= fun out -> return (recursion_valid, out)
           in
+          let open Promise.Let_syntax in
+          let%map recursion_valid = Proof_valid.to_promise recursion_valid in
           if not recursion_valid then
             failwith "compile_simple [fake]: recursive proof invalid" ;
           printf "compile_simple.fake: %s.%s done\n" name branch_name ;
           let fake_proof = make_fake_proof tag out_typ out in
-          Promise.return (out, fake_proof)
+          (out, fake_proof)
         in
         prover :: go rest
     | [] ->

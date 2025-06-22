@@ -2,7 +2,11 @@ open Core_kernel
 open Async
 open Relational_db
 
-module Make (Merger : In_memory.Intf) = struct
+module Make
+    (Merger : In_memory.Intf
+                with type Commit.out :=
+                  unit -> (unit, Caqti_error.t) result Deferred.t) =
+struct
   module Witness_table = struct
     type t = { tree_id : Merger.Tree.id; witness : string }
     [@@deriving hlist, fields]
@@ -95,10 +99,16 @@ module Make (Merger : In_memory.Intf) = struct
       pool
 
   let commit_exn pool t ctx ~commit_witness =
-    let%bind tree_result, tid = Merger.commit_exn t ctx ~commit_witness in
-    let%map _deleted =
-      Pool.use (fun conn -> Witness_table.remove_tree conn tid) pool
+    let%bind store_commit, tid, result =
+      Merger.commit_exn t ctx ~commit_witness
+    in
+    let%map _ =
+      Pool.use
+        (with_transaction ~f:(fun conn ->
+             let%bind.Deferred.Result () = store_commit () in
+             Witness_table.remove_tree conn tid ) )
+        pool
       >>| caqti_ok_exn ~msg:"Failed to remove tree: %s"
     in
-    tree_result
+    result
 end

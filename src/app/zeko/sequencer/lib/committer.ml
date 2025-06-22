@@ -5,6 +5,7 @@ open Signature_lib
 open Mina_ledger
 open Zeko_types
 open Zeko_circuits
+open Relational_db
 module Field = Snark_params.Tick.Field
 
 module Commit_witness = struct
@@ -18,30 +19,51 @@ module Commit_witness = struct
   [@@deriving yojson]
 end
 
-module Store = struct
-  let ok_exn x =
-    let open Ppx_deriving_yojson_runtime.Result in
-    match x with Ok x -> x | Error e -> failwith e
+module Commit_table = struct
+  type t =
+    { source_ledger_hash : Ledger_hash.t
+    ; target_ledger_hash : Ledger_hash.t
+    ; witness : Commit_witness.t
+    }
+  [@@deriving hlist, fields]
 
-  type commit_id = Frozen_ledger_hash.t * Frozen_ledger_hash.t
-  [@@deriving yojson, equal]
+  let make ~source_ledger_hash ~target_ledger_hash ~witness =
+    { source_ledger_hash; target_ledger_hash; witness }
 
-  module Kvdb = Kvdb_base.Make_table (struct
-    type key = commit_id [@@deriving yojson, equal]
+  let typ =
+    Mina_caqti.Type_spec.custom_type
+      ~to_hlist:(fun { source_ledger_hash; target_ledger_hash; witness } ->
+        H_list.
+          [ Ledger_hash.to_decimal_string source_ledger_hash
+          ; Ledger_hash.to_decimal_string target_ledger_hash
+          ; Commit_witness.to_yojson witness |> Yojson.Safe.to_string
+          ] )
+      ~of_hlist:(fun H_list.[ source_ledger_hash; target_ledger_hash; witness ] ->
+        let ok_exn = function
+          | Ppx_deriving_yojson_runtime.Result.Ok x ->
+              x
+          | Ppx_deriving_yojson_runtime.Result.Error e ->
+              failwithf "Error parsing ledger openings: %s" e ()
+        in
+        { source_ledger_hash = Ledger_hash.of_decimal_string source_ledger_hash
+        ; target_ledger_hash = Ledger_hash.of_decimal_string target_ledger_hash
+        ; witness =
+            Commit_witness.of_yojson (Yojson.Safe.from_string witness) |> ok_exn
+        } )
+      Caqti_type.[ string; string; octets ]
 
-    type value = Commit_witness.t [@@deriving yojson]
+  let insert (module Conn : CONNECTION) t =
+    Conn.exec
+      (Caqti_request.exec typ
+         {sql| INSERT INTO "commit" (source_ledger_hash, target_ledger_hash, witness)
+                VALUES (?, ?, ?) |sql} )
+      t
 
-    let key = "commit"
-  end)
-
-  let store_commit kvdb witness ~source ~target =
-    Kvdb.set kvdb ~key:(source, target) ~data:witness
-
-  let get_index kvdb = Kvdb.get_keys kvdb
-
-  let get_commit kvdb commit_id = Kvdb.get kvdb ~key:commit_id
-
-  let get_all kvdb = Kvdb.get_all kvdb
+  let get_by_source (module Conn : CONNECTION) ledger_hash =
+    Conn.find_opt
+      (Caqti_request.find_opt Caqti_type.string typ
+         {sql| SELECT source_ledger_hash, target_ledger_hash, witness FROM "commit" WHERE source_ledger_hash = ? |sql} )
+      (Ledger_hash.to_decimal_string ledger_hash)
 end
 
 let prove_commit ~proof_cache_db ~provers ~(executor : Executor.t)
@@ -70,18 +92,19 @@ let prove_commit ~proof_cache_db ~provers ~(executor : Executor.t)
   in
   let old_inner_acc, old_inner_acc_path = get_inner_acc old_inner_ledger in
   let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
-  let%bind { inner_action_state; _ } =
-    Gql_client.infer_state
-      Executor.(executor.l1_uri)
-      ~zkapp_pk
-      ~signer_pk:(Public_key.compress executor.signer.public_key)
-    >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
-  in
-  let inner_ase_source : Ase.With_length.Stmt.t =
-    Rollup_state.Inner_action_state.With_length.
-      { action_state = raw inner_action_state
-      ; length = length inner_action_state
-      }
+  let%bind inner_ase_source =
+    let%map { inner_action_state = committed_inner_action_state; _ } =
+      Gql_client.infer_state
+        Executor.(executor.l1_uri)
+        ~zkapp_pk
+        ~signer_pk:(Public_key.compress executor.signer.public_key)
+      >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
+    in
+    ( Rollup_state.Inner_action_state.With_length.
+        { action_state = raw committed_inner_action_state
+        ; length = length committed_inner_action_state
+        }
+      : Ase.With_length.Stmt.t )
   in
   let new_inner_actions =
     let from =
@@ -171,33 +194,32 @@ let prove_commit ~proof_cache_db ~provers ~(executor : Executor.t)
   in
   return command
 
-let recommit_all ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
-    ~archive ~kvdb ~zkapp_pk ~archive_uri =
+let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
+    ~(executor : Executor.t) ~archive ~zkapp_pk ~archive_uri =
   let%bind { ledger_hash; _ } =
     Gql_client.infer_state executor.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress executor.signer.public_key)
     >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
   in
-  let commits = Store.get_index kvdb in
-  let rec recommit_next current_state =
-    match
-      List.find commits ~f:(fun (source, _) ->
-          Frozen_ledger_hash.equal source current_state )
+  let rec recommit_next ~conn current_state =
+    match%bind
+      Commit_table.get_by_source conn current_state
+      >>| caqti_ok_exn ~msg:"Failed to get commit by source: %s"
     with
     | None ->
         return ()
-    | Some (source, target) ->
+    | Some { source_ledger_hash; target_ledger_hash; witness } ->
         [%log info] "Recommitting %s -> %s"
-          (Frozen_ledger_hash.to_base58_check source)
-          (Frozen_ledger_hash.to_base58_check target) ;
-        let witness =
-          Store.get_commit kvdb (source, target) |> Option.value_exn
-        in
+          (Frozen_ledger_hash.to_base58_check source_ledger_hash)
+          (Frozen_ledger_hash.to_base58_check target_ledger_hash) ;
         let%bind command =
           prove_commit ~proof_cache_db ~provers ~executor ~archive ~zkapp_pk
             ~archive_uri witness
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
-        recommit_next target
+        recommit_next ~conn target_ledger_hash
   in
-  recommit_next ledger_hash
+  Pool.use
+    (fun conn -> recommit_next ~conn ledger_hash >>| Result.return)
+    db_pool
+  >>| caqti_ok_exn ~msg:"Failed to recommit all: %s"

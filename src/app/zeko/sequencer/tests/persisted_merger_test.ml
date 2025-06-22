@@ -41,7 +41,9 @@ end
 module Commit = struct
   type t = int
 
-  let process _ _ _ = return ()
+  type out = unit -> (unit, Caqti_error.t) Result.t Deferred.t
+
+  let process _ _ _ = return (fun () -> return (Ok ()))
 end
 
 module Merger = Parallel_merger.Persisted.Make (struct

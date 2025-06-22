@@ -1,0 +1,208 @@
+open Core_kernel
+open Mina_base
+open Mina_ledger
+open Signature_lib
+
+(** 1. Check that [root ledger_openings = diff.source_ledger_hash].
+    2. Check that [diff.source_ledger_hash] is either in the databse or an empty ledger.
+    3. Check that the indices in [diff.diff] are unique. 
+    4. Set each account in [diff.diff] to the [ledger_openings] and call the resulting ledger hash [target_ledger_hash].
+    5. Sign [target_ledger_hash].
+    6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
+    7. Attach timestamp.
+    8. Store the diff under the [target_ledger_hash]. *)
+let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
+    ~ledger_openings ~diff =
+  (* 1 *)
+  let%bind.Result () =
+    match
+      Ledger_hash.equal
+        (Sparse_ledger.merkle_root ledger_openings)
+        (Diff.source_ledger_hash diff)
+    with
+    | true ->
+        Ok ()
+    | false ->
+        Error
+          (Error.create "Source ledger hash mismatch"
+             (Diff.source_ledger_hash diff)
+             Ledger_hash.sexp_of_t )
+  in
+
+  (* 2 *)
+  let%bind.Result () =
+    match Db.get_diff kvdb ~ledger_hash:(Diff.source_ledger_hash diff) with
+    | Some _ ->
+        Ok ()
+    | None ->
+        if
+          Ledger_hash.equal
+            (Diff.source_ledger_hash diff)
+            (Diff.empty_ledger_hash
+               ~depth:(Sparse_ledger.depth ledger_openings) )
+        then Ok ()
+        else
+          Error
+            (Error.create "Source ledger not found in the database"
+               (Diff.source_ledger_hash diff)
+               Ledger_hash.sexp_of_t )
+  in
+
+  (* 3 *)
+  let indices = List.map (Diff.changed_accounts diff) ~f:fst in
+  let%bind.Result () =
+    match List.contains_dup ~compare:Int.compare indices with
+    | false ->
+        Ok ()
+    | true ->
+        Error
+          (Error.create "Duplicate indices" diff [%sexp_of: Diff.Stable.V1.t])
+  in
+
+  (* 4 *)
+  let%bind.Result target_ledger =
+    List.fold_result (Diff.changed_accounts diff) ~init:ledger_openings
+      ~f:(fun ledger (diff_index, account) ->
+        try
+          (* Check that the index of the account matches the index in the diff *)
+          let%bind.Result () =
+            let opening_index =
+              Sparse_ledger.find_index_exn ledger_openings
+              @@ Account.identifier account
+            in
+            if opening_index = diff_index then Ok ()
+            else
+              Error
+                (Error.of_string
+                   (sprintf "Index mismatch %d <> %d" opening_index diff_index) )
+          in
+          Ok (Sparse_ledger.set_exn ledger diff_index account)
+        with e -> Error (Error.of_exn e) )
+  in
+  let target_ledger_hash = Sparse_ledger.merkle_root target_ledger in
+
+  (* 5 *)
+  let message =
+    Random_oracle.Input.Chunked.field
+    @@ Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         [| target_ledger_hash |]
+  in
+  let signature =
+    Schnorr.Chunked.sign ~signature_kind:network_id signer.private_key message
+  in
+
+  (* 6 *)
+  let get_account ledger account_id =
+    try
+      let index = Sparse_ledger.find_index_exn ledger account_id in
+      Ok (Sparse_ledger.get_exn ledger index)
+    with e -> Error (Error.of_exn e)
+  in
+  (* First try to find in [map] and fallback to the [ledger_openings] *)
+  let get_account's_receipt_chain_hash map account_id =
+    match Account_id.Map.find map account_id with
+    | Some account ->
+        Ok account
+    | None ->
+        let%bind.Result account = get_account ledger_openings account_id in
+        Ok account.receipt_chain_hash
+  in
+  let%bind.Result applied_hashes =
+    match Diff.command_with_action_step_flags diff with
+    | None ->
+        Ok Account_id.Map.empty
+    | Some (Signed_command command, _) ->
+        (* For signed command only the fee payer gets the receipt *)
+        let account_id = Signed_command.fee_payer command in
+        let%bind.Result old_receipt_chain_hash =
+          get_account's_receipt_chain_hash Account_id.Map.empty account_id
+        in
+        let new_receipt_chain_hash =
+          Receipt.Chain_hash.cons_signed_command_payload
+            (Signed_command_payload (Signed_command.payload command))
+            old_receipt_chain_hash
+        in
+        Ok
+          (Account_id.Map.set Account_id.Map.empty ~key:account_id
+             ~data:new_receipt_chain_hash )
+    | Some (Zkapp_command command, _) ->
+        let command =
+          Zkapp_command.write_all_proofs_to_disk ~signature_kind:network_id
+            ~proof_cache_db command
+        in
+        let _commitment, full_transaction_commitment =
+          Zkapp_command.get_transaction_commitments ~signature_kind:network_id
+            command
+        in
+        let%bind.Result _, acc =
+          List.fold_result (Zkapp_command.all_account_updates_list command)
+            ~init:(Unsigned.UInt32.zero, Account_id.Map.empty)
+            ~f:(fun (index, acc) account_update ->
+              (* Receipt chain hash is updated only for account updates authorised with Proof or Signature *)
+              match Account_update.Poly.authorization account_update with
+              | None_given ->
+                  Ok (Unsigned.UInt32.succ index, acc)
+              | Proof _ | Signature _ ->
+                  let account_id =
+                    let aid = Account_update.account_id account_update in
+                    if Public_key.Compressed.(Account_id.public_key aid = empty)
+                    then Zeko_constants.inner_account_id
+                    else aid
+                  in
+                  let%bind.Result old_receipt_chain_hash =
+                    get_account's_receipt_chain_hash acc account_id
+                  in
+                  let new_receipt_chain_hash =
+                    Receipt.Chain_hash.cons_zkapp_command_commitment index
+                      (Zkapp_command_commitment full_transaction_commitment)
+                      old_receipt_chain_hash
+                  in
+                  Ok
+                    ( Unsigned.UInt32.succ index
+                    , Account_id.Map.set acc ~key:account_id
+                        ~data:new_receipt_chain_hash ) )
+        in
+        Ok acc
+  in
+  let%bind.Result () =
+    if Option.is_none (Diff.command_with_action_step_flags diff) then Ok ()
+    else
+      List.fold_result (Diff.changed_accounts diff) ~init:()
+        ~f:(fun _ (_, account) ->
+          (* account's target_receipt_chain_hash needs to be either unchanged or the same as in [applied_hashes] *)
+          let account_id = Account.identifier account in
+          let%bind.Result target_account =
+            get_account target_ledger account_id
+          in
+          let target_receipt_chain_hash = target_account.receipt_chain_hash in
+          let%bind.Result applied_receipt_chain_hash =
+            get_account's_receipt_chain_hash applied_hashes account_id
+          in
+          if
+            Receipt.Chain_hash.equal target_receipt_chain_hash
+              applied_receipt_chain_hash
+          then Ok ()
+          else
+            Error
+              (Error.create "Receipt chain hash mismatch"
+                 (target_receipt_chain_hash, applied_receipt_chain_hash)
+                 [%sexp_of: Receipt.Chain_hash.t * Receipt.Chain_hash.t] ) )
+  in
+
+  (* 7 *)
+  (* V2 was added time *)
+  let diff : Diff.Stable.V2.t = Diff.add_time ~logger diff in
+
+  (* 8 *)
+  (* We don't care if the diff already existed *)
+  let () =
+    match Db.add_diff kvdb ~ledger_hash:target_ledger_hash ~diff with
+    | `Already_existed ->
+        [%log warn] "Diff with target ledger hash %s already exists"
+          (Ledger_hash.to_decimal_string target_ledger_hash)
+    | `Added ->
+        [%log info] "Diff with target ledger hash %s added to the database"
+          (Ledger_hash.to_decimal_string target_ledger_hash)
+  in
+  Ok signature

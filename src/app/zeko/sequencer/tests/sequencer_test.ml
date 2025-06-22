@@ -49,6 +49,7 @@ module Sequencer_test_spec = struct
           (* Transaction specs *)
     ; sequencer : Sequencer.t
     ; da_key : Even_PC.t
+    ; accounts : Keypair.t list
     }
 
   let gen ?(delay_deposit = 0) ?db_dir ~postgres_uri () =
@@ -72,18 +73,23 @@ module Sequencer_test_spec = struct
       Mina_transaction_logic.For_tests.Test_spec.mk_gen
         ~num_transactions:number_of_transactions ()
     in
+    let funded_accounts =
+      Array.init 10 ~f:(fun _ ->
+          (Keypair.create (), Int64.of_float (1000. *. 1e8)) )
+    in
 
     let initial_inner_account = run Deploy.Z.Inner.initial_account in
     let genesis_accounts =
       (Zeko_constants.inner_account_id, initial_inner_account)
-      :: ( Array.map init_ledger ~f:(fun (keypair, balance) ->
-               let pk = Signature_lib.Public_key.compress keypair.public_key in
-               let account_id = Account_id.create pk Token_id.default in
-               let balance = Unsigned.UInt64.of_int64 balance in
-               let account =
-                 Account.create account_id (Currency.Balance.of_uint64 balance)
-               in
-               (account_id, account) )
+      :: ( Array.concat [ init_ledger; funded_accounts ]
+         |> Array.map ~f:(fun (keypair, balance) ->
+                let pk = Signature_lib.Public_key.compress keypair.public_key in
+                let account_id = Account_id.create pk Token_id.default in
+                let balance = Unsigned.UInt64.of_int64 balance in
+                let account =
+                  Account.create account_id (Currency.Balance.of_uint64 balance)
+                in
+                (account_id, account) )
          |> Array.to_list )
     in
 
@@ -162,7 +168,14 @@ module Sequencer_test_spec = struct
     in
 
     Quickcheck.Generator.return
-      { zkapp_keypair; signer; ephemeral_ledger; specs; sequencer; da_key }
+      { zkapp_keypair
+      ; signer
+      ; ephemeral_ledger
+      ; specs
+      ; sequencer
+      ; da_key
+      ; accounts = Array.map funded_accounts ~f:fst |> Array.to_list
+      }
 end
 
 let () =
@@ -179,31 +192,70 @@ let () =
 
   Quickcheck.test ~trials:1
     (Sequencer_test_spec.gen ~postgres_uri:postgres_uri1 ())
-    ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
-      let batch1, batch2 = List.split_n specs 3 in
+    ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; accounts; _ } ->
+      let commands =
+        List.mapi specs ~f:(fun i spec ->
+            if i % 2 = 0 then
+              User_command.Zkapp_command
+                (Mina_transaction_logic.For_tests.account_update_send
+                   ~chain:l2_signature_kind spec )
+            else
+              Signed_command
+                (Mina_transaction_logic.For_tests.command_send
+                   ~chain:l2_signature_kind spec ) )
+      in
+      let zkapp_command_with_real_proof =
+        let fee_signer = List.hd_exn accounts in
+        let account_creation_fee =
+          Account_update.with_aux
+            ~body:
+              { Account_update.Body.dummy with
+                public_key = Public_key.compress fee_signer.public_key
+              ; balance_change =
+                  Currency.Amount.Signed.of_fee @@ Currency.Fee.Signed.negate
+                  @@ Currency.Fee.Signed.of_unsigned
+                       constraint_constants.account_creation_fee
+              ; authorization_kind = Signature
+              ; use_full_commitment = true
+              }
+            ~authorization:(Control.Poly.Signature Signature.dummy)
+        in
+        let open Initialize_state.Test_module in
+        (* First one is the inner account *)
+        let call_forest =
+          Zkapp_command.Call_forest.cons ~signature_kind:l2_signature_kind
+            account_creation_fee
+          @@ Zkapp_command.Call_forest.cons ~signature_kind:l2_signature_kind
+               Deploy_account_update.account_update
+          @@ Zkapp_command.Call_forest.cons_tree
+               Initialize_account_update.account_update
+          @@ Zkapp_command.Call_forest.cons_tree
+               Update_state_account_update.account_update []
+        in
+        User_command.Zkapp_command
+          (Utils.sign_zkapp_command ~signature_kind:l2_signature_kind
+             { fee_payer =
+                 { body =
+                     { Account_update.Body.Fee_payer.dummy with
+                       public_key = Public_key.compress fee_signer.public_key
+                     ; fee = Currency.Fee.of_mina_int_exn 1
+                     }
+                 ; authorization = Signature.dummy
+                 }
+             ; account_updates = call_forest
+             ; memo = Signed_command_memo.empty
+             }
+             [ fee_signer; Keypair.of_private_key_exn sk ] )
+      in
+      let batch1, batch2 = List.split_n commands 3 in
+      let batch1 = zkapp_command_with_real_proof :: batch1 in
 
       print_endline "(* Apply first batch *)" ;
       let () =
         run (fun () ->
             let%bind () =
-              Deferred.List.iteri batch1 ~f:(fun i spec ->
-                  let%bind result =
-                    match i % 2 = 0 with
-                    | true ->
-                        let command =
-                          Mina_transaction_logic.For_tests.account_update_send
-                            ~chain:l2_signature_kind spec
-                        in
-                        printf "Applying zkapp command\n%!" ;
-                        apply_user_command sequencer (Zkapp_command command)
-                    | false ->
-                        let command =
-                          Mina_transaction_logic.For_tests.command_send
-                            ~chain:l2_signature_kind spec
-                        in
-                        printf "Applying signed command\n%!" ;
-                        apply_user_command sequencer (Signed_command command)
-                  in
+              Deferred.List.iter batch1 ~f:(fun command ->
+                  let%bind result = apply_user_command sequencer command in
                   let witnesses =
                     match result with
                     | Ok result ->
@@ -251,25 +303,8 @@ let () =
       print_endline "(* Apply second batch *)" ;
       run (fun () ->
           let%bind () =
-            Deferred.List.iteri batch2 ~f:(fun i spec ->
-                let%bind result =
-                  match i % 2 = 0 with
-                  | true ->
-                      let command =
-                        Mina_transaction_logic.For_tests.account_update_send
-                          ~chain:l2_signature_kind spec
-                      in
-                      printf "Applying zkapp command\n%!" ;
-                      apply_user_command sequencer (Zkapp_command command)
-                  | false ->
-                      let command =
-                        Mina_transaction_logic.For_tests.command_send
-                          ~chain:l2_signature_kind spec
-                      in
-                      printf "Applying signed command\n%!" ;
-                      apply_user_command sequencer (Signed_command command)
-                in
-
+            Deferred.List.iter batch2 ~f:(fun command ->
+                let%bind result = apply_user_command sequencer command in
                 let witnesses =
                   match result with
                   | Ok result ->
@@ -277,7 +312,6 @@ let () =
                   | Error e ->
                       Error.raise e
                 in
-
                 match%map
                   Deferred.List.map ~how:`Sequential witnesses
                     ~f:(fun witness ->
@@ -402,27 +436,22 @@ let () =
   in
   Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ~postgres_uri ())
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
+      let commands =
+        List.mapi specs ~f:(fun i spec ->
+            if i % 2 = 0 then
+              User_command.Zkapp_command
+                (Mina_transaction_logic.For_tests.account_update_send
+                   ~chain:l2_signature_kind spec )
+            else
+              Signed_command
+                (Mina_transaction_logic.For_tests.command_send
+                   ~chain:l2_signature_kind spec ) )
+      in
       let () =
         run (fun () ->
             let%bind () =
-              Deferred.List.iteri specs ~f:(fun i spec ->
-                  let%bind result =
-                    match i % 2 = 0 with
-                    | true ->
-                        let command =
-                          Mina_transaction_logic.For_tests.account_update_send
-                            ~chain:l2_signature_kind spec
-                        in
-                        printf "Applying zkapp command\n%!" ;
-                        apply_user_command sequencer (Zkapp_command command)
-                    | false ->
-                        let command =
-                          Mina_transaction_logic.For_tests.command_send
-                            ~chain:l2_signature_kind spec
-                        in
-                        printf "Applying signed command\n%!" ;
-                        apply_user_command sequencer (Signed_command command)
-                  in
+              Deferred.List.iter commands ~f:(fun command ->
+                  let%bind result = apply_user_command sequencer command in
                   let witnesses =
                     match result with
                     | Ok result ->
@@ -492,6 +521,152 @@ let () =
                   ~msg:"Failed to get all witnesses: %s"
           in
           [%test_eq: int] (List.length all_witnesses) 0 ) ;
+
+      Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown new_sequencer) ;
+
+      print_endline "(* Drop database *)" ;
+      run (fun () ->
+          Relational_db.For_tests.drop_database ~port:5433 "sequencer" ) )
+
+let () =
+  print_endline "Started test 'restart sequencer and recommit'" ;
+  let db_dir =
+    Filename.concat Cache_dir.autogen_path
+      (Uuid.to_string @@ Uuid_unix.create ())
+  in
+  let postgres_uri =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer" )
+  in
+  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ~postgres_uri ())
+    ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
+      let commands =
+        List.mapi specs ~f:(fun i spec ->
+            if i % 2 = 0 then
+              User_command.Zkapp_command
+                (Mina_transaction_logic.For_tests.account_update_send
+                   ~chain:l2_signature_kind spec )
+            else
+              Signed_command
+                (Mina_transaction_logic.For_tests.command_send
+                   ~chain:l2_signature_kind spec ) )
+      in
+      let batch1, batch2 = List.split_n commands 3 in
+      let initial_ledger_hash = get_root sequencer in
+
+      print_endline "(* Apply first batch *)" ;
+      let () =
+        run (fun () ->
+            let%bind () =
+              Deferred.List.iter batch1 ~f:(fun command ->
+                  let%bind result = apply_user_command sequencer command in
+                  let witnesses =
+                    match result with
+                    | Ok result ->
+                        result
+                    | Error e ->
+                        Error.raise e
+                  in
+                  match%map
+                    Deferred.List.map ~how:`Sequential witnesses
+                      ~f:(fun witness ->
+                        Merger.P.add_job sequencer.db_pool sequencer.merger
+                          sequencer.merger_ctx ~data:witness )
+                    >>| Result.all
+                    >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+                  with
+                  | Ok () ->
+                      ()
+                  | Error e ->
+                      failwith (Caqti_error.show e) )
+            in
+            return () )
+      in
+
+      print_endline "(* First commit *)" ;
+      run (fun () ->
+          let%bind () = commit sequencer in
+          let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+          Executor.wait_to_finish sequencer.merger_ctx.executor ) ;
+
+      print_endline "(* Apply second batch *)" ;
+      run (fun () ->
+          let%bind () =
+            Deferred.List.iter batch2 ~f:(fun command ->
+                let%bind result = apply_user_command sequencer command in
+                let witnesses =
+                  match result with
+                  | Ok result ->
+                      result
+                  | Error e ->
+                      Error.raise e
+                in
+                match%map
+                  Deferred.List.map ~how:`Sequential witnesses
+                    ~f:(fun witness ->
+                      Merger.P.add_job sequencer.db_pool sequencer.merger
+                        sequencer.merger_ctx ~data:witness )
+                  >>| Result.all
+                  >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+                with
+                | Ok () ->
+                    ()
+                | Error e ->
+                    failwith (Caqti_error.show e) )
+          in
+          return () ) ;
+
+      print_endline "(* Second commit *)" ;
+      let final_ledger_hash =
+        run (fun () ->
+            let%bind () = commit sequencer in
+            let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+            let%bind () =
+              Executor.wait_to_finish sequencer.merger_ctx.executor
+            in
+            let%bind _cleared = Gql_client.For_tests.clear_pool gql_uri in
+            let%map { ledger_hash = committed_ledger_hash; _ } =
+              Gql_client.infer_state gql_uri
+                ~signer_pk:(Public_key.compress signer.public_key)
+                ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+              >>| Utils.value_of_zkapp_state
+                    Zeko_circuits.Rollup_state.Outer_state.typ
+            in
+            [%test_eq: Ledger_hash.t] committed_ledger_hash initial_ledger_hash ;
+            get_root sequencer )
+      in
+
+      Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown sequencer) ;
+
+      print_endline "(* Restart sequencer *)" ;
+      let new_sequencer =
+        run (fun () ->
+            Sequencer.create ~logger
+              ~zkapp_pk:
+                Signature_lib.Public_key.(compress zkapp_keypair.public_key)
+              ~max_pool_size:10 ~commitment_period_sec:0.
+              ~da_config:
+                (Da_layer.Client.Config.of_string_list
+                   [ "127.0.0.1:8555"; "127.0.0.1:8556" ] )
+              ~da_quorum:2 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
+              ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
+              ~deposit_delay_blocks:0 ~provers ~da_key ~fee_modifier:1.0
+              ~minimum_fee:0.01 )
+      in
+
+      print_endline "(* Check that after restart it recommited *)" ;
+      run (fun () ->
+          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%map { ledger_hash = committed_ledger_hash; _ } =
+            Gql_client.infer_state gql_uri
+              ~signer_pk:(Public_key.compress signer.public_key)
+              ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+            >>| Utils.value_of_zkapp_state
+                  Zeko_circuits.Rollup_state.Outer_state.typ
+          in
+          [%test_eq: Ledger_hash.t] committed_ledger_hash final_ledger_hash ) ;
 
       Gc.full_major () ;
       run (fun () -> Sequencer.shutdown new_sequencer) ;

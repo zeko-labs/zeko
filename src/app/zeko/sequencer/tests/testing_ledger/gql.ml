@@ -1660,7 +1660,14 @@ module Mutations = struct
       ~args:Arg.[]
       ~resolve:(fun { ctx = t; _ } () -> State.create_new_block t ; "Created")
 
-  let commands = [ send_payment; send_zkapp; create_account; create_new_block ]
+  let clear_pool =
+    field "clearTransactionPool" ~doc:"Clear the transaction pool"
+      ~typ:(non_null string)
+      ~args:Arg.[]
+      ~resolve:(fun { ctx = t; _ } () -> State.clear_pool t ; "Cleared")
+
+  let commands =
+    [ send_payment; send_zkapp; create_account; create_new_block; clear_pool ]
 end
 
 module Queries = struct

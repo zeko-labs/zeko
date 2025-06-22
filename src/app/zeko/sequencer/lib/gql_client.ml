@@ -426,4 +426,21 @@ module For_tests = struct
     in
     let%map result = Graphql_client.query_json_exn q uri in
     Yojson.Safe.(to_string result)
+
+  let clear_pool uri =
+    let q =
+      object
+        method query =
+          String.substr_replace_all ~pattern:"\n" ~with_:" "
+            {|
+              mutation {
+                clearTransactionPool
+              } 
+            |}
+
+        method variables = `Assoc []
+      end
+    in
+    let%map result = Graphql_client.query_json_exn q uri in
+    Yojson.Safe.(to_string result)
 end
