@@ -603,15 +603,9 @@ let _txn_stmt, _txn_proof =
       Promise.block_on_async_exn @@ fun () -> zkapp_double zkapp_double_witness
 
     let receipt_chain_hash =
-      let open Random_oracle in
-      Input.Chunked.(
-        append
-          (Mina_numbers.Index.to_input Unsigned.UInt32.zero)
-          (append
-             (field full_transaction_commitment)
-             (field Mina_base.Receipt.Chain_hash.empty) ))
-      |> pack_input
-      |> hash ~init:Hash_prefix_states.receipt_chain_zkapp_command
+      Mina_base.Receipt.Chain_hash.(
+        cons_zkapp_command_commitment Unsigned.UInt32.zero
+          (Zkapp_command_commitment full_transaction_commitment) empty)
 
     let fee_payer_acc =
       { fee_payer_acc with nonce = Unsigned.UInt32.one; receipt_chain_hash }
@@ -721,6 +715,15 @@ let _txn_stmt, _txn_proof =
       Promise.block_on_async_exn
       @@ fun () -> zkapp_double zkapp_second_double_witness
 
+    let receipt_chain_hash =
+      Mina_base.Receipt.Chain_hash.(
+        cons_zkapp_command_commitment (Unsigned.UInt32.of_int 2)
+          (Zkapp_command_commitment full_transaction_commitment)
+          receipt_chain_hash)
+
+    let fee_payer_acc =
+      { fee_payer_acc with nonce = Unsigned.UInt32.one; receipt_chain_hash }
+
     let stmt, proof =
       Promise.block_on_async_exn
       @@ fun () ->
@@ -761,6 +764,7 @@ let _txn_stmt, _txn_proof =
                       { empty with
                         public_key = Public_key.compress new_kp.public_key
                       ; balance = Currency.Balance.of_mina_string_exn "1"
+                      ; delegate = Some (Public_key.compress new_kp.public_key)
                       } )
                    (force empty_digest))
            }
