@@ -305,9 +305,11 @@ module Sequencer = struct
               if Float.(command_fee < required_fee) then
                 return
                   (Error
-                     (Error.of_string
-                        (Format.asprintf "Fee is too low, expected %f, got %f"
-                           (required_fee /. 10e8) (command_fee /. 10e8) ) ) )
+                     ( Error.of_info
+                     @@ Info.create
+                          (Format.asprintf "Fee is too low, expected %f"
+                             (required_fee /. 10e8) )
+                          (required_fee /. 10e8) Float.sexp_of_t ) )
               else return (Ok ())
           in
 
