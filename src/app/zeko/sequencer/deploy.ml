@@ -38,10 +38,12 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
         | None ->
             L.create_new_account_exn ledger Zeko_constants.inner_account_id
               initial_inner_account ;
-            let () =
-              match faucet_account with
+            let tids =
+              Account_id.derive_token_id ~owner:Zeko_constants.inner_account_id
+              ::
+              ( match faucet_account with
               | None ->
-                  ()
+                  []
               | Some faucet_account ->
                   let aid =
                     Account_id.of_public_key
@@ -50,15 +52,18 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
                         @@ Compressed.of_base58_check_exn faucet_account)
                   in
                   L.create_new_account_exn ledger aid
-                    (Account.create aid Currency.Balance.max_int)
+                    (Account.create aid Currency.Balance.max_int) ;
+                  [ Account_id.derive_token_id ~owner:aid ] )
             in
-            ( None
-            , ledger
-            , Account_set.of_fields
-                [| Indexed_merkle_tree.Db.(
-                     create ~depth:constraint_constants.ledger_depth ()
-                     |> merkle_root)
-                |] )
+            let imt_hash =
+              printf "Creating imt\n%!" ;
+              let imt, _witnesses =
+                Indexed_merkle_tree.Db.create_of_entries_exn
+                  ~depth:constraint_constants.ledger_depth tids
+              in
+              Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root imt |]
+            in
+            (None, ledger, imt_hash)
         | Some ledger_input_json ->
             print_endline "(* Load ledger from json file *)" ;
             Yojson.Safe.from_file ledger_input_json
@@ -79,21 +84,16 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
             print_endline "(* Construct IMT *)" ;
             let imt_hash =
               printf "Creating imt\n%!" ;
-              let imt =
-                Indexed_merkle_tree.Db.create
-                  ~depth:constraint_constants.ledger_depth ()
-              in
               let tids =
                 L.to_list_sequential ledger
                 |> List.map ~f:Account.identifier
                 |> List.map ~f:(fun aid ->
                        Account_id.derive_token_id ~owner:aid )
               in
-              List.iter tids ~f:(fun tid ->
-                  let _witness =
-                    Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
-                  in
-                  () ) ;
+              let imt, _witnesses =
+                Indexed_merkle_tree.Db.create_of_entries_exn
+                  ~depth:constraint_constants.ledger_depth tids
+              in
               Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root imt |]
             in
             (Some (old_ledger_hash, old_inner_account_opening), ledger, imt_hash)

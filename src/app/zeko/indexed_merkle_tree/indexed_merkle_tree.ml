@@ -145,19 +145,22 @@ module type Database_intf = sig
 
   module Path : Merkle_path.S with type hash := Ledger_hash.t
 
+  type witness =
+    [ `X of Token_id.t ]
+    * [ `X_path of Path.t ]
+    * [ `Y of Token_id.t ]
+    * [ `Y_path of Path.t ]
+    * [ `Z of Token_id.t ]
+
   val merkle_root : t -> Hash.t
 
   val create : ?directory_name:string -> depth:index -> unit -> t
 
+  val create_of_entries_exn :
+    ?directory_name:string -> depth:index -> Token_id.t list -> t * witness list
+
   val get_or_create_entry_exn :
-       t
-    -> Token_id.t
-    -> [ `Added | `Existed ]
-       * ( [ `X of Token_id.t ]
-         * [ `X_path of Path.t ]
-         * [ `Y of Token_id.t ]
-         * [ `Y_path of Path.t ]
-         * [ `Z of Token_id.t ] )
+    t -> Token_id.t -> [ `Added | `Existed ] * witness
 
   val find_lower_entry_tid : t -> Token_id.t -> Token_id.t option
 
@@ -183,6 +186,13 @@ let base_entries =
 
 module Db : Database_intf = struct
   include Database.Make (Inputs)
+
+  type witness =
+    [ `X of Token_id.t ]
+    * [ `X_path of Path.t ]
+    * [ `Y of Token_id.t ]
+    * [ `Y_path of Path.t ]
+    * [ `Z of Token_id.t ]
 
   module Db_error = struct
     [@@@warning "-4"] (* due to deriving sexp below *)
@@ -325,4 +335,14 @@ module Db : Database_intf = struct
               , `Y new_entry.value
               , `Y_path (merkle_path t new_location)
               , `Z new_entry.value_next ) ) )
+
+  let create_of_entries_exn ?directory_name ~depth tids =
+    let t = create ?directory_name ~depth () in
+    if num_entries t <> 2 then
+      failwith "Called create_of_entries_exn on non-empty database"
+    else
+      ( t
+      , List.map tids ~f:(fun tid ->
+            let _added, witness = get_or_create_entry_exn t tid in
+            witness ) )
 end
