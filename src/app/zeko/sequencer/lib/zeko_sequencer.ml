@@ -464,6 +464,7 @@ module Sequencer = struct
                     `Error (Error.of_string (Caqti_error.show e)) ) )
 
   let update_inner_account t =
+    let logger = t.logger in
     let old_synced_outer_action_state, old_deposits_length =
       let s =
         Utils.get_synced_outer_action_state_exn (L.of_database t.ledger)
@@ -484,10 +485,14 @@ module Sequencer = struct
             , action :: curr_actions )
           else (curr_state, curr_actions) )
     in
-    if Field.equal old_synced_outer_action_state processed_pointer then
+    if Field.equal old_synced_outer_action_state processed_pointer then (
       (* In case no new actions are to process, we don't need to update inner account *)
-      return (0, old_synced_outer_action_state)
-    else
+      [%log info] "No new actions to process" ;
+      return (0, old_synced_outer_action_state) )
+    else (
+      [%log info] "Processing %d new actions to %s"
+        (List.length processed_new_actions)
+        (Field.to_string processed_pointer) ;
       let%bind tree =
         let%map (body, account_update_digest, calls), proof =
           Zeko_prover.Client.inner_sync t.snark_q.provers
@@ -568,7 +573,7 @@ module Sequencer = struct
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to add witness for inner account update: %s" )
       in
-      return (List.length processed_new_actions, processed_pointer)
+      return (List.length processed_new_actions, processed_pointer) )
 
   let commit t =
     let logger = t.logger in

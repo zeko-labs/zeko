@@ -1962,8 +1962,17 @@ let check_authorization (type proof aux)
 
 let of_fee_payer_no_aux ({ body; authorization } : Fee_payer.t) :
     (Body.t, (_, Signature.t) Control.Poly.t, _) Poly.t =
-  with_no_aux ~body:(Body.of_fee_payer body)
-    ~authorization:(Control.Poly.Signature authorization)
+  let body = Body.of_fee_payer body in
+  (* ZEKO NOTE: dummy fee payer does not have signature authorization *)
+  with_no_aux ~body
+    ~authorization:
+      ( match body.authorization_kind with
+      | Proof _ ->
+          failwith "Proof authorization not supported for fee payre"
+      | None_given ->
+          Control.Poly.None_given
+      | Signature ->
+          Control.Poly.Signature authorization )
 
 let of_fee_payer t = reset_aux @@ of_fee_payer_no_aux t
 
