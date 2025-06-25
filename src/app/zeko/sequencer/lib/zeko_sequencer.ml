@@ -476,10 +476,6 @@ module Sequencer = struct
         ~from_action_state:old_synced_outer_action_state t.config.zkapp_pk
     in
     let%bind current_height = Gql_client.fetch_block_height t.config.l1_uri in
-    [%log info] "Current height: %d" current_height ;
-    [%log info]
-      !"All new actions: %{sexp: (Zkapp_account.Actions_impl.t * int) list}"
-      all_new_actions ;
     (* Find pointer for actions to be processed *)
     let processed_pointer, processed_new_actions =
       List.fold all_new_actions ~init:(old_synced_outer_action_state, [])

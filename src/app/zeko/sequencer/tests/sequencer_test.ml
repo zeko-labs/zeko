@@ -15,8 +15,6 @@ let logger =
   Cli_lib.Stdout_log.setup false Logger.Level.Debug ;
   Logger.create ()
 
-let number_of_transactions = 5
-
 let gql_uri =
   { Cli_lib.Flag.Types.value = Uri.of_string "http://localhost:8080/graphql"
   ; name = "gql-uri"
@@ -52,7 +50,8 @@ module Sequencer_test_spec = struct
     ; accounts : Keypair.t list
     }
 
-  let gen ?(delay_deposit = 0) ?db_dir ~postgres_uri () =
+  let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir
+      ~postgres_uri () =
     let zkapp_keypair = Keypair.create () in
 
     print_endline "(* Create signer *)" ;
@@ -191,7 +190,8 @@ let () =
   in
 
   Quickcheck.test ~trials:1
-    (Sequencer_test_spec.gen ~postgres_uri:postgres_uri1 ())
+    (Sequencer_test_spec.gen ~number_of_transactions:5
+       ~postgres_uri:postgres_uri1 () )
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; accounts; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
@@ -247,8 +247,9 @@ let () =
              }
              [ fee_signer; Keypair.of_private_key_exn sk ] )
       in
-      let batch1, batch2 = List.split_n commands 3 in
+      let batch1, batch2 = List.split_n commands 1 in
       let batch1 = zkapp_command_with_real_proof :: batch1 in
+      let batch2, batch3 = List.split_n batch2 2 in
 
       print_endline "(* Apply first batch *)" ;
       let () =
@@ -328,6 +329,49 @@ let () =
           return () ) ;
 
       print_endline "(* Second commit *)" ;
+      run (fun () ->
+          let%bind () = commit sequencer in
+          let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+          let%bind () = Executor.wait_to_finish sequencer.merger_ctx.executor in
+          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%map { ledger_hash = committed_ledger_hash; _ } =
+            Gql_client.infer_state gql_uri
+              ~signer_pk:(Public_key.compress signer.public_key)
+              ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+            >>| Utils.value_of_zkapp_state
+                  Zeko_circuits.Rollup_state.Outer_state.typ
+          in
+          let target_ledger_hash = get_root sequencer in
+          [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
+
+      print_endline "(* Apply third batch *)" ;
+      run (fun () ->
+          let%bind () =
+            Deferred.List.iter batch3 ~f:(fun command ->
+                let%bind result = apply_user_command sequencer command in
+                let witnesses =
+                  match result with
+                  | Ok result ->
+                      result
+                  | Error e ->
+                      Error.raise e
+                in
+                match%map
+                  Deferred.List.map ~how:`Sequential witnesses
+                    ~f:(fun witness ->
+                      Merger.P.add_job sequencer.db_pool sequencer.merger
+                        sequencer.merger_ctx ~data:witness )
+                  >>| Result.all
+                  >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
+                with
+                | Ok () ->
+                    ()
+                | Error e ->
+                    failwith (Caqti_error.show e) )
+          in
+          return () ) ;
+
+      print_endline "(* Third commit *)" ;
       let final_ledger_hash =
         run (fun () ->
             let%bind () = commit sequencer in
