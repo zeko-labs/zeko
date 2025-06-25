@@ -406,45 +406,62 @@ module Sequencer = struct
           return (Ok witnesses) )
 
   let apply_fee_transfer t =
-    let%bind.Deferred.Result witness, (source_ledger, diff) =
-      return
-      @@
-      let fee = State.Fee_excess.get t.state in
-      let receiver_pk =
-        Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
-      in
-      let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
-      let ledger = L.of_database t.ledger in
-      let%map.Result source_ledger, witness =
-        Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk ~fee
-          ~constraint_constants ~global_slot ledger t.imt
-      in
-      State.Fee_excess.reset t.state ;
+    Throttle.enqueue t.apply_q (fun () ->
+        let fee = State.Fee_excess.get t.state in
+        if Currency.Fee.(equal fee zero) then return `No_fee
+        else
+          let receiver_pk =
+            Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
+          in
+          let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+          let ledger = L.of_database t.ledger in
 
-      (* Post transaction to the DA layer *)
-      let changed_accounts =
-        let account_ids =
-          [ Account_id.of_public_key t.config.signer.public_key ]
-        in
-        List.map account_ids ~f:(fun id ->
-            let index = L.index_of_account_exn ledger id in
-            (index, L.get_at_index_exn ledger index) )
-      in
-      let diff =
-        (* FIXME: add fee transfer command to DA *)
-        Da_layer.Diff.create
-          ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
-          ~changed_accounts ~command_with_action_step_flags:None
-      in
-      (witness, (source_ledger, diff))
-    in
-    let%bind () =
-      Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-        ~ledger_openings:source_ledger ~diff
-        ~target_ledger_hash:(L.Db.merkle_root t.ledger)
-    in
-    Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
-    >>| Result.map_error ~f:(fun e -> Error.of_string (Caqti_error.show e))
+          let receiver_location =
+            L.location_of_account ledger
+              (Account_id.of_public_key t.config.signer.public_key)
+          in
+          if
+            Option.is_none receiver_location
+            && Currency.Fee.(fee < constraint_constants.account_creation_fee)
+          then return `Skip
+          else
+            match
+              Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk
+                ~fee ~constraint_constants ~global_slot ledger t.imt
+            with
+            | Error e ->
+                return (`Error e)
+            | Ok (source_ledger, witness) -> (
+                State.Fee_excess.reset t.state ;
+
+                (* Post transaction to the DA layer *)
+                let changed_accounts =
+                  let account_ids =
+                    [ Account_id.of_public_key t.config.signer.public_key ]
+                  in
+                  List.map account_ids ~f:(fun id ->
+                      let index = L.index_of_account_exn ledger id in
+                      (index, L.get_at_index_exn ledger index) )
+                in
+                let diff =
+                  (* FIXME: add fee transfer command to DA *)
+                  Da_layer.Diff.create
+                    ~source_ledger_hash:
+                      (Sparse_ledger.merkle_root source_ledger)
+                    ~changed_accounts ~command_with_action_step_flags:None
+                in
+                let%bind () =
+                  Da_layer.Client.enqueue_diff t.da_client ~genesis:false
+                    ~ledger_openings:source_ledger ~diff
+                    ~target_ledger_hash:(L.Db.merkle_root t.ledger)
+                in
+                match%map
+                  Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
+                with
+                | Ok () ->
+                    `Ok
+                | Error e ->
+                    `Error (Error.of_string (Caqti_error.show e)) ) )
 
   let update_inner_account t =
     let old_synced_outer_action_state, old_deposits_length =
@@ -555,28 +572,37 @@ module Sequencer = struct
 
   let commit t =
     let logger = t.logger in
-    let%bind () = apply_fee_transfer t >>| Or_error.ok_exn in
-    let%bind processed_actions, processed_actions_pointer =
-      update_inner_account t
-    in
-    let tree_leaves =
-      Merger.M.current_tree t.merger
-      |> Option.map ~f:(fun tree -> Merger.M.Tree.base_jobs_count tree.value)
-      |> Option.value ~default:0
-    in
-    (* If the only txn was update of inner account, we don't need to commit *)
-    if tree_leaves = 0 || (tree_leaves = 1 && processed_actions = 1) then
-      return ([%log info] "Nothing to commit")
-    else
-      let target_ledger =
-        Sparse_ledger.of_ledger_subset_exn
-          L.(of_database t.ledger)
-          [ Zeko_constants.inner_account_id ]
-      in
-      Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
-        ~commit_witness:
-          { new_inner_ledger = target_ledger; processed_actions_pointer }
-      |> Deferred.ignore_m
+    match%bind apply_fee_transfer t with
+    | `Skip ->
+        [%log info]
+          "Skipping commit because there's not enough accumulated fee to \
+           create recipient account" ;
+        return ()
+    | `Error e ->
+        Error.raise e
+    | `No_fee | `Ok ->
+        let%bind processed_actions, processed_actions_pointer =
+          update_inner_account t
+        in
+        let tree_leaves =
+          Merger.M.current_tree t.merger
+          |> Option.map ~f:(fun tree ->
+                 Merger.M.Tree.base_jobs_count tree.value )
+          |> Option.value ~default:0
+        in
+        (* If the only txn was update of inner account, we don't need to commit *)
+        if tree_leaves = 0 || (tree_leaves = 1 && processed_actions = 1) then
+          return ([%log info] "Nothing to commit")
+        else
+          let target_ledger =
+            Sparse_ledger.of_ledger_subset_exn
+              L.(of_database t.ledger)
+              [ Zeko_constants.inner_account_id ]
+          in
+          Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
+            ~commit_witness:
+              { new_inner_ledger = target_ledger; processed_actions_pointer }
+          |> Deferred.ignore_m
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()
