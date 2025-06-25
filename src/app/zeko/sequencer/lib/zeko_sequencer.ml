@@ -464,6 +464,7 @@ module Sequencer = struct
                     `Error (Error.of_string (Caqti_error.show e)) ) )
 
   let update_inner_account t =
+    let logger = t.logger in
     let old_synced_outer_action_state, old_deposits_length =
       let s =
         Utils.get_synced_outer_action_state_exn (L.of_database t.ledger)
@@ -475,6 +476,10 @@ module Sequencer = struct
         ~from_action_state:old_synced_outer_action_state t.config.zkapp_pk
     in
     let%bind current_height = Gql_client.fetch_block_height t.config.l1_uri in
+    [%log info] "Current height: %d" current_height ;
+    [%log info]
+      !"All new actions: %{sexp: (Zkapp_account.Actions_impl.t * int) list}"
+      all_new_actions ;
     (* Find pointer for actions to be processed *)
     let processed_pointer, processed_new_actions =
       List.fold all_new_actions ~init:(old_synced_outer_action_state, [])
@@ -484,10 +489,14 @@ module Sequencer = struct
             , action :: curr_actions )
           else (curr_state, curr_actions) )
     in
-    if Field.equal old_synced_outer_action_state processed_pointer then
+    if Field.equal old_synced_outer_action_state processed_pointer then (
       (* In case no new actions are to process, we don't need to update inner account *)
-      return (0, old_synced_outer_action_state)
-    else
+      [%log info] "No new actions to process" ;
+      return (0, old_synced_outer_action_state) )
+    else (
+      [%log info] "Processing %d new actions to %s"
+        (List.length processed_new_actions)
+        (Field.to_string processed_pointer) ;
       let%bind tree =
         let%map (body, account_update_digest, calls), proof =
           Zeko_prover.Client.inner_sync t.snark_q.provers
@@ -568,7 +577,7 @@ module Sequencer = struct
             >>| Relational_db.caqti_ok_exn
                   ~msg:"Failed to add witness for inner account update: %s" )
       in
-      return (List.length processed_new_actions, processed_pointer)
+      return (List.length processed_new_actions, processed_pointer) )
 
   let commit t =
     let logger = t.logger in

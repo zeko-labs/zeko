@@ -2482,7 +2482,13 @@ module For_tests = struct
       { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount }
       : Signed_command.t =
     let sender_pk = Public_key.compress sender.public_key in
-    let signature_kind = match chain with Some chain -> chain | _ -> Mina_signature_kind.t_DEPRECATED in
+    let signature_kind =
+      match chain with
+      | Some chain ->
+          chain
+      | _ ->
+          Mina_signature_kind.t_DEPRECATED
+    in
     Signed_command.sign ~signature_kind sender
       { common =
           { fee
@@ -2499,7 +2505,9 @@ module For_tests = struct
       ?(double_sender_nonce = true)
       { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount }
       : Zkapp_command.t =
-    let signature_kind = Option.value ~default:Mina_signature_kind.t_DEPRECATED chain in
+    let signature_kind =
+      Option.value ~default:Mina_signature_kind.t_DEPRECATED chain
+    in
     let sender_pk = Public_key.compress sender.public_key in
     let actual_nonce =
       (* Here, we double the spec'd nonce, because we bump the nonce a second
@@ -2584,7 +2592,9 @@ module For_tests = struct
       ; memo = Signed_command_memo.empty
       }
     in
-    let zkapp_command = Zkapp_command.of_simple ~signature_kind ~proof_cache_db zkapp_command in
+    let zkapp_command =
+      Zkapp_command.of_simple ~signature_kind ~proof_cache_db zkapp_command
+    in
     let commitment = Zkapp_command.commitment zkapp_command in
     let full_commitment =
       Zkapp_command.Transaction_commitment.create_complete commitment
