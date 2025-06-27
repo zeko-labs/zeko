@@ -473,6 +473,7 @@ module Sequencer = struct
       Gql_client.fetch_actions t.config.archive_uri
         ~from_action_state:old_synced_outer_action_state t.config.zkapp_pk
     in
+    [%log info] "All new actions: %d" (List.length all_new_actions) ;
     let%bind current_height = Gql_client.fetch_block_height t.config.l1_uri in
     (* Find pointer for actions to be processed *)
     let processed_pointer, processed_new_actions =
