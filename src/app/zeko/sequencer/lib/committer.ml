@@ -66,7 +66,7 @@ module Commit_table = struct
       (Ledger_hash.to_decimal_string ledger_hash)
 end
 
-let prove_commit ~proof_cache_db ~provers ~(executor : Executor.t)
+let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     ~(archive : Archive.t) ~zkapp_pk ~archive_uri
     ({ old_inner_ledger
      ; new_inner_ledger
@@ -106,6 +106,7 @@ let prove_commit ~proof_cache_db ~provers ~(executor : Executor.t)
         }
       : Ase.With_length.Stmt.t )
   in
+  (* TODO: check if it needs to be reversed *)
   let new_inner_actions =
     let from =
       match (Option.value_exn old_inner_acc.zkapp).action_state with
@@ -132,9 +133,16 @@ let prove_commit ~proof_cache_db ~provers ~(executor : Executor.t)
   let%bind unprocessed_actions =
     Gql_client.fetch_actions archive_uri
       ~from_action_state:processed_actions_pointer zkapp_pk
-    >>| List.map ~f:fst >>| List.rev
+    >>| List.map ~f:fst
     >>| List.map ~f:Zkapp_account.Actions_impl.hash
   in
+  let unprocessed_actions_state =
+    List.fold unprocessed_actions ~init:processed_actions_pointer
+      ~f:(fun acc elem -> Zkapp_account.Actions_impl.push_hash acc elem)
+  in
+  [%log info] "Skipping %d actions to %s"
+    (List.length unprocessed_actions)
+    (Field.to_string unprocessed_actions_state) ;
   let%bind tree =
     let da_key, da_signature = signature in
     let%map (body, account_update_digest, calls), proof =
@@ -213,8 +221,8 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
           (Frozen_ledger_hash.to_base58_check source_ledger_hash)
           (Frozen_ledger_hash.to_base58_check target_ledger_hash) ;
         let%bind command =
-          prove_commit ~proof_cache_db ~provers ~executor ~archive ~zkapp_pk
-            ~archive_uri witness
+          prove_commit ~logger ~proof_cache_db ~provers ~executor ~archive
+            ~zkapp_pk ~archive_uri witness
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
         recommit_next ~conn target_ledger_hash

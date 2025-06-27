@@ -151,7 +151,7 @@ let ase (type target) t ~source ~elems ~max_excess
 let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
   let%bind ase =
     let%map proof, target, excess =
-      ase t ~source:ase_source ~elems:(List.rev ase_elms)
+      ase t ~source:ase_source ~elems:ase_elms
         ~max_excess:Zeko_constants.Max_excess_actions.inner_sync ase_with_length
     in
     Inner_sync.Ase_inst.
@@ -183,8 +183,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
   (* Counting length of inner action state *)
   let%bind inner_ase =
     let%map proof, target, excess =
-      ase t ~source:inner_ase_source
-        ~elems:(List.rev new_inner_actions)
+      ase t ~source:inner_ase_source ~elems:new_inner_actions
         ~max_excess:Zeko_constants.Max_excess_actions.commit_inner
         ase_with_length
     in
@@ -201,8 +200,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
       Rollup_state.Outer_action_state.With_length.raw outer_action_state
     in
     let%map proof, target, excess =
-      ase t ~source:action_state
-        ~elems:(List.rev unprocessed_actions)
+      ase t ~source:action_state ~elems:unprocessed_actions
         ~max_excess:Zeko_constants.Max_excess_actions.commit_outer
         ase_without_length
     in
