@@ -144,8 +144,8 @@ module Sequencer = struct
           }
         in
         let%bind command =
-          Committer.prove_commit ~proof_cache_db ~provers ~executor ~archive
-            ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
+          Committer.prove_commit ~logger ~proof_cache_db ~provers ~executor
+            ~archive ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
             commit_witness
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
@@ -482,6 +482,7 @@ module Sequencer = struct
             ( Zkapp_account.Actions_impl.(push_hash curr_state (hash action))
             , action :: curr_actions )
           else (curr_state, curr_actions) )
+      |> Tuple2.map_snd ~f:List.rev
     in
     if Field.equal old_synced_outer_action_state processed_pointer then (
       (* In case no new actions are to process, we don't need to update inner account *)
