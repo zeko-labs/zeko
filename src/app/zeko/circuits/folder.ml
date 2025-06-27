@@ -81,12 +81,17 @@ struct
 
     val middle_or_end : [ `Middle | `End ]
 
-    module Source : SnarkType
-
     type prevs
 
-    val unwrap_source :
-      Source.var -> (Stmt.var * prevs Compile_simple.prevs) Checked.t
+    module Source : sig
+      include SnarkType
+
+      val prevs : var -> prevs Compile_simple.prevs Checked.t
+
+      val stmt_source : var -> Stmt.var Checked.t
+
+      val folding_source : var -> Stmt.var Checked.t
+    end
 
     val tags : (Trans.var, prevs, 'input) Compile_simple.tags
   end) =
@@ -105,9 +110,14 @@ struct
       let* elems, source =
         exists Typ.(Elems.typ * Source.typ) ~compute:(V.get w)
       in
-      let* source, prevs = unwrap_source source in
-      let*| target = fold middle_or_end source elems.array elems.length in
-      Compile_simple.{ out = ({ source; target } : Trans.var); prevs }
+      let* prevs = Source.prevs source in
+      let* stmt_source = Source.stmt_source source in
+      let* folding_source = Source.folding_source source in
+      let*| target =
+        fold middle_or_end folding_source elems.array elems.length
+      in
+      Compile_simple.
+        { out = ({ source = stmt_source; target } : Trans.var); prevs }
 
     let rule : _ Compile_simple.branch = { branch_name; tags; main }
   end
@@ -119,11 +129,17 @@ struct
 
     let middle_or_end = `End
 
-    module Source = Stmt
-
     type prevs = Compile_simple.no_prevs
 
-    let unwrap_source stmt = Checked.return (stmt, Compile_simple.No_prevs)
+    module Source = struct
+      include Stmt
+
+      let prevs _ = Checked.return Compile_simple.No_prevs
+
+      let stmt_source source = Checked.return source
+
+      let folding_source source = Checked.return source
+    end
 
     let tags = Compile_simple.No_tags
   end)
@@ -135,11 +151,17 @@ struct
 
     let middle_or_end = `Middle
 
-    module Source = Stmt
-
     type prevs = Compile_simple.no_prevs
 
-    let unwrap_source stmt = Checked.return (stmt, Compile_simple.No_prevs)
+    module Source = struct
+      include Stmt
+
+      let prevs _ = Checked.return Compile_simple.No_prevs
+
+      let stmt_source source = Checked.return source
+
+      let folding_source source = Checked.return source
+    end
 
     let tags = Compile_simple.No_tags
   end)
@@ -158,22 +180,25 @@ struct
 
     let middle_or_end = Inputs.middle_or_end
 
+    type prevs = Trans.var Compile_simple.one_prev
+
     module Source = struct
       type t = Trans.t * Proof_V.t
 
       type var = Trans.var * Proof_V.var
 
       let typ = Typ.(Trans.typ * Proof_V.typ)
+
+      let prevs (trans, proof) =
+        Checked.return
+          (Compile_simple.One_prev
+             { proof_must_verify = Boolean.true_; public_input = trans; proof }
+          )
+
+      let stmt_source ((trans, _) : var) = Checked.return trans.source
+
+      let folding_source ((trans, _) : var) = Checked.return trans.target
     end
-
-    type prevs = Trans.var Compile_simple.one_prev
-
-    let unwrap_source ((trans, proof) : Source.var) =
-      let prevs =
-        Compile_simple.One_prev
-          { proof_must_verify = Boolean.true_; public_input = trans; proof }
-      in
-      Checked.return (trans.target, prevs)
 
     let tags = Compile_simple.One_tag_own
   end)
