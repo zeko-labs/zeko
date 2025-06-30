@@ -287,7 +287,9 @@ module Sequencer = struct
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
       (command : User_command.t) =
-    if Throttle.num_jobs_waiting_to_start t.apply_q >= t.config.max_pool_size
+    if
+      Throttle.num_jobs_waiting_to_start t.apply_q >= t.config.max_pool_size
+      && not skip_validity_check
     then
       return
         (Error (Error.of_string "Sequencer is under the load, try again later"))
@@ -403,7 +405,16 @@ module Sequencer = struct
               ~target_ledger_hash:(L.Db.merkle_root t.ledger)
           in
 
-          return (Ok witnesses) )
+          (* Add witnesses to the merger *)
+          let%bind.Deferred.Result () =
+            Deferred.List.iter ~how:`Sequential witnesses ~f:(fun witness ->
+                Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
+                >>| Relational_db.caqti_ok_exn
+                      ~msg:"Fatal error: failed to add witness: %s" )
+            >>| Result.return
+          in
+
+          return (Ok ()) )
 
   let apply_fee_transfer t =
     let fee = State.Fee_excess.get t.state in
@@ -557,23 +568,12 @@ module Sequencer = struct
         ; memo = Signed_command_memo.empty
         }
       in
-      let%bind witnesses =
-        match%bind
-          (* Skip validity check because dummy fee payer triggers invalid public key error *)
-          apply_user_command t ~skip_validity_check:true (Zkapp_command command)
-        with
-        | Ok witness ->
-            return witness
-        | Error e ->
-            Error.raise e
+      let%map () =
+        (* Skip validity check because dummy fee payer triggers invalid public key error *)
+        apply_user_command t ~skip_validity_check:true (Zkapp_command command)
+        >>| Or_error.ok_exn
       in
-      let%bind () =
-        Deferred.List.iter ~how:`Sequential witnesses ~f:(fun witness ->
-            Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
-            >>| Relational_db.caqti_ok_exn
-                  ~msg:"Failed to add witness for inner account update: %s" )
-      in
-      return (List.length processed_new_actions, processed_pointer) )
+      (List.length processed_new_actions, processed_pointer) )
 
   let commit t =
     let logger = t.logger in

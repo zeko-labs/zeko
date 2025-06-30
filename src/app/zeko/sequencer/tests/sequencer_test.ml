@@ -252,33 +252,9 @@ let () =
       let batch2, batch3 = List.split_n batch2 2 in
 
       print_endline "(* Apply first batch *)" ;
-      let () =
-        run (fun () ->
-            let%bind () =
-              Deferred.List.iter batch1 ~f:(fun command ->
-                  let%bind result = apply_user_command sequencer command in
-                  let witnesses =
-                    match result with
-                    | Ok result ->
-                        result
-                    | Error e ->
-                        Error.raise e
-                  in
-                  match%map
-                    Deferred.List.map ~how:`Sequential witnesses
-                      ~f:(fun witness ->
-                        Merger.P.add_job sequencer.db_pool sequencer.merger
-                          sequencer.merger_ctx ~data:witness )
-                    >>| Result.all
-                    >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
-                  with
-                  | Ok () ->
-                      ()
-                  | Error e ->
-                      failwith (Caqti_error.show e) )
-            in
-            return () )
-      in
+      run (fun () ->
+          Deferred.List.iter batch1 ~f:(fun command ->
+              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* First commit *)" ;
       run (fun () ->
@@ -303,30 +279,8 @@ let () =
 
       print_endline "(* Apply second batch *)" ;
       run (fun () ->
-          let%bind () =
-            Deferred.List.iter batch2 ~f:(fun command ->
-                let%bind result = apply_user_command sequencer command in
-                let witnesses =
-                  match result with
-                  | Ok result ->
-                      result
-                  | Error e ->
-                      Error.raise e
-                in
-                match%map
-                  Deferred.List.map ~how:`Sequential witnesses
-                    ~f:(fun witness ->
-                      Merger.P.add_job sequencer.db_pool sequencer.merger
-                        sequencer.merger_ctx ~data:witness )
-                  >>| Result.all
-                  >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
-                with
-                | Ok () ->
-                    ()
-                | Error e ->
-                    failwith (Caqti_error.show e) )
-          in
-          return () ) ;
+          Deferred.List.iter batch2 ~f:(fun command ->
+              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* Second commit *)" ;
       run (fun () ->
@@ -346,30 +300,8 @@ let () =
 
       print_endline "(* Apply third batch *)" ;
       run (fun () ->
-          let%bind () =
-            Deferred.List.iter batch3 ~f:(fun command ->
-                let%bind result = apply_user_command sequencer command in
-                let witnesses =
-                  match result with
-                  | Ok result ->
-                      result
-                  | Error e ->
-                      Error.raise e
-                in
-                match%map
-                  Deferred.List.map ~how:`Sequential witnesses
-                    ~f:(fun witness ->
-                      Merger.P.add_job sequencer.db_pool sequencer.merger
-                        sequencer.merger_ctx ~data:witness )
-                  >>| Result.all
-                  >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
-                with
-                | Ok () ->
-                    ()
-                | Error e ->
-                    failwith (Caqti_error.show e) )
-          in
-          return () ) ;
+          Deferred.List.iter batch3 ~f:(fun command ->
+              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* Third commit *)" ;
       let final_ledger_hash =
@@ -491,33 +423,9 @@ let () =
                 (Mina_transaction_logic.For_tests.command_send
                    ~chain:l2_signature_kind spec ) )
       in
-      let () =
-        run (fun () ->
-            let%bind () =
-              Deferred.List.iter commands ~f:(fun command ->
-                  let%bind result = apply_user_command sequencer command in
-                  let witnesses =
-                    match result with
-                    | Ok result ->
-                        result
-                    | Error e ->
-                        Error.raise e
-                  in
-                  match%map
-                    Deferred.List.map ~how:`Sequential witnesses
-                      ~f:(fun witness ->
-                        Merger.P.add_job sequencer.db_pool sequencer.merger
-                          sequencer.merger_ctx ~data:witness )
-                    >>| Result.all
-                    >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
-                  with
-                  | Ok () ->
-                      ()
-                  | Error e ->
-                      failwith (Caqti_error.show e) )
-            in
-            return () )
-      in
+      run (fun () ->
+          Deferred.List.iter commands ~f:(fun command ->
+              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
 
       Gc.full_major () ;
       run (fun () -> Sequencer.shutdown sequencer) ;
@@ -600,33 +508,9 @@ let () =
       let initial_ledger_hash = get_root sequencer in
 
       print_endline "(* Apply first batch *)" ;
-      let () =
-        run (fun () ->
-            let%bind () =
-              Deferred.List.iter batch1 ~f:(fun command ->
-                  let%bind result = apply_user_command sequencer command in
-                  let witnesses =
-                    match result with
-                    | Ok result ->
-                        result
-                    | Error e ->
-                        Error.raise e
-                  in
-                  match%map
-                    Deferred.List.map ~how:`Sequential witnesses
-                      ~f:(fun witness ->
-                        Merger.P.add_job sequencer.db_pool sequencer.merger
-                          sequencer.merger_ctx ~data:witness )
-                    >>| Result.all
-                    >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
-                  with
-                  | Ok () ->
-                      ()
-                  | Error e ->
-                      failwith (Caqti_error.show e) )
-            in
-            return () )
-      in
+      run (fun () ->
+          Deferred.List.iter batch1 ~f:(fun command ->
+              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* First commit *)" ;
       run (fun () ->
@@ -636,30 +520,8 @@ let () =
 
       print_endline "(* Apply second batch *)" ;
       run (fun () ->
-          let%bind () =
-            Deferred.List.iter batch2 ~f:(fun command ->
-                let%bind result = apply_user_command sequencer command in
-                let witnesses =
-                  match result with
-                  | Ok result ->
-                      result
-                  | Error e ->
-                      Error.raise e
-                in
-                match%map
-                  Deferred.List.map ~how:`Sequential witnesses
-                    ~f:(fun witness ->
-                      Merger.P.add_job sequencer.db_pool sequencer.merger
-                        sequencer.merger_ctx ~data:witness )
-                  >>| Result.all
-                  >>| Result.map ~f:(fun x -> List.iter x ~f:Fn.id)
-                with
-                | Ok () ->
-                    ()
-                | Error e ->
-                    failwith (Caqti_error.show e) )
-          in
-          return () ) ;
+          Deferred.List.iter batch2 ~f:(fun command ->
+              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* Second commit *)" ;
       let final_ledger_hash =
