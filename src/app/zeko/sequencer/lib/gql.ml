@@ -1910,6 +1910,14 @@ module Queries = struct
         let%map account_id = Ledger.token_owner l token in
         Types.AccountObj.get_best_ledger_account l account_id )
 
+  let prover_queue_size =
+    field "proverQueueSize" ~doc:"Get the size of the prover queue"
+      ~typ:(non_null int)
+      ~args:Arg.[]
+      ~resolve:(fun { ctx = sequencer; _ } () ->
+        Zeko_prover.Client.queue_size
+          Zeko_sequencer.(sequencer.merger_ctx.provers) )
+
   module Archive = struct
     let actions =
       io_field "actions"
@@ -1958,6 +1966,7 @@ module Queries = struct
     ; token_owner
     ; network_id
     ; fee_per_weight_unit
+    ; prover_queue_size
     ]
     @ Archive.commands
 end

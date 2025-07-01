@@ -125,7 +125,7 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
           ([ fields ], block_height) ) )
   |> List.join
   |>
-  (* Drop the first transfer if it's not the initial state *)
+  (* Drop the first action if it's not the initial state *)
   if Stdlib.(from_action_state = Some Zkapp_account.Actions.empty_state_element)
   then Fn.id
   else function [] -> [] | _ :: tail -> tail
