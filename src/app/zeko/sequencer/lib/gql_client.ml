@@ -123,12 +123,13 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
       List.map actionData ~f:(fun { data } ->
           let fields = List.map data ~f:Field.of_string |> List.to_array in
           ([ fields ], block_height) ) )
+  |> ( if
+       (* Drop the first action if it's not the initial state *)
+       Stdlib.(
+         from_action_state = Some Zkapp_account.Actions.empty_state_element)
+     then Fn.id
+     else function [] -> [] | _ :: tail -> tail )
   |> List.join
-  |>
-  (* Drop the first action if it's not the initial state *)
-  if Stdlib.(from_action_state = Some Zkapp_account.Actions.empty_state_element)
-  then Fn.id
-  else function [] -> [] | _ :: tail -> tail
 
 let fetch_events uri pk =
   let ok_exn = function
