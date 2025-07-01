@@ -501,8 +501,9 @@ module Sequencer = struct
       [%log info] "No new actions to process" ;
       return (0, old_synced_outer_action_state) )
     else (
-      [%log info] "Processing %d new actions to %s"
+      [%log info] "Processing %d new actions from %s to %s"
         (List.length processed_new_actions)
+        (Field.to_string old_synced_outer_action_state)
         (Field.to_string processed_pointer) ;
       let%bind tree =
         let%map (body, account_update_digest, calls), proof =

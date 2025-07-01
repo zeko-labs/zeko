@@ -125,8 +125,8 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     |> Or_error.ok_exn
     (* Drop the first action if it's not the initial state *)
     |> ( if Stdlib.(from = Zkapp_account.Actions.empty_state_element) then
-         List.tl
-       else Option.some )
+         Option.some
+       else List.tl )
     |> Option.value ~default:[]
     |> List.map ~f:(fun x -> Zkapp_account.Actions_impl.hash x.actions)
   in
@@ -140,8 +140,9 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     List.fold unprocessed_actions ~init:processed_actions_pointer
       ~f:(fun acc elem -> Zkapp_account.Actions_impl.push_hash acc elem)
   in
-  [%log info] "Skipping %d actions to %s"
+  [%log info] "Skipping %d actions from %s to %s"
     (List.length unprocessed_actions)
+    (Field.to_string processed_actions_pointer)
     (Field.to_string unprocessed_actions_state) ;
   let%bind tree =
     let da_key, da_signature = signature in
