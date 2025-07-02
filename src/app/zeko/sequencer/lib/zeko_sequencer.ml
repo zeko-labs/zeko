@@ -665,8 +665,10 @@ module Sequencer = struct
           let changed_accounts =
             Da_layer.Diff.Stable.Latest.changed_accounts diff
           in
-          List.iter changed_accounts ~f:(fun (index, account) ->
-              L.set_at_index_exn mask index account ) ;
+          List.sort changed_accounts ~compare:(fun (a, _) (b, _) ->
+              Int.compare a b )
+          |> List.iter ~f:(fun (index, account) ->
+                 L.set_at_index_exn mask index account ) ;
           L.Mask.Attached.commit mask ;
 
           (* Add to Indexed Merkle Tree *)

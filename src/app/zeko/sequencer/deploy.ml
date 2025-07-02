@@ -10,7 +10,7 @@ let constraint_constants = Zeko_constants.constraint_constants
 
 let print_endline = Core.print_endline
 
-let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
+let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
     ~sequencer_key ~da_key ~network ~account_creation_fee () =
   let logger = Logger.create () in
   let sender_keypair =
@@ -41,19 +41,13 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
             let tids =
               Account_id.derive_token_id ~owner:Zeko_constants.inner_account_id
               ::
-              ( match faucet_account with
+              ( match faucet_aid with
               | None ->
                   []
-              | Some faucet_account ->
-                  let aid =
-                    Account_id.of_public_key
-                      Public_key.(
-                        decompress_exn
-                        @@ Compressed.of_base58_check_exn faucet_account)
-                  in
-                  L.create_new_account_exn ledger aid
-                    (Account.create aid Currency.Balance.max_int) ;
-                  [ Account_id.derive_token_id ~owner:aid ] )
+              | Some faucet_aid ->
+                  L.create_new_account_exn ledger faucet_aid
+                    (Account.create faucet_aid Currency.Balance.max_int) ;
+                  [ Account_id.derive_token_id ~owner:faucet_aid ] )
             in
             let imt_hash =
               printf "Creating imt\n%!" ;
@@ -72,14 +66,44 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
             |> List.map ~f:(function Ok x -> x | Error e -> failwith e)
             |> List.iter ~f:(fun (index, account) ->
                    L.set_at_index_exn ledger index account ) ;
+
             let old_ledger_hash = L.merkle_root ledger in
-            let old_inner_account_opening =
+            printf "Old ledger hash: %s\n%!"
+              (Ledger_hash.to_decimal_string old_ledger_hash) ;
+
+            let old_ledger_openings =
               Sparse_ledger.of_ledger_subset_exn ledger
-                [ Zeko_constants.inner_account_id ]
+                ( Zeko_constants.inner_account_id
+                :: (match faucet_aid with None -> [] | Some aid -> [ aid ]) )
             in
 
             print_endline "(* Overwrite inner account *)" ;
             L.set_at_index_exn ledger 0 initial_inner_account ;
+
+            let accounts_diff =
+              (0, initial_inner_account)
+              ::
+              ( match faucet_aid with
+              | None ->
+                  []
+              | Some faucet_aid ->
+                  let account =
+                    Account.create faucet_aid Currency.Balance.max_int
+                  in
+                  let location = L.location_of_account ledger faucet_aid in
+                  let () =
+                    match location with
+                    | None ->
+                        L.create_new_account_exn ledger faucet_aid account
+                    | Some location ->
+                        L.set ledger location account
+                  in
+                  let index = L.index_of_account_exn ledger faucet_aid in
+                  [ (index, account) ] )
+            in
+
+            printf "New ledger hash: %s\n%!"
+              (Ledger_hash.to_decimal_string @@ L.merkle_root ledger) ;
 
             print_endline "(* Construct IMT *)" ;
             let imt_hash =
@@ -94,9 +118,13 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
                 Indexed_merkle_tree.Db.create_of_entries_exn
                   ~depth:constraint_constants.ledger_depth tids
               in
-              Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root imt |]
+              let imt_hash = Indexed_merkle_tree.Db.merkle_root imt in
+              printf "IMT hash: %s\n%!" (Ledger_hash.to_decimal_string imt_hash) ;
+              Account_set.of_fields [| imt_hash |]
             in
-            (Some (old_ledger_hash, old_inner_account_opening), ledger, imt_hash)
+            ( Some (old_ledger_hash, old_ledger_openings, accounts_diff)
+            , ledger
+            , imt_hash )
       in
       let%bind command =
         Sequencer_lib.Deploy.deploy_command_exn ~signature_kind:network
@@ -110,10 +138,10 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
       let da_config = Da_layer.Client.Config.{ nodes = da_nodes } in
 
       (* If the old ledger exists, we need to just post the diff with updated inner account *)
-      let old_ledger_hash = Option.map old_ledger_witness ~f:fst in
+      let old_ledger_hash = Option.map old_ledger_witness ~f:fst3 in
       let%bind old_ledger_exists =
         match old_ledger_witness with
-        | Some (ledger_hash, _) ->
+        | Some (ledger_hash, _, _) ->
             Da_layer.Client.get_diff ~logger ~config:da_config ~ledger_hash
             >>| Result.is_ok
         | None ->
@@ -132,18 +160,21 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
           let () =
             print_endline "(* Post only diff with updated inner account *)"
           in
-          let old_inner_account_opening =
-            Option.(value_exn @@ map old_ledger_witness ~f:snd)
+          let old_ledger_openings, changed_accounts =
+            match old_ledger_witness with
+            | Some (_, old_ledger_openings, diff) ->
+                (old_ledger_openings, diff)
+            | None ->
+                failwith "Unreachable"
           in
           let diff =
             Da_layer.Diff.create
               ~source_ledger_hash:
-                (Sparse_ledger.merkle_root old_inner_account_opening)
-              ~changed_accounts:[ (0, initial_inner_account) ]
-              ~command_with_action_step_flags:None
+                (Sparse_ledger.merkle_root old_ledger_openings)
+              ~changed_accounts ~command_with_action_step_flags:None
           in
           Da_layer.Client.distribute_diff ~logger ~config:da_config
-            ~ledger_openings:old_inner_account_opening ~diff
+            ~ledger_openings:old_ledger_openings ~diff
         else
           let () =
             print_endline
@@ -199,7 +230,11 @@ let () =
                 ; name = sprintf "da-node-%d" i
                 } )
         in
-
+        let faucet_aid =
+          Option.map faucet_account ~f:(fun pk ->
+              Public_key.Compressed.of_base58_check_exn pk
+              |> Public_key.decompress_exn |> Account_id.of_public_key )
+        in
         let string_to_even_pc x =
           Public_key.Compressed.of_base58_check_exn x
           |> Zeko_types.Even_PC.create |> Or_error.ok
@@ -230,13 +265,5 @@ let () =
         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
         in
-        let () =
-          match (faucet_account, ledger_input) with
-          | Some _, Some _ ->
-              failwith
-                "Faucet account and ledger input cannot be provided together"
-          | _ ->
-              ()
-        in
-        run ~l1_uri ~sk ~ledger_input ~faucet_account ~da_nodes ~pause_key
+        run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
           ~sequencer_key ~da_key ~network ~account_creation_fee )
