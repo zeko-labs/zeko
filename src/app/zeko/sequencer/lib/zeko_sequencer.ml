@@ -576,18 +576,19 @@ module Sequencer = struct
       in
       (List.length processed_new_actions, processed_pointer) )
 
-  let commit t =
+  (* Double Deferred.t is deliberate, the first is filled after update of ledger, the second is filled after commit *)
+  let commit t : Txn_snark.serializable option Deferred.t Deferred.t =
     let logger = t.logger in
     let%bind processed_actions, processed_actions_pointer =
       update_inner_account t
     in
     Throttle.enqueue t.apply_q (fun () ->
-        match%bind apply_fee_transfer t with
+        match%map apply_fee_transfer t with
         | `Skip ->
             [%log info]
               "Skipping commit because there's not enough accumulated fee to \
                create recipient account" ;
-            return ()
+            return None
         | `Error e ->
             Error.raise e
         | `No_fee | `Ok ->
@@ -599,7 +600,9 @@ module Sequencer = struct
             in
             (* If the only txn was update of inner account, we don't need to commit *)
             if tree_leaves = 0 || (tree_leaves = 1 && processed_actions = 1)
-            then return ([%log info] "Nothing to commit")
+            then (
+              [%log info] "Nothing to commit" ;
+              return None )
             else
               let target_ledger =
                 Sparse_ledger.of_ledger_subset_exn
@@ -611,7 +614,7 @@ module Sequencer = struct
                   { new_inner_ledger = target_ledger
                   ; processed_actions_pointer
                   }
-              |> Deferred.ignore_m )
+              >>| Option.some )
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()
@@ -664,11 +667,10 @@ module Sequencer = struct
           in
           let changed_accounts =
             Da_layer.Diff.Stable.Latest.changed_accounts diff
+            |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
           in
-          List.sort changed_accounts ~compare:(fun (a, _) (b, _) ->
-              Int.compare a b )
-          |> List.iter ~f:(fun (index, account) ->
-                 L.set_at_index_exn mask index account ) ;
+          List.iter changed_accounts ~f:(fun (index, account) ->
+              L.set_at_index_exn mask index account ) ;
           L.Mask.Attached.commit mask ;
 
           (* Add to Indexed Merkle Tree *)

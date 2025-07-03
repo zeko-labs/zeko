@@ -11,6 +11,29 @@ let constraint_constants = Zeko_constants.constraint_constants
 
 let start_time = Time.now ()
 
+module Handle = struct
+  type valid
+
+  type invalid
+
+  type ('a, _) t = Valid : 'a -> ('a, valid) t | Invalid : (_, invalid) t
+
+  type 'a valid_t = ('a, valid) t
+
+  let make x = Valid x
+
+  let invalidate (t : ('a, valid) t) : ('a, invalid) t =
+    match t with Valid _ -> Invalid
+
+  let get (t : ('a, valid) t) = match t with Valid x -> x
+
+  module Operator = struct
+    let ( ! ) = get
+  end
+end
+
+open Handle.Operator
+
 let logger =
   Cli_lib.Stdout_log.setup false Logger.Level.Debug ;
   Logger.create ()
@@ -38,6 +61,11 @@ let l2_signature_kind = Utils.signature_kind l2_network_id
 
 let run = Thread_safe.block_on_async_exn
 
+let free_sequencer (sequencer : Sequencer.t Handle.valid_t) =
+  Gc.full_major () ;
+  run (fun () -> Sequencer.shutdown !sequencer) ;
+  Handle.invalidate sequencer
+
 module Sequencer_test_spec = struct
   type t =
     { zkapp_keypair : Keypair.t
@@ -45,7 +73,7 @@ module Sequencer_test_spec = struct
     ; ephemeral_ledger : L.t (* The ledger to test the expected outcome *)
     ; specs : Mina_transaction_logic.For_tests.Transaction_spec.t list
           (* Transaction specs *)
-    ; sequencer : Sequencer.t
+    ; sequencer : Sequencer.t Handle.valid_t
     ; da_key : Even_PC.t
     ; accounts : Keypair.t list
     }
@@ -171,7 +199,7 @@ module Sequencer_test_spec = struct
       ; signer
       ; ephemeral_ledger
       ; specs
-      ; sequencer
+      ; sequencer = Handle.make sequencer
       ; da_key
       ; accounts = Array.map funded_accounts ~f:fst |> Array.to_list
       }
@@ -254,13 +282,16 @@ let () =
       print_endline "(* Apply first batch *)" ;
       run (fun () ->
           Deferred.List.iter batch1 ~f:(fun command ->
-              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
+              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* First commit *)" ;
       run (fun () ->
-          let%bind () = commit sequencer in
-          let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-          let%bind () = Executor.wait_to_finish sequencer.merger_ctx.executor in
+          let%bind commit_result = commit !sequencer in
+          let%bind _txn_snark = commit_result in
+          let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+          let%bind () =
+            Executor.wait_to_finish !sequencer.merger_ctx.executor
+          in
           let%bind { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
@@ -268,25 +299,28 @@ let () =
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
-          let target_ledger_hash = get_root sequencer in
+          let target_ledger_hash = get_root !sequencer in
           [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
 
           Deferred.unit ) ;
 
       (* To test nonce inferring from pool *)
       (* The first commit is still in the pool *)
-      Executor.refresh_nonce sequencer.merger_ctx.executor ;
+      Executor.refresh_nonce !sequencer.merger_ctx.executor ;
 
       print_endline "(* Apply second batch *)" ;
       run (fun () ->
           Deferred.List.iter batch2 ~f:(fun command ->
-              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
+              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* Second commit *)" ;
       run (fun () ->
-          let%bind () = commit sequencer in
-          let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-          let%bind () = Executor.wait_to_finish sequencer.merger_ctx.executor in
+          let%bind commit_result = commit !sequencer in
+          let%bind _txn_snark = commit_result in
+          let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+          let%bind () =
+            Executor.wait_to_finish !sequencer.merger_ctx.executor
+          in
           let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state gql_uri
@@ -295,21 +329,22 @@ let () =
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
-          let target_ledger_hash = get_root sequencer in
+          let target_ledger_hash = get_root !sequencer in
           [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
 
       print_endline "(* Apply third batch *)" ;
       run (fun () ->
           Deferred.List.iter batch3 ~f:(fun command ->
-              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
+              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* Third commit *)" ;
       let final_ledger_hash =
         run (fun () ->
-            let%bind () = commit sequencer in
-            let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+            let%bind commit_result = commit !sequencer in
+            let%bind _txn_snark = commit_result in
+            let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
             let%bind () =
-              Executor.wait_to_finish sequencer.merger_ctx.executor
+              Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
             let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
             let%bind { ledger_hash = committed_ledger_hash; _ } =
@@ -319,14 +354,13 @@ let () =
               >>| Utils.value_of_zkapp_state
                     Zeko_circuits.Rollup_state.Outer_state.typ
             in
-            let target_ledger_hash = get_root sequencer in
+            let target_ledger_hash = get_root !sequencer in
             [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
 
             return target_ledger_hash )
       in
 
-      Gc.full_major () ;
-      run (fun () -> Sequencer.shutdown sequencer) ;
+      let[@warning "-26"] sequencer = free_sequencer sequencer in
 
       print_endline "(* Try to bootstrap again *)" ;
       let new_sequencer =
@@ -385,7 +419,7 @@ let () =
       in
       let result =
         run (fun () ->
-            apply_user_command sequencer (Zkapp_command dummy_signature_command) )
+            apply_user_command !sequencer (Zkapp_command dummy_signature_command) )
       in
       match result with
       | Error e
@@ -393,7 +427,7 @@ let () =
                (Error.to_string_hum e) ->
           run (fun () ->
               Gc.full_major () ;
-              let%bind () = Sequencer.shutdown sequencer in
+              let%bind () = Sequencer.shutdown !sequencer in
               Relational_db.For_tests.drop_database ~port:5433 "sequencer" )
       | Ok _ ->
           failwith "Transaction should have failed"
@@ -425,10 +459,9 @@ let () =
       in
       run (fun () ->
           Deferred.List.iter commands ~f:(fun command ->
-              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
+              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
-      Gc.full_major () ;
-      run (fun () -> Sequencer.shutdown sequencer) ;
+      let[@warning "-26"] sequencer = free_sequencer sequencer in
 
       print_endline "(* Restart sequencer *)" ;
       let new_sequencer =
@@ -448,7 +481,8 @@ let () =
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
       run (fun () ->
-          let%bind () = commit new_sequencer in
+          let%bind commit_result = commit new_sequencer in
+          let%bind _txn_snark = commit_result in
           let%bind () = Snark_queue.wait_to_finish new_sequencer.snark_q in
           let%bind () =
             Executor.wait_to_finish new_sequencer.merger_ctx.executor
@@ -505,31 +539,33 @@ let () =
                    ~chain:l2_signature_kind spec ) )
       in
       let batch1, batch2 = List.split_n commands 3 in
-      let initial_ledger_hash = get_root sequencer in
+      let initial_ledger_hash = get_root !sequencer in
 
       print_endline "(* Apply first batch *)" ;
       run (fun () ->
           Deferred.List.iter batch1 ~f:(fun command ->
-              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
+              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* First commit *)" ;
       run (fun () ->
-          let%bind () = commit sequencer in
-          let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
-          Executor.wait_to_finish sequencer.merger_ctx.executor ) ;
+          let%bind commit_result = commit !sequencer in
+          let%bind _txn_snark = commit_result in
+          let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+          Executor.wait_to_finish !sequencer.merger_ctx.executor ) ;
 
       print_endline "(* Apply second batch *)" ;
       run (fun () ->
           Deferred.List.iter batch2 ~f:(fun command ->
-              apply_user_command sequencer command >>| Or_error.ok_exn ) ) ;
+              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* Second commit *)" ;
       let final_ledger_hash =
         run (fun () ->
-            let%bind () = commit sequencer in
-            let%bind () = Snark_queue.wait_to_finish sequencer.snark_q in
+            let%bind commit_result = commit !sequencer in
+            let%bind _txn_snark = commit_result in
+            let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
             let%bind () =
-              Executor.wait_to_finish sequencer.merger_ctx.executor
+              Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
             let%bind _cleared = Gql_client.For_tests.clear_pool gql_uri in
             let%map { ledger_hash = committed_ledger_hash; _ } =
@@ -540,11 +576,10 @@ let () =
                     Zeko_circuits.Rollup_state.Outer_state.typ
             in
             [%test_eq: Ledger_hash.t] committed_ledger_hash initial_ledger_hash ;
-            get_root sequencer )
+            get_root !sequencer )
       in
 
-      Gc.full_major () ;
-      run (fun () -> Sequencer.shutdown sequencer) ;
+      let[@warning "-26"] sequencer = free_sequencer sequencer in
 
       print_endline "(* Restart sequencer *)" ;
       let new_sequencer =
