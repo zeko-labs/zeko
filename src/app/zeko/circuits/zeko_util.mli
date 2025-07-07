@@ -160,7 +160,7 @@ module Slot_span : sig
 end
 
 module Slot_range : sig
-  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky]
+  type t = { lower : Slot.t; upper : Slot.t } [@@deriving snarky, equal]
 
   module Checked : sig
     val to_valid_while :
