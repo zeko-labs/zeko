@@ -50,7 +50,8 @@ module Inner_rules_inst =
 module Outer_rules_inst =
   Outer_rules.Make
     (struct
-      let max_valid_while_size = Slot.to_int Slot_range.infinite.upper
+      let max_valid_while_size =
+        Slot.to_int Zeko_constants.commit_max_valid_while
 
       let inner_public_key = Zeko_constants.inner_public_key
 
