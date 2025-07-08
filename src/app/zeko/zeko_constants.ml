@@ -34,6 +34,8 @@ let indexed_merkle_tree_merge_salt = "indexed merkle tree"
 
 let da_layer_check_salt = "zeko da layer check"
 
+let commit_max_valid_while = Mina_numbers.Global_slot_since_genesis.max_value
+
 module Max_excess_actions = struct
   let inner_sync = Int.pow 2 10
 

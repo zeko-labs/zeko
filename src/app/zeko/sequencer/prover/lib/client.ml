@@ -227,7 +227,8 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
                { lower = Slot.zero
                ; upper =
                    Slot.(
-                     sub max_value Mina_numbers.Global_slot_span.one
+                     sub Zeko_constants.commit_max_valid_while
+                       Mina_numbers.Global_slot_span.one
                      |> Option.value_exn)
                }
            else (fst txn_snark).slot_range )
