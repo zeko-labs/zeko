@@ -203,7 +203,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   in
   return command
 
-let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
+let recommit_all ~logger ~genesis_timestamp ~proof_cache_db ~db_pool ~provers
     ~(executor : Executor.t) ~archive ~zkapp_pk ~archive_uri =
   let%bind { ledger_hash; _ } =
     Gql_client.infer_state executor.l1_uri ~zkapp_pk
@@ -221,6 +221,16 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
         [%log info] "Recommitting %s -> %s"
           (Frozen_ledger_hash.to_base58_check source_ledger_hash)
           (Frozen_ledger_hash.to_base58_check target_ledger_hash) ;
+        let () =
+          let l1_global_slot = Utils.l1_global_slot ~genesis_timestamp in
+          let ({ upper; _ } : Slot_range.t) =
+            (fst witness.txn_snark).slot_range
+          in
+          if Zeko_util.Slot.(upper <= l1_global_slot) then
+            failwithf "Failed to recommit, upper slot is in the past: %s"
+              (Zeko_util.Slot.to_string upper)
+              ()
+        in
         let%bind command =
           prove_commit ~logger ~proof_cache_db ~provers ~executor ~archive
             ~zkapp_pk ~archive_uri witness

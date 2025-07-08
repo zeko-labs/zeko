@@ -851,9 +851,9 @@ module Sequencer = struct
       if is_empty t then bootstrap ~logger t da_config else return ()
     in
     let%bind () =
-      Committer.recommit_all ~logger ~proof_cache_db ~provers:t.snark_q.provers
-        ~executor:t.merger_ctx.executor ~archive ~db_pool
-        ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
+      Committer.recommit_all ~logger ~genesis_timestamp ~proof_cache_db
+        ~provers:t.snark_q.provers ~executor:t.merger_ctx.executor ~archive
+        ~db_pool ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
     in
     let%bind () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)

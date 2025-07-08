@@ -447,10 +447,6 @@ let () =
       run (fun () ->
           Relational_db.For_tests.drop_database ~port:5433 "sequencer" ) )
 
-(* disable committing if the slot range is too old *)
-
-(* test if fees are calculated correctly *)
-
 let () =
   print_endline "Started test 'slot range check'" ;
   let postgres_uri =
