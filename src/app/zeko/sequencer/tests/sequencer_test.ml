@@ -5,34 +5,14 @@ open Signature_lib
 open Sequencer_lib
 open Zeko_sequencer
 open Sequencer
-open Zeko_types
+open Test_spec
+open Handle.Operator
 
 let constraint_constants = Zeko_constants.constraint_constants
 
 let start_time = Time.now ()
 
-module Handle = struct
-  type valid
-
-  type invalid
-
-  type ('a, _) t = Valid : 'a -> ('a, valid) t | Invalid : (_, invalid) t
-
-  type 'a valid_t = ('a, valid) t
-
-  let make x = Valid x
-
-  let invalidate (t : ('a, valid) t) : ('a, invalid) t =
-    match t with Valid _ -> Invalid
-
-  let get (t : ('a, valid) t) = match t with Valid x -> x
-
-  module Operator = struct
-    let ( ! ) = get
-  end
-end
-
-open Handle.Operator
+let slot_acceptance = Time.Span.of_min 60.
 
 let logger =
   Cli_lib.Stdout_log.setup false Logger.Level.Debug ;
@@ -53,8 +33,6 @@ let provers =
 
 let l1_network_id = "testnet"
 
-let l1_signature_kind = Utils.signature_kind l1_network_id
-
 let l2_network_id = "testnet"
 
 let l2_signature_kind = Utils.signature_kind l2_network_id
@@ -65,145 +43,6 @@ let free_sequencer (sequencer : Sequencer.t Handle.valid_t) =
   Gc.full_major () ;
   run (fun () -> Sequencer.shutdown !sequencer) ;
   Handle.invalidate sequencer
-
-module Sequencer_test_spec = struct
-  type t =
-    { zkapp_keypair : Keypair.t
-    ; signer : Keypair.t
-    ; ephemeral_ledger : L.t (* The ledger to test the expected outcome *)
-    ; specs : Mina_transaction_logic.For_tests.Transaction_spec.t list
-          (* Transaction specs *)
-    ; sequencer : Sequencer.t Handle.valid_t
-    ; da_key : Even_PC.t
-    ; accounts : Keypair.t list
-    }
-
-  let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir
-      ~postgres_uri () =
-    let zkapp_keypair = Keypair.create () in
-
-    print_endline "(* Create signer *)" ;
-    let rec create_even_signer () =
-      let signer = Keypair.create () in
-      let compressed = Public_key.compress signer.public_key in
-      if compressed.is_odd then create_even_signer () else signer
-    in
-    let signer = create_even_signer () in
-    run (fun () ->
-        let%bind _res =
-          Gql_client.For_tests.create_account gql_uri
-            (Public_key.compress signer.public_key)
-        in
-        return () ) ;
-
-    let%bind.Quickcheck.Generator { init_ledger; specs } =
-      Mina_transaction_logic.For_tests.Test_spec.mk_gen
-        ~num_transactions:number_of_transactions ()
-    in
-    let funded_accounts =
-      Array.init 10 ~f:(fun _ ->
-          (Keypair.create (), Int64.of_float (1000. *. 1e8)) )
-    in
-
-    let initial_inner_account = run Deploy.Z.Inner.initial_account in
-    let genesis_accounts =
-      (Zeko_constants.inner_account_id, initial_inner_account)
-      :: ( Array.concat [ init_ledger; funded_accounts ]
-         |> Array.map ~f:(fun (keypair, balance) ->
-                let pk = Signature_lib.Public_key.compress keypair.public_key in
-                let account_id = Account_id.create pk Token_id.default in
-                let balance = Unsigned.UInt64.of_int64 balance in
-                let account =
-                  Account.create account_id (Currency.Balance.of_uint64 balance)
-                in
-                (account_id, account) )
-         |> Array.to_list )
-    in
-
-    print_endline "(* Init ephemeral ledger *)" ;
-    let ephemeral_ledger =
-      L.create_ephemeral ~depth:constraint_constants.ledger_depth ()
-    in
-    List.iter genesis_accounts ~f:(fun (aid, acc) ->
-        L.create_new_account_exn ephemeral_ledger aid acc ) ;
-    let account_set_hash =
-      let db =
-        Indexed_merkle_tree.Db.create ~depth:constraint_constants.ledger_depth
-          ()
-      in
-      let tids =
-        List.map genesis_accounts ~f:(fun (aid, _) ->
-            Account_id.derive_token_id ~owner:aid )
-      in
-      List.iter tids ~f:(fun tid ->
-          let _, _ = Indexed_merkle_tree.Db.get_or_create_entry_exn db tid in
-          () ) ;
-      Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root db |]
-    in
-
-    print_endline "(* Post genesis batch *)" ;
-    run (fun () ->
-        Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
-          ~ledger:ephemeral_ledger ) ;
-
-    print_endline "(* Get da key *)" ;
-    let da_key =
-      run (fun () ->
-          Da_layer.Client.Rpc.get_node_public_key ~logger
-            ~node_location:(List.hd_exn da_config.nodes)
-            ()
-          >>| Or_error.ok_exn >>| Even_PC.create_exn )
-    in
-
-    print_endline "(* Deploy zkapp *)" ;
-    run (fun () ->
-        let sequencer_pk =
-          Public_key.compress signer.public_key |> Even_PC.create_exn
-        in
-        ( print_endline
-        @@ Public_key.(
-             Compressed.to_base58_check @@ compress zkapp_keypair.public_key) ) ;
-        let%bind nonce =
-          Gql_client.infer_nonce gql_uri (Public_key.compress signer.public_key)
-        in
-        let%bind command =
-          Deploy.deploy_command_exn ~signature_kind:l1_signature_kind ~signer
-            ~zkapp:zkapp_keypair
-            ~fee:(Currency.Fee.of_mina_int_exn 1)
-            ~nonce ~initial_ledger:ephemeral_ledger
-            ~account_creation_fee:constraint_constants.account_creation_fee
-            ~account_set_hash ~pause_key:sequencer_pk ~sequencer:sequencer_pk
-            ~da_key ()
-        in
-        let%bind _ =
-          Gql_client.send_zkapp gql_uri
-            (Zkapp_command.read_all_proofs_from_disk command)
-        in
-        let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
-        return () ) ;
-
-    print_endline "(* Init sequencer *)" ;
-    let sequencer =
-      run (fun () ->
-          Sequencer.create ~logger
-            ~zkapp_pk:
-              Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-            ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:2
-            ~db_dir ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-            ~l1_network_id ~l2_network_id ~deposit_delay_blocks:delay_deposit
-            ~provers ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01 )
-    in
-
-    Quickcheck.Generator.return
-      { zkapp_keypair
-      ; signer
-      ; ephemeral_ledger
-      ; specs
-      ; sequencer = Handle.make sequencer
-      ; da_key
-      ; accounts = Array.map funded_accounts ~f:fst |> Array.to_list
-      }
-end
 
 let () =
   print_endline "Started test 'apply commands and commit'" ;
@@ -218,19 +57,16 @@ let () =
   in
 
   Quickcheck.test ~trials:1
-    (Sequencer_test_spec.gen ~number_of_transactions:5
-       ~postgres_uri:postgres_uri1 () )
+    (Sequencer_spec.gen ~logger ~number_of_transactions:5
+       ~postgres_uri:postgres_uri1 ~gql_uri ~da_config ~l1_network_id
+       ~l2_network_id ~provers ~slot_acceptance () )
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; accounts; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
               User_command.Zkapp_command
-                (Mina_transaction_logic.For_tests.account_update_send
-                   ~chain:l2_signature_kind spec )
-            else
-              Signed_command
-                (Mina_transaction_logic.For_tests.command_send
-                   ~chain:l2_signature_kind spec ) )
+                (account_update_send ~chain:l2_signature_kind spec)
+            else Signed_command (command_send ~chain:l2_signature_kind spec) )
       in
       let zkapp_command_with_real_proof =
         let fee_signer = List.hd_exn accounts in
@@ -373,7 +209,7 @@ let () =
                 ~da_quorum:2 ~db_dir:None ~postgres_uri:postgres_uri2
                 ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer ~l1_network_id
                 ~l2_network_id ~deposit_delay_blocks:0 ~provers ~da_key
-                ~fee_modifier:1.0 ~minimum_fee:0.01
+                ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
             in
             [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
               final_ledger_hash ;
@@ -397,13 +233,12 @@ let () =
         Relational_db.For_tests.create_database ~port:5433 "sequencer" )
   in
 
-  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~postgres_uri ())
+  Quickcheck.test ~trials:1
+    (Sequencer_spec.gen ~logger ~postgres_uri ~gql_uri ~da_config ~l1_network_id
+       ~l2_network_id ~provers ~slot_acceptance () )
     ~f:(fun { specs; sequencer; _ } ->
       let dummy_signature_command : Zkapp_command.t =
-        let command =
-          Mina_transaction_logic.For_tests.account_update_send
-            (List.hd_exn specs)
-        in
+        let command = account_update_send (List.hd_exn specs) in
         { command with
           account_updates =
             Zkapp_command.Call_forest.map command.account_updates
@@ -444,18 +279,16 @@ let () =
     run (fun () ->
         Relational_db.For_tests.create_database ~port:5433 "sequencer" )
   in
-  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ~postgres_uri ())
+  Quickcheck.test ~trials:1
+    (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri ~da_config
+       ~l1_network_id ~l2_network_id ~provers ~slot_acceptance () )
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
               User_command.Zkapp_command
-                (Mina_transaction_logic.For_tests.account_update_send
-                   ~chain:l2_signature_kind spec )
-            else
-              Signed_command
-                (Mina_transaction_logic.For_tests.command_send
-                   ~chain:l2_signature_kind spec ) )
+                (account_update_send ~chain:l2_signature_kind spec)
+            else Signed_command (command_send ~chain:l2_signature_kind spec) )
       in
       run (fun () ->
           Deferred.List.iter commands ~f:(fun command ->
@@ -476,7 +309,7 @@ let () =
               ~da_quorum:3 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
               ~deposit_delay_blocks:0 ~provers ~da_key ~fee_modifier:1.0
-              ~minimum_fee:0.01 )
+              ~minimum_fee:0.01 ~slot_acceptance )
       in
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
@@ -525,18 +358,16 @@ let () =
     run (fun () ->
         Relational_db.For_tests.create_database ~port:5433 "sequencer" )
   in
-  Quickcheck.test ~trials:1 (Sequencer_test_spec.gen ~db_dir ~postgres_uri ())
+  Quickcheck.test ~trials:1
+    (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri ~da_config
+       ~l1_network_id ~l2_network_id ~provers ~slot_acceptance () )
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
               User_command.Zkapp_command
-                (Mina_transaction_logic.For_tests.account_update_send
-                   ~chain:l2_signature_kind spec )
-            else
-              Signed_command
-                (Mina_transaction_logic.For_tests.command_send
-                   ~chain:l2_signature_kind spec ) )
+                (account_update_send ~chain:l2_signature_kind spec)
+            else Signed_command (command_send ~chain:l2_signature_kind spec) )
       in
       let batch1, batch2 = List.split_n commands 3 in
       let initial_ledger_hash = get_root !sequencer in
@@ -594,7 +425,7 @@ let () =
               ~da_quorum:2 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
               ~deposit_delay_blocks:0 ~provers ~da_key ~fee_modifier:1.0
-              ~minimum_fee:0.01 )
+              ~minimum_fee:0.01 ~slot_acceptance )
       in
 
       print_endline "(* Check that after restart it recommited *)" ;
@@ -611,6 +442,166 @@ let () =
 
       Gc.full_major () ;
       run (fun () -> Sequencer.shutdown new_sequencer) ;
+
+      print_endline "(* Drop database *)" ;
+      run (fun () ->
+          Relational_db.For_tests.drop_database ~port:5433 "sequencer" ) )
+
+(* disable committing if the slot range is too old *)
+
+(* test if fees are calculated correctly *)
+
+let () =
+  print_endline "Started test 'slot range check'" ;
+  let postgres_uri =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer" )
+  in
+  let genesis_timestamp =
+    run (fun () -> Gql_client.fetch_genesis_timestamp gql_uri)
+  in
+  Quickcheck.test ~trials:1
+    (Sequencer_spec.gen ~logger ~number_of_transactions:5 ~postgres_uri ~gql_uri
+       ~da_config ~l1_network_id ~l2_network_id ~provers
+       ~slot_acceptance:(Time.Span.of_min 10.) () )
+    ~f:(fun { specs; sequencer; signer; zkapp_keypair; _ } ->
+      run (fun () ->
+          let open Mina_numbers in
+          let spec, specs = (List.hd_exn specs, List.tl_exn specs) in
+          let current_slot : Global_slot_since_genesis.t =
+            Utils.l1_global_slot ~genesis_timestamp
+          in
+          let command =
+            User_command.Signed_command
+              (command_send
+                 ~valid_until:
+                   Global_slot_since_genesis.(
+                     add current_slot (Global_slot_span.of_int 1))
+                 ~chain:l2_signature_kind spec )
+          in
+          let%bind result = apply_user_command !sequencer command in
+          [%test_eq: unit Or_error.t] result
+            (Error
+               (Error.of_string
+                  "Upper slot has too small margin to be committed" ) ) ;
+          let command =
+            User_command.Signed_command
+              (command_send
+                 ~valid_until:
+                   Global_slot_since_genesis.(
+                     add current_slot (Global_slot_span.of_int 5))
+                 ~chain:l2_signature_kind spec )
+          in
+          let%bind result = apply_user_command !sequencer command in
+          [%test_eq: unit Or_error.t] result (Ok ()) ;
+
+          let spec, specs = (List.hd_exn specs, List.tl_exn specs) in
+          let current_slot : Global_slot_since_genesis.t =
+            Utils.l1_global_slot ~genesis_timestamp
+          in
+          let command =
+            User_command.Zkapp_command
+              (account_update_send
+                 ~global_slot_precondition:
+                   ( Check
+                       { lower = current_slot
+                       ; upper =
+                           Global_slot_since_genesis.(
+                             add current_slot (Global_slot_span.of_int 1))
+                       }
+                   , Check
+                       { lower =
+                           Global_slot_since_genesis.(
+                             add current_slot (Global_slot_span.of_int 2))
+                       ; upper =
+                           Global_slot_since_genesis.(
+                             add current_slot (Global_slot_span.of_int 3))
+                       } )
+                 ~chain:l2_signature_kind spec )
+          in
+          let%bind result = apply_user_command !sequencer command in
+          [%test_eq: unit Or_error.t] result
+            (Error (Error.of_string "Conflicting slot ranges")) ;
+
+          let spec, specs = (List.hd_exn specs, List.tl_exn specs) in
+          let current_slot : Global_slot_since_genesis.t =
+            Utils.l1_global_slot ~genesis_timestamp
+          in
+          let command =
+            User_command.Zkapp_command
+              (account_update_send
+                 ~valid_while:
+                   ( Check
+                       { lower =
+                           Global_slot_since_genesis.(
+                             add current_slot (Global_slot_span.of_int 1))
+                       ; upper =
+                           Global_slot_since_genesis.(
+                             add current_slot (Global_slot_span.of_int 10))
+                       }
+                   , Ignore )
+                 ~chain:l2_signature_kind spec )
+          in
+          let%bind result = apply_user_command !sequencer command in
+          [%test_eq: unit Or_error.t] result
+            (Error (Error.of_string "Lower slot is in the future")) ;
+
+          let spec, _specs = (List.hd_exn specs, List.tl_exn specs) in
+          let current_slot : Global_slot_since_genesis.t =
+            Utils.l1_global_slot ~genesis_timestamp
+          in
+          let command =
+            User_command.Zkapp_command
+              (account_update_send
+                 ~valid_until:
+                   (Some
+                      Global_slot_since_genesis.(
+                        add current_slot (Global_slot_span.of_int 10)) )
+                 ~valid_while:
+                   ( Check
+                       { lower = current_slot
+                       ; upper =
+                           Global_slot_since_genesis.(
+                             add current_slot (Global_slot_span.of_int 15))
+                       }
+                   , Ignore )
+                 ~global_slot_precondition:
+                   ( Ignore
+                   , Check
+                       { lower =
+                           Global_slot_since_genesis.(
+                             sub current_slot (Global_slot_span.of_int 15)
+                             |> Option.value_exn)
+                       ; upper =
+                           Global_slot_since_genesis.(
+                             add current_slot (Global_slot_span.of_int 20))
+                       } )
+                 ~chain:l2_signature_kind spec )
+          in
+          let%bind result = apply_user_command !sequencer command in
+          [%test_eq: unit Or_error.t] result (Ok ()) ;
+
+          return () ) ;
+
+      run (fun () ->
+          let%bind commit_result = commit !sequencer in
+          let%bind _txn_snark = commit_result in
+          let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+          let%bind () =
+            Executor.wait_to_finish !sequencer.merger_ctx.executor
+          in
+          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%map { ledger_hash = committed_ledger_hash; _ } =
+            Gql_client.infer_state gql_uri
+              ~signer_pk:(Public_key.compress signer.public_key)
+              ~zkapp_pk:(Public_key.compress zkapp_keypair.public_key)
+            >>| Utils.value_of_zkapp_state
+                  Zeko_circuits.Rollup_state.Outer_state.typ
+          in
+          let target_ledger_hash = get_root !sequencer in
+          [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
+
+      let[@warning "-26"] sequencer = free_sequencer sequencer in
 
       print_endline "(* Drop database *)" ;
       run (fun () ->

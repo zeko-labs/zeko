@@ -3,6 +3,7 @@ open Mina_base
 open Signature_lib
 open Snark_params.Tick
 open Async
+open Zeko_circuits.Zeko_util
 
 let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
   let rec go attempt =
@@ -180,3 +181,41 @@ let fee_per_weight_unit ~minimum_fee ~fee_modifier ~jobs_in_queue =
   *. exp (jobs_in_queue *. 0.1 *. fee_modifier)
   (* convert to nanomina *)
   *. 10e8
+
+let slot_range_intersection (a : Slot_range.t option) (b : Slot_range.t option)
+    =
+  let%bind.Option a = a in
+  let%bind.Option b = b in
+  let lower = Slot.max a.lower b.lower in
+  let upper = Slot.min a.upper b.upper in
+  if Slot.(lower <= upper) then Some ({ lower; upper } : Slot_range.t) else None
+
+let command_slot_range (command : User_command.t) : Slot_range.t option =
+  let precondition_to_range :
+      Slot.t Zkapp_precondition.Numeric.t -> Slot_range.t = function
+    | Ignore ->
+        Slot_range.infinite
+    | Check range ->
+        { lower = range.lower; upper = range.upper }
+  in
+  match command with
+  | Signed_command command ->
+      Some { lower = Slot.zero; upper = Signed_command.valid_until command }
+  | Zkapp_command command ->
+      Zkapp_command.all_account_updates_list command
+      |> List.fold ~init:(Some Slot_range.infinite) ~f:(fun acc au ->
+             let valid_while =
+               precondition_to_range
+                 (Account_update.valid_while_precondition au)
+             in
+             let global_slot =
+               precondition_to_range
+                 (Account_update.protocol_state_precondition au)
+                   .global_slot_since_genesis
+             in
+             slot_range_intersection (Some valid_while) (Some global_slot)
+             |> slot_range_intersection acc )
+
+let l1_global_slot ~genesis_timestamp =
+  (Time.abs_diff (Time.now ()) genesis_timestamp |> Time.Span.to_sec) /. 180.
+  |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int

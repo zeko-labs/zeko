@@ -3,6 +3,7 @@ open Async
 open Async_kernel
 open Mina_base
 open Mina_ledger
+open Mina_numbers
 open Signature_lib
 open Zeko_types
 module C = Zeko_circuits
@@ -26,6 +27,8 @@ module Sequencer = struct
       ; da_key : Even_PC.t
       ; fee_modifier : float
       ; minimum_fee : float
+      ; genesis_timestamp : Time.t
+      ; slot_acceptance : Time.Span.t
       }
   end
 
@@ -315,8 +318,35 @@ module Sequencer = struct
               else return (Ok ())
           in
 
-          (* the protocol state from sequencer has dummy values which wouldn't pass the txn snark *)
-          let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+          let l1_global_slot =
+            Utils.l1_global_slot ~genesis_timestamp:t.config.genesis_timestamp
+          in
+          let acceptable_future_slot =
+            Global_slot_since_genesis.add l1_global_slot
+              ( (Float.to_int @@ Time.Span.to_min t.config.slot_acceptance) / 3
+              |> Global_slot_span.of_int )
+          in
+          let%bind.Deferred.Result () =
+            if skip_validity_check then return (Ok ())
+            else
+              match Utils.command_slot_range command with
+              | None ->
+                  return (Error (Error.of_string "Conflicting slot ranges"))
+              | Some { lower; upper } ->
+                  if Global_slot_since_genesis.(lower > l1_global_slot) then
+                    return
+                      (Error (Error.of_string "Lower slot is in the future"))
+                  else if
+                    Global_slot_since_genesis.(upper < acceptable_future_slot)
+                  then
+                    return
+                      (Error
+                         (Error.of_string
+                            "Upper slot has too small margin to be committed" )
+                      )
+                  else return (Ok ())
+          in
+
           let l = L.of_database t.ledger in
 
           let%bind.Deferred.Result () =
@@ -357,7 +387,8 @@ module Sequencer = struct
               (Zeko_transaction_logic.apply_user_command_unchecked
                  ~signature_kind:t.config.network_id ~sequencer_pk
                  ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
-                 ~constraint_constants ~global_slot l t.imt command )
+                 ~constraint_constants ~global_slot:l1_global_slot l t.imt
+                 command )
           in
 
           let%bind.Deferred.Result () =
@@ -423,7 +454,9 @@ module Sequencer = struct
       let receiver_pk =
         Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
       in
-      let global_slot = Mina_numbers.Global_slot_since_genesis.zero in
+      let l1_global_slot =
+        Utils.l1_global_slot ~genesis_timestamp:t.config.genesis_timestamp
+      in
       let ledger = L.of_database t.ledger in
 
       let receiver_location =
@@ -437,7 +470,7 @@ module Sequencer = struct
       else
         match
           Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk ~fee
-            ~constraint_constants ~global_slot ledger t.imt
+            ~constraint_constants ~global_slot:l1_global_slot ledger t.imt
         with
         | Error e ->
             return (`Error e)
@@ -733,7 +766,7 @@ module Sequencer = struct
   let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
       ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
       ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key
-      ~fee_modifier ~minimum_fee =
+      ~fee_modifier ~minimum_fee ~slot_acceptance =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let ledger =
@@ -748,6 +781,7 @@ module Sequencer = struct
           (Option.map db_dir ~f:(fun db_dir -> Filename.concat db_dir "imt"))
         ~depth:constraint_constants.ledger_depth ()
     in
+    let%bind genesis_timestamp = Gql_client.fetch_genesis_timestamp l1_uri in
     let config =
       Config.
         { max_pool_size
@@ -762,6 +796,8 @@ module Sequencer = struct
         ; da_key
         ; fee_modifier
         ; minimum_fee
+        ; genesis_timestamp
+        ; slot_acceptance
         }
     in
     let%bind db_pool = Db.create_and_migrate ~postgres_uri ~logger in
