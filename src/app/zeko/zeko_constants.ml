@@ -35,9 +35,9 @@ let indexed_merkle_tree_merge_salt = "indexed merkle tree"
 let da_layer_check_salt = "zeko da layer check"
 
 module Max_excess_actions = struct
-  let inner_sync = Int.pow 2 10
+  let inner_sync = Int.pow 2 2
 
-  let commit_inner = Int.pow 2 10
+  let commit_inner = Int.pow 2 2
 
-  let commit_outer = Int.pow 2 10
+  let commit_outer = Int.pow 2 2
 end

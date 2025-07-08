@@ -116,7 +116,7 @@ struct
           ; old_inner_acc_path
           ; new_inner_acc
           ; new_inner_acc_path
-          ; da_signature
+          ; da_signature = _
           ; da_key
           ; slot_range
           } :
@@ -156,32 +156,29 @@ struct
     in
 
     (* DA check, simply see if public key in question has signed our ledger. *)
-    let* () =
-      with_label __LOC__
-      @@ fun () ->
-      (* TODO: Is this correct? *)
-      let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
-      let* da_key_uncompressed =
-        Even_PC.to_pc_var da_key |> Signature_lib.Public_key.decompress_var
-      in
-      let input =
-        let open Random_oracle.Input.Chunked in
-        append
-          (Ledger_hash.var_to_field target_ledger |> field)
-          (Account_set.to_input_var target_acc_set)
-      in
-      let* payload =
-        make_checked (fun () ->
-            Random_oracle.Checked.hash
-              ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
-              (Random_oracle.Checked.pack_input input) )
-      in
-      Signature_lib.Schnorr.Chunked.Checked.assert_verifies
-        ~signature_kind:chain_l1
-        (module Shifted)
-        da_signature da_key_uncompressed
-        (Random_oracle.Input.Chunked.field payload)
-    in
+    (* let* () =
+         (* TODO: Is this correct? *)
+         let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
+         let* da_key_uncompressed =
+           Even_PC.to_pc_var da_key |> Signature_lib.Public_key.decompress_var
+         in
+         let input =
+           let open Random_oracle.Input.Chunked in
+           append
+             (Ledger_hash.var_to_field target_ledger |> field)
+             (Account_set.to_input_var target_acc_set)
+         in
+         let* payload =
+           make_checked (fun () ->
+               Random_oracle.Checked.hash
+                 ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+                 (Random_oracle.Checked.pack_input input) )
+         in
+         Signature_lib.Schnorr.Chunked.Checked.assert_verifies
+           (module Shifted)
+           da_signature da_key_uncompressed
+           (Random_oracle.Input.Chunked.field payload)
+       in *)
 
     (* Sequencer must take fees. A non-zero magnitude would
        either mean printing or burning L2 MINA. *)
