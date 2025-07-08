@@ -126,6 +126,24 @@ module Types = struct
                   Some timing_info.vesting_increment )
         ] )
 
+  let genesis_constants =
+    obj "GenesisConstants" ~fields:(fun _ ->
+        [ field "accountCreationFee" ~typ:(non_null fee)
+            ~doc:"The fee charged to create a new account"
+            ~args:Arg.[]
+            ~resolve:(fun _ () ->
+              State.Constants.constraint_constants.account_creation_fee )
+        ; field "coinbase" ~typ:(non_null amount) ~doc:"Dummy value for Zeko"
+            ~args:Arg.[]
+            ~resolve:(fun _ () -> Currency.Amount.zero)
+        ; field "genesisTimestamp" ~typ:(non_null string)
+            ~doc:"Dummy value for Zeko"
+            ~args:Arg.[]
+            ~resolve:(fun _ () ->
+              State.Constants.genesis_timestamp |> Genesis_constants.of_time
+              |> Genesis_constants.genesis_timestamp_to_string )
+        ] )
+
   module AccountObj = struct
     module AnnotatedBalance = struct
       type t =
@@ -1899,6 +1917,15 @@ module Queries = struct
         | _ ->
             return (Error "Supported only maxLength of 1") )
 
+  let genesis_constants =
+    field "genesisConstants"
+      ~doc:
+        "The constants used to determine the configuration of the genesis \
+         block and all of its transitive dependencies"
+      ~args:Arg.[]
+      ~typ:(non_null Types.genesis_constants)
+      ~resolve:(fun _ () -> ())
+
   module Archive = struct
     let actions =
       io_field "actions"
@@ -1944,6 +1971,7 @@ module Queries = struct
     ; pooled_user_commands
     ; pooled_zkapp_commands
     ; best_chain
+    ; genesis_constants
     ]
     @ Archive.commands
 end

@@ -27,6 +27,10 @@ module Constants = struct
       ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
       ~constraint_constants ~consensus_constants
       ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+
+  let genesis_timestamp =
+    Genesis_constants.genesis_timestamp_of_string
+      "2024-04-09T13:00:00.000000-08:00"
 end
 
 type t =
@@ -48,17 +52,31 @@ let commands t = t.commands
 
 let pooled_commands t = Indexed_pool.transactions ~logger:t.logger t.pool
 
+let state_view ~global_slot : Zkapp_precondition.Protocol_state.View.t =
+  let s =
+    Mina_state.Protocol_state.Body.view Constants.compile_time_genesis.data.body
+  in
+  { snarked_ledger_hash = s.snarked_ledger_hash
+  ; blockchain_length = s.blockchain_length
+  ; min_window_density = s.min_window_density
+  ; total_currency = s.total_currency
+  ; global_slot_since_genesis = global_slot
+  ; staking_epoch_data = s.staking_epoch_data
+  ; next_epoch_data = s.next_epoch_data
+  }
+
 let apply_command t ~command =
   let logger = t.logger in
   let l = Ledger.of_database t.db in
+  let global_slot =
+    (Time.abs_diff (Time.now ()) Constants.genesis_timestamp |> Time.Span.to_sec)
+    /. 180.
+    |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int
+  in
   let%bind.Result partialy_applied_txn =
     Ledger.apply_transaction_first_pass
-      ~constraint_constants:Constants.constraint_constants
-      ~global_slot:Mina_numbers.Global_slot_since_genesis.zero
-      ~txn_state_view:
-        (Mina_state.Protocol_state.Body.view
-           Constants.compile_time_genesis.data.body )
-      l (Command command)
+      ~constraint_constants:Constants.constraint_constants ~global_slot
+      ~txn_state_view:(state_view ~global_slot) l (Command command)
   in
   let%bind.Result txn_applied =
     Ledger.apply_transaction_second_pass l partialy_applied_txn

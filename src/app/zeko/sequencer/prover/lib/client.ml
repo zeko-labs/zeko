@@ -220,7 +220,17 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
        ; new_inner_acc_path
        ; da_signature
        ; da_key
-       ; slot_range = Slot_range.infinite
+       ; slot_range =
+           ( if Slot_range.equal (fst txn_snark).slot_range Slot_range.infinite
+           then
+             Zeko_util.
+               { lower = Slot.zero
+               ; upper =
+                   Slot.(
+                     sub max_value Mina_numbers.Global_slot_span.one
+                     |> Option.value_exn)
+               }
+           else (fst txn_snark).slot_range )
        } )
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
