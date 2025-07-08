@@ -123,10 +123,15 @@ let perform ~(zeko_env : zeko_env) ~global_slot (type r)
       Zkapp_precondition.Valid_while.check valid_while global_slot
       |> Or_error.is_ok
   | Check_protocol_state_precondition
-      ((_predicate : Zkapp_precondition.Protocol_state.t), _global_state) ->
-      (* FIXME: Zkapp_precondition.Protocol_state.(equal predicate accept) *)
-      (* Allow for global slot precondition, as it's the fee payer's valid while *)
-      true
+      ( ({ global_slot_since_genesis; _ } as protocol_state_predicate :
+          Zkapp_precondition.Protocol_state.t )
+      , _global_state ) ->
+      Zkapp_precondition.Protocol_state.(
+        equal protocol_state_predicate { accept with global_slot_since_genesis })
+      && Zkapp_precondition.Numeric.(
+           check ~label:"global_slot_since_genesis" Tc.global_slot)
+           global_slot_since_genesis global_slot
+         |> Or_error.is_ok
   | Check_account_precondition
       (account_update, account, new_account, local_state) ->
       let local_state = ref local_state in
