@@ -24,7 +24,7 @@ let () = assert (not da_key.is_odd)
 
 let ase_with_length, ase_with_length_proof =
   let open struct
-    let trans0, proof0 =
+    let trans0, (), proof0 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.With_length.leaf
@@ -33,12 +33,12 @@ let ase_with_length, ase_with_length_proof =
           ; length = Unsigned.UInt32.of_string "42"
           } )
 
-    let trans1, proof1 =
+    let trans1, (), proof1 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.With_length.leaf_option ([ Field.of_string "2" ], trans0.target)
 
-    let trans2, proof2 =
+    let trans2, (), proof2 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.With_length.merge
@@ -48,12 +48,12 @@ let ase_with_length, ase_with_length_proof =
         ; right_proof = proof1
         }
 
-    let trans3, proof3 =
+    let trans3, (), proof3 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.With_length.extend ([ Field.of_string "99" ], (trans2, proof2))
 
-    let trans4, proof4 =
+    let trans4, (), proof4 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.With_length.extend_option ([ Field.of_string "99" ], (trans3, proof3))
@@ -62,16 +62,16 @@ let ase_with_length, ase_with_length_proof =
 
 let _ase_without_length =
   let open struct
-    let trans0, proof0 =
+    let trans0, (), proof0 =
       Promise.block_on_async_exn
       @@ fun () -> Ase.Without_length.leaf ([ Field.one ], Field.of_string "6")
 
-    let trans1, proof1 =
+    let trans1, (), proof1 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.Without_length.leaf_option ([ Field.of_string "2" ], trans0.target)
 
-    let trans2, proof2 =
+    let trans2, (), proof2 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.Without_length.merge
@@ -81,12 +81,12 @@ let _ase_without_length =
         ; right_proof = proof1
         }
 
-    let trans3, proof3 =
+    let trans3, (), proof3 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.Without_length.extend ([ Field.of_string "99" ], (trans2, proof2))
 
-    let trans4, proof4 =
+    let trans4, (), proof4 =
       Promise.block_on_async_exn
       @@ fun () ->
       Ase.Without_length.extend_option
@@ -129,7 +129,7 @@ let _inner_stmt, _inner_proof =
       ; ase = ase_with_length
       }
 
-    let _stmt, _proof =
+    let _stmt, (), _proof =
       Promise.block_on_async_exn @@ fun () -> sync sync_witness
 
     let action_witness : Rule_inner_action_witness.Witness.t =
@@ -138,7 +138,7 @@ let _inner_stmt, _inner_proof =
       ; witness = { aux = Field.zero; children = [] }
       }
 
-    let stmt, proof =
+    let stmt, (), proof =
       Promise.block_on_async_exn @@ fun () -> action action_witness
   end in
   (stmt, proof)
@@ -187,7 +187,7 @@ let _txn_stmt, _txn_proof =
           }
       }
 
-    let _stmt, _proof =
+    let _stmt, (), _proof =
       Promise.block_on_async_exn @@ fun () -> action action_witness
 
     let Compile_simple.[ prove_both ] = Rule_commit.Verify_both_ases.provers
@@ -206,7 +206,7 @@ let _txn_stmt, _txn_proof =
       Rule_commit.Ase_inner_inst.make ~proof_source:default
         ~proof_target:default default []
 
-    let verify_both_ases_stmt, verify_both_ases_proof =
+    let verify_both_ases_stmt, (), verify_both_ases_proof =
       Promise.block_on_async_exn @@ fun () -> prove_both (ase_outer, ase_inner)
 
     let verify_both_ases =
@@ -600,7 +600,7 @@ let _txn_stmt, _txn_proof =
           }
       }
 
-    let stmt0, proof0 =
+    let stmt0, _target_ledger, proof0 =
       Promise.block_on_async_exn @@ fun () -> zkapp_double zkapp_double_witness
 
     let receipt_chain_hash =
@@ -712,7 +712,7 @@ let _txn_stmt, _txn_proof =
           }
       }
 
-    let stmt1, proof1 =
+    let stmt1, _target_ledger, proof1 =
       Promise.block_on_async_exn
       @@ fun () -> zkapp_double zkapp_second_double_witness
 
@@ -725,7 +725,7 @@ let _txn_stmt, _txn_proof =
     let fee_payer_acc =
       { fee_payer_acc with nonce = Unsigned.UInt32.one; receipt_chain_hash }
 
-    let stmt, proof =
+    let stmt, _target_ledger, proof =
       Promise.block_on_async_exn
       @@ fun () ->
       merge
@@ -819,6 +819,6 @@ let _txn_stmt, _txn_proof =
       ; verify_both_ases
       }
 
-    let stmt, proof = Promise.block_on_async_exn @@ fun () -> commit witness
+    let stmt, (), proof = Promise.block_on_async_exn @@ fun () -> commit witness
   end in
   (stmt, proof)

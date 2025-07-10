@@ -231,7 +231,10 @@ struct
             ]
         in
         Compile_simple.
-          { prevs = Two_prevs (verify_commit_ase, verify_withdrawal_ase); out } )
+          { prevs = Two_prevs (verify_commit_ase, verify_withdrawal_ase)
+          ; out
+          ; auxiliary_output = ()
+          } )
 
   let rule : _ Compile_simple.branch =
     { branch_name = "finalize withdrawal"

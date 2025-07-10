@@ -88,8 +88,8 @@ type 'branches count_branches_result =
       -> 'branches count_branches_result
 
 let rec count_branches :
-    type out_var branches n_available_branches.
-       (out_var, branches, n_available_branches) Branches.t
+    type out_var branches n_available_branches aux_var.
+       (out_var, branches, n_available_branches, aux_var) Branches.t
     -> branches count_branches_result = function
   | [] ->
       Count_branches_result Z
@@ -112,7 +112,7 @@ let rec branches_length_to_module :
       end )
 
 let input_for_main (type input)
-    (_main : input V.t -> ('out_var, 'prevs) main_return Checked.t) :
+    (_main : input V.t -> ('out_var, 'prevs, 'aux_var) main_return Checked.t) :
     input V.t Checked.t
     * (   input
        -> Snarky_backendless.Request.request
@@ -136,19 +136,23 @@ let input_for_main (type input)
   (exists_input, handler)
 
 let transform_main_one
-    ({ out; prevs = One_prev { public_input; proof; proof_must_verify } } :
+    ({ out
+     ; prevs = One_prev { public_input; proof; proof_must_verify }
+     ; auxiliary_output
+     } :
       _ main_return ) =
   let*| proof = V.as_prover_value proof in
   Pickles.Inductive_rule.
     { previous_proof_statements = [ { public_input; proof; proof_must_verify } ]
     ; public_output = out
-    ; auxiliary_output = ()
+    ; auxiliary_output
     }
 
 let transform_main_one_sideloaded ~sideloaded
     ({ out
      ; prevs =
          One_prev_sideloaded { public_input; proof; proof_must_verify; vk }
+     ; auxiliary_output
      } :
       _ main_return ) =
   let* proof = V.as_prover_value proof in
@@ -158,7 +162,7 @@ let transform_main_one_sideloaded ~sideloaded
   Pickles.Inductive_rule.
     { previous_proof_statements = [ { public_input; proof; proof_must_verify } ]
     ; public_output = out
-    ; auxiliary_output = ()
+    ; auxiliary_output
     }
 
 let transform_main_two
@@ -173,6 +177,7 @@ let transform_main_two
              ; proof = right_proof
              ; proof_must_verify = right_proof_must_verify
              } )
+     ; auxiliary_output
      } :
       _ main_return ) =
   let* left_proof = V.as_prover_value left_proof in
@@ -189,7 +194,7 @@ let transform_main_two
           }
         ]
     ; public_output = out
-    ; auxiliary_output = ()
+    ; auxiliary_output
     }
 
 let transform_main_two_one_sideloaded ~sideloaded
@@ -205,6 +210,7 @@ let transform_main_two_one_sideloaded ~sideloaded
              ; proof = right_proof
              ; proof_must_verify = right_proof_must_verify
              } )
+     ; auxiliary_output
      } :
       _ main_return ) =
   let* left_proof = V.as_prover_value left_proof in
@@ -224,10 +230,16 @@ let transform_main_two_one_sideloaded ~sideloaded
           }
         ]
     ; public_output = out
-    ; auxiliary_output = ()
+    ; auxiliary_output
     }
 
-type ('out_var, 'out_t, 'branches, 'tag_branches) branches_to_choices_return =
+type ( 'out_var
+     , 'out_t
+     , 'branches
+     , 'tag_branches
+     , 'aux_var
+     , 'aux_t )
+     branches_to_choices_return =
   | Choices :
       { branches_length : ('branches, 'n_branches) branches_length
       ; rules :
@@ -241,8 +253,8 @@ type ('out_var, 'out_t, 'branches, 'tag_branches) branches_to_choices_return =
              , unit
              , 'out_var
              , 'out_t
-             , unit
-             , unit )
+             , 'aux_var
+             , 'aux_t )
              Pickles_types.Hlist.H4_6_with_length.T
                (Pickles.Inductive_rule.Promise)
              .t
@@ -251,11 +263,17 @@ type ('out_var, 'out_t, 'branches, 'tag_branches) branches_to_choices_return =
              , 'widthss
              , 'heightss
              , unit
-             , ('out_t * unit * self_width Pickles.Proof.t) Promise.t )
+             , ('out_t * 'aux_t * self_width Pickles.Proof.t) Promise.t )
              Pickles.Provers.t
-          -> ('out_t, 'branches) provers
+          -> ('out_t, 'aux_t, 'branches) provers
       }
-      -> ('out_var, 'out_t, 'branches, 'tag_branches) branches_to_choices_return
+      -> ( 'out_var
+         , 'out_t
+         , 'branches
+         , 'tag_branches
+         , 'aux_var
+         , 'aux_t )
+         branches_to_choices_return
 
 let transform_prover :
        ?pre_prove:('input -> unit)
@@ -265,31 +283,37 @@ let transform_prover :
              (   Snarky_backendless.Request.request
               -> Snarky_backendless.Request.response )
         -> unit
-        -> ('out_t * unit * _ Pickles.Proof.t) Promise.t )
+        -> ('out_t * 'aux_t * _ Pickles.Proof.t) Promise.t )
     -> (   'input
         -> Snarky_backendless.Request.request
         -> Snarky_backendless.Request.response )
     -> 'input
-    -> ('out_t * Pickles.Side_loaded.Proof.t) Promise.t =
+    -> ('out_t * 'aux_t * Pickles.Side_loaded.Proof.t) Promise.t =
  fun ?pre_prove ~branch_name ~name prover handler input ->
   let@ () =
     time_promise @@ "(compile_simple) proved " ^ name ^ "." ^ branch_name
   in
   (match pre_prove with Some f -> f input | None -> ()) ;
-  let@ stmt, (), proof =
+  let@ stmt, aux, proof =
     prover ~handler:(handler input) () |> Promise.( >>| )
   in
-  (stmt, Pickles.Side_loaded.Proof.of_proof proof)
+  (stmt, aux, Pickles.Side_loaded.Proof.of_proof proof)
 
 (* used to figure out what flags are used *)
 let bad_fixme_feature_flags = ref None
 
 (* TODO: collapse pattern match, maybe with newer ocaml version *)
 let rec branches_to_choices :
-    type out_var out_t branches available_branches tag_branches.
+    type out_var out_t branches available_branches tag_branches aux_var aux_t.
        name:string
-    -> (out_var, branches, available_branches) Branches.t
-    -> (out_var, out_t, branches, tag_branches) branches_to_choices_return =
+    -> (out_var, branches, available_branches, aux_var) Branches.t
+    -> ( out_var
+       , out_t
+       , branches
+       , tag_branches
+       , aux_var
+       , aux_t )
+       branches_to_choices_return =
  fun ~name -> function
   | [] ->
       let open
@@ -342,14 +366,17 @@ let rec branches_to_choices :
                             (fun _ ->
                               Run.run_checked
                                 (let* i = input in
-                                 let*| ({ out; prevs = No_prevs } :
+                                 let*| ({ out
+                                        ; prevs = No_prevs
+                                        ; auxiliary_output
+                                        } :
                                          _ main_return ) =
                                    main i
                                  in
                                  Pickles.Inductive_rule.
                                    { previous_proof_statements = []
                                    ; public_output = out
-                                   ; auxiliary_output = ()
+                                   ; auxiliary_output
                                    } )
                               |> Promise.return )
                         ; prevs = []
@@ -637,7 +664,7 @@ let rec branches_to_choices :
                                 ; proof = right_proof
                                 ; proof_must_verify = right_proof_must_verify
                                 ; vk = right_vk
-                                } ) ) =
+                                } ) ) auxiliary_output =
                           let* () =
                             make_checked (fun () ->
                                 Pickles.Side_loaded.in_circuit left_sideloaded
@@ -659,11 +686,13 @@ let rec branches_to_choices :
                                   }
                                 ]
                             ; public_output = out
-                            ; auxiliary_output = ()
+                            ; auxiliary_output
                             }
                         in
-                        let* { out; prevs } = input >>= main in
-                        f out prevs
+                        let* { out; prevs; auxiliary_output } =
+                          input >>= main
+                        in
+                        f out prevs auxiliary_output
                       in
                       let rule : _ Pickles.Inductive_rule.Promise.t =
                         { identifier = branch_name
@@ -688,16 +717,21 @@ let get_first_backtrace_entry b =
       | Some { filename; line_number; _ } ->
           filename ^ ":" ^ Int.to_string line_number )
 
-let compile (type out_t out_var first_input branches n_available_branches)
+let compile
+    (type out_t out_var first_input branches n_available_branches aux_var aux_t)
     ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
     ~(branches :
        ( out_var
        , (first_input, branches) cons_branch
-       , n_available_branches )
-       Branches.t ) ~(out_typ : (out_var, out_t) Typ.t) () :
+       , n_available_branches
+       , aux_var )
+       Branches.t ) ~(out_typ : (out_var, out_t) Typ.t)
+    ~(auxiliary_typ : (aux_var, aux_t) Typ.t) () :
     (module Result
        with type out_t = out_t
         and type out_var = out_var
+        and type aux_t = aux_t
+        and type aux_var = aux_var
         and type branches = (first_input, branches) cons_branch ) =
   printf "compile_simple.real: %s at %s\n%!" name
     (P.get_callstack 9999 |> get_first_backtrace_entry) ;
@@ -732,8 +766,8 @@ let compile (type out_t out_var first_input branches n_available_branches)
              , unit
              , out_var
              , out_t
-             , unit
-             , unit )
+             , aux_var
+             , aux_t )
              Pickles_types.Hlist.H4_6_with_length.T
                (Pickles.Inductive_rule.Promise)
              .t =
@@ -764,7 +798,7 @@ let compile (type out_t out_var first_input branches n_available_branches)
           , _proof_module
           , provers ) =
         Pickles.compile_promise () ?override_wrap_domain ~cache:Cache_dir.cache
-          ~public_input:(Output out_typ) ~auxiliary_typ:Typ.unit ~choices
+          ~public_input:(Output out_typ) ~auxiliary_typ ~choices
           ~max_proofs_verified:(module Pickles_types.Nat.N2)
           ~name:("compile_simple of " ^ name)
       in
@@ -778,11 +812,17 @@ let compile (type out_t out_var first_input branches n_available_branches)
           (module Result
              with type out_t = out_t
               and type out_var = out_var
+              and type aux_t = aux_t
+              and type aux_var = aux_var
               and type branches = (first_input, branches) cons_branch ) =
         ( module struct
           type nonrec out_t = out_t
 
           type nonrec out_var = out_var
+
+          type nonrec aux_t = aux_t
+
+          type nonrec aux_var = aux_var
 
           type nonrec branches = (first_input, branches) cons_branch
 

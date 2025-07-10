@@ -81,9 +81,12 @@ let main input =
          dummy_state_body )
       transaction
   in
-  let*| target_acc_set =
+  let* target_acc_set =
     update_acc_set accounts source_acc_set
       ~witness:As_prover.(V.get witness >>| fun x -> x.update_acc_set_witness)
+  in
+  let*| auxiliary_output =
+    make_checked @@ fun () -> Prover_value.create (fun () -> None)
   in
   let out : Zeko_stmt.var =
     { source_ledger
@@ -98,4 +101,4 @@ let main input =
     ; target_local_state = Local_state.dummy
     }
   in
-  Compile_simple.{ prevs = No_prevs; out }
+  Compile_simple.{ prevs = No_prevs; out; auxiliary_output }

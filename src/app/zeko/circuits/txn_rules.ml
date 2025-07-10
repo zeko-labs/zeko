@@ -1,6 +1,7 @@
 include
   ( val Compile_simple.compile ~name:"zeko-transaction-snark"
           ~out_typ:Txn_state.Zeko_stmt.typ
+          ~auxiliary_typ:(Mina_base.Prover_value.typ ())
           ~branches:
             [ { branch_name = "single-signed-command"
               ; tags = No_tags

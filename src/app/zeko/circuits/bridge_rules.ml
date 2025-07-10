@@ -65,6 +65,7 @@ struct
   module System_L1_enabled =
   ( val Compile_simple.compile ~name:"bridge rules for mina l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~auxiliary_typ:Snark_params.Tick.Typ.unit
           ~branches:
             [ Rule_bridge_finalize_cancelled_deposit.rule
             ; Rule_bridge_finalize_withdrawal.rule
@@ -75,12 +76,14 @@ struct
   module System_L1_disabled =
   ( val Compile_simple.compile ~name:"bridge rules for mina l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~auxiliary_typ:Snark_params.Tick.Typ.unit
           ~branches:[ Rule_bridge_enable.rule ]
           () )
 
   module System_L2 =
   ( val Compile_simple.compile ~name:"bridge rules for mina l2"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~auxiliary_typ:Snark_params.Tick.Typ.unit
           ~branches:
             [ Rule_bridge_finalize_deposit.rule
             ; Rule_bridge_inner_receive.rule
@@ -155,6 +158,7 @@ struct
   module System_L1_enabled =
   ( val Compile_simple.compile ~name:"bridge rules for custom l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~auxiliary_typ:Snark_params.Tick.Typ.unit
           ~branches:
             [ Rule_bridge_finalize_cancelled_deposit.rule
             ; Rule_bridge_finalize_withdrawal.rule
@@ -165,12 +169,14 @@ struct
   module System_L1_disabled =
   ( val Compile_simple.compile ~name:"bridge rules for custom l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~auxiliary_typ:Snark_params.Tick.Typ.unit
           ~branches:[ Rule_bridge_enable.rule ]
           () )
 
   module System_L2 =
   ( val Compile_simple.compile ~name:"bridge rules for custom l2"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~auxiliary_typ:Snark_params.Tick.Typ.unit
           ~branches:
             [ Rule_bridge_finalize_deposit.rule
             ; Rule_bridge_inner_receive.rule

@@ -84,6 +84,7 @@ struct
       Compile_simple.
         { prevs = Two_prevs (verify_outer, verify_outer_with_length)
         ; out = (outer, outer_with_length)
+        ; auxiliary_output = ()
         }
 
     let rule : _ Compile_simple.branch =
@@ -97,7 +98,7 @@ struct
               ~out_typ:
                 Typ.(
                   Ase_outer_inst.Stmt.typ * Ase_outer_with_length_inst.Stmt.typ)
-              () )
+              ~auxiliary_typ:Typ.unit () )
   end
 
   module Check_accepted_params = struct
@@ -124,6 +125,7 @@ struct
       Compile_simple.
         { prevs = Two_prevs (verify_check_accepted, verify_ase)
         ; out = (check_accepted, ase)
+        ; auxiliary_output = ()
         }
 
     let rule : _ Compile_simple.branch =
@@ -139,7 +141,7 @@ struct
                 Typ.(
                   Check_accepted.Definition.Stmt.typ
                   * Ase_outer_with_length_inst.Stmt.typ)
-              () )
+              ~auxiliary_typ:Typ.unit () )
   end
 
   module Witness = struct
@@ -333,6 +335,7 @@ struct
           { prevs =
               Two_prevs (verify_two_outer_ases, verify_check_accepted_and_ase)
           ; out
+          ; auxiliary_output = ()
           } )
 
   let rule : _ Compile_simple.branch =

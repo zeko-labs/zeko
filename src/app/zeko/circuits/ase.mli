@@ -10,27 +10,28 @@ module With_length : sig
 
   type trans = { source : Stmt.t; target : Stmt.t }
 
-  val leaf : field list * Stmt.t -> (trans * Proof.t) Promise.t
+  val leaf : field list * Stmt.t -> (trans * unit * Proof.t) Promise.t
 
   val leaf_iterations : int
 
-  val leaf_option : field list * Stmt.t -> (trans * Proof.t) Promise.t
+  val leaf_option : field list * Stmt.t -> (trans * unit * Proof.t) Promise.t
 
   val leaf_option_iterations : int
 
-  val extend : field list * (trans * Proof.t) -> (trans * Proof.t) Promise.t
+  val extend :
+    field list * (trans * Proof.t) -> (trans * unit * Proof.t) Promise.t
 
   val extend_iterations : int
 
   val extend_option :
-    field list * (trans * Proof.t) -> (trans * Proof.t) Promise.t
+    field list * (trans * Proof.t) -> (trans * unit * Proof.t) Promise.t
 
   val extend_option_iterations : int
 
   type merge_input =
     { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
 
-  val merge : merge_input -> (trans * Proof.t) Promise.t
+  val merge : merge_input -> (trans * unit * Proof.t) Promise.t
 
   type tag_t
 
@@ -81,27 +82,28 @@ module Without_length : sig
 
   type trans = { source : field; target : field }
 
-  val leaf : field list * field -> (trans * Proof.t) Promise.t
+  val leaf : field list * field -> (trans * unit * Proof.t) Promise.t
 
   val leaf_iterations : int
 
-  val leaf_option : field list * field -> (trans * Proof.t) Promise.t
+  val leaf_option : field list * field -> (trans * unit * Proof.t) Promise.t
 
   val leaf_option_iterations : int
 
-  val extend : field list * (trans * Proof.t) -> (trans * Proof.t) Promise.t
+  val extend :
+    field list * (trans * Proof.t) -> (trans * unit * Proof.t) Promise.t
 
   val extend_iterations : int
 
   val extend_option :
-    field list * (trans * Proof.t) -> (trans * Proof.t) Promise.t
+    field list * (trans * Proof.t) -> (trans * unit * Proof.t) Promise.t
 
   val extend_option_iterations : int
 
   type merge_input =
     { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
 
-  val merge : merge_input -> (trans * Proof.t) Promise.t
+  val merge : merge_input -> (trans * unit * Proof.t) Promise.t
 
   type tag_t
 

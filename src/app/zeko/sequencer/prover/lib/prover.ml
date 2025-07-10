@@ -29,18 +29,19 @@ module Make_folder (System : sig
 
   type trans = { source : Stmt.t; target : Stmt.t }
 
-  val leaf : F.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
+  val leaf :
+    F.t list * Stmt.t -> (trans * unit * Compile_simple.Proof.t) Promise.t
 
   val leaf_option :
-    F.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
+    F.t list * Stmt.t -> (trans * unit * Compile_simple.Proof.t) Promise.t
 
   val extend :
        F.t list * (trans * Compile_simple.Proof.t)
-    -> (trans * Compile_simple.Proof.t) Promise.t
+    -> (trans * unit * Compile_simple.Proof.t) Promise.t
 
   val extend_option :
        F.t list * (trans * Compile_simple.Proof.t)
-    -> (trans * Compile_simple.Proof.t) Promise.t
+    -> (trans * unit * Compile_simple.Proof.t) Promise.t
 
   val leaf_iterations : int
 
@@ -69,7 +70,10 @@ struct
             ( System.leaf_option
             , List.split_n elems_to_prove System.leaf_option_iterations )
         in
-        let%bind.Promise leaf = leaf_prover (leaf_elems, source) in
+        let%bind.Promise leaf =
+          let%map.Promise stmt, (), proof = leaf_prover (leaf_elems, source) in
+          (stmt, proof)
+        in
         let rec extend_rest elems_to_prove acc =
           match elems_to_prove with
           | [] ->
@@ -86,7 +90,12 @@ struct
                   , List.split_n elems_to_prove System.extend_option_iterations
                   )
               in
-              let%bind.Promise acc = extend_prover (extend_elems, acc) in
+              let%bind.Promise acc =
+                let%map.Promise stmt, (), proof =
+                  extend_prover (extend_elems, acc)
+                in
+                (stmt, proof)
+              in
               extend_rest rest acc
         in
         let%bind.Promise trans, proof = extend_rest rest leaf in
@@ -156,14 +165,14 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       return Output.Pong
   | Txn_snark (Signed_command input) ->
       let Compile_simple.[ prove; _; _; _; _ ] = Txn_rules.provers in
-      let%map stmt, proof =
+      let%map stmt, _maybe_target_ledger, proof =
         time ?fake_proving_time ~logger "Txn_rules.single_signed_command"
           (prove (Base_input.of_serializable input) |> Promise.to_deferred)
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Single_unproved input)) ->
       let Compile_simple.[ _; prove; _; _; _ ] = Txn_rules.provers in
-      let%map stmt, proof =
+      let%map stmt, _maybe_target_ledger, proof =
         time ?fake_proving_time ~logger
           "Txn_rules.single_unproved_zkapp_command"
           ( prove
@@ -173,7 +182,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Double_unproved input)) ->
       let Compile_simple.[ _; _; prove; _; _ ] = Txn_rules.provers in
-      let%map stmt, proof =
+      let%map stmt, _maybe_target_ledger, proof =
         time ?fake_proving_time ~logger
           "Txn_rules.double_unproved_zkapp_command"
           ( prove
@@ -183,7 +192,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Single_proved input)) ->
       let Compile_simple.[ _; _; _; prove; _ ] = Txn_rules.provers in
-      let%map stmt, proof =
+      let%map stmt, _maybe_target_ledger, proof =
         time ?fake_proving_time ~logger "Txn_rules.single_proved_zkapp_command"
           ( prove
               (Zkapp_single_proved_input.of_serializable ~proof_cache_db input)
@@ -192,7 +201,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Merge input) ->
       let Compile_simple.[ _; _; _; _; prove ] = Txn_rules.provers in
-      let%map stmt, proof =
+      let%map stmt, _maybe_target_ledger, proof =
         time ?fake_proving_time ~logger "Txn_rules.merge"
           (prove input |> Promise.to_deferred)
       in
@@ -205,7 +214,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
       in
-      let%map (_stmt, parent_with_calls), proof =
+      let%map (_stmt, parent_with_calls), (), proof =
         time ?fake_proving_time ~logger "Inner_rules.inner_sync"
           ( prove (Inner_sync.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
@@ -230,7 +239,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       Output.(Ase (Without_length snark))
   | Verify_both_ases (outer, inner) ->
       let Compile_simple.[ prove ] = Rule_commit.Verify_both_ases.provers in
-      let%map stmt, proof =
+      let%map stmt, (), proof =
         time ?fake_proving_time ~logger "Rule_commit.verify_both_ases"
           ( prove
               Outer_commit.
@@ -247,7 +256,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
       in
-      let%map (_stmt, parent_with_calls), proof =
+      let%map (_stmt, parent_with_calls), (), proof =
         time ?fake_proving_time ~logger "Outer_rules.commit"
           ( prove (Outer_commit.Witness.of_serializable ~vk_hash input)
           |> Promise.to_deferred )

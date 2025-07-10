@@ -117,7 +117,10 @@ struct
         fold middle_or_end folding_source elems.array elems.length
       in
       Compile_simple.
-        { out = ({ source = stmt_source; target } : Trans.var); prevs }
+        { out = ({ source = stmt_source; target } : Trans.var)
+        ; prevs
+        ; auxiliary_output = ()
+        }
 
     let rule : _ Compile_simple.branch = { branch_name; tags; main }
   end
@@ -252,6 +255,7 @@ struct
                   ; proof = right_proof
                   } )
           ; out = new_stmt
+          ; auxiliary_output = ()
           }
 
     let rule : _ Compile_simple.branch =
@@ -271,7 +275,7 @@ struct
             ; Rule_extend_option.rule
             ; Rule_merge.rule
             ]
-          ~out_typ:Trans.typ () )
+          ~out_typ:Trans.typ ~auxiliary_typ:Typ.unit () )
 
   type tag_var = System.tag_var
 

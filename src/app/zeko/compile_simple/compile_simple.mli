@@ -40,13 +40,17 @@ val compile :
   -> branches:
        ( 'out_var
        , ('first_input, 'branches) cons_branch
-       , 'n_available_branches )
+       , 'n_available_branches
+       , 'aux_var )
        Branches.t
   -> out_typ:('out_var, 'out_t) Snark_params.Tick.Typ.t
+  -> auxiliary_typ:('aux_var, 'aux_t) Snark_params.Tick.Typ.t
   -> unit
   -> (module Result
         with type out_t = 'out_t
          and type out_var = 'out_var
+         and type aux_t = 'aux_t
+         and type aux_var = 'aux_var
          and type branches = ('first_input, 'branches) cons_branch )
 
 val add_plonk_constraint :

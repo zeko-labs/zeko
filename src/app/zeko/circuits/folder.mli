@@ -55,26 +55,26 @@ end)
 
   type t := trans * Proof.t
 
-  val leaf : Elem.t list * Stmt.t -> t Promise.t
+  val leaf : Elem.t list * Stmt.t -> (trans * unit * Proof.t) Promise.t
 
   val leaf_iterations : int
 
-  val leaf_option : Elem.t list * Stmt.t -> t Promise.t
+  val leaf_option : Elem.t list * Stmt.t -> (trans * unit * Proof.t) Promise.t
 
   val leaf_option_iterations : int
 
-  val extend : Elem.t list * t -> t Promise.t
+  val extend : Elem.t list * t -> (trans * unit * Proof.t) Promise.t
 
   val extend_iterations : int
 
-  val extend_option : Elem.t list * t -> t Promise.t
+  val extend_option : Elem.t list * t -> (trans * unit * Proof.t) Promise.t
 
   val extend_option_iterations : int
 
   type merge_input =
     { left : trans; left_proof : Proof.t; right : trans; right_proof : Proof.t }
 
-  val merge : merge_input -> t Promise.t
+  val merge : merge_input -> (trans * unit * Proof.t) Promise.t
 
   type tag_t
 
