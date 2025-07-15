@@ -83,7 +83,8 @@ module Outer_user_state = struct
       }
 
     let of_fields
-        (fields : F.var Zkapp_basic.Set_or_keep.Checked.t Zkapp_state.V.t) : t Checked.t =
+        (fields : F.var Zkapp_basic.Set_or_keep.Checked.t Zkapp_state.V.t) :
+        t Checked.t =
       let (next_cancelled_deposit :: next_withdrawal :: rest) = fields in
       (* assert that everything else is kept *)
       let* () =
@@ -282,7 +283,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
   let* children' =
     Calls.hash ~chain:chain_l1 ((a', children) :: Raw base_params.children)
   in
-  let hash_prefix = "Deposit_params - qFB3jXP*)" in
+  let hash_prefix = Zeko_constants.deposit_salt in
   let* aux = var_to_hash ~init:hash_prefix Deposit_params.typ params in
   Checked.return
     ( { aux
