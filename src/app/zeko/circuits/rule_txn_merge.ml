@@ -61,11 +61,8 @@ let main input =
     assert_equal_safer ~label:__LOC__ Even_PC.typ left_sequencer right_sequencer
   in
   let* slot_range = slot_range_intersection left_slot_range right_slot_range in
-  let* global_slot_range =
+  let*| global_slot_range =
     slot_range_intersection left_global_slot_range right_global_slot_range
-  in
-  let*| auxiliary_output =
-    make_checked @@ fun () -> Prover_value.create (fun () -> None)
   in
   Compile_simple.
     { prevs =
@@ -90,5 +87,4 @@ let main input =
          ; source_acc_set
          ; target_acc_set
          } : Zeko_stmt.var)
-    ; auxiliary_output
     }

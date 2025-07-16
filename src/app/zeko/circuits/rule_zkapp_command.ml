@@ -372,7 +372,7 @@ open struct
             fun y -> slot_range_intersection x y >>| fun x -> Some x )
       >>| Option.value ~default:Slot_range.(constant typ infinite)
     in
-    let target_ledger, target_sparse_ledger = l.ledger in
+    let target_ledger, _ = l.ledger in
     let* stack_frame_digest =
       make_checked @@ fun () -> force l.stack_frame.hash
     in
@@ -396,12 +396,8 @@ open struct
       ; target_acc_set
       }
     in
-    let* prevs = gen_prevs vks must_verify_zkapp zkapp_input in
-    let*| auxiliary_output =
-      make_checked
-      @@ fun () -> Prover_value.map target_sparse_ledger ~f:Option.some
-    in
-    { Compile_simple.out; prevs; auxiliary_output }
+    let*| prevs = gen_prevs vks must_verify_zkapp zkapp_input in
+    { Compile_simple.out; prevs }
 end
 
 module Zkapp_single_unproved_input = struct

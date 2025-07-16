@@ -40,5 +40,5 @@ let pause_witness : Rule_pause.Witness.t =
   ; pause_key = point_of_string_even "1511111121"
   }
 
-let _stmt, (), _proof =
-  Promise.block_on_async_exn @@ fun () -> pause pause_witness
+let _stmt, _proof = Promise.block_on_async_exn @@ fun () -> pause pause_witness
+

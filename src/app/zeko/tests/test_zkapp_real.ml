@@ -395,5 +395,5 @@ let zkapp_double_witness : Rule_zkapp_command.Zkapp_double_unproved_input.t =
       }
   }
 
-let _stmt0, _target_ledger, _proof0 =
+let _stmt0, _proof0 =
   Promise.block_on_async_exn @@ fun () -> zkapp_double zkapp_double_witness

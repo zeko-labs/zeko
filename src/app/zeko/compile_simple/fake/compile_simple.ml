@@ -250,30 +250,26 @@ let match_tags_prevs :
          ( match_tag_prev self_tag prev1
          |> As_prover.map ~f:Proof_valid.immediate )
 
-let branches_to_provers name tag out_typ auxiliary_typ =
+let branches_to_provers name tag out_typ =
   let rec go :
       type branches available_branches.
-         (_, branches, available_branches, _) Branches.t
-      -> (_, _, branches) provers = function
+      (_, branches, available_branches) Branches.t -> (_, branches) provers =
+    function
     | Branches.({ branch_name; tags; main } :: rest) ->
         let prover input =
           printf "compile_simple.fake: proving %s.%s\n" name branch_name ;
-          let recursion_valid, out, auxiliary_output =
+          let recursion_valid, out =
             Snark_params.Tick.run_and_check_exn
             @@
             let open Checked in
             exists Typ.unit ~compute:(fun _ -> ())
             >>= fun () ->
             main (V.return input)
-            >>| fun { out; prevs; auxiliary_output } ->
+            >>| fun { out; prevs } ->
             let open As_prover in
             match_tags_prevs input tag tags prevs
             >>= fun recursion_valid ->
-            read out_typ out
-            >>= fun out ->
-            read auxiliary_typ auxiliary_output
-            >>= fun auxiliary_output ->
-            return (recursion_valid, out, auxiliary_output)
+            read out_typ out >>= fun out -> return (recursion_valid, out)
           in
           let open Promise.Let_syntax in
           let%map recursion_valid = Proof_valid.to_promise recursion_valid in
@@ -281,7 +277,7 @@ let branches_to_provers name tag out_typ auxiliary_typ =
             failwith "compile_simple [fake]: recursive proof invalid" ;
           printf "compile_simple.fake: %s.%s done\n" name branch_name ;
           let fake_proof = make_fake_proof tag out_typ out in
-          (out, auxiliary_output, fake_proof)
+          (out, fake_proof)
         in
         prover :: go rest
     | [] ->
@@ -291,7 +287,7 @@ let branches_to_provers name tag out_typ auxiliary_typ =
 
 let rec hash_branches :
     type branches available_branches.
-    (_, branches, available_branches, _) Branches.t -> field = function
+    (_, branches, available_branches) Branches.t -> field = function
   | Branches.({ branch_name = _; tags = _; main } :: rest) ->
       let rest_hash = hash_branches rest in
       let main_wrapper input () =
@@ -315,21 +311,16 @@ let rec hash_branches :
   | [] ->
       Field.zero
 
-let compile
-    (type out_t out_var first_input branches n_available_branches aux_t aux_var)
+let compile (type out_t out_var first_input branches n_available_branches)
     ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
     ~(branches :
        ( out_var
        , (first_input, branches) cons_branch
-       , n_available_branches
-       , aux_var )
-       Branches.t ) ~(out_typ : (out_var, out_t) Typ.t)
-    ~(auxiliary_typ : (aux_var, aux_t) Typ.t) () :
+       , n_available_branches )
+       Branches.t ) ~(out_typ : (out_var, out_t) Typ.t) () :
     (module Result
        with type out_t = out_t
         and type out_var = out_var
-        and type aux_t = aux_t
-        and type aux_var = aux_var
         and type branches = (first_input, branches) cons_branch ) =
   ignore wrap_domain ;
   printf "compile_simple.fake: called for circuit %s from %s\n%!" name
@@ -344,17 +335,11 @@ let compile
       (module Result
          with type out_t = out_t
           and type out_var = out_var
-          and type aux_t = aux_t
-          and type aux_var = aux_var
           and type branches = (first_input, branches) cons_branch ) =
     ( module struct
       type nonrec out_t = out_t
 
       type nonrec out_var = out_var
-
-      type nonrec aux_t = aux_t
-
-      type nonrec aux_var = aux_var
 
       type nonrec branches = (first_input, branches) cons_branch
 
@@ -364,7 +349,7 @@ let compile
 
       let tag = tag
 
-      let provers = branches_to_provers name tag out_typ auxiliary_typ branches
+      let provers = branches_to_provers name tag out_typ branches
 
       type t = out_t
 

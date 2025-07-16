@@ -10,7 +10,7 @@ struct
     ( val Compile_simple.compile ()
             ~out_typ:
               Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-            ~auxiliary_typ:Snark_params.Tick.Typ.unit ~name:"Inner_rules"
+            ~name:"Inner_rules"
             ~branches:
               [ Rule_inner_sync_inst.rule; Rule_inner_action_witness_inst.rule ]
       )

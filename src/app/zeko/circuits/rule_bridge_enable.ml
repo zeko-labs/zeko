@@ -105,7 +105,7 @@ struct
       }
     in
     let*| out = make_outputs ~chain:chain_l1 account_update [] in
-    Compile_simple.{ prevs = No_prevs; out; auxiliary_output = () }
+    Compile_simple.{ prevs = No_prevs; out }
 
   let rule : _ Compile_simple.branch =
     { branch_name = "enable holder account"; tags = No_tags; main }

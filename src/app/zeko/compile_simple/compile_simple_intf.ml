@@ -98,8 +98,7 @@ struct
            tags
     | Two_tags_own : ('self_var, ('self_var, 'self_var) two_prevs, 'input) tags
 
-  type ('var, 'prevs, 'aux_var) main_return =
-    { out : 'var; prevs : 'prevs prevs; auxiliary_output : 'aux_var }
+  type ('var, 'prevs) main_return = { out : 'var; prevs : 'prevs prevs }
 
   type max_branches = |
 
@@ -117,33 +116,27 @@ struct
 
   type ('x, 'xs) cons_branch = |
 
-  type ('out_t, 'aux_t, 'branches) provers =
-    | [] : ('out_var, 'aux_var, nil_branch) provers
+  type ('out_t, 'branches) provers =
+    | [] : ('out_var, nil_branch) provers
     | ( :: ) :
-        ('input -> ('out_t * 'aux_t * proof) Promise.t)
-        * ('out_t, 'aux_t, 'branches) provers
-        -> ('out_t, 'aux_t, ('input, 'branches) cons_branch) provers
+        ('input -> ('out_t * proof) Promise.t) * ('out_t, 'branches) provers
+        -> ('out_t, ('input, 'branches) cons_branch) provers
 
-  type ('input, 'out_var, 'prevs, 'aux_var) branch =
+  type ('input, 'out_var, 'prevs) branch =
     { branch_name : string
     ; tags : ('out_var, 'prevs, 'input) tags
-    ; main : 'input V.t -> ('out_var, 'prevs, 'aux_var) main_return Checked.t
+    ; main : 'input V.t -> ('out_var, 'prevs) main_return Checked.t
     }
 
   module Branches = struct
-    type ('out_var, 'branches, 'n_available_branches, 'aux_var) t =
-      | [] : ('out_var, nil_branch, all_branches_available, 'aux_var) t
+    type ('out_var, 'branches, 'n_available_branches) t =
+      | [] : ('out_var, nil_branch, all_branches_available) t
       | ( :: ) :
-          ('input, 'out_var, 'prevs, 'aux_var) branch
-          * ( 'out_var
-            , 'branches
-            , 'n_available_branches available_branch
-            , 'aux_var )
-            t
+          ('input, 'out_var, 'prevs) branch
+          * ('out_var, 'branches, 'n_available_branches available_branch) t
           -> ( 'out_var
              , ('input, 'branches) cons_branch
-             , 'n_available_branches
-             , 'aux_var )
+             , 'n_available_branches )
              t
   end
 
@@ -153,10 +146,6 @@ struct
     type out_t
 
     type out_var
-
-    type aux_t
-
-    type aux_var
 
     type branches
 
@@ -168,7 +157,7 @@ struct
 
     val tag : tag_var tag
 
-    val provers : (out_t, aux_t, branches) provers
+    val provers : (out_t, branches) provers
 
     type t
 

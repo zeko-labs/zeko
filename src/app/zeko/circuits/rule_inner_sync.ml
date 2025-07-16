@@ -69,7 +69,7 @@ struct
       }
     in
     let*| out = make_outputs ~chain:chain_l2 account_update [] in
-    Compile_simple.{ prevs = One_prev verify_ase; out; auxiliary_output = () }
+    Compile_simple.{ prevs = One_prev verify_ase; out }
 
   let rule : _ Compile_simple.branch =
     { branch_name = "Rollup inner account step"

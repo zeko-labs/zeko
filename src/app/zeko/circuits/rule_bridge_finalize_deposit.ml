@@ -220,10 +220,7 @@ struct
         [ (helper_account, []); (witness_inner, []) ]
     in
     Compile_simple.
-      { prevs = Two_prevs (verify_check_accepted, verify_ase)
-      ; out
-      ; auxiliary_output = ()
-      }
+      { prevs = Two_prevs (verify_check_accepted, verify_ase); out }
 
   let rule : _ Compile_simple.branch =
     { branch_name = "finalize deposit"

@@ -30,14 +30,13 @@ struct
           { default_account_update with
             public_key
           ; token_id = constant Token_id.typ token_id_l2
-          ; may_use_token =
-              constant Account_update.May_use_token.typ Parents_own_token
+          ; may_use_token = constant Account_update.May_use_token.typ Parents_own_token
           ; authorization_kind = authorization_vk_hash vk_hash
           ; balance_change = Currency.Amount.Signed.Checked.(of_unsigned amount)
           }
         in
         let*| out = make_outputs ~chain:chain_l2 account_update [] in
-        Compile_simple.{ prevs = No_prevs; out; auxiliary_output = () } )
+        Compile_simple.{ prevs = No_prevs; out } )
 
   let rule : _ Compile_simple.branch =
     { branch_name = "inner receive"; tags = No_tags; main }

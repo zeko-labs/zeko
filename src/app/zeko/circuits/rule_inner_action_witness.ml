@@ -29,7 +29,7 @@ struct
     let*| out =
       make_outputs ~chain:chain_l2 account_update (Raw witness.children)
     in
-    Compile_simple.{ prevs = No_prevs; out; auxiliary_output = () }
+    Compile_simple.{ prevs = No_prevs; out }
 
   let rule : _ Compile_simple.branch =
     { branch_name = "zeko action witness"; tags = No_tags; main }

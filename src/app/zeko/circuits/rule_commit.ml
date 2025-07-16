@@ -29,10 +29,7 @@ module Verify_both_ases = struct
     let* outer, verify_outer = Ase_outer_inst.get outer in
     let*| inner, verify_inner = Ase_inner_inst.get inner in
     Compile_simple.
-      { prevs = Two_prevs (verify_outer, verify_inner)
-      ; out = (outer, inner)
-      ; auxiliary_output = ()
-      }
+      { prevs = Two_prevs (verify_outer, verify_inner); out = (outer, inner) }
 
   let rule : _ Compile_simple.branch =
     { branch_name = "Verify_both_ases"
@@ -43,7 +40,7 @@ module Verify_both_ases = struct
   include
     ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
             ~out_typ:Typ.(Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
-            ~auxiliary_typ:Typ.unit () )
+            () )
 end
 
 module Make (Inputs : sig
@@ -421,11 +418,7 @@ struct
       make_outputs ~chain:chain_l1 account_update
         [ (sequencer_account_update, []) ]
     in
-    Compile_simple.
-      { prevs = Two_prevs (verify_txn_snark, verify_ases)
-      ; out
-      ; auxiliary_output = ()
-      }
+    Compile_simple.{ prevs = Two_prevs (verify_txn_snark, verify_ases); out }
 
   let rule : _ Compile_simple.branch =
     { branch_name = "Rollup step"

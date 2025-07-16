@@ -65,7 +65,7 @@ struct
     let*| out =
       make_outputs ~chain:chain_l1 account_update [ (signature_witness, []) ]
     in
-    Compile_simple.{ prevs = No_prevs; out; auxiliary_output = () }
+    Compile_simple.{ prevs = No_prevs; out }
 
   let rule : _ Compile_simple.branch =
     { branch_name = "zeko pause"; tags = No_tags; main }
