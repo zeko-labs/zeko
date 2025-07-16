@@ -294,6 +294,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
 
 let withdrawal_action (type withdrawal_params_var) ~chain_l2
     ~(holder_account_l2 : PC.t) ~(token_owner_l2 : Account_id.t option)
+    ~inner_vk_hash
     (module Withdrawal_params : WITHDRAWAL_PARAMS
       with type var = withdrawal_params_var ) (params : Withdrawal_params.var) :
     Rollup_state.Inner_action.var Checked.t =
@@ -312,7 +313,10 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
     ; may_use_token =
         constant Account_update.May_use_token.typ Parents_own_token
     ; authorization_kind =
-        constant Account_update.Authorization_kind.typ None_given
+        { is_signed = Boolean.false_
+        ; is_proved = Boolean.true_
+        ; verification_key_hash = inner_vk_hash
+        }
     }
   in
   let a', (children : Calls.t) =
@@ -339,6 +343,6 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
   let* children' =
     Calls.hash ~chain:chain_l2 ((a', children) :: Raw base_params.children)
   in
-  let hash_prefix = "Withdrawal_params - qFB3jXP*)" in
+  let hash_prefix = Zeko_constants.withdrawal_salt in
   let* aux = var_to_hash ~init:hash_prefix Withdrawal_params.typ params in
   Checked.return ({ aux; children = children' } : Rollup_state.Inner_action.var)
