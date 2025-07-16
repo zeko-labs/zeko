@@ -882,15 +882,19 @@ open struct
 
     let max_valid_while_size = 128
 
-    let holder_accounts_l1 = [ point_of_string "89888" ]
+    let holder_accounts_l1 =
+      [ point_of_string "89888"
+      ; point_of_string "46532"
+      ; point_of_string "46513"
+      ]
 
     let holder_account_l2 = point_of_string "11111"
 
     let helper_token_owner_l1 = point_of_string "5123111"
 
-    let zeko_l1 = inner_public_key
+    let zeko_l1 = point_of_string "39921"
 
-    let zeko_l2 = point_of_string "39921"
+    let zeko_l2 = inner_public_key
 
     let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
 
@@ -933,25 +937,30 @@ open struct
 
   module Outer_rules = Outer_rules.Make (Inputs) ()
 
-  (* module Inner_rules = Inner_rules.Make (Inputs) () *)
+  module Inner_rules = Inner_rules.Make (Inputs) ()
 
-  let Compile_simple.[ _; action_witness_prover; _ ] = Outer_rules.provers
-
-  let Compile_simple.[ _; _finalize_withdrawal; _ ] =
+  let Compile_simple.[ _; finalize_withdrawal; _ ] =
     Bridge.System_L1_enabled.provers
 
-  let Compile_simple.[ finalize_deposit; _inner_receive ] =
+  let Compile_simple.[ finalize_deposit; inner_receive ] =
     Bridge.System_L2.provers
 
-  (* Deposit *)
-  open struct
+  let Compile_simple.[ outer_token_owner ] =
+    Bridge.System_L1_token_owner.provers
+
+  let Compile_simple.[ _; outer_action_witness; _ ] = Outer_rules.provers
+
+  let Compile_simple.[ _; inner_action_witness ] = Inner_rules.provers
+
+  module Deposit = struct
     let recipient = Keypair.create ()
 
     let amount = Currency.Amount.of_mina_string_exn "1"
 
     let deposit_params : Bridge_state.Deposit_params_base.t =
       { children = []
-      ; holder_account_l1 = List.hd_exn Inputs.holder_accounts_l1
+      ; holder_account_l1 =
+          List.random_element Inputs.holder_accounts_l1 |> Option.value_exn
       ; amount
       ; recipient = Public_key.compress recipient.public_key
       ; timeout = Slot.of_int 50
@@ -984,22 +993,30 @@ open struct
       ; slot_range = deposit_slot_range
       }
 
-    let action_witness : Rule_action_witness.Witness.t =
-      { public_key = Inputs.zeko_l1
-      ; vk_hash =
-          ( Promise.block_on_async_exn
-          @@ fun () -> Compile_simple.Verification_key.of_tag Outer_rules.tag )
-          |> Compile_simple.Verification_key.hash
-      ; witness = deposit_witness
-      }
-
     let original_action_state = Zkapp_account.Actions.empty_state_element
 
     let deposit_action =
-      let (_stmt, (au, _au_digest, _calls)), (), _proof =
+      let (_stmt, (au, _au_digest, calls)), (), _proof =
         Promise.block_on_async_exn
-        @@ fun () -> action_witness_prover action_witness
+        @@ fun () ->
+        outer_action_witness
+          { public_key = Inputs.zeko_l1
+          ; vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag Outer_rules.tag )
+              |> Compile_simple.Verification_key.hash
+          ; witness = deposit_witness
+          }
       in
+      assert (Public_key.Compressed.equal au.public_key Inputs.zeko_l1) ;
+      assert (
+        List.equal
+          (fun a b ->
+            let a = With_stack_hash.stack_hash a in
+            let b = With_stack_hash.stack_hash b in
+            Zkapp_command.Digest.Forest.equal a b )
+          calls deposit_witness.children ) ;
       let h = Zkapp_account.Actions_impl.hash au.actions in
       let h' =
         Zkapp_account.Actions_impl.hash (witness_to_actions deposit_witness)
@@ -1071,7 +1088,7 @@ open struct
           }
           []
       in
-      let (_stmt, (au, _au_digest, _calls)), (), _proof =
+      let (_stmt, (au, _au_digest, calls)), (), _proof =
         Promise.block_on_async_exn
         @@ fun () ->
         finalize_deposit
@@ -1104,8 +1121,254 @@ open struct
       assert (
         Currency.Amount.Signed.equal au.balance_change
           Currency.Amount.Signed.(of_unsigned amount |> negate) ) ;
-      assert (Public_key.Compressed.equal au.public_key Inputs.holder_account_l2)
+      assert (Public_key.Compressed.equal au.public_key Inputs.holder_account_l2) ;
+      let helper_account, witness_inner =
+        match Zkapp_command.Call_forest.to_account_updates calls with
+        | [ helper_account; witness_inner ] ->
+            (helper_account, witness_inner)
+        | _ ->
+            failwith
+              "finalize_deposit calls: no helper account or witness inner"
+      in
+      assert (
+        Account_id.equal
+          (Account_update.account_id helper_account)
+          (Account_id.create
+             (Public_key.compress recipient.public_key)
+             (Account_id.derive_token_id
+                ~owner:
+                  ( Account_id.of_public_key
+                  @@ Public_key.decompress_exn Inputs.holder_account_l2 ) ) ) ) ;
+      assert (
+        Public_key.Compressed.equal witness_inner.body.public_key Inputs.zeko_l2 )
   end
+
+  module Withdrawal = struct
+    let recipient = Keypair.create ()
+
+    let amount = Currency.Amount.of_mina_string_exn "2"
+
+    let withdrawal_params : Bridge_state.Withdrawal_params_base.t =
+      { children = []
+      ; amount
+      ; recipient = Public_key.compress recipient.public_key
+      }
+
+    let inner_receive_au =
+      let (_stmt, (au, _au_digest, calls)), (), _proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        inner_receive
+          { public_key = Inputs.holder_account_l2
+          ; vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              |> Compile_simple.Verification_key.hash
+          ; amount
+          }
+      in
+      assert (Zkapp_command.Call_forest.is_empty calls) ;
+      assert (
+        Currency.Amount.Signed.equal au.balance_change
+          Currency.Amount.Signed.(of_unsigned amount) ) ;
+      assert (Public_key.Compressed.equal au.public_key Inputs.holder_account_l2) ;
+      au
+
+    let withdrawal_witness : Rollup_state.Inner_action.t =
+      { aux =
+          value_to_hash ~init:Zeko_constants.withdrawal_salt
+            Bridge_state.Withdrawal_params_base.typ withdrawal_params
+      ; children =
+          Zkapp_command.Call_forest.cons ~signature_kind:Inputs.chain_l2
+            (Account_update.with_aux ~body:inner_receive_au
+               ~authorization:
+                 (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
+                 Control.Poly.None_given )
+            []
+      }
+
+    let withdrawal_action =
+      let (_stmt, (au, _au_digest, calls)), (), _proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        inner_action_witness
+          { public_key = Inputs.zeko_l2
+          ; vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              |> Compile_simple.Verification_key.hash
+          ; witness = withdrawal_witness
+          }
+      in
+      assert (
+        List.equal
+          (fun a b ->
+            let a = With_stack_hash.stack_hash a in
+            let b = With_stack_hash.stack_hash b in
+            Zkapp_command.Digest.Forest.equal a b )
+          calls withdrawal_witness.children ) ;
+      let h = Zkapp_account.Actions_impl.hash au.actions in
+      let h' =
+        Zkapp_account.Actions_impl.hash
+          [ value_to_fields
+              Typ.(F.typ * Rollup_state.Inner_action.typ)
+              (Field.of_int 0, withdrawal_witness)
+          ]
+      in
+      assert (Field.equal h h') ;
+      h
+
+    let inner_action_state : Rollup_state.Inner_action_state.With_length.t =
+      Rollup_state.Inner_action_state.(
+        With_length.unsafe_value_of_fields
+          ~state:
+            ( Zkapp_account.Actions_impl.push_hash
+                Zkapp_account.Actions.empty_state_element withdrawal_action
+            |> unsafe_value_of_field )
+          ~length:Checked32.one)
+
+    let commit : Rollup_state.Outer_action.Commit.t =
+      { ledger = Field.zero
+      ; inner_action_state
+      ; synchronized_outer_action_state =
+          Rollup_state.Outer_action_state.With_length.empty
+      ; slot_range = { lower = Slot.zero; upper = Slot.one }
+      }
+
+    let () =
+      let commit_ase : Bridge.Rule_bridge_finalize_withdrawal.Ase_outer_inst.t =
+        let action_state =
+          Zkapp_account.Actions_impl.(
+            push_hash Zkapp_account.Actions.empty_state_element
+              (hash (commit_to_actions commit)))
+        in
+        Bridge.Rule_bridge_finalize_withdrawal.Ase_outer_inst.make
+          ~proof_source:action_state ~proof_target:action_state action_state []
+      in
+      let withdrawal_ase :
+          Bridge.Rule_bridge_finalize_withdrawal.Ase_inner_inst.t =
+        let action_state : Ase.With_length.Stmt.t =
+          { action_state =
+              Rollup_state.Inner_action_state.With_length.state
+                inner_action_state
+              |> Rollup_state.Inner_action_state.raw
+          ; length =
+              Rollup_state.Inner_action_state.With_length.length
+                inner_action_state
+          }
+        in
+        Bridge.Rule_bridge_finalize_withdrawal.Ase_inner_inst.make
+          ~proof_source:action_state ~proof_target:action_state action_state []
+      in
+      let holder_l1 =
+        List.random_element Inputs.holder_accounts_l1 |> Option.value_exn
+      in
+      let (_stmt, (au, _au_digest, calls)), (), _proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        finalize_withdrawal
+          { public_key = holder_l1
+          ; vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag
+                Bridge.System_L1_enabled.tag )
+              |> Compile_simple.Verification_key.hash
+          ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
+          ; outer_authorization_kind =
+              Rule_bridge_finalize_withdrawal.A.None_given
+          ; commit
+          ; before_commit = Rollup_state.Outer_action_state.empty
+          ; commit_ase
+          ; before_withdrawal = Rollup_state.Inner_action_state.empty
+          ; withdrawal_ase
+          ; prev_next_withdrawal = Checked32.zero
+          ; withdrawal_params
+          ; helper_token_owner_l1_vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag
+                Bridge.System_L1_token_owner.tag )
+              |> Compile_simple.Verification_key.hash
+          ; inner_vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              |> Compile_simple.Verification_key.hash
+          }
+      in
+      assert (
+        Currency.Amount.Signed.equal au.balance_change
+          Currency.Amount.Signed.(of_unsigned amount |> negate) ) ;
+      assert (Public_key.Compressed.equal au.public_key holder_l1) ;
+
+      let (helper_token_owner, helper_account), witness_outer =
+        match calls with
+        | [ { elt =
+                { account_update = helper_token_owner
+                ; calls =
+                    [ { elt = { account_update = helper_account; calls = []; _ }
+                      ; _
+                      }
+                    ]
+                ; _
+                }
+            ; _
+            }
+          ; { elt = { account_update = witness_outer; calls = []; _ }; _ }
+          ] ->
+            ((helper_token_owner, helper_account), witness_outer)
+        | _ ->
+            failwith
+              "finalize_withdrawal calls: no helper token owner or witness \
+               outer"
+      in
+
+      assert (
+        Public_key.Compressed.equal witness_outer.body.public_key Inputs.zeko_l1 ) ;
+      assert (
+        Public_key.Compressed.equal helper_account.body.public_key
+          (Public_key.compress recipient.public_key) ) ;
+      assert (
+        Token_id.equal helper_account.body.token_id
+          (Account_id.derive_token_id
+             ~owner:
+               ( Account_id.of_public_key
+               @@ Public_key.decompress_exn Inputs.helper_token_owner_l1 ) ) ) ;
+      assert (
+        Public_key.Compressed.equal helper_token_owner.body.public_key
+          Inputs.helper_token_owner_l1 ) ;
+
+      let (_stmt, (helper_token_owner', _au_digest, calls)), (), _proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        outer_token_owner
+          { public_key = Inputs.helper_token_owner_l1
+          ; vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag
+                Bridge.System_L1_token_owner.tag )
+              |> Compile_simple.Verification_key.hash
+          ; a = helper_account.body
+          }
+      in
+      let helper_account' =
+        match calls with
+        | [ { elt = { account_update; calls = []; _ }; _ } ] ->
+            account_update
+        | _ ->
+            failwith "outer_token_owner calls: no helper account"
+      in
+      assert (
+        Account_update.Body.equal helper_token_owner' helper_token_owner.body ) ;
+      assert (Account_update.Body.equal helper_account'.body helper_account.body)
+  end
+
+  include Deposit
+  include Withdrawal
 end
 
 let () = print_endline "Done ✅"

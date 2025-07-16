@@ -61,6 +61,8 @@ struct
   module Rule_bridge_disable = Rule_bridge_disable.Make (Inputs)
   module Rule_bridge_enable = Rule_bridge_enable.Make (Inputs)
   module Rule_bridge_inner_receive = Rule_bridge_inner_receive.Make (Inputs)
+  module Rule_bridge_outer_token_owner =
+    Rule_bridge_outer_token_owner.Make (Inputs)
 
   module System_L1_enabled =
   ( val Compile_simple.compile ~name:"bridge rules for mina l1"
@@ -88,6 +90,13 @@ struct
             [ Rule_bridge_finalize_deposit.rule
             ; Rule_bridge_inner_receive.rule
             ]
+          () )
+
+  module System_L1_token_owner =
+  ( val Compile_simple.compile ~name:"bridge rules for mina l1 token owner"
+          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~auxiliary_typ:Snark_params.Tick.Typ.unit
+          ~branches:[ Rule_bridge_outer_token_owner.rule ]
           () )
 end
 

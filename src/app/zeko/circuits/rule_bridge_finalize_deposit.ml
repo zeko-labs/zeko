@@ -84,8 +84,7 @@ struct
 
   (** Prove that we have submitted a deposit, and that it's been accepted. *)
   let main (w : Witness.t V.t) =
-    with_label ("main " ^ __LOC__)
-    @@ fun () ->
+    let@ () = with_label ("main " ^ __LOC__) in
     let* Witness.
            { public_key
            ; vk_hash
@@ -97,8 +96,6 @@ struct
            } =
       exists Witness.typ ~compute:(V.get w)
     in
-    with_label __LOC__
-    @@ fun () ->
     let* ( { params
            ; action_state = mid_outer_action_state'
            ; deposit_index
@@ -109,8 +106,7 @@ struct
          , verify_check_accepted ) =
       Check_accepted_inst.get check_accepted
     in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let* helper_token_id =
       make_checked
       @@ fun () ->
@@ -119,24 +115,22 @@ struct
       in
       Account_id.Checked.derive_token_id ~owner:account_id
     in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let* () = Boolean.Assert.is_true is_accepted in
+    let@ () = with_label __LOC__ in
     let* () = Boolean.(Assert.is_true (not is_rejected)) in
+    let@ () = with_label __LOC__ in
     let* ( { source = mid_outer_action_state; target = outer_action_state }
          , verify_ase ) =
       Ase_inst.get ase
     in
-    with_label __LOC__
-    @@ fun () ->
     let* () =
       assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
         (Rollup_state.Outer_action_state.With_length.state_var
            mid_outer_action_state )
         mid_outer_action_state'
     in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let* next_deposit =
       Checked32.Checked.(
         sub
@@ -144,25 +138,18 @@ struct
              mid_outer_action_state )
           n_steps)
     in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let* next_deposit' = Checked32.Checked.succ deposit_index in
-    with_label __LOC__
-    @@ fun () ->
     let* () =
       assert_equal ~label:__LOC__ Checked32.typ next_deposit next_deposit'
     in
-    with_label __LOC__
-    @@ fun () ->
     let* () =
       assert_var __LOC__
         Checked32.Checked.(fun () -> prev_next_deposit < next_deposit)
     in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let base_params = Deposit_params.base params in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let helper_account =
       { default_account_update with
         public_key = base_params.recipient
@@ -188,8 +175,7 @@ struct
           }
       }
     in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let witness_inner =
       { default_account_update with
         public_key = constant PC.typ zeko_l2
@@ -216,8 +202,7 @@ struct
           }
       }
     in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let account_update =
       { default_account_update with
         public_key
@@ -229,8 +214,7 @@ struct
             of_unsigned base_params.amount |> negate)
       }
     in
-    with_label __LOC__
-    @@ fun () ->
+    let@ () = with_label __LOC__ in
     let*| out =
       make_outputs ~chain:chain_l2 account_update
         [ (helper_account, []); (witness_inner, []) ]
