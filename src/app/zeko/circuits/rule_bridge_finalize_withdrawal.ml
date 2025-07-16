@@ -172,8 +172,8 @@ struct
               { default_account_update.update with
                 app_state =
                   Outer_user_state.fine
-                    { next_withdrawal = Some next_withdrawal
-                    ; next_cancelled_deposit = None
+                    { next_cancelled_deposit = None
+                    ; next_withdrawal = Some next_withdrawal
                     }
                   |> var_to_app_state_fine
               }
@@ -183,8 +183,8 @@ struct
                   { default_account_update.preconditions.account with
                     state =
                       Outer_user_state.fine
-                        { next_withdrawal = Some prev_next_withdrawal
-                        ; next_cancelled_deposit = None
+                        { next_cancelled_deposit = None
+                        ; next_withdrawal = Some prev_next_withdrawal
                         }
                       |> var_to_precondition_fine
                   }

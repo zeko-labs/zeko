@@ -1140,7 +1140,58 @@ open struct
                   ( Account_id.of_public_key
                   @@ Public_key.decompress_exn Inputs.holder_account_l2 ) ) ) ) ;
       assert (
-        Public_key.Compressed.equal witness_inner.body.public_key Inputs.zeko_l2 )
+        Zkapp_state.State_length_vec.equal
+          (fun a b -> Zkapp_basic.Or_ignore.equal Field.equal a b)
+          helper_account.body.preconditions.account.state
+          Zkapp_state.State_length_vec.(
+            of_list_exn
+              [ Zkapp_basic.Or_ignore.Check Checked32.(to_field zero)
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ]) ) ;
+      assert (
+        Zkapp_state.State_length_vec.equal
+          (fun a b -> Zkapp_basic.Set_or_keep.equal Field.equal a b)
+          helper_account.body.update.app_state
+          Zkapp_state.State_length_vec.(
+            of_list_exn
+              [ Zkapp_basic.Set_or_keep.Set Checked32.(to_field one)
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ]) ) ;
+
+      assert (
+        Public_key.Compressed.equal witness_inner.body.public_key Inputs.zeko_l2 ) ;
+      assert (
+        Zkapp_state.State_length_vec.equal
+          (fun a b -> Zkapp_basic.Or_ignore.equal Field.equal a b)
+          witness_inner.body.preconditions.account.state
+          Zkapp_state.State_length_vec.(
+            of_list_exn
+              [ Zkapp_basic.Or_ignore.Check
+                  Rollup_state.Outer_action_state.(
+                    With_length.state target_outer_action_state |> raw)
+              ; Zkapp_basic.Or_ignore.Check
+                  Rollup_state.Outer_action_state.(
+                    With_length.length target_outer_action_state
+                    |> Checked32.to_field)
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ]) )
   end
 
   module Withdrawal = struct
@@ -1238,14 +1289,18 @@ open struct
       }
 
     let () =
-      let commit_ase : Bridge.Rule_bridge_finalize_withdrawal.Ase_outer_inst.t =
+      let (commit_ase, commit_ase_target)
+            : Bridge.Rule_bridge_finalize_withdrawal.Ase_outer_inst.t * Field.t
+          =
         let action_state =
           Zkapp_account.Actions_impl.(
             push_hash Zkapp_account.Actions.empty_state_element
               (hash (commit_to_actions commit)))
         in
-        Bridge.Rule_bridge_finalize_withdrawal.Ase_outer_inst.make
-          ~proof_source:action_state ~proof_target:action_state action_state []
+        ( Bridge.Rule_bridge_finalize_withdrawal.Ase_outer_inst.make
+            ~proof_source:action_state ~proof_target:action_state action_state
+            []
+        , action_state )
       in
       let withdrawal_ase :
           Bridge.Rule_bridge_finalize_withdrawal.Ase_inner_inst.t =
@@ -1329,6 +1384,11 @@ open struct
       assert (
         Public_key.Compressed.equal witness_outer.body.public_key Inputs.zeko_l1 ) ;
       assert (
+        Zkapp_basic.Or_ignore.equal Field.equal
+          witness_outer.body.preconditions.account.action_state
+          (Zkapp_basic.Or_ignore.Check commit_ase_target) ) ;
+
+      assert (
         Public_key.Compressed.equal helper_account.body.public_key
           (Public_key.compress recipient.public_key) ) ;
       assert (
@@ -1337,6 +1397,43 @@ open struct
              ~owner:
                ( Account_id.of_public_key
                @@ Public_key.decompress_exn Inputs.helper_token_owner_l1 ) ) ) ;
+
+      printf
+        !"helper_account.preconditions: %{sexp: Field.t \
+          Zkapp_basic.Or_ignore.t Zkapp_state.State_length_vec.t}\n\
+          %!"
+        helper_account.body.preconditions.account.state ;
+
+      assert (
+        Zkapp_state.State_length_vec.equal
+          (fun a b -> Zkapp_basic.Or_ignore.equal Field.equal a b)
+          helper_account.body.preconditions.account.state
+          Zkapp_state.State_length_vec.(
+            of_list_exn
+              [ Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Check Checked32.(to_field zero)
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ]) ) ;
+      assert (
+        Zkapp_state.State_length_vec.equal
+          (fun a b -> Zkapp_basic.Set_or_keep.equal Field.equal a b)
+          helper_account.body.update.app_state
+          Zkapp_state.State_length_vec.(
+            of_list_exn
+              [ Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Set Checked32.(to_field one)
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ]) ) ;
       assert (
         Public_key.Compressed.equal helper_token_owner.body.public_key
           Inputs.helper_token_owner_l1 ) ;
