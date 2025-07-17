@@ -73,6 +73,7 @@ struct
       ; prev_next_withdrawal : Checked32.t
       ; withdrawal_params : Withdrawal_params.t
       ; helper_token_owner_l1_vk_hash : F.t
+      ; inner_vk_hash : F.t
       }
     [@@deriving snarky]
   end
@@ -92,23 +93,29 @@ struct
                ; prev_next_withdrawal
                ; withdrawal_params
                ; helper_token_owner_l1_vk_hash
+               ; inner_vk_hash
                } =
           exists Witness.typ ~compute:(V.get w)
         in
+        let@ () = with_label __LOC__ in
         let* commit_ase, verify_commit_ase = Ase_outer_inst.get commit_ase in
+        let@ () = with_label __LOC__ in
         let* withdrawal_ase, verify_withdrawal_ase =
           Ase_inner_inst.get withdrawal_ase
         in
+        let@ () = with_label __LOC__ in
         let helper_token_id =
           let account_id =
             Account_id.create helper_token_owner_l1 Token_id.default
           in
           Account_id.derive_token_id ~owner:account_id |> constant Token_id.typ
         in
+        let@ () = with_label __LOC__ in
         (* make sure that withdrawal ase is connected to withdrawal *)
         let* () =
           let* action =
             withdrawal_action ~chain_l2 ~holder_account_l2 ~token_owner_l2
+              ~inner_vk_hash
               (module Withdrawal_params)
               withdrawal_params
           in
@@ -120,6 +127,7 @@ struct
                withdrawal_ase.source )
             withdrawal_ase_source'
         in
+        let@ () = with_label __LOC__ in
         let next_withdrawal =
           Rollup_state.Inner_action_state.With_length.length_var
             withdrawal_ase.source
@@ -128,6 +136,7 @@ struct
           assert_var __LOC__
             Checked32.Checked.(fun () -> prev_next_withdrawal < next_withdrawal)
         in
+        let@ () = with_label __LOC__ in
         (* make sure that commit ase is connected to commit *)
         let* () =
           let* commit_ase_source' =
@@ -141,7 +150,9 @@ struct
             Rollup_state.Inner_action_state.With_length.typ
             commit.inner_action_state withdrawal_ase.target
         in
+        let@ () = with_label __LOC__ in
         let base_params = Withdrawal_params.base withdrawal_params in
+        let@ () = with_label __LOC__ in
         let helper_token_owner =
           { default_account_update with
             public_key = constant PC.typ helper_token_owner_l1
@@ -149,6 +160,7 @@ struct
               authorization_vk_hash helper_token_owner_l1_vk_hash
           }
         in
+        let@ () = with_label __LOC__ in
         let helper_account =
           { default_account_update with
             public_key = base_params.recipient
@@ -160,8 +172,8 @@ struct
               { default_account_update.update with
                 app_state =
                   Outer_user_state.fine
-                    { next_withdrawal = Some next_withdrawal
-                    ; next_cancelled_deposit = None
+                    { next_cancelled_deposit = None
+                    ; next_withdrawal = Some next_withdrawal
                     }
                   |> var_to_app_state_fine
               }
@@ -171,18 +183,20 @@ struct
                   { default_account_update.preconditions.account with
                     state =
                       Outer_user_state.fine
-                        { next_withdrawal = Some prev_next_withdrawal
-                        ; next_cancelled_deposit = None
+                        { next_cancelled_deposit = None
+                        ; next_withdrawal = Some prev_next_withdrawal
                         }
                       |> var_to_precondition_fine
                   }
               }
           }
         in
+        let@ () = with_label __LOC__ in
         let* lower =
           Slot.Checked.add commit.slot_range.upper
             (constant Mina_numbers.Global_slot_span.typ withdrawal_delay)
         in
+        let@ () = with_label __LOC__ in
         let witness_outer =
           { default_account_update with
             public_key = constant PC.typ zeko_l1
@@ -213,6 +227,7 @@ struct
               }
           }
         in
+        let@ () = with_label __LOC__ in
         let account_update =
           { default_account_update with
             public_key
@@ -224,6 +239,7 @@ struct
                 of_unsigned base_params.amount |> negate)
           }
         in
+        let@ () = with_label __LOC__ in
         let*| out =
           make_outputs ~chain:chain_l1 account_update
             [ (helper_token_owner, [ (helper_account, []) ])

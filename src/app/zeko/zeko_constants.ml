@@ -36,6 +36,10 @@ let da_layer_check_salt = "zeko da layer check"
 
 let commit_max_valid_while = Mina_numbers.Global_slot_since_genesis.max_value
 
+let deposit_salt = "Deposit_params - qFB3jXP*)"
+
+let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
+
 module Max_excess_actions = struct
   let inner_sync = Int.pow 2 10
 
