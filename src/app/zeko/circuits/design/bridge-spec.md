@@ -117,7 +117,7 @@ let withdraw_action
     ; token_id = token_id_l2
     ; balance_change = params.withdrawal.amount
     ; may_use_token = Parents_own_token
-    ; authorization_kind = None
+    ; authorization_kind = Proof
     }
   in
   let a' =
