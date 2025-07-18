@@ -113,6 +113,11 @@ module Input = struct
     [@@deriving yojson]
   end
 
+  module Bridge = struct
+    type t = Outer_action_witness of Bridge.Outer_action_witness.serializable
+    [@@deriving yojson]
+  end
+
   type t =
     | Ping
     | Txn_snark of Txn_snark.t
@@ -122,6 +127,7 @@ module Input = struct
         ( Outer_commit.Ase_outer_inst.serializable
         * Outer_commit.Ase_inner_inst.serializable )
     | Outer_commit of Outer_commit.Witness.serializable
+    | Bridge of Bridge.t
   [@@deriving yojson]
 end
 
@@ -250,6 +256,27 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       let%map (_stmt, parent_with_calls), proof =
         time ?fake_proving_time ~logger "Outer_rules.commit"
           ( prove (Outer_commit.Witness.of_serializable ~vk_hash input)
+          |> Promise.to_deferred )
+      in
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
+  | Bridge (Outer_action_witness input) ->
+      let Compile_simple.[ _; prove; _ ] = Outer_rules_inst.provers in
+      let%bind vk_hash =
+        Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%map (_stmt, parent_with_calls), proof =
+        time ?fake_proving_time ~logger "Outer_rules.action_witness"
+          ( prove
+              (Bridge.Outer_action_witness.of_serializable ~proof_cache_db
+                 ~vk_hash input )
           |> Promise.to_deferred )
       in
       Output.Call_forest

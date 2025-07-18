@@ -105,12 +105,7 @@ module Acc_set_witness = struct
     end
   end)
 
-  type t = Txn_state.update_acc_set_witness =
-    { get_account_set_x : unit -> Token_id.t
-    ; get_account_set_z : unit -> Token_id.t
-    ; get_account_set_x_path : unit -> Path.t
-    ; get_account_set_y_path : unit -> Path.t
-    }
+  type t = Txn_state.update_acc_set_witness
 
   type serializable =
     { x : Token_id.t list
@@ -173,19 +168,7 @@ module Acc_set_witness = struct
 end
 
 module Zkapp_rule_input_witness = struct
-  type t = Rule_zkapp_command.Zkapp_rule_input_witness.t =
-    { stack_frame :
-        (Token_id.t, Zkapp_command.Call_forest.With_hashes.t) Stack_frame.t
-    ; call_stack :
-        ( ( (Token_id.t, Zkapp_command.Call_forest.With_hashes.t) Stack_frame.t
-          , Stack_frame.Digest.t )
-          With_hash.t
-        , Call_stack_digest.t )
-        With_stack_hash.t
-        list
-    ; source_ledger_sparse : Mina_ledger.Sparse_ledger.t
-    ; update_acc_set_witness : Acc_set_witness.t
-    }
+  type t = Rule_zkapp_command.Zkapp_rule_input_witness.t
 
   type serializable =
     { stack_frame :
@@ -264,13 +247,7 @@ module Local_state = struct
 end
 
 module Zkapp_rule_input = struct
-  type t = Rule_zkapp_command.Zkapp_rule_input.t =
-    { source_ledger : Ledger_hash.t
-    ; source_local_state : Local_state.t
-    ; sequencer : Even_PC.t
-    ; source_acc_set : Account_set.t
-    ; witness : Zkapp_rule_input_witness.t
-    }
+  type t = Rule_zkapp_command.Zkapp_rule_input.t
 
   type serializable =
     { source_ledger : Ledger_hash.t
@@ -293,12 +270,7 @@ module Zkapp_rule_input = struct
 end
 
 module Per_account_update = struct
-  type t = Rule_zkapp_command.Per_account_update.t =
-    { account_updates : Zkapp_command.Digest.Forest.t
-    ; memo_hash : F.t
-    ; account_updates_data : Zkapp_command.Call_forest.With_hashes.t
-    ; shift_action_state : bool
-    }
+  type t = Rule_zkapp_command.Per_account_update.t
 
   type serializable =
     { account_updates : Zkapp_command.Digest.Forest.t
@@ -329,12 +301,7 @@ module Verification_key = struct
 end
 
 module Zkapp_single_proved_input = struct
-  type t = Rule_zkapp_command.Zkapp_single_proved_input.t =
-    { base : Zkapp_rule_input.t
-    ; vk : Verification_key.t
-    ; zkapp_proof : Proof.t
-    ; first : Per_account_update.t
-    }
+  type t = Rule_zkapp_command.Zkapp_single_proved_input.t
 
   type serializable =
     { base : Zkapp_rule_input.serializable
@@ -354,8 +321,7 @@ module Zkapp_single_proved_input = struct
 end
 
 module Zkapp_single_unproved_input = struct
-  type t = Rule_zkapp_command.Zkapp_single_unproved_input.t =
-    { base : Zkapp_rule_input.t; first : Per_account_update.t }
+  type t = Rule_zkapp_command.Zkapp_single_unproved_input.t
 
   type serializable =
     { base : Zkapp_rule_input.serializable
@@ -370,11 +336,7 @@ module Zkapp_single_unproved_input = struct
 end
 
 module Zkapp_double_unproved_input = struct
-  type t = Rule_zkapp_command.Zkapp_double_unproved_input.t =
-    { base : Zkapp_rule_input.t
-    ; first : Per_account_update.t
-    ; second : Per_account_update.t
-    }
+  type t = Rule_zkapp_command.Zkapp_double_unproved_input.t
 
   type serializable =
     { base : Zkapp_rule_input.serializable
@@ -403,10 +365,7 @@ module Sparse_ledger_handler = struct
 end
 
 module Base_witness = struct
-  type t = Rule_signed_command.Base_witness.t =
-    { ledger_path_handler : Handler.t
-    ; update_acc_set_witness : Acc_set_witness.t
-    }
+  type t = Rule_signed_command.Base_witness.t
 
   type serializable =
     { ledger_path_handler : Sparse_ledger.t
@@ -423,13 +382,7 @@ module Base_witness = struct
 end
 
 module Base_input = struct
-  type t = Rule_signed_command.Base_input.t =
-    { source_ledger : Ledger_hash.t
-    ; source_acc_set : Account_set.t
-    ; sequencer : Even_PC.t
-    ; transaction : Mina_transaction.Transaction_union.t
-    ; witness : Base_witness.t
-    }
+  type t = Rule_signed_command.Base_input.t
 
   type transaction_union =
     | Command of Signed_command.t
@@ -654,8 +607,7 @@ module Inner_sync = struct
   end)
 
   module Witness = struct
-    type t = Rule_inner_sync.Witness.t =
-      { public_key : Public_key.Compressed.t; vk_hash : F.t; ase : Ase_inst.t }
+    type t = Rule_inner_sync.Witness.t
 
     type serializable =
       { public_key : Public_key.Compressed.t; ase : Ase_inst.serializable }
@@ -705,19 +657,7 @@ module Outer_commit = struct
   end)
 
   module Witness = struct
-    type t = Outer_rules_inst.Rule_commit_inst.Witness.t =
-      { txn_snark : Txn_snark.t
-      ; public_key : Public_key.Compressed.t
-      ; vk_hash : F.t
-      ; verify_both_ases : Verify_both_ases.t
-      ; old_inner_acc : Account.t
-      ; old_inner_acc_path : Path.t
-      ; new_inner_acc : Account.t
-      ; new_inner_acc_path : Path.t
-      ; da_signature : Signature_lib.Schnorr.Chunked.Signature.t
-      ; da_key : Even_PC.t
-      ; slot_range : Slot_range.t
-      }
+    type t = Outer_rules_inst.Rule_commit_inst.Witness.t
 
     type serializable =
       { txn_snark : Txn_snark.serializable
@@ -757,6 +697,47 @@ module Outer_commit = struct
       ; da_signature
       ; da_key
       ; slot_range
+      }
+  end
+end
+
+module Bridge = struct
+  module Outer_action_witness = struct
+    module Witness = struct
+      type t = Rollup_state.Outer_action.Witness.t
+
+      type serializable =
+        { aux : F.t
+        ; children :
+            ( Account_update.Stable.Latest.t
+            , Zkapp_command.Digest.Account_update.t
+            , Zkapp_command.Digest.Forest.t )
+            Zkapp_command.Call_forest.t
+        ; slot_range : Slot_range.t
+        }
+      [@@deriving yojson]
+
+      let of_serializable ~proof_cache_db
+          ({ aux; children; slot_range } : serializable) : t =
+        { aux
+        ; children =
+            Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+              ~proof_cache_db children
+        ; slot_range
+        }
+    end
+
+    type t = Rule_action_witness.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t; witness : Witness.serializable }
+    [@@deriving yojson]
+
+    let of_serializable ~proof_cache_db ({ public_key; witness } : serializable)
+        ~vk_hash : t =
+      { public_key
+      ; vk_hash
+      ; witness = Witness.of_serializable ~proof_cache_db witness
       }
   end
 end
