@@ -277,18 +277,6 @@ open struct
       let consensus_constants =
         Consensus.Constants.create ~constraint_constants ~protocol_constants
 
-      let _dummy_state_body =
-        let compile_time_genesis =
-          Mina_state.Genesis_protocol_state.t
-            ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
-            ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
-            ~constraint_constants ~consensus_constants
-            ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
-        in
-        Mina_state.Protocol_state.body compile_time_genesis.data
-
-      let () = printf "%i\n%!" constraint_constants.ledger_depth
-
       let () = assert (Int.(constraint_constants.ledger_depth = 35))
 
       let intermediate_ledger_hashes =

@@ -125,6 +125,7 @@
  (libraries
   sequencer_lib
   is_compile_simple_real_fake
+  test_spec
   ;; mina ;;
   init
   signature_lib
