@@ -112,9 +112,9 @@ let transaction_snark ?proving_timeout t input =
       failwith "Unexpected response from prover"
 
 let ase_with_length ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Ase (With_length input))
+  send ?proving_timeout t (Prover.Input.Folder (Ase_with_length input))
   >>| function
-  | Prover.Output.Ase (With_length ase) ->
+  | Prover.Output.Folder (Ase_with_length ase) ->
       ase
   | Prover.Output.Error err ->
       failwith err
@@ -122,10 +122,20 @@ let ase_with_length ?proving_timeout t input =
       failwith "Unexpected response from prover"
 
 let ase_without_length ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Ase (Without_length input))
+  send ?proving_timeout t (Prover.Input.Folder (Ase_without_length input))
   >>| function
-  | Prover.Output.Ase (Without_length ase) ->
+  | Prover.Output.Folder (Ase_without_length ase) ->
       ase
+  | Prover.Output.Error err ->
+      failwith err
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let check_accepted_mina ?proving_timeout t input =
+  send ?proving_timeout t (Prover.Input.Folder (Check_accepted_mina input))
+  >>| function
+  | Prover.Output.Folder (Check_accepted_mina check_accepted) ->
+      check_accepted
   | Prover.Output.Error err ->
       failwith err
   | _ ->
@@ -241,16 +251,62 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
   | _ ->
       failwith "Unexpected response from prover"
 
-let submit_deposit ?proving_timeout:_ _t ~outer_pk:_ ~deposit:_ =
-  failwith "Not implemented"
+let outer_action_witness ?proving_timeout t witness =
+  send ?proving_timeout t Prover.Input.(Bridge (Outer_action_witness witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error err
+  | _ ->
+      failwith "Unexpected response from prover"
 
-let submit_withdrawal ?proving_timeout:_ _t ~withdrawal:_ =
-  failwith "Not implemented"
+let inner_action_witness ?proving_timeout t witness =
+  send ?proving_timeout t Prover.Input.(Bridge (Inner_action_witness witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error err
+  | _ ->
+      failwith "Unexpected response from prover"
 
-let process_deposit ?proving_timeout:_ _t ~is_new:_ ~pointer:_ ~before:_
-    ~after:_ ~deposit:_ =
-  failwith "Not implemented"
+let finalize_deposit ?proving_timeout t witness =
+  send ?proving_timeout t Prover.Input.(Bridge (Finalize_deposit witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error err
+  | _ ->
+      failwith "Unexpected response from prover"
 
-let process_withdrawal ?proving_timeout:_ _t ~outer_pk:_ ~is_new:_ ~pointer:_
-    ~before:_ ~after:_ ~withdrawal:_ =
-  failwith "Not implemented"
+let inner_receive ?proving_timeout t witness =
+  send ?proving_timeout t Prover.Input.(Bridge (Inner_receive witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error err
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let finalize_withdrawal ?proving_timeout t witness =
+  send ?proving_timeout t Prover.Input.(Bridge (Finalize_withdrawal witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error err
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let outer_token_owner ?proving_timeout t witness =
+  send ?proving_timeout t Prover.Input.(Bridge (Outer_token_owner witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error err
+  | _ ->
+      failwith "Unexpected response from prover"

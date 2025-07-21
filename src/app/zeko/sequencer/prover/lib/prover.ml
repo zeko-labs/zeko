@@ -27,19 +27,23 @@ module Make_folder (System : sig
     type t [@@deriving yojson]
   end
 
+  module Elem : sig
+    type t
+  end
+
   type trans = { source : Stmt.t; target : Stmt.t }
 
-  val leaf : F.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
+  val leaf : Elem.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
 
   val leaf_option :
-    F.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
+    Elem.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
 
   val extend :
-       F.t list * (trans * Compile_simple.Proof.t)
+       Elem.t list * (trans * Compile_simple.Proof.t)
     -> (trans * Compile_simple.Proof.t) Promise.t
 
   val extend_option :
-       F.t list * (trans * Compile_simple.Proof.t)
+       Elem.t list * (trans * Compile_simple.Proof.t)
     -> (trans * Compile_simple.Proof.t) Promise.t
 
   val leaf_iterations : int
@@ -95,6 +99,8 @@ end
 
 module Folder_with_length = Make_folder (Ase.With_length)
 module Folder_without_length = Make_folder (Ase.Without_length)
+module Folder_check_accepted_mina =
+  Make_folder (Bridge.Finalize_deposit.Check_accepted_mina)
 
 (* Unfortunately yojson doesn't support GADTs so it can't be one type, or maybe I'm just bad *)
 module Input = struct
@@ -106,22 +112,31 @@ module Input = struct
     [@@deriving yojson]
   end
 
-  module Ase = struct
+  module Folder = struct
     type t =
-      | With_length of (Ase.With_length.Stmt.t * F.t list)
-      | Without_length of (Ase.Without_length.Stmt.t * F.t list)
+      | Ase_with_length of (Ase.With_length.Stmt.t * F.t list)
+      | Ase_without_length of (Ase.Without_length.Stmt.t * F.t list)
+      | Check_accepted_mina of
+          ( Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t
+          * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list )
     [@@deriving yojson]
   end
 
   module Bridge = struct
-    type t = Outer_action_witness of Bridge.Outer_action_witness.serializable
+    type t =
+      | Outer_action_witness of Bridge.Outer_action_witness.serializable
+      | Inner_action_witness of Bridge.Inner_action_witness.serializable
+      | Finalize_deposit of Bridge.Finalize_deposit.serializable
+      | Inner_receive of Bridge.Inner_receive.serializable
+      | Finalize_withdrawal of Bridge.Finalize_withdrawal.serializable
+      | Outer_token_owner of Bridge.Outer_token_owner.serializable
     [@@deriving yojson]
   end
 
   type t =
     | Ping
     | Txn_snark of Txn_snark.t
-    | Ase of Ase.t
+    | Folder of Folder.t
     | Inner_sync of Inner_sync.Witness.serializable
     | Verify_both_ases of
         ( Outer_commit.Ase_outer_inst.serializable
@@ -132,10 +147,11 @@ module Input = struct
 end
 
 module Output = struct
-  module Ase = struct
+  module Folder = struct
     type t =
-      | With_length of Folder_with_length.out_t
-      | Without_length of Folder_without_length.out_t
+      | Ase_with_length of Folder_with_length.out_t
+      | Ase_without_length of Folder_without_length.out_t
+      | Check_accepted_mina of Folder_check_accepted_mina.out_t
     [@@deriving yojson]
   end
 
@@ -143,7 +159,7 @@ module Output = struct
     | Error of string
     | Pong
     | Txn_snark of (Zeko_stmt.t * Compile_simple.Proof.t)
-    | Ase of Ase.t
+    | Folder of Folder.t
     | Verify_both_ases of Outer_commit.Verify_both_ases.serializable
     | Call_forest of
         ( Account_update.Body.t
@@ -222,18 +238,24 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
               (Zkapp_command.Call_forest.map
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
-  | Ase (With_length (source, elems)) ->
+  | Folder (Ase_with_length (source, elems)) ->
       let%map snark =
-        time ?fake_proving_time ~logger "Folder_with_length.fold"
+        time ?fake_proving_time ~logger "Folder.Ase_with_length.fold"
           (Folder_with_length.fold ~source ~elems |> Promise.to_deferred)
       in
-      Output.(Ase (With_length snark))
-  | Ase (Without_length (source, elems)) ->
+      Output.(Folder (Ase_with_length snark))
+  | Folder (Ase_without_length (source, elems)) ->
       let%map snark =
-        time ?fake_proving_time ~logger "Folder_without_length.fold"
+        time ?fake_proving_time ~logger "Folder.Ase_without_length.fold"
           (Folder_without_length.fold ~source ~elems |> Promise.to_deferred)
       in
-      Output.(Ase (Without_length snark))
+      Output.(Folder (Ase_without_length snark))
+  | Folder (Check_accepted_mina (source, elems)) ->
+      let%map snark =
+        time ?fake_proving_time ~logger "Folder.Check_accepted_mina.fold"
+          (Folder_check_accepted_mina.fold ~source ~elems |> Promise.to_deferred)
+      in
+      Output.(Folder (Check_accepted_mina snark))
   | Verify_both_ases (outer, inner) ->
       let Compile_simple.[ prove ] = Rule_commit.Verify_both_ases.provers in
       let%map stmt, proof =
@@ -277,6 +299,126 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
           ( prove
               (Bridge.Outer_action_witness.of_serializable ~proof_cache_db
                  ~vk_hash input )
+          |> Promise.to_deferred )
+      in
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
+  | Bridge (Inner_action_witness input) ->
+      let Compile_simple.[ _; prove ] = Inner_rules_inst.provers in
+      let%bind vk_hash =
+        Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%map (_stmt, parent_with_calls), proof =
+        time ?fake_proving_time ~logger "Inner_rules.action_witness"
+          ( prove
+              (Bridge.Inner_action_witness.of_serializable ~proof_cache_db
+                 ~vk_hash input )
+          |> Promise.to_deferred )
+      in
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
+  | Bridge (Finalize_deposit input) ->
+      let Compile_simple.[ prove; _ ] = Bridge_inst_mina.System_L2.provers in
+      let%bind vk_hash =
+        Compile_simple.Verification_key.of_tag Bridge_inst_mina.System_L2.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%map (_stmt, parent_with_calls), proof =
+        time ?fake_proving_time ~logger "Bridge_mina.System_L2.finalize_deposit"
+          ( prove (Bridge.Finalize_deposit.of_serializable ~vk_hash input)
+          |> Promise.to_deferred )
+      in
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
+  | Bridge (Inner_receive input) ->
+      let Compile_simple.[ _; prove ] = Bridge_inst_mina.System_L2.provers in
+      let%bind vk_hash =
+        Compile_simple.Verification_key.of_tag Bridge_inst_mina.System_L2.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%map (_stmt, parent_with_calls), proof =
+        time ?fake_proving_time ~logger "Bridge_mina.System_L2.inner_receive"
+          ( prove (Bridge.Inner_receive.of_serializable ~vk_hash input)
+          |> Promise.to_deferred )
+      in
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
+  | Bridge (Finalize_withdrawal input) ->
+      let Compile_simple.[ _; prove; _ ] =
+        Bridge_inst_mina.System_L1_enabled.provers
+      in
+      let%bind vk_hash =
+        Compile_simple.Verification_key.of_tag
+          Bridge_inst_mina.System_L1_enabled.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%bind helper_token_owner_l1_vk_hash =
+        Compile_simple.Verification_key.of_tag
+          Bridge_inst_mina.System_L1_token_owner.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%bind inner_vk_hash =
+        Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%map (_stmt, parent_with_calls), proof =
+        time ?fake_proving_time ~logger
+          "Bridge_mina.System_L1.finalize_withdrawal"
+          ( prove
+              (Bridge.Finalize_withdrawal.of_serializable ~vk_hash
+                 ~helper_token_owner_l1_vk_hash ~inner_vk_hash input )
+          |> Promise.to_deferred )
+      in
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
+  | Bridge (Outer_token_owner input) ->
+      let Compile_simple.[ prove ] =
+        Bridge_inst_mina.System_L1_token_owner.provers
+      in
+      let%bind vk_hash =
+        Compile_simple.Verification_key.of_tag
+          Bridge_inst_mina.System_L1_token_owner.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%map (_stmt, parent_with_calls), proof =
+        time ?fake_proving_time ~logger
+          "Bridge_mina.System_L1_token_owner.allow"
+          ( prove (Bridge.Outer_token_owner.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
       in
       Output.Call_forest

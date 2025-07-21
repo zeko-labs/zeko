@@ -40,24 +40,12 @@ module Snarky_serializable (Typ : SnarkType) = struct
     with e -> Error (Exn.to_string e)
 end
 
-module Inner_rules_inst =
-  Inner_rules.Make
-    (struct
-      let chain_l2 = Mina_signature_kind.Testnet
-    end)
-    ()
+module Inner_rules_inst = Inner_rules.Make (Zeko_circuits_config.Inputs) ()
 
-module Outer_rules_inst =
-  Outer_rules.Make
-    (struct
-      let max_valid_while_size =
-        Slot.to_int Zeko_constants.commit_max_valid_while
+module Outer_rules_inst = Outer_rules.Make (Zeko_circuits_config.Inputs) ()
 
-      let inner_public_key = Zeko_constants.inner_public_key
-
-      let chain_l1 = Mina_signature_kind.Testnet
-    end)
-    ()
+module Bridge_inst_mina =
+  Bridge_rules.Make_mina (Zeko_circuits_config.Inputs) ()
 
 module F = struct
   include F
@@ -499,6 +487,8 @@ module Ase = struct
       [@@deriving yojson]
     end
 
+    module Elem = F
+
     type trans = Ase.With_length.trans = { source : Stmt.t; target : Stmt.t }
     [@@deriving yojson]
   end
@@ -509,6 +499,8 @@ module Ase = struct
     module Stmt = struct
       type t = F.t [@@deriving yojson]
     end
+
+    module Elem = F
 
     type trans = Ase.Without_length.trans = { source : Stmt.t; target : Stmt.t }
     [@@deriving yojson]
@@ -739,5 +731,220 @@ module Bridge = struct
       ; vk_hash
       ; witness = Witness.of_serializable ~proof_cache_db witness
       }
+  end
+
+  module Inner_action_witness = struct
+    module Witness = struct
+      type t = Rollup_state.Inner_action.t
+
+      type serializable =
+        { aux : F.t
+        ; children :
+            ( Account_update.Stable.Latest.t
+            , Zkapp_command.Digest.Account_update.t
+            , Zkapp_command.Digest.Forest.t )
+            Zkapp_command.Call_forest.t
+        }
+      [@@deriving yojson]
+
+      let of_serializable ~proof_cache_db ({ aux; children } : serializable) : t
+          =
+        { aux
+        ; children =
+            Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+              ~proof_cache_db children
+        }
+    end
+
+    type t = Rule_inner_action_witness.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t; witness : Witness.serializable }
+    [@@deriving yojson]
+
+    let of_serializable ~proof_cache_db ({ public_key; witness } : serializable)
+        ~vk_hash : t =
+      { public_key
+      ; vk_hash
+      ; witness = Witness.of_serializable ~proof_cache_db witness
+      }
+  end
+
+  module Finalize_deposit = struct
+    module Check_accepted_mina = struct
+      include Bridge_inst_mina.Check_accepted
+      include Bridge_inst_mina.Check_accepted.Definition
+
+      module Stmt = struct
+        type t = Bridge_inst_mina.Check_accepted.Definition.Stmt.t
+
+        include
+          Snarky_serializable (Bridge_inst_mina.Check_accepted.Definition.Stmt)
+      end
+
+      module Elem = struct
+        type t = Bridge_inst_mina.Check_accepted.Definition.Elem.t
+
+        include
+          Snarky_serializable (Bridge_inst_mina.Check_accepted.Definition.Elem)
+      end
+
+      module Init = struct
+        type t = Bridge_inst_mina.Check_accepted.Definition.Init.t
+
+        include
+          Snarky_serializable (Bridge_inst_mina.Check_accepted.Definition.Init)
+      end
+
+      type serializable =
+        { proof : Compile_simple.Proof.t option
+        ; proof_source : Stmt.t
+        ; proof_target : Stmt.t
+        ; init : Init.t
+        ; excess : Elem.t list
+        }
+      [@@deriving yojson]
+
+      let of_serializable
+          ({ proof; proof_source; proof_target; init; excess } : serializable) =
+        Bridge_inst_mina.Rule_bridge_finalize_deposit.Check_accepted_inst.make
+          ?proof ~proof_source ~proof_target init excess
+    end
+
+    module Ase_inst = Ase.Make_serializable_ase (struct
+      module Ase_system = Ase.With_length
+      module Action_state = Outer_action_state.With_length
+
+      module Ase_inst = Bridge_inst_mina.Rule_bridge_finalize_deposit.Ase_inst
+    end)
+
+    type t = Bridge_inst_mina.Rule_bridge_finalize_deposit.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t
+      ; may_use_token :
+          Bridge_inst_mina.Rule_bridge_finalize_deposit.May_use_token.t
+      ; inner_authorization_kind : Rule_bridge_finalize_deposit.A.t
+      ; ase : Ase_inst.serializable
+      ; check_accepted : Check_accepted_mina.serializable
+      ; prev_next_deposit : Checked32.t
+      }
+    [@@deriving yojson]
+
+    let of_serializable
+        ({ public_key
+         ; may_use_token
+         ; inner_authorization_kind
+         ; ase
+         ; check_accepted
+         ; prev_next_deposit
+         } :
+          serializable ) ~vk_hash : t =
+      { public_key
+      ; vk_hash
+      ; may_use_token
+      ; inner_authorization_kind
+      ; ase = Ase_inst.of_serializable ase
+      ; check_accepted = Check_accepted_mina.of_serializable check_accepted
+      ; prev_next_deposit
+      }
+  end
+
+  module Inner_receive = struct
+    type t = Bridge_inst_mina.Rule_bridge_inner_receive.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t; amount : Currency.Amount.t }
+    [@@deriving yojson]
+
+    let of_serializable ({ public_key; amount } : serializable) ~vk_hash : t =
+      { public_key; vk_hash; amount }
+  end
+
+  module Finalize_withdrawal = struct
+    module Ase_outer_inst = Ase.Make_serializable_ase (struct
+      module Ase_system = Ase.Without_length
+      module Action_state = Outer_action_state
+
+      module Ase_inst =
+        Bridge_inst_mina.Rule_bridge_finalize_withdrawal.Ase_outer_inst
+    end)
+
+    module Ase_inner_inst = Ase.Make_serializable_ase (struct
+      module Ase_system = Ase.With_length
+      module Action_state = Inner_action_state.With_length
+
+      module Ase_inst =
+        Bridge_inst_mina.Rule_bridge_finalize_withdrawal.Ase_inner_inst
+    end)
+
+    type t = Bridge_inst_mina.Rule_bridge_finalize_withdrawal.Witness.t
+
+    module Commit = struct
+      type t = Rollup_state.Outer_action.Commit.t
+
+      include Snarky_serializable (Rollup_state.Outer_action.Commit)
+    end
+
+    module Withdrawal_params = struct
+      type t = Bridge_state.Withdrawal_params_base.t
+
+      include Snarky_serializable (Bridge_state.Withdrawal_params_base)
+    end
+
+    type serializable =
+      { public_key : Public_key.Compressed.t
+      ; may_use_token :
+          Bridge_inst_mina.Rule_bridge_finalize_withdrawal.May_use_token.t
+      ; outer_authorization_kind : Rule_bridge_finalize_withdrawal.A.t
+      ; commit : Commit.t
+      ; before_commit : Outer_action_state.t
+      ; commit_ase : Ase_outer_inst.serializable
+      ; before_withdrawal : Inner_action_state.t
+      ; withdrawal_ase : Ase_inner_inst.serializable
+      ; prev_next_withdrawal : Checked32.t
+      ; withdrawal_params : Withdrawal_params.t
+      }
+    [@@deriving yojson]
+
+    let of_serializable
+        ({ public_key
+         ; may_use_token
+         ; outer_authorization_kind
+         ; commit
+         ; before_commit
+         ; commit_ase
+         ; before_withdrawal
+         ; withdrawal_ase
+         ; prev_next_withdrawal
+         ; withdrawal_params
+         } :
+          serializable ) ~vk_hash ~helper_token_owner_l1_vk_hash ~inner_vk_hash
+        : t =
+      { public_key
+      ; vk_hash
+      ; may_use_token
+      ; outer_authorization_kind
+      ; commit
+      ; before_commit
+      ; commit_ase = Ase_outer_inst.of_serializable commit_ase
+      ; before_withdrawal
+      ; withdrawal_ase = Ase_inner_inst.of_serializable withdrawal_ase
+      ; prev_next_withdrawal
+      ; withdrawal_params
+      ; helper_token_owner_l1_vk_hash
+      ; inner_vk_hash
+      }
+  end
+
+  module Outer_token_owner = struct
+    type t = Bridge_inst_mina.Rule_bridge_outer_token_owner.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t; a : Account_update.Body.t }
+    [@@deriving yojson]
+
+    let of_serializable ({ public_key; a } : serializable) ~vk_hash : t =
+      { public_key; vk_hash; a }
   end
 end
