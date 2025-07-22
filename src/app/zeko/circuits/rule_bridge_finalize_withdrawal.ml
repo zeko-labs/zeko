@@ -50,13 +50,15 @@ struct
   module Ase_outer_inst = Ase.Without_length.Make (struct
     module Action_state = Rollup_state.Outer_action_state
 
-    let get_iterations = Int.pow 2 10
+    let get_iterations =
+      Zeko_constants.Max_excess_actions.Finalize_withdrawal.outer
   end)
 
   module Ase_inner_inst = Ase.With_length.Make (struct
     module Action_state = Rollup_state.Inner_action_state
 
-    let get_iterations = Int.pow 2 10
+    let get_iterations =
+      Zeko_constants.Max_excess_actions.Finalize_withdrawal.inner
   end)
 
   module Witness = struct

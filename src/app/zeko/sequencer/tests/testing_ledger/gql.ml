@@ -1684,8 +1684,19 @@ module Mutations = struct
       ~args:Arg.[]
       ~resolve:(fun { ctx = t; _ } () -> State.clear_pool t ; "Cleared")
 
-  let commands =
-    [ send_payment; send_zkapp; create_account; create_new_block; clear_pool ]
+  let reset_state ~reset_callback =
+    field "resetState" ~doc:"Reset the state" ~typ:(non_null string)
+      ~args:Arg.[]
+      ~resolve:(fun _ () -> reset_callback () ; "Reset")
+
+  let commands ~reset_callback =
+    [ send_payment
+    ; send_zkapp
+    ; create_account
+    ; create_new_block
+    ; clear_pool
+    ; reset_state ~reset_callback
+    ]
 end
 
 module Queries = struct
@@ -1976,5 +1987,6 @@ module Queries = struct
     @ Archive.commands
 end
 
-let schema =
-  Graphql_async.Schema.(schema Queries.commands ~mutations:Mutations.commands)
+let schema ~reset_callback =
+  Graphql_async.Schema.(
+    schema Queries.commands ~mutations:(Mutations.commands ~reset_callback))

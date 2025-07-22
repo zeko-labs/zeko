@@ -394,8 +394,8 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         time ?fake_proving_time ~logger
           "Bridge_mina.System_L1.finalize_withdrawal"
           ( prove
-              (Bridge.Finalize_withdrawal.of_serializable ~vk_hash
-                 ~helper_token_owner_l1_vk_hash ~inner_vk_hash input )
+              (Bridge.Finalize_withdrawal.of_serializable ~proof_cache_db
+                 ~vk_hash ~helper_token_owner_l1_vk_hash ~inner_vk_hash input )
           |> Promise.to_deferred )
       in
       Output.Call_forest

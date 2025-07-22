@@ -12,6 +12,14 @@ let ok_exn = function
   | Error e ->
       failwith e
 
+module type SnarkTypeWithoutAux = sig
+  type t
+
+  type var
+
+  val typ : (var, t) Typ.t
+end
+
 module Snarky_serializable (Typ : SnarkType) = struct
   let of_fields fields =
     let (Typ typ) = Typ.typ in
@@ -771,6 +779,47 @@ module Bridge = struct
   end
 
   module Finalize_deposit = struct
+    module Deposit_params_base = struct
+      type t = Bridge_state.Deposit_params_base.t
+
+      type serializable =
+        { children :
+            ( Account_update.Stable.Latest.t
+            , Zkapp_command.Digest.Account_update.t
+            , Zkapp_command.Digest.Forest.t )
+            Zkapp_command.Call_forest.t
+        ; holder_account_l1 : Public_key.Compressed.t
+        ; amount : Currency.Amount.t
+        ; recipient : Public_key.Compressed.t
+        ; timeout : Slot.t
+        }
+      [@@deriving yojson]
+
+      let of_serializable ~proof_cache_db
+          ({ children; holder_account_l1; amount; recipient; timeout } :
+            serializable ) : t =
+        { children =
+            Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+              ~proof_cache_db children
+        ; holder_account_l1
+        ; amount
+        ; recipient
+        ; timeout
+        }
+
+      let to_serializable
+          ({ children; holder_account_l1; amount; recipient; timeout } : t) :
+          serializable =
+        { children =
+            Zkapp_command.Call_forest.With_hashes.read_all_proofs_from_disk
+              children
+        ; holder_account_l1
+        ; amount
+        ; recipient
+        ; timeout
+        }
+    end
+
     module Check_accepted_mina = struct
       include Bridge_inst_mina.Check_accepted
       include Bridge_inst_mina.Check_accepted.Definition
@@ -886,10 +935,36 @@ module Bridge = struct
       include Snarky_serializable (Rollup_state.Outer_action.Commit)
     end
 
-    module Withdrawal_params = struct
+    module Withdrawal_params_base = struct
       type t = Bridge_state.Withdrawal_params_base.t
 
-      include Snarky_serializable (Bridge_state.Withdrawal_params_base)
+      type serializable =
+        { children :
+            ( Account_update.Stable.Latest.t
+            , Zkapp_command.Digest.Account_update.t
+            , Zkapp_command.Digest.Forest.t )
+            Zkapp_command.Call_forest.t
+        ; amount : Currency.Amount.t
+        ; recipient : Public_key.Compressed.t
+        }
+      [@@deriving yojson]
+
+      let of_serializable ~proof_cache_db
+          ({ children; amount; recipient } : serializable) : t =
+        { children =
+            Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+              ~proof_cache_db children
+        ; amount
+        ; recipient
+        }
+
+      let to_serializable ({ children; amount; recipient } : t) : serializable =
+        { children =
+            Zkapp_command.Call_forest.With_hashes.read_all_proofs_from_disk
+              children
+        ; amount
+        ; recipient
+        }
     end
 
     type serializable =
@@ -903,11 +978,11 @@ module Bridge = struct
       ; before_withdrawal : Inner_action_state.t
       ; withdrawal_ase : Ase_inner_inst.serializable
       ; prev_next_withdrawal : Checked32.t
-      ; withdrawal_params : Withdrawal_params.t
+      ; withdrawal_params : Withdrawal_params_base.serializable
       }
     [@@deriving yojson]
 
-    let of_serializable
+    let of_serializable ~proof_cache_db
         ({ public_key
          ; may_use_token
          ; outer_authorization_kind
@@ -931,7 +1006,9 @@ module Bridge = struct
       ; before_withdrawal
       ; withdrawal_ase = Ase_inner_inst.of_serializable withdrawal_ase
       ; prev_next_withdrawal
-      ; withdrawal_params
+      ; withdrawal_params =
+          Withdrawal_params_base.of_serializable withdrawal_params
+            ~proof_cache_db
       ; helper_token_owner_l1_vk_hash
       ; inner_vk_hash
       }

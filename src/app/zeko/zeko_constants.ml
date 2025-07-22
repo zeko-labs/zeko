@@ -26,6 +26,13 @@ let inner_public_key =
 let inner_account_id =
   Account_id.of_public_key (Public_key.decompress_exn inner_public_key)
 
+let inner_holder_key =
+  let pk =
+    Snark_params.Tick.Inner_curve.(
+      to_affine_exn @@ point_near_x @@ Field.Constant.of_int 987654321)
+  in
+  Public_key.compress pk
+
 let inner_account_index = 0
 
 let indexed_merkle_tree_salt = "indexed merkle tree entry hash"
@@ -34,16 +41,38 @@ let indexed_merkle_tree_merge_salt = "indexed merkle tree"
 
 let da_layer_check_salt = "zeko da layer check"
 
-let commit_max_valid_while = Mina_numbers.Global_slot_since_genesis.max_value
-
 let deposit_salt = "Deposit_params - qFB3jXP*)"
 
 let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
 
 module Max_excess_actions = struct
-  let inner_sync = Int.pow 2 10
+  module Inner_sync = struct
+    let outer = Int.pow 2 10
+  end
 
-  let commit_inner = Int.pow 2 10
+  module Commit = struct
+    let inner = Int.pow 2 10
 
-  let commit_outer = Int.pow 2 10
+    let outer = Int.pow 2 10
+  end
+
+  module Finalize_cancelled_deposit = struct
+    let outer = Int.pow 2 10
+
+    let outer_with_length = Int.pow 2 10
+
+    let check_accepted = Int.pow 2 7
+  end
+
+  module Finalize_deposit = struct
+    let outer = Int.pow 2 8
+
+    let check_accepted = Int.pow 2 7
+  end
+
+  module Finalize_withdrawal = struct
+    let inner = Int.pow 2 10
+
+    let outer = Int.pow 2 10
+  end
 end

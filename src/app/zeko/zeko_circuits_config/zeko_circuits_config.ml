@@ -11,22 +11,38 @@ end
 type t =
   { chain_l1 : Mina_signature_kind.t
   ; chain_l2 : Mina_signature_kind.t
-  ; max_valid_while_size : int
-  ; holder_accounts_l1 : Public_key.Compressed.t list
-  ; holder_account_l2 : Public_key.Compressed.t
-  ; helper_token_owner_l1 : Public_key.Compressed.t
-  ; zeko_l1 : Public_key.Compressed.t
+  ; max_valid_while_size : Zeko_circuits.Zeko_util.Slot.t
+  ; holder_accounts_l1 : (Public_key.Compressed.t * Private_key.t) list
+  ; helper_token_owner_l1 : Public_key.Compressed.t * Private_key.t
+  ; zeko_l1 : Public_key.Compressed.t * Private_key.t
   ; withdrawal_delay : Global_slot_span.t
   }
 [@@deriving yojson]
 
 let t =
-  let path = Sys.getenv "ZEKO_CIRCUITS_CONFIG" in
-  match Yojson.Safe.from_file path |> of_yojson with
-  | Ok t ->
-      t
-  | Error err ->
-      failwithf "Failed to parse Zeko circuits config: %s" err ()
+  match Sys.getenv_opt "ZEKO_CIRCUITS_CONFIG" with
+  | None ->
+      failwith "ZEKO_CIRCUITS_CONFIG is not set"
+  | Some "test" ->
+      let random_keypair () =
+        let kp = Keypair.create () in
+        (Public_key.compress kp.public_key, kp.private_key)
+      in
+      { chain_l1 = Mainnet
+      ; chain_l2 = Other_network "zeko-testnet"
+      ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
+      ; holder_accounts_l1 =
+          [ random_keypair (); random_keypair (); random_keypair () ]
+      ; helper_token_owner_l1 = random_keypair ()
+      ; zeko_l1 = random_keypair ()
+      ; withdrawal_delay = Global_slot_span.of_int 5
+      }
+  | Some path -> (
+      match Yojson.Safe.from_file path |> of_yojson with
+      | Ok t ->
+          t
+      | Error err ->
+          failwithf "Failed to parse Zeko circuits config: %s" err () )
 
 module Inputs = struct
   let inner_public_key = Zeko_constants.inner_public_key
@@ -35,15 +51,16 @@ module Inputs = struct
 
   let chain_l2 = t.chain_l2
 
-  let max_valid_while_size = t.max_valid_while_size
+  let max_valid_while_size =
+    Zeko_circuits.Zeko_util.Slot.to_int t.max_valid_while_size
 
-  let holder_accounts_l1 = t.holder_accounts_l1
+  let holder_accounts_l1 = List.map t.holder_accounts_l1 ~f:fst
 
-  let holder_account_l2 = t.holder_account_l2
+  let holder_account_l2 = Zeko_constants.inner_holder_key
 
-  let helper_token_owner_l1 = t.helper_token_owner_l1
+  let helper_token_owner_l1 = fst t.helper_token_owner_l1
 
-  let zeko_l1 = t.zeko_l1
+  let zeko_l1 = fst t.zeko_l1
 
   let zeko_l2 = Zeko_constants.inner_public_key
 

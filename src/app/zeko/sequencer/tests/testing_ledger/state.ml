@@ -46,6 +46,8 @@ type t =
   ; proof_cache_db : Proof_cache_tag.cache_db
   }
 
+let shutdown t = Ledger.Db.close t.db
+
 let db t = t.db
 
 let commands t = t.commands

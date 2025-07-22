@@ -144,9 +144,9 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     (List.length unprocessed_actions)
     (Field.to_string processed_actions_pointer)
     (Field.to_string unprocessed_actions_state) ;
-  let%bind tree =
+  let%bind forest =
     let da_key, da_signature = signature in
-    let%map (body, account_update_digest, calls), proof =
+    let%map (body, _, calls), proof =
       Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
         ~public_key:zkapp_pk ~inner_ase_source ~new_inner_actions ~old_inner_acc
         ~old_inner_acc_path ~new_inner_acc ~new_inner_acc_path
@@ -154,38 +154,8 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
         ~da_key:(Even_PC.create_exn da_key)
     in
     (* see #286 *)
-    match Is_compile_simple_real.is_compile_simple_real with
-    | Some eq ->
-        let proof_eq, _ = Type_equal.detuple2 eq in
-        let account_update : Account_update.t =
-          Account_update.with_aux ~body
-            ~authorization:
-              (Control.Poly.Proof
-                 (Proof_cache_tag.write_proof_to_disk proof_cache_db
-                    (Type_equal.conv proof_eq proof) ) )
-        in
-        Zkapp_command.Call_forest.Tree.
-          { account_update
-          ; account_update_digest
-          ; calls =
-              Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
-                ~proof_cache_db calls
-          }
-    | None ->
-        let account_update : Account_update.t =
-          Account_update.with_aux
-            ~body:{ body with authorization_kind = None_given }
-            ~authorization:Control.Poly.None_given
-        in
-        Zkapp_command.Call_forest.Tree.
-          { account_update
-          ; account_update_digest =
-              Zkapp_command.Digest.Account_update.create
-                ~signature_kind:executor.signature_kind account_update
-          ; calls =
-              Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
-                ~proof_cache_db calls
-          }
+    Utils.attach_proof_to_forest ~signature_kind:executor.signature_kind
+      ~proof_cache_db ~body ~calls ~proof
   in
   let command : Zkapp_command.t =
     { fee_payer =
@@ -197,7 +167,9 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
             }
         ; authorization = Signature.dummy
         }
-    ; account_updates = Zkapp_command.Call_forest.cons_tree tree []
+    ; account_updates =
+        Zkapp_command.Call_forest.map forest
+          ~f:(Account_update.write_all_proofs_to_disk ~proof_cache_db)
     ; memo = Signed_command_memo.empty
     }
   in

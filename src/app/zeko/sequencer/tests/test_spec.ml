@@ -367,10 +367,11 @@ module Sequencer_spec = struct
     }
 
   let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir ~logger
-      ~postgres_uri ~gql_uri ~da_config ~l1_network_id ~l2_network_id ~provers
-      ~slot_acceptance () =
-    let zkapp_keypair = Keypair.create () in
-
+      ~postgres_uri ~gql_uri ~da_config ~provers ~slot_acceptance () =
+    let _reset = run @@ fun () -> Gql_client.For_tests.reset_state gql_uri in
+    let zkapp_keypair =
+      Keypair.of_private_key_exn @@ snd Zeko_circuits_config.t.zeko_l1
+    in
     print_endline "(* Create signer *)" ;
     let rec create_even_signer () =
       let signer = Keypair.create () in
@@ -456,8 +457,8 @@ module Sequencer_spec = struct
         in
         let%bind command =
           Deploy.deploy_command_exn
-            ~signature_kind:(Utils.signature_kind l1_network_id)
-            ~signer ~zkapp:zkapp_keypair
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer
+            ~zkapp:zkapp_keypair
             ~fee:(Currency.Fee.of_mina_int_exn 1)
             ~nonce ~initial_ledger:ephemeral_ledger
             ~account_creation_fee:constraint_constants.account_creation_fee
@@ -479,11 +480,10 @@ module Sequencer_spec = struct
               Signature_lib.Public_key.(compress zkapp_keypair.public_key)
             ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:2
             ~db_dir ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-            ~l1_network_id ~l2_network_id ~deposit_delay_blocks:delay_deposit
-            ~provers ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01
-            ~slot_acceptance )
+            ~deposit_delay_blocks:delay_deposit ~provers ~da_key
+            ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+            ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
     in
-
     Quickcheck.Generator.return
       { zkapp_keypair
       ; signer

@@ -31,12 +31,6 @@ let provers =
   ; Host_and_port.create ~host:"localhost" ~port:9991
   ]
 
-let l1_network_id = "testnet"
-
-let l2_network_id = "testnet"
-
-let l2_signature_kind = Utils.signature_kind l2_network_id
-
 let run = Thread_safe.block_on_async_exn
 
 let free_sequencer (sequencer : Sequencer.t Handle.valid_t) =
@@ -58,15 +52,18 @@ let () =
 
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:5
-       ~postgres_uri:postgres_uri1 ~gql_uri ~da_config ~l1_network_id
-       ~l2_network_id ~provers ~slot_acceptance () )
+       ~postgres_uri:postgres_uri1 ~gql_uri ~da_config ~provers ~slot_acceptance
+       () )
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; accounts; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
               User_command.Zkapp_command
-                (account_update_send ~chain:l2_signature_kind spec)
-            else Signed_command (command_send ~chain:l2_signature_kind spec) )
+                (account_update_send ~chain:Zeko_circuits_config.Inputs.chain_l2
+                   spec )
+            else
+              Signed_command
+                (command_send ~chain:Zeko_circuits_config.Inputs.chain_l2 spec) )
       in
       let zkapp_command_with_real_proof =
         let fee_signer = List.hd_exn accounts in
@@ -87,9 +84,11 @@ let () =
         let open Initialize_state.Test_module in
         (* First one is the inner account *)
         let call_forest =
-          Zkapp_command.Call_forest.cons ~signature_kind:l2_signature_kind
+          Zkapp_command.Call_forest.cons
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
             account_creation_fee
-          @@ Zkapp_command.Call_forest.cons ~signature_kind:l2_signature_kind
+          @@ Zkapp_command.Call_forest.cons
+               ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                Deploy_account_update.account_update
           @@ Zkapp_command.Call_forest.cons_tree
                Initialize_account_update.account_update
@@ -97,7 +96,8 @@ let () =
                Update_state_account_update.account_update []
         in
         User_command.Zkapp_command
-          (Utils.sign_zkapp_command ~signature_kind:l2_signature_kind
+          (Utils.sign_zkapp_command
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
              { fee_payer =
                  { body =
                      { Account_update.Body.Fee_payer.dummy with
@@ -124,7 +124,9 @@ let () =
       run (fun () ->
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+          let%bind () =
+            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
+          in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -153,7 +155,9 @@ let () =
       run (fun () ->
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+          let%bind () =
+            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
+          in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -178,7 +182,9 @@ let () =
         run (fun () ->
             let%bind commit_result = commit !sequencer in
             let%bind _txn_snark = commit_result in
-            let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+            let%bind () =
+              Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
+            in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
@@ -207,9 +213,10 @@ let () =
                   Signature_lib.Public_key.(compress zkapp_keypair.public_key)
                 ~max_pool_size:10 ~commitment_period_sec:0. ~da_config
                 ~da_quorum:2 ~db_dir:None ~postgres_uri:postgres_uri2
-                ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer ~l1_network_id
-                ~l2_network_id ~deposit_delay_blocks:0 ~provers ~da_key
-                ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+                ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
+                ~deposit_delay_blocks:0 ~provers ~da_key ~fee_modifier:1.0
+                ~minimum_fee:0.01 ~slot_acceptance
+                ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
             in
             [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
               final_ledger_hash ;
@@ -234,9 +241,8 @@ let () =
   in
 
   Quickcheck.test ~trials:1
-    (Sequencer_spec.gen ~logger ~postgres_uri ~gql_uri ~da_config ~l1_network_id
-       ~l2_network_id ~provers ~slot_acceptance () )
-    ~f:(fun { specs; sequencer; _ } ->
+    (Sequencer_spec.gen ~logger ~postgres_uri ~gql_uri ~da_config ~provers
+       ~slot_acceptance () ) ~f:(fun { specs; sequencer; _ } ->
       let dummy_signature_command : Zkapp_command.t =
         let command = account_update_send (List.hd_exn specs) in
         { command with
@@ -281,14 +287,17 @@ let () =
   in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri ~da_config
-       ~l1_network_id ~l2_network_id ~provers ~slot_acceptance () )
+       ~provers ~slot_acceptance () )
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
               User_command.Zkapp_command
-                (account_update_send ~chain:l2_signature_kind spec)
-            else Signed_command (command_send ~chain:l2_signature_kind spec) )
+                (account_update_send ~chain:Zeko_circuits_config.Inputs.chain_l2
+                   spec )
+            else
+              Signed_command
+                (command_send ~chain:Zeko_circuits_config.Inputs.chain_l2 spec) )
       in
       run (fun () ->
           Deferred.List.iter commands ~f:(fun command ->
@@ -307,16 +316,19 @@ let () =
                 (Da_layer.Client.Config.of_string_list
                    [ "127.0.0.1:8555"; "127.0.0.1:8556"; "127.0.0.1:8557" ] )
               ~da_quorum:3 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
-              ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
-              ~deposit_delay_blocks:0 ~provers ~da_key ~fee_modifier:1.0
-              ~minimum_fee:0.01 ~slot_acceptance )
+              ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:0 ~provers
+              ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+              ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
       in
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
       run (fun () ->
           let%bind commit_result = commit new_sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () = Snark_queue.wait_to_finish new_sequencer.snark_q in
+          let%bind () =
+            Zeko_prover.Client.wait_to_finish
+              new_sequencer.bridge_prover.provers
+          in
           let%bind () =
             Executor.wait_to_finish new_sequencer.merger_ctx.executor
           in
@@ -360,14 +372,17 @@ let () =
   in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri ~da_config
-       ~l1_network_id ~l2_network_id ~provers ~slot_acceptance () )
+       ~provers ~slot_acceptance () )
     ~f:(fun { zkapp_keypair; signer; specs; sequencer; da_key; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
               User_command.Zkapp_command
-                (account_update_send ~chain:l2_signature_kind spec)
-            else Signed_command (command_send ~chain:l2_signature_kind spec) )
+                (account_update_send ~chain:Zeko_circuits_config.Inputs.chain_l2
+                   spec )
+            else
+              Signed_command
+                (command_send ~chain:Zeko_circuits_config.Inputs.chain_l2 spec) )
       in
       let batch1, batch2 = List.split_n commands 3 in
       let initial_ledger_hash = get_root !sequencer in
@@ -381,7 +396,9 @@ let () =
       run (fun () ->
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+          let%bind () =
+            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
+          in
           Executor.wait_to_finish !sequencer.merger_ctx.executor ) ;
 
       print_endline "(* Apply second batch *)" ;
@@ -394,7 +411,9 @@ let () =
         run (fun () ->
             let%bind commit_result = commit !sequencer in
             let%bind _txn_snark = commit_result in
-            let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+            let%bind () =
+              Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
+            in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
@@ -423,9 +442,9 @@ let () =
                 (Da_layer.Client.Config.of_string_list
                    [ "127.0.0.1:8555"; "127.0.0.1:8556" ] )
               ~da_quorum:2 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
-              ~archive_uri:gql_uri ~signer ~l1_network_id ~l2_network_id
-              ~deposit_delay_blocks:0 ~provers ~da_key ~fee_modifier:1.0
-              ~minimum_fee:0.01 ~slot_acceptance )
+              ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:0 ~provers
+              ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+              ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
       in
 
       print_endline "(* Check that after restart it recommited *)" ;
@@ -458,8 +477,7 @@ let () =
   in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:5 ~postgres_uri ~gql_uri
-       ~da_config ~l1_network_id ~l2_network_id ~provers
-       ~slot_acceptance:(Time.Span.of_min 10.) () )
+       ~da_config ~provers ~slot_acceptance:(Time.Span.of_min 10.) () )
     ~f:(fun { specs; sequencer; signer; zkapp_keypair; _ } ->
       run (fun () ->
           let open Mina_numbers in
@@ -473,7 +491,7 @@ let () =
                  ~valid_until:
                    Global_slot_since_genesis.(
                      add current_slot (Global_slot_span.of_int 1))
-                 ~chain:l2_signature_kind spec )
+                 ~chain:Zeko_circuits_config.Inputs.chain_l2 spec )
           in
           let%bind result = apply_user_command !sequencer command in
           [%test_eq: unit Or_error.t] result
@@ -486,7 +504,7 @@ let () =
                  ~valid_until:
                    Global_slot_since_genesis.(
                      add current_slot (Global_slot_span.of_int 5))
-                 ~chain:l2_signature_kind spec )
+                 ~chain:Zeko_circuits_config.Inputs.chain_l2 spec )
           in
           let%bind result = apply_user_command !sequencer command in
           [%test_eq: unit Or_error.t] result (Ok ()) ;
@@ -513,7 +531,7 @@ let () =
                            Global_slot_since_genesis.(
                              add current_slot (Global_slot_span.of_int 3))
                        } )
-                 ~chain:l2_signature_kind spec )
+                 ~chain:Zeko_circuits_config.Inputs.chain_l2 spec )
           in
           let%bind result = apply_user_command !sequencer command in
           [%test_eq: unit Or_error.t] result
@@ -536,7 +554,7 @@ let () =
                              add current_slot (Global_slot_span.of_int 10))
                        }
                    , Ignore )
-                 ~chain:l2_signature_kind spec )
+                 ~chain:Zeko_circuits_config.Inputs.chain_l2 spec )
           in
           let%bind result = apply_user_command !sequencer command in
           [%test_eq: unit Or_error.t] result
@@ -572,7 +590,7 @@ let () =
                            Global_slot_since_genesis.(
                              add current_slot (Global_slot_span.of_int 20))
                        } )
-                 ~chain:l2_signature_kind spec )
+                 ~chain:Zeko_circuits_config.Inputs.chain_l2 spec )
           in
           let%bind result = apply_user_command !sequencer command in
           [%test_eq: unit Or_error.t] result (Ok ()) ;
@@ -582,7 +600,9 @@ let () =
       run (fun () ->
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () = Snark_queue.wait_to_finish !sequencer.snark_q in
+          let%bind () =
+            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
+          in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in

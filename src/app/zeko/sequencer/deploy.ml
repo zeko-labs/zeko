@@ -11,7 +11,7 @@ let constraint_constants = Zeko_constants.constraint_constants
 let print_endline = Core.print_endline
 
 let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-    ~sequencer_key ~da_key ~network ~account_creation_fee () =
+    ~sequencer_key ~da_key ~account_creation_fee () =
   let logger = Logger.create () in
   let sender_keypair =
     Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
@@ -127,7 +127,8 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
             , imt_hash )
       in
       let%bind command =
-        Sequencer_lib.Deploy.deploy_command_exn ~signature_kind:network
+        Sequencer_lib.Deploy.deploy_command_exn
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
           ~signer:sender_keypair ~zkapp:zkapp_keypair
           ~fee:(Currency.Fee.of_mina_int_exn 1)
           ~nonce ~account_creation_fee ~initial_ledger:new_ledger
@@ -217,7 +218,6 @@ let () =
         and sequencer_key =
           flag "--sequencer-key" (required string) ~doc:"string Sequencer key"
         and da_key = flag "--da-key" (required string) ~doc:"string Da key"
-        and network = flag "--network" (optional string) ~doc:"string Network"
         and account_creation_fee =
           flag "--account-creation-fee" (required string)
             ~doc:"float Account creation fee in mina"
@@ -250,15 +250,6 @@ let () =
           string_to_even_pc sequencer_key
           |> Option.value_exn ~message:"Sequencer key odd"
         in
-        let network =
-          match network with
-          | None | Some "testnet" ->
-              Mina_signature_kind.Testnet
-          | Some "mainnet" ->
-              Mainnet
-          | Some network ->
-              Other_network network
-        in
         let account_creation_fee =
           Currency.Fee.of_mina_string_exn account_creation_fee
         in
@@ -266,4 +257,4 @@ let () =
           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
         in
         run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-          ~sequencer_key ~da_key ~network ~account_creation_fee )
+          ~sequencer_key ~da_key ~account_creation_fee )

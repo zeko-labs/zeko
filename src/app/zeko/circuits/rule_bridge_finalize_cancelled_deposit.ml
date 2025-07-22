@@ -60,14 +60,17 @@ struct
   module Ase_outer_inst = Ase.Without_length.Make (struct
     module Action_state = Rollup_state.Outer_action_state
 
-    let get_iterations = Int.pow 2 10
+    let get_iterations =
+      Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit.outer
   end)
 
   (** Used to prove that the synchronized outer action state is a predecessor of the current one. *)
   module Ase_outer_with_length_inst = Ase.With_length.Make (struct
     module Action_state = Rollup_state.Outer_action_state
 
-    let get_iterations = Int.pow 2 10
+    let get_iterations =
+      Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit
+      .outer_with_length
   end)
 
   (** Exists to circumvent limit. *)
@@ -101,7 +104,9 @@ struct
   end
 
   module Check_accepted_params = struct
-    let get_iterations = Int.pow 2 7
+    let get_iterations =
+      Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit
+      .check_accepted
   end
 
   module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)

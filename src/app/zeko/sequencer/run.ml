@@ -10,25 +10,26 @@ module Graphql_cohttp_async =
 module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
-    ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~l1_network_id
-    ~l2_network_id ~deposit_delay_blocks ~provers ~da_key ~fee_modifier
-    ~minimum_fee ~slot_acceptance () =
+    ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
+    ~deposit_delay_blocks ~provers ~da_key ~fee_modifier ~minimum_fee
+    ~slot_acceptance () =
   let zkapp_pk =
     Option.(
       value ~default:Signature_lib.Public_key.Compressed.empty
       @@ map ~f:Signature_lib.Public_key.Compressed.of_base58_check_exn zkapp_pk)
   in
+  let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
         Sequencer.create ~logger ~zkapp_pk ~max_pool_size ~da_config ~da_quorum
           ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri ~archive_uri
-          ~commitment_period_sec:commitment_period ~l1_network_id ~l2_network_id
-          ~deposit_delay_blocks
+          ~commitment_period_sec:commitment_period ~deposit_delay_blocks
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
               @@ Private_key.of_base58_check_exn signer)
-          ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance )
+          ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
+          ~proof_cache_db )
   in
 
   Sequencer.run_committer sequencer ;
@@ -36,7 +37,7 @@ let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
   let graphql_callback =
     Graphql_cohttp_async.make_callback
       (fun ~with_seq_no:_ _req -> sequencer)
-      Gql.schema
+      (Gql.schema ~proof_cache_db)
   in
   let () =
     Cohttp_async.Server.create_expert
@@ -87,14 +88,6 @@ let () =
          ~doc:"string Directory to store the Ledger database"
      and postgres_uri =
        flag "--postgres-uri" (required string) ~doc:"string Postgres URI"
-     and l1_network_id =
-       flag "--l1-network-id"
-         (optional_with_default "testnet" string)
-         ~doc:"string Network id"
-     and l2_network_id =
-       flag "--l2-network-id"
-         (optional_with_default "testnet" string)
-         ~doc:"string Network id"
      and deposit_delay_blocks =
        flag "--deposit-delay-blocks"
          (optional_with_default 5 int)
@@ -131,6 +124,6 @@ let () =
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
        ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-       ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key
-       ~fee_modifier ~minimum_fee ~slot_acceptance )
+       ~deposit_delay_blocks ~provers ~da_key ~fee_modifier ~minimum_fee
+       ~slot_acceptance )
   |> Command_unix.run
