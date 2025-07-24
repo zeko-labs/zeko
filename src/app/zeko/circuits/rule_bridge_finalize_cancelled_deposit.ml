@@ -139,7 +139,7 @@ struct
 
     include
       ( val Compile_simple.compile ~name:"Verify_check_accepted_and_ase"
-              ~wrap_domain:`N15 ~branches:[ rule ]
+              ~wrap_domain:`N14 ~branches:[ rule ]
               ~out_typ:
                 Typ.(
                   Check_accepted.Definition.Stmt.typ

@@ -159,6 +159,7 @@ struct
       ; authorization_kind = authorization_signed ()
       ; use_full_commitment = Boolean.true_
       ; may_use_token = constant May_use_token.typ Parents_own_token
+      ; implicit_account_creation_fee = constant Boolean.typ false
       ; update =
           { default_account_update.update with
             app_state =

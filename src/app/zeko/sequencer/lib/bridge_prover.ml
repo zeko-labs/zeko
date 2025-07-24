@@ -64,8 +64,7 @@ let create ~provers ~proof_cache_db =
   }
 
 let deposit_request t ~logger ~key
-    ~(deposit_params : Bridge.Finalize_deposit.Deposit_params_base.t)
-    ~deposit_slot_range =
+    ~(deposit_params : Bridge.Finalize_deposit.Deposit_params_base.t) =
   let%map result =
     try_with (fun () ->
         let receive_forest =
@@ -95,7 +94,7 @@ let deposit_request t ~logger ~key
                       Zeko_circuits.Bridge_state.Deposit_params_base.typ
                       deposit_params
                 ; children = receive_forest
-                ; slot_range = deposit_slot_range
+                ; slot_range = Slot_range.infinite
                 }
             }
         with
@@ -109,7 +108,7 @@ let deposit_request t ~logger ~key
   in
   match result with
   | Error e ->
-      [%log warn] "Warning: prove failed %s" e ;
+      [%log warn] "prove failed %s" e ;
       Proofs_memory.add t.proofs_memory key (Error (Error.of_string e))
   | Ok forest ->
       Proofs_memory.add t.proofs_memory key (Ok forest)
@@ -154,13 +153,13 @@ let withdrawal_request t ~logger ~key
   in
   match result with
   | Error e ->
-      [%log warn] "Warning: prove failed %s" e ;
+      [%log warn] "prove failed %s" e ;
       Proofs_memory.add t.proofs_memory key (Error (Error.of_string e))
   | Ok forest ->
       Proofs_memory.add t.proofs_memory key (Ok forest)
 
-let finalize_deposit t ~logger ~key ~public_key ~may_use_token
-    ~inner_authorization_kind ~(ase : Ase.With_length.Stmt.t * Field.t list)
+let finalize_deposit t ~logger ~key
+    ~(ase : Ase.With_length.Stmt.t * Field.t list)
     ~(check_accepted :
        Bridge.Finalize_deposit.Check_accepted_mina.Init.t
        * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list )
@@ -176,8 +175,12 @@ let finalize_deposit t ~logger ~key ~public_key ~may_use_token
             [ Utils.actions_of_outer_action deposit ]
         in
         match%map
-          Zeko_prover.Client.finalize_deposit t.provers ~public_key
-            ~may_use_token ~inner_authorization_kind ~ase
+          Zeko_prover.Client.finalize_deposit t.provers
+            ~public_key:Zeko_circuits_config.Inputs.holder_account_l2
+            ~may_use_token:
+              Bridge_inst_mina.Rule_bridge_finalize_deposit.May_use_token.No
+            ~inner_authorization_kind:
+              Zeko_circuits.Rule_bridge_finalize_deposit.A.None_given ~ase
             ~check_accepted:
               (check_accepted_init, deposit_hash, check_accepted_elems)
             ~prev_next_deposit
@@ -187,28 +190,33 @@ let finalize_deposit t ~logger ~key ~public_key ~may_use_token
         | Ok ((body, _, calls), proof) ->
             Utils.attach_proof_to_forest
               ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-              ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof )
+              ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+            |> Utils.rehash_forest
+                 ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 )
     >>| Result.map_error ~f:(fun e -> Exn.to_string e)
   in
   match result with
   | Error e ->
-      [%log warn] "Warning: prove failed %s" e ;
+      [%log warn] "prove failed %s" e ;
       Proofs_memory.add t.proofs_memory key (Error (Error.of_string e))
   | Ok forest ->
       Proofs_memory.add t.proofs_memory key (Ok forest)
 
-let finalize_withdrawal t ~logger ~key ~public_key ~may_use_token
-    ~outer_authorization_kind ~commit ~before_commit ~commit_ase
-    ~before_withdrawal ~withdrawal_ase ~prev_next_withdrawal ~withdrawal_params
-    =
+let finalize_withdrawal t ~logger ~key ~public_key ~commit ~before_commit
+    ~commit_ase ~before_withdrawal ~withdrawal_ase ~prev_next_withdrawal
+    ~withdrawal_params =
   let%map result =
     try_with (fun () ->
         let%bind (withdrawal_body, _, calls), withdrawal_proof =
           match%map
             Zeko_prover.Client.finalize_withdrawal t.provers ~public_key
-              ~may_use_token ~outer_authorization_kind ~commit ~before_commit
-              ~commit_ase ~before_withdrawal ~withdrawal_ase
-              ~prev_next_withdrawal ~withdrawal_params
+              ~may_use_token:
+                Bridge_inst_mina.Rule_bridge_finalize_withdrawal.May_use_token
+                .No
+              ~outer_authorization_kind:
+                Zeko_circuits.Rule_bridge_finalize_withdrawal.A.None_given
+              ~commit ~before_commit ~commit_ase ~before_withdrawal
+              ~withdrawal_ase ~prev_next_withdrawal ~withdrawal_params
           with
           | Error e ->
               failwith e
@@ -260,12 +268,19 @@ let finalize_withdrawal t ~logger ~key ~public_key ~may_use_token
         Utils.attach_proof_to_forest
           ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
           ~proof_cache_db:t.proof_cache_db ~body:withdrawal_body ~calls:children
-          ~proof:withdrawal_proof )
+          ~proof:withdrawal_proof
+        |> Utils.rehash_forest
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 )
     >>| Result.map_error ~f:(fun e -> Exn.to_string e)
   in
   match result with
   | Error e ->
-      [%log warn] "Warning: prove failed %s" e ;
+      [%log warn] "prove failed %s" e ;
       Proofs_memory.add t.proofs_memory key (Error (Error.of_string e))
   | Ok forest ->
       Proofs_memory.add t.proofs_memory key (Ok forest)
+
+let prove t prover =
+  let key = Int.to_string @@ Random.int Int.max_value in
+  let%map () = prover t ~key in
+  Proofs_memory.get t.proofs_memory key |> Option.value_exn |> snd

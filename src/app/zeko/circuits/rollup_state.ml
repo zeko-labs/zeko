@@ -153,14 +153,25 @@ module Inner_state = struct
     [ Recursive (Outer_action_state.With_length.fine p.outer_action_state) ]
 end
 
-module Inner_action = struct
-  module Zkapp_call_forest = struct
-    include Zkapp_call_forest
+module Zkapp_call_forest = struct
+  include Zkapp_call_forest
+
+  type var = Checked.t
+
+  module Digest = struct
+    include Zkapp_command.Digest.Forest
 
     type var = Checked.t
   end
+end
 
+module Inner_action = struct
   type t = { aux : F.t; children : Zkapp_call_forest.t } [@@deriving snarky]
+
+  module Without_forest = struct
+    type t = { aux : F.t; children_digest : Zkapp_call_forest.Digest.t }
+    [@@deriving snarky]
+  end
 
   (* We discriminate between the actions by prefixing with a tag,
      even though we only have one case right now. We might have more
@@ -245,18 +256,6 @@ module Outer_action = struct
       ; slot_range : Slot_range.t
       }
     [@@deriving snarky]
-  end
-
-  module Zkapp_call_forest = struct
-    include Zkapp_call_forest
-
-    type var = Checked.t
-
-    module Digest = struct
-      include Zkapp_command.Digest.Forest
-
-      type var = Checked.t
-    end
   end
 
   module Witness = struct

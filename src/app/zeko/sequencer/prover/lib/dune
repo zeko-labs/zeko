@@ -4,6 +4,7 @@
   zeko_circuits
   zeko_constants
   zeko_types
+  utils
   ;; mina ;;
   mina_base
   mina_ledger

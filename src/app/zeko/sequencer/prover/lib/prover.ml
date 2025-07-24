@@ -384,8 +384,8 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
       in
-      let%bind inner_vk_hash =
-        Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
+      let%bind l2_holder_vk_hash =
+        Compile_simple.Verification_key.of_tag Bridge_inst_mina.System_L2.tag
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -395,7 +395,8 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
           "Bridge_mina.System_L1.finalize_withdrawal"
           ( prove
               (Bridge.Finalize_withdrawal.of_serializable ~proof_cache_db
-                 ~vk_hash ~helper_token_owner_l1_vk_hash ~inner_vk_hash input )
+                 ~vk_hash ~helper_token_owner_l1_vk_hash ~l2_holder_vk_hash
+                 input )
           |> Promise.to_deferred )
       in
       Output.Call_forest

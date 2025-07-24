@@ -35,8 +35,7 @@ struct
     let dummy_elem =
       Rollup_state.Outer_action.Witness
         { aux = Field.zero
-        ; children_digest =
-            Rollup_state.Outer_action.Zkapp_call_forest.Digest.empty
+        ; children_digest = Rollup_state.Zkapp_call_forest.Digest.empty
         ; slot_range = Slot_range.infinite
         }
 

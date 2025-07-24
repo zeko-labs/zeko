@@ -23,7 +23,7 @@ fi
 SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 
-export ZEKO_SIGNATURE_KIND=zeko-testnet
+export ZEKO_SIGNATURE_KIND=testnet
 export ZEKO_CIRCUITS_CONFIG=test
 
 TMP_DIR=$(mktemp -d)
@@ -35,23 +35,23 @@ docker run --rm --name pg-sequencer \
   -p 5433:5432 \
   -d postgres:16-alpine
 
-$SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id mainnet --block-period 9999999 &
+$SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet --block-period 9999999 &
 l1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --random-sk --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --random-sk --network-id testnet --db-dir "$TMP_DIR/da1_db" &
 da1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --random-sk --network-id zeko-testnet --db-dir "$TMP_DIR/da2_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --random-sk --network-id testnet --db-dir "$TMP_DIR/da2_db" &
 da2_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --random-sk --network-id zeko-testnet --db-dir "$TMP_DIR/da3_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --random-sk --network-id testnet --db-dir "$TMP_DIR/da3_db" &
 da3_pid=$!
 
 if [ "$MODE" = "fake" ]; then
-    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9990 > /dev/null &
+    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9990 &
     prover1_pid=$!
 
-    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9991 > /dev/null &
+    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9991 &
     prover2_pid=$!
 else
     $SEQUENCER_BUILD_ROOT/prover/cli.exe run-server --port 9990 &

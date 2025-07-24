@@ -1518,7 +1518,8 @@ module Mutations = struct
     in
     match%bind
       try_with (fun () ->
-          Verifier.verify_command ~signature_kind:t.signature_kind
+          Verifier.verify_command ~allowed_empty_fee_payer:false
+            ~signature_kind:t.signature_kind
             { data = verifiable; status = Applied } )
       >>| Result.map_error ~f:Error.of_exn
       >>| Result.join
@@ -1689,6 +1690,13 @@ module Mutations = struct
       ~args:Arg.[]
       ~resolve:(fun _ () -> reset_callback () ; "Reset")
 
+  let shift_slots =
+    field "shiftSlots" ~doc:"Shift the slots" ~typ:(non_null string)
+      ~args:Arg.[ arg "slots" ~typ:(non_null int) ]
+      ~resolve:(fun { ctx = t; _ } () slots ->
+        State.shift_slots t (Mina_numbers.Global_slot_span.of_int slots) ;
+        "Shifted" )
+
   let commands ~reset_callback =
     [ send_payment
     ; send_zkapp
@@ -1696,6 +1704,7 @@ module Mutations = struct
     ; create_new_block
     ; clear_pool
     ; reset_state ~reset_callback
+    ; shift_slots
     ]
 end
 

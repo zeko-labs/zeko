@@ -25,7 +25,7 @@ let run ~logger ~port ~db_dir ~genesis_account ~block_period ~network_id
     in
     let t =
       State.create ~logger
-        ~signature_kind:(Sequencer_lib.Utils.signature_kind network_id)
+        ~signature_kind:(Utils.signature_kind network_id)
         ~disable_proofs ~db_dir
         ~block_period:
           (Option.map block_period

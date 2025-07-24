@@ -107,6 +107,27 @@ let actions_of_outer_action :
       in
       typ.value_to_fields (Field.of_int 1, x) |> fst
 
+let actions_to_inner_action x :
+    Zeko_circuits.Rollup_state.Inner_action.Without_forest.t =
+  if Field.equal x.(0) Field.zero then
+    let (Typ typ) =
+      Zeko_circuits.Rollup_state.Inner_action.Without_forest.typ
+    in
+    typ.value_of_fields
+      ( Array.sub ~pos:1 ~len:(Array.length x - 1) x
+      , typ.constraint_system_auxiliary () )
+  else failwith "Invalid inner action"
+
+let actions_of_inner_action x =
+  let (Typ typ) = Typ.(F.typ * Zeko_circuits.Rollup_state.Inner_action.typ) in
+  typ.value_to_fields (Field.of_int 0, x) |> fst
+
+let actions_of_inner_action_without_forest x =
+  let (Typ typ) =
+    Typ.(F.typ * Zeko_circuits.Rollup_state.Inner_action.Without_forest.typ)
+  in
+  typ.value_to_fields (Field.of_int 0, x) |> fst
+
 let update_state pk command state =
   let open Zkapp_basic in
   let account_id = Account_id.create pk Token_id.default in
@@ -276,9 +297,18 @@ let command_slot_range (command : User_command.t) : Slot_range.t option =
              slot_range_intersection (Some valid_while) (Some global_slot)
              |> slot_range_intersection acc )
 
-let l1_global_slot ~genesis_timestamp =
-  (Time.abs_diff (Time.now ()) genesis_timestamp |> Time.Span.to_sec) /. 180.
-  |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int
+module Slot = struct
+  type l1_config = { fork_timestamp : Time.t; fork_slot : Slot.t }
+
+  let global_slot ~l1_config =
+    let after_fork_slot =
+      (Time.abs_diff (Time.now ()) l1_config.fork_timestamp |> Time.Span.to_sec)
+      /. 180.
+      |> Float.to_int |> Mina_numbers.Global_slot_span.of_int
+    in
+    Mina_numbers.Global_slot_since_genesis.add l1_config.fork_slot
+      after_fork_slot
+end
 
 let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =
   match Is_compile_simple_real.is_compile_simple_real with
@@ -309,3 +339,93 @@ let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =
           Zkapp_command.Digest.Account_update.create ~signature_kind
             account_update )
         ~calls []
+
+let is_deposit_finalization (command : User_command.t) =
+  match command with
+  | Signed_command _ ->
+      false
+  | Zkapp_command command -> (
+      match command.account_updates with
+      | [ transferrer_forest; deposit_forest ] ->
+          let is_valid_deposit_forest, recipient =
+            let l2_holder_au = deposit_forest.elt.account_update in
+            let is_holder_au_valid =
+              Public_key.Compressed.equal l2_holder_au.body.public_key
+                Zeko_circuits_config.Inputs.holder_account_l2
+            in
+            let are_children_valid, recipient =
+              match deposit_forest.elt.calls with
+              | [ helper_forest; witness_forest ] ->
+                  let is_helper_valid =
+                    List.is_empty helper_forest.elt.calls
+                    && Token_id.equal
+                         helper_forest.elt.account_update.body.token_id
+                         (Account_id.derive_token_id
+                            ~owner:
+                              ( Account_id.of_public_key
+                              @@ Public_key.decompress_exn
+                                   Zeko_circuits_config.Inputs.holder_account_l2
+                              ) )
+                  in
+                  let is_witness_valid =
+                    List.is_empty witness_forest.elt.calls
+                    && Public_key.Compressed.equal
+                         witness_forest.elt.account_update.body.public_key
+                         Zeko_circuits_config.Inputs.zeko_l2
+                    && Token_id.equal
+                         witness_forest.elt.account_update.body.token_id
+                         Token_id.default
+                  in
+                  ( is_helper_valid && is_witness_valid
+                  , Some helper_forest.elt.account_update.body.public_key )
+              | _ ->
+                  (false, None)
+            in
+            (is_holder_au_valid && are_children_valid, recipient)
+          in
+          let is_valid_transferrer =
+            List.is_empty transferrer_forest.elt.calls
+            && Option.value ~default:false
+                 (Option.map recipient
+                    ~f:
+                      (Public_key.Compressed.equal
+                         transferrer_forest.elt.account_update.body.public_key ) )
+            && Token_id.equal
+                 transferrer_forest.elt.account_update.body.token_id
+                 Token_id.default
+          in
+          is_valid_deposit_forest && is_valid_transferrer
+      | _ ->
+          false )
+
+let sign_fee_payer ~signature_kind (sequencer_signer : Keypair.t)
+    (command : User_command.t) : User_command.t =
+  match command with
+  | Signed_command command ->
+      Signed_command command
+  | Zkapp_command command ->
+      let full_commitment =
+        Zkapp_command.Transaction_commitment.create_complete
+          (Zkapp_command.commitment command)
+          ~memo_hash:(Signed_command_memo.hash command.memo)
+          ~fee_payer_hash:
+            (Zkapp_command.Digest.Account_update.create ~signature_kind
+               (Account_update.of_fee_payer command.fee_payer) )
+      in
+      Zkapp_command
+        { command with
+          fee_payer =
+            { command.fee_payer with
+              authorization =
+                ( if
+                  Public_key.Compressed.(
+                    equal
+                      (Public_key.compress sequencer_signer.public_key)
+                      command.fee_payer.body.public_key)
+                then
+                  Signature_lib.Schnorr.Chunked.sign ~signature_kind
+                    sequencer_signer.private_key
+                    (Random_oracle.Input.Chunked.field full_commitment)
+                else command.fee_payer.authorization )
+            }
+        }
