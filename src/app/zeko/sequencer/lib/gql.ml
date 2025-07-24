@@ -1640,35 +1640,15 @@ module Types = struct
       end
 
       module Deposit_request = struct
-        type input =
-          { deposit_params : Deposit_params.input
-          ; deposit_slot_range : Slot_range.t
-          }
+        type input = { deposit_params : Deposit_params.input }
 
         let arg_typ ~proof_cache_db =
           obj "DepositRequestInput"
-            ~coerce:(fun deposit_params slot_range_lower slot_range_upper ->
-              { deposit_params
-              ; deposit_slot_range =
-                  { lower =
-                      Mina_numbers.Global_slot_since_genesis.of_int
-                        slot_range_lower
-                  ; upper =
-                      Mina_numbers.Global_slot_since_genesis.of_int
-                        slot_range_upper
-                  }
-              } )
-            ~split:(fun f (x : input) ->
-              f x.deposit_params
-                (Mina_numbers.Global_slot_since_genesis.to_int
-                   x.deposit_slot_range.lower )
-                (Mina_numbers.Global_slot_since_genesis.to_int
-                   x.deposit_slot_range.upper ) )
+            ~coerce:(fun deposit_params -> { deposit_params })
+            ~split:(fun f (x : input) -> f x.deposit_params)
             ~fields:
               [ arg "depositParams"
                   ~typ:(non_null @@ Deposit_params.arg_typ ~proof_cache_db)
-              ; arg "slotRangeLower" ~typ:(non_null int)
-              ; arg "slotRangeUpper" ~typ:(non_null int)
               ]
       end
 
@@ -1680,8 +1660,7 @@ module Types = struct
 
       module Finalize_deposit = struct
         type input =
-          { public_key : Public_key.Compressed.t
-          ; ase : Ase.With_length.Stmt.t * Field.t list
+          { ase : Ase.With_length.Stmt.t * Field.t list
           ; check_accepted :
               Bridge.Finalize_deposit.Check_accepted_mina.Init.t
               * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list
@@ -1690,13 +1669,12 @@ module Types = struct
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeDepositInput"
-            ~coerce:(fun public_key ase check_accepted prev_next_deposit ->
-              { public_key; ase; check_accepted; prev_next_deposit } )
+            ~coerce:(fun ase check_accepted prev_next_deposit ->
+              { ase; check_accepted; prev_next_deposit } )
             ~split:(fun f (x : input) ->
-              f x.public_key x.ase x.check_accepted x.prev_next_deposit )
+              f x.ase x.check_accepted x.prev_next_deposit )
             ~fields:
-              [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
-              ; arg "ase" ~typ:(non_null Folder.Ase_with_length.arg_typ)
+              [ arg "ase" ~typ:(non_null Folder.Ase_with_length.arg_typ)
               ; arg "checkAccepted"
                   ~typ:
                     ( non_null
@@ -2114,15 +2092,23 @@ module Mutations = struct
                   @@ Types.Input.Provers.Deposit_request.arg_typ ~proof_cache_db
                   )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } ()
-                      { deposit_params; deposit_slot_range } ->
-          let key = Int.to_string @@ Random.int Int.max_value in
-          don't_wait_for
-          @@ Bridge_prover.deposit_request
-               Zeko_sequencer.(sequencer.bridge_prover)
-               ~logger:Zeko_sequencer.(sequencer.logger)
-               ~key ~deposit_params ~deposit_slot_range ;
-          return (Ok key) )
+        ~resolve:(fun { ctx = sequencer; _ } () { deposit_params } ->
+          let ( + ) a b = Currency.Fee.add a b |> Option.value_exn in
+          let account_creation_fee =
+            Zeko_constants.constraint_constants.account_creation_fee
+            + Zeko_constants.constraint_constants.account_creation_fee
+            |> Currency.Amount.of_fee
+          in
+          if Currency.Amount.(deposit_params.amount < account_creation_fee) then
+            return (Error "Amount must be at least 2 account creation fees")
+          else
+            let key = Int.to_string @@ Random.int Int.max_value in
+            don't_wait_for
+            @@ Bridge_prover.deposit_request
+                 Zeko_sequencer.(sequencer.bridge_prover)
+                 ~logger:Zeko_sequencer.(sequencer.logger)
+                 ~key ~deposit_params ;
+            return (Ok key) )
 
     let withdrawal_request ~proof_cache_db =
       io_field "proveWithdrawalRequest" ~doc:"Prove withdrawal request"
@@ -2156,20 +2142,13 @@ module Mutations = struct
                        ~proof_cache_db )
             ]
         ~resolve:(fun { ctx = sequencer; _ } ()
-                      { public_key; ase; check_accepted; prev_next_deposit } ->
+                      { ase; check_accepted; prev_next_deposit } ->
           let key = Int.to_string @@ Random.int Int.max_value in
           don't_wait_for
           @@ Bridge_prover.finalize_deposit
                Zeko_sequencer.(sequencer.bridge_prover)
                ~logger:Zeko_sequencer.(sequencer.logger)
-               ~key ~public_key
-               ~may_use_token:
-                 Zeko_types.Bridge_inst_mina.Rule_bridge_finalize_deposit
-                 .May_use_token
-                 .No
-               ~inner_authorization_kind:
-                 Zeko_circuits.Rule_bridge_finalize_deposit.A.None_given ~ase
-               ~check_accepted ~prev_next_deposit ;
+               ~key ~ase ~check_accepted ~prev_next_deposit ;
           return (Ok key) )
 
     let finalize_withdrawal ~proof_cache_db =
@@ -2198,15 +2177,8 @@ module Mutations = struct
           @@ Bridge_prover.finalize_withdrawal
                Zeko_sequencer.(sequencer.bridge_prover)
                ~logger:Zeko_sequencer.(sequencer.logger)
-               ~key ~public_key
-               ~may_use_token:
-                 Zeko_types.Bridge_inst_mina.Rule_bridge_finalize_withdrawal
-                 .May_use_token
-                 .No
-               ~outer_authorization_kind:
-                 Zeko_circuits.Rule_bridge_finalize_withdrawal.A.None_given
-               ~commit ~before_commit ~commit_ase ~before_withdrawal
-               ~withdrawal_ase ~prev_next_withdrawal
+               ~key ~public_key ~commit ~before_commit ~commit_ase
+               ~before_withdrawal ~withdrawal_ase ~prev_next_withdrawal
                ~withdrawal_params:
                  (Zeko_types.Bridge.Finalize_withdrawal.Withdrawal_params_base
                   .to_serializable withdrawal_params ) ;

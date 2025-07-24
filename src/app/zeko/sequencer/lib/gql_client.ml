@@ -56,7 +56,9 @@ let fetch_action_state uri pk =
   |> Field.of_string
 
 let fetch_actions uri ?from_action_state ?end_action_state pk :
-    (Field.t array list * int) list Deferred.t =
+    (Field.t array list * int * [ `Before of Field.t ] * [ `After of Field.t ])
+    list
+    Deferred.t =
   let ok_exn = function
     | Ppx_deriving_yojson_runtime.Result.Ok x ->
         x
@@ -68,7 +70,14 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
 
     type block_info = { height : int } [@@deriving yojson]
 
-    type action = { actionData : action_data list; blockInfo : block_info }
+    type action_state = { actionStateOne : string; actionStateTwo : string }
+    [@@deriving yojson]
+
+    type action =
+      { actionData : action_data list
+      ; blockInfo : block_info
+      ; actionState : action_state
+      }
     [@@deriving yojson]
 
     type actions = { actions : action list } [@@deriving yojson]
@@ -86,6 +95,10 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
                   endActionState: $endActionState
                 }
               ) {
+                actionState {
+                  actionStateOne
+                  actionStateTwo
+                }
                 actionData {
                   data
                 }
@@ -118,15 +131,28 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
   in
   let%map result = Graphql_client.query_json_exn q uri in
   let result = M.actions_of_yojson result |> ok_exn in
-  List.map result.actions ~f:(fun { actionData; blockInfo } ->
+  List.map result.actions
+    ~f:(fun
+         { actionData
+         ; blockInfo
+         ; actionState =
+             { actionStateOne = action_state_after
+             ; actionStateTwo = action_state_before
+             }
+         }
+       ->
       let block_height = blockInfo.height in
       List.map actionData ~f:(fun { data } ->
           let fields = List.map data ~f:Field.of_string |> List.to_array in
-          ([ fields ], block_height) ) )
+          ( [ fields ]
+          , block_height
+          , `Before (Field.of_string action_state_before)
+          , `After (Field.of_string action_state_after) ) ) )
   |> ( if
        (* Drop the first action if it's not the initial state *)
        Stdlib.(
-         from_action_state = Some Zkapp_account.Actions.empty_state_element)
+         from_action_state = Some Zkapp_account.Actions.empty_state_element
+         || from_action_state = None)
      then Fn.id
      else function [] -> [] | _ :: tail -> tail )
   |> List.join
@@ -257,24 +283,26 @@ let infer_nonce uri pk =
   let%map committed_nonce = fetch_nonce uri pk in
   Unsigned.UInt32.max max_pooled_nonce committed_nonce
 
-let fetch_state uri pk =
+let fetch_state uri aid =
   let q =
     object
       method query =
         String.substr_replace_all ~pattern:"\n" ~with_:" "
           {|
-            query ($pk: PublicKey!) {
-              account(publicKey: $pk){
+            query ($pk: PublicKey!, $tokenId: TokenId!) {
+              account(publicKey: $pk, token: $tokenId){
                 zkappState
               }
-            } 
+            }
           |}
 
       method variables =
         `Assoc
           [ ( "pk"
-            , `String Signature_lib.Public_key.Compressed.(to_base58_check pk)
-            )
+            , `String
+                ( Account_id.public_key aid
+                |> Signature_lib.Public_key.Compressed.to_base58_check ) )
+          ; ("tokenId", `String (Account_id.token_id aid |> Token_id.to_string))
           ]
     end
   in
@@ -286,7 +314,10 @@ let fetch_state uri pk =
     |> Zkapp_state.V.of_list_exn)
 
 let infer_state uri ~zkapp_pk ~signer_pk =
-  let%bind committed_state = fetch_state uri zkapp_pk
+  let%bind committed_state =
+    fetch_state uri
+      ( Account_id.of_public_key
+      @@ Signature_lib.Public_key.decompress_exn zkapp_pk )
   and pooled_zkapp_commands = fetch_pooled_zkapp_commands uri signer_pk in
   let pooled_zkapp_commands =
     List.sort pooled_zkapp_commands ~compare:(fun a b ->
@@ -482,4 +513,53 @@ module For_tests = struct
     in
     let%map result = Graphql_client.query_json_exn q uri in
     Yojson.Safe.(to_string result)
+
+  let shift_slots uri slots =
+    let q =
+      object
+        method query =
+          String.substr_replace_all ~pattern:"\n" ~with_:" "
+            {|
+              mutation ($slots: Int!) {
+                shiftSlots(slots: $slots)
+              } 
+            |}
+
+        method variables = `Assoc [ ("slots", `Int slots) ]
+      end
+    in
+    let%map result = Graphql_client.query_json_exn q uri in
+    Yojson.Safe.(to_string result)
+
+  let get_zkapp_command_status uri hash =
+    let q =
+      object
+        method query =
+          String.substr_replace_all ~pattern:"\n" ~with_:" "
+            {|
+              query ($hash: String!) {
+                zkappCommand(hash: $hash) {
+                  failureReason {
+                    failures
+                  }
+                }
+              } 
+            |}
+
+        method variables =
+          `Assoc
+            [ ( "hash"
+              , `String (Mina_transaction.Transaction_hash.to_base58_check hash)
+              )
+            ]
+      end
+    in
+    let%map result = Graphql_client.query_json_exn q uri in
+    Yojson.Safe.Util.(
+      result |> member "zkappCommand" |> member "failureReason"
+      |> to_option (fun json ->
+             to_list json
+             |> List.map ~f:(member "failures")
+             |> List.map ~f:to_list
+             |> List.map ~f:(List.map ~f:to_string) ))
 end

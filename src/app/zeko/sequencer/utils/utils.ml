@@ -107,6 +107,27 @@ let actions_of_outer_action :
       in
       typ.value_to_fields (Field.of_int 1, x) |> fst
 
+let actions_to_inner_action x :
+    Zeko_circuits.Rollup_state.Inner_action.Without_forest.t =
+  if Field.equal x.(0) Field.zero then
+    let (Typ typ) =
+      Zeko_circuits.Rollup_state.Inner_action.Without_forest.typ
+    in
+    typ.value_of_fields
+      ( Array.sub ~pos:1 ~len:(Array.length x - 1) x
+      , typ.constraint_system_auxiliary () )
+  else failwith "Invalid inner action"
+
+let actions_of_inner_action x =
+  let (Typ typ) = Typ.(F.typ * Zeko_circuits.Rollup_state.Inner_action.typ) in
+  typ.value_to_fields (Field.of_int 0, x) |> fst
+
+let actions_of_inner_action_without_forest x =
+  let (Typ typ) =
+    Typ.(F.typ * Zeko_circuits.Rollup_state.Inner_action.Without_forest.typ)
+  in
+  typ.value_to_fields (Field.of_int 0, x) |> fst
+
 let update_state pk command state =
   let open Zkapp_basic in
   let account_id = Account_id.create pk Token_id.default in
@@ -276,9 +297,14 @@ let command_slot_range (command : User_command.t) : Slot_range.t option =
              slot_range_intersection (Some valid_while) (Some global_slot)
              |> slot_range_intersection acc )
 
-let l1_global_slot ~genesis_timestamp =
-  (Time.abs_diff (Time.now ()) genesis_timestamp |> Time.Span.to_sec) /. 180.
-  |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int
+module Slot = struct
+  type l1_config = { fork_timestamp : Time.t; fork_slot : Slot.t }
+
+  let global_slot ~l1_config =
+    (Time.abs_diff (Time.now ()) l1_config.fork_timestamp |> Time.Span.to_sec)
+    /. 180.
+    |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int
+end
 
 let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =
   match Is_compile_simple_real.is_compile_simple_real with

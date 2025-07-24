@@ -20,7 +20,8 @@ module type SnarkTypeWithoutAux = sig
   val typ : (var, t) Typ.t
 end
 
-module Snarky_serializable (Typ : SnarkType) = struct
+(** Use only for snarky types that are not using auxiliary system *)
+module Snarky_serializable_unsafe (Typ : SnarkType) = struct
   let of_fields fields =
     let (Typ typ) = Typ.typ in
     typ.value_of_fields (fields, typ.constraint_system_auxiliary ())
@@ -74,7 +75,7 @@ end
 
 module Account_set = struct
   include Account_set
-  include Snarky_serializable (Account_set)
+  include Snarky_serializable_unsafe (Account_set)
 end
 
 module Acc_set_witness = struct
@@ -585,12 +586,12 @@ module Make_serializable_action_state
 struct
   type t = Action_state.t
 
-  include Snarky_serializable (Action_state)
+  include Snarky_serializable_unsafe (Action_state)
 
   module With_length = struct
     type t = Action_state.With_length.t
 
-    include Snarky_serializable (Action_state.With_length)
+    include Snarky_serializable_unsafe (Action_state.With_length)
   end
 end
 
@@ -818,6 +819,14 @@ module Bridge = struct
         ; recipient
         ; timeout
         }
+
+      let to_yojson = Fn.compose serializable_to_yojson to_serializable
+
+      let of_yojson json =
+        Ppx_deriving_yojson_runtime.(
+          serializable_of_yojson json
+          >|= of_serializable
+                ~proof_cache_db:(Proof_cache_tag.create_identity_db ()))
     end
 
     module Check_accepted_mina = struct
@@ -825,24 +834,32 @@ module Bridge = struct
       include Bridge_inst_mina.Check_accepted.Definition
 
       module Stmt = struct
-        type t = Bridge_inst_mina.Check_accepted.Definition.Stmt.t
-
-        include
-          Snarky_serializable (Bridge_inst_mina.Check_accepted.Definition.Stmt)
+        type t = Bridge_inst_mina.Check_accepted.Definition.Stmt.t =
+          { params : Deposit_params_base.t
+          ; action_state : Outer_action_state.t
+          ; deposit_index : Checked32.t
+          ; n_steps : Checked32.t
+          ; is_rejected : bool
+          ; is_accepted : bool
+          }
+        [@@deriving yojson]
       end
 
       module Elem = struct
         type t = Bridge_inst_mina.Check_accepted.Definition.Elem.t
 
         include
-          Snarky_serializable (Bridge_inst_mina.Check_accepted.Definition.Elem)
+          Snarky_serializable_unsafe
+            (Bridge_inst_mina.Check_accepted.Definition.Elem)
       end
 
       module Init = struct
-        type t = Bridge_inst_mina.Check_accepted.Definition.Init.t
-
-        include
-          Snarky_serializable (Bridge_inst_mina.Check_accepted.Definition.Init)
+        type t = Bridge_inst_mina.Check_accepted.Definition.Init.t =
+          { params : Deposit_params_base.t
+          ; original_action_state : Outer_action_state.t
+          ; deposit_index : Checked32.t
+          }
+        [@@deriving yojson]
       end
 
       type serializable =
@@ -932,7 +949,7 @@ module Bridge = struct
     module Commit = struct
       type t = Rollup_state.Outer_action.Commit.t
 
-      include Snarky_serializable (Rollup_state.Outer_action.Commit)
+      include Snarky_serializable_unsafe (Rollup_state.Outer_action.Commit)
     end
 
     module Withdrawal_params_base = struct
@@ -994,8 +1011,8 @@ module Bridge = struct
          ; prev_next_withdrawal
          ; withdrawal_params
          } :
-          serializable ) ~vk_hash ~helper_token_owner_l1_vk_hash ~inner_vk_hash
-        : t =
+          serializable ) ~vk_hash ~helper_token_owner_l1_vk_hash
+        ~l2_holder_vk_hash : t =
       { public_key
       ; vk_hash
       ; may_use_token
@@ -1010,7 +1027,7 @@ module Bridge = struct
           Withdrawal_params_base.of_serializable withdrawal_params
             ~proof_cache_db
       ; helper_token_owner_l1_vk_hash
-      ; inner_vk_hash
+      ; l2_holder_vk_hash
       }
   end
 

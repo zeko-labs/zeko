@@ -9,19 +9,23 @@ module Graphql_cohttp_async =
     (Cohttp_async.Body)
 module Sequencer = Zeko_sequencer.Sequencer
 
-let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
-    ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-    ~deposit_delay_blocks ~provers ~da_key ~fee_modifier ~minimum_fee
-    ~slot_acceptance () =
-  let zkapp_pk =
-    Option.(
-      value ~default:Signature_lib.Public_key.Compressed.empty
-      @@ map ~f:Signature_lib.Public_key.Compressed.of_base58_check_exn zkapp_pk)
-  in
+let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_quorum
+    ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
+    ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
+  let l1_config : Utils.Slot.l1_config =
+    let genesis_timestamp =
+      Thread_safe.block_on_async_exn (fun () ->
+          Gql_client.fetch_genesis_timestamp l1_uri )
+    in
+    { fork_timestamp = genesis_timestamp
+    ; fork_slot =
+        Mina_numbers.Global_slot_since_genesis.zero (* TODO: fetch this *)
+    }
+  in
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
-        Sequencer.create ~logger ~zkapp_pk ~max_pool_size ~da_config ~da_quorum
+        Sequencer.create ~logger ~max_pool_size ~da_config ~da_quorum
           ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~deposit_delay_blocks
           ~signer:
@@ -29,7 +33,7 @@ let run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
               Keypair.of_private_key_exn
               @@ Private_key.of_base58_check_exn signer)
           ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
-          ~proof_cache_db )
+          ~proof_cache_db ~l1_config )
   in
 
   Sequencer.run_committer sequencer ;
@@ -58,8 +62,6 @@ let () =
      and log_level = Flag.Log.level
      and port =
        flag "-p" (optional_with_default 8080 int) ~doc:"int Port to listen on"
-     and zkapp_pk =
-       flag "--zkapp-pk" (optional string) ~doc:"string ZkApp public key"
      and da_key = flag "--da-key" (required string) ~doc:"string DA key"
      and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
      and archive_uri =
@@ -122,8 +124,7 @@ let () =
      let logger = Logger.create () in
      let postgres_uri = Uri.of_string postgres_uri in
      Stdout_log.setup log_json log_level ;
-     run ~logger ~port ~zkapp_pk ~max_pool_size ~commitment_period ~da_config
-       ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-       ~deposit_delay_blocks ~provers ~da_key ~fee_modifier ~minimum_fee
-       ~slot_acceptance )
+     run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_quorum
+       ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
+       ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance )
   |> Command_unix.run

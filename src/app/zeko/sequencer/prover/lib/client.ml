@@ -192,7 +192,7 @@ let verify_both_ases ?proving_timeout t input =
 let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
     ~new_inner_actions ~unprocessed_actions ~(old_inner_acc : Account.t)
     ~old_inner_acc_path ~(new_inner_acc : Account.t) ~new_inner_acc_path
-    ~da_signature ~da_key =
+    ~da_signature ~da_key ~slot_range =
   (* Counting length of inner action state *)
   let%bind inner_ase =
     let%map proof, target, excess =
@@ -221,7 +221,6 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
       { proof; proof_target = target; init = action_state; excess }
   in
   let%bind verify_both_ases = verify_both_ases t (outer_ase, inner_ase) in
-
   send ?proving_timeout t
     (Prover.Input.Outer_commit
        { txn_snark
@@ -233,18 +232,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
        ; new_inner_acc_path
        ; da_signature
        ; da_key
-       ; slot_range =
-           ( if Slot_range.equal (fst txn_snark).slot_range Slot_range.infinite
-           then
-             Zeko_util.
-               { lower = Slot.zero
-               ; upper =
-                   Slot.(
-                     sub Zeko_circuits_config.t.max_valid_while_size
-                       Mina_numbers.Global_slot_span.one
-                     |> Option.value_exn)
-               }
-           else (fst txn_snark).slot_range )
+       ; slot_range
        } )
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->

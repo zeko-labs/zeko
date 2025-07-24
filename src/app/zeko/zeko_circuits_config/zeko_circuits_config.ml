@@ -24,17 +24,29 @@ let t =
   | None ->
       failwith "ZEKO_CIRCUITS_CONFIG is not set"
   | Some "test" ->
-      let random_keypair () =
-        let kp = Keypair.create () in
+      let keypair_of_b58_sk sk =
+        let kp =
+          Private_key.of_base58_check_exn sk |> Keypair.of_private_key_exn
+        in
         (Public_key.compress kp.public_key, kp.private_key)
       in
-      { chain_l1 = Mainnet
-      ; chain_l2 = Other_network "zeko-testnet"
+      { chain_l1 = Testnet
+      ; chain_l2 = Testnet
       ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
       ; holder_accounts_l1 =
-          [ random_keypair (); random_keypair (); random_keypair () ]
-      ; helper_token_owner_l1 = random_keypair ()
-      ; zeko_l1 = random_keypair ()
+          [ keypair_of_b58_sk
+              "EKDkANpuXLT3AYp4ySHoYfVsjfTM8syQeNd6oTSr5KgS7jnFgXQU"
+          ; keypair_of_b58_sk
+              "EKE9coDZMm84U8whQmm2JibDijKT2Qe1YWN4xMdJzUbTBfwdUzwF"
+          ; keypair_of_b58_sk
+              "EKFK44pD33YEQUUgSFDvFmt4rHYZxVUDENh4Pz9iRxaSPNBKNXuV"
+          ]
+      ; helper_token_owner_l1 =
+          keypair_of_b58_sk
+            "EKFLJEQouWgCQrBKTrMf8EKvRzuJRsd5hKoo6GWJFdjiS1MFn3np"
+      ; zeko_l1 =
+          keypair_of_b58_sk
+            "EKEFFD7uJayycrse8A2ixBR2Wu7cA5GnGS5ydcYNyzhvr1EPPvj8"
       ; withdrawal_delay = Global_slot_span.of_int 5
       }
   | Some path -> (

@@ -1064,7 +1064,6 @@ open struct
 
     let commit_action =
       let actions = commit_to_actions commit_witness in
-      printf !"commit actions: %{sexp: Field.t array list}" actions ;
       let () =
         match outer_action_of_actions actions with
         | Commit _commit_witness ->
