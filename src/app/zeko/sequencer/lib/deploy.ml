@@ -20,7 +20,7 @@ module Z = struct
     ; set_zkapp_uri = Proof
     ; edit_action_state = Proof
     ; set_token_symbol = Proof
-    ; increment_nonce = None
+    ; increment_nonce = Proof
     ; set_voting_for = Proof
     ; set_timing = Proof
     ; access = Proof
@@ -43,12 +43,16 @@ module Z = struct
     }
 
   module Inner = struct
-    let initial_account () =
-      let%bind vk =
+    let initial_accounts () =
+      let%bind inner_vk =
         Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
         |> Promise.to_deferred
       in
-      return
+      let%map holder_vk =
+        Compile_simple.Verification_key.of_tag Bridge_inst_mina.System_L2.tag
+        |> Promise.to_deferred
+      in
+      let inner_account =
         { Account.empty with
           public_key = Zeko_constants.inner_public_key
         ; balance = Currency.Balance.max_int
@@ -73,21 +77,48 @@ module Z = struct
                        ( match Is_compile_simple_real.is_compile_simple_real with
                        | Some eq ->
                            let _, vk_eq = Type_equal.detuple2 eq in
-                           Type_equal.conv vk_eq vk
+                           Type_equal.conv vk_eq inner_vk
                        | None ->
                            Pickles.Side_loaded.Verification_key.dummy ) )
               }
         }
+      in
+      let holder_account =
+        { Account.empty with
+          public_key = Zeko_circuits_config.Inputs.holder_account_l2
+        ; balance = Currency.Balance.max_int
+        ; permissions =
+            ( if
+              (* see #286 *)
+              Option.is_some Is_compile_simple_real.is_compile_simple_real
+            then proof_permissions
+            else none_permissions )
+        ; zkapp =
+            Some
+              { Zkapp_account.default with
+                verification_key =
+                  Some
+                    (Verification_key_wire.Stable.Latest.M.of_binable
+                       ( match Is_compile_simple_real.is_compile_simple_real with
+                       | Some eq ->
+                           let _, vk_eq = Type_equal.detuple2 eq in
+                           Type_equal.conv vk_eq holder_vk
+                       | None ->
+                           Pickles.Side_loaded.Verification_key.dummy ) )
+              }
+        }
+      in
+      (`Inner inner_account, `Holder holder_account)
   end
 
   module Outer = struct
     let unsafe_deploy ~pause_key ~ledger_hash ~sequencer ~da_key ~acc_set () =
       let open Zkapp_basic in
-      let%bind vk =
+      let%bind outer_vk =
         Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
         |> Promise.to_deferred
       in
-      return
+      let outer_update =
         { Update.dummy with
           app_state =
             Rollup_state.Outer_state.(
@@ -110,7 +141,63 @@ module Z = struct
                  ( match Is_compile_simple_real.is_compile_simple_real with
                  | Some eq ->
                      let _, vk_eq = Type_equal.detuple2 eq in
-                     Type_equal.conv vk_eq vk
+                     Type_equal.conv vk_eq outer_vk
+                 | None ->
+                     Pickles.Side_loaded.Verification_key.dummy ) )
+        ; permissions =
+            Set
+              { ( if
+                  (* see #286 *)
+                  Option.is_some Is_compile_simple_real.is_compile_simple_real
+                then proof_permissions
+                else none_permissions )
+                with
+                access = None
+              }
+        }
+      in
+      let%bind holder_vk =
+        Compile_simple.Verification_key.of_tag
+          Bridge_inst_mina.System_L1_enabled.tag
+        |> Promise.to_deferred
+      in
+      let holder_update =
+        { Update.dummy with
+          verification_key =
+            Set
+              (Verification_key_wire.Stable.Latest.M.of_binable
+                 ( match Is_compile_simple_real.is_compile_simple_real with
+                 | Some eq ->
+                     let _, vk_eq = Type_equal.detuple2 eq in
+                     Type_equal.conv vk_eq holder_vk
+                 | None ->
+                     Pickles.Side_loaded.Verification_key.dummy ) )
+        ; permissions =
+            Set
+              { ( if
+                  (* see #286 *)
+                  Option.is_some Is_compile_simple_real.is_compile_simple_real
+                then proof_permissions
+                else none_permissions )
+                with
+                access = None
+              }
+        }
+      in
+      let%map token_owner_vk =
+        Compile_simple.Verification_key.of_tag
+          Bridge_inst_mina.System_L1_token_owner.tag
+        |> Promise.to_deferred
+      in
+      let token_owner_update =
+        { Update.dummy with
+          verification_key =
+            Set
+              (Verification_key_wire.Stable.Latest.M.of_binable
+                 ( match Is_compile_simple_real.is_compile_simple_real with
+                 | Some eq ->
+                     let _, vk_eq = Type_equal.detuple2 eq in
+                     Type_equal.conv vk_eq token_owner_vk
                  | None ->
                      Pickles.Side_loaded.Verification_key.dummy ) )
         ; permissions =
@@ -121,6 +208,10 @@ module Z = struct
               then proof_permissions
               else none_permissions )
         }
+      in
+      ( `Outer outer_update
+      , `Holder holder_update
+      , `Token_owner token_owner_update )
 
     let deploy_exn (l : L.t) =
       if
@@ -134,20 +225,47 @@ module Z = struct
 end
 
 let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
-    ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~(zkapp : Keypair.t)
+    ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~(outer_kp : Keypair.t)
+    ~(holder_kp : Keypair.t) ~(token_holder_kp : Keypair.t)
     ~(initial_ledger : L.t) ~account_set_hash
     ~(account_creation_fee : Currency.Fee.t) ~pause_key ~sequencer ~da_key () =
-  let%bind update =
+  let%map ( `Outer outer_update
+          , `Holder holder_update
+          , `Token_owner token_owner_update ) =
     Z.Outer.deploy_exn ~pause_key ~sequencer ~da_key ~acc_set:account_set_hash
       initial_ledger ()
   in
-  let zkapp_update =
+  let outer_au =
     Account_update.with_aux
       ~body:
         { Body.dummy with
-          public_key = Public_key.compress zkapp.public_key
+          public_key = Public_key.compress outer_kp.public_key
         ; implicit_account_creation_fee = false
-        ; update
+        ; update = outer_update
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+  in
+  let holder_au =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Public_key.compress holder_kp.public_key
+        ; implicit_account_creation_fee = false
+        ; update = holder_update
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+  in
+  let token_owner_au =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Public_key.compress token_holder_kp.public_key
+        ; implicit_account_creation_fee = false
+        ; update = token_owner_update
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
@@ -160,8 +278,9 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
           public_key = Public_key.compress signer.public_key
         ; balance_change =
             Currency.Amount.(
-              account_creation_fee |> of_fee |> Signed.of_unsigned
-              |> Signed.negate)
+              let ( + ) a b = Currency.Fee.add a b |> Option.value_exn in
+              account_creation_fee + account_creation_fee + account_creation_fee
+              |> of_fee |> Signed.of_unsigned |> Signed.negate)
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
@@ -173,7 +292,7 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
         (Zkapp_command.Call_forest.Digest.Account_update.create ~signature_kind)
     @@ Zkapp_command.Call_forest.of_account_updates
          ~account_update_depth:(fun _ -> 0)
-         [ zkapp_update; sender_update ]
+         [ outer_au; holder_au; token_owner_au; sender_update ]
   in
   let command : Zkapp_command.t =
     { fee_payer =
@@ -189,4 +308,5 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
     ; memo = Signed_command_memo.empty
     }
   in
-  return (Utils.sign_zkapp_command ~signature_kind command [ zkapp; signer ])
+  Utils.sign_zkapp_command ~signature_kind command
+    [ outer_kp; holder_kp; token_holder_kp; signer ]

@@ -153,14 +153,25 @@ module Inner_state = struct
     [ Recursive (Outer_action_state.With_length.fine p.outer_action_state) ]
 end
 
-module Inner_action = struct
-  module Zkapp_call_forest = struct
-    include Zkapp_call_forest
+module Zkapp_call_forest = struct
+  include Zkapp_call_forest
+
+  type var = Checked.t
+
+  module Digest = struct
+    include Zkapp_command.Digest.Forest
 
     type var = Checked.t
   end
+end
 
+module Inner_action = struct
   type t = { aux : F.t; children : Zkapp_call_forest.t } [@@deriving snarky]
+
+  module Without_forest = struct
+    type t = { aux : F.t; children_digest : Zkapp_call_forest.Digest.t }
+    [@@deriving snarky]
+  end
 
   (* We discriminate between the actions by prefixing with a tag,
      even though we only have one case right now. We might have more
@@ -247,19 +258,23 @@ module Outer_action = struct
     [@@deriving snarky]
   end
 
-  module Zkapp_call_forest = struct
-    include Zkapp_call_forest
-
-    type var = Checked.t
-  end
-
   module Witness = struct
     type t =
       { aux : F.t; children : Zkapp_call_forest.t; slot_range : Slot_range.t }
     [@@deriving snarky]
+
+    (* Call forest has auxiliary data, which can't be reconstructed from the action *)
+    module Without_forest = struct
+      type t =
+        { aux : F.t
+        ; children_digest : Zkapp_call_forest.Digest.t
+        ; slot_range : Slot_range.t
+        }
+      [@@deriving snarky]
+    end
   end
 
-  type t = Commit of Commit.t | Witness of Witness.t
+  type t = Commit of Commit.t | Witness of Witness.Without_forest.t
 
   module Repr = struct
     (* NB: If you add more cases, make sure to fix check in `typ`. *)
@@ -267,7 +282,7 @@ module Outer_action = struct
       { is_commit : Boolean.t
       ; case_commit : Commit.t
       ; is_witness : Boolean.t
-      ; case_witness : Witness.t
+      ; case_witness : Witness.Without_forest.t
       }
     [@@deriving snarky]
 
@@ -294,9 +309,9 @@ module Outer_action = struct
     ; slot_range = dummy_slot_range
     }
 
-  let dummy_witness : Witness.t =
+  let dummy_witness : Witness.Without_forest.t =
     { aux = Field.zero
-    ; children = Zkapp_call_forest.empty ()
+    ; children_digest = Zkapp_call_forest.Digest.empty
     ; slot_range = dummy_slot_range
     }
 
@@ -342,9 +357,14 @@ module Outer_action = struct
   let witness_to_actions_var (w : Witness.var) =
     var_to_actions Typ.(F.typ * Witness.typ) (Run.Field.of_int 1, w)
 
+  let witness_without_forest_to_actions_var (w : Witness.Without_forest.var) =
+    var_to_actions
+      Typ.(F.typ * Witness.Without_forest.typ)
+      (Run.Field.of_int 1, w)
+
   let to_actions_var (x : var) =
     let* case_commit = commit_to_actions_var x.case_commit in
-    let* case_witness = witness_to_actions_var x.case_witness in
+    let* case_witness = witness_without_forest_to_actions_var x.case_witness in
     switch x ~typ:Zkapp_account.Actions.typ ~case_commit ~case_witness
 
   let push_commit_var :

@@ -35,7 +35,7 @@ let invalid_to_error (invalid : invalid) : Error.t =
   | `Invalid_proof err ->
       Error.tag ~tag:"Invalid_proof" err
 
-let check ~signature_kind :
+let check ~allowed_empty_fee_payer ~signature_kind :
        User_command.Verifiable.t With_status.t
     -> [ `Valid of User_command.Valid.t
        | `Valid_assuming of User_command.Valid.t * _ list
@@ -68,23 +68,29 @@ let check ~signature_kind :
                 (Zkapp_command.Digest.Account_update.create ~signature_kind
                    (Account_update.of_fee_payer fee_payer) )
           in
-          let check_signature s pk msg =
-            match Signature_lib.Public_key.decompress pk with
-            | None ->
-                return (`Invalid_keys [ pk ])
-            | Some pk ->
-                if
-                  not
-                    (Signature_lib.Schnorr.Chunked.verify ~signature_kind s
-                       (Backend.Tick.Inner_curve.of_affine pk)
-                       (Random_oracle_input.Chunked.field msg) )
-                then
-                  return
-                    (`Invalid_signature [ Signature_lib.Public_key.compress pk ])
-                else ()
+          let check_signature ~allowed_empty_fee_payer s pk msg =
+            if
+              allowed_empty_fee_payer
+              && Signature_lib.Public_key.Compressed.(equal pk empty)
+            then ()
+            else
+              match Signature_lib.Public_key.decompress pk with
+              | None ->
+                  return (`Invalid_keys [ pk ])
+              | Some pk ->
+                  if
+                    not
+                      (Signature_lib.Schnorr.Chunked.verify ~signature_kind s
+                         (Backend.Tick.Inner_curve.of_affine pk)
+                         (Random_oracle_input.Chunked.field msg) )
+                  then
+                    return
+                      (`Invalid_signature
+                        [ Signature_lib.Public_key.compress pk ] )
+                  else ()
           in
-          check_signature fee_payer.authorization fee_payer.body.public_key
-            full_tx_commitment ;
+          check_signature ~allowed_empty_fee_payer fee_payer.authorization
+            fee_payer.body.public_key full_tx_commitment ;
           let zkapp_command_with_hashes_list =
             account_updates |> Zkapp_statement.zkapp_statements_of_forest'
             |> Zkapp_command.Call_forest.With_hashes_and_data
@@ -99,7 +105,8 @@ let check ~signature_kind :
                 in
                 match (p.authorization, p.body.authorization_kind) with
                 | Signature s, Signature ->
-                    check_signature s p.body.public_key commitment ;
+                    check_signature ~allowed_empty_fee_payer:false s
+                      p.body.public_key commitment ;
                     None
                 | None_given, None_given ->
                     None
@@ -147,7 +154,7 @@ let check ~signature_kind :
           | _ :: _ ->
               `Valid_assuming (v, valid_assuming) )
 
-let verify_command ~signature_kind
+let verify_command ~allowed_empty_fee_payer ~signature_kind
     (command : User_command.Verifiable.t With_status.t) :
     [ `Valid of User_command.Valid.t
     | `Valid_assuming of
@@ -157,7 +164,9 @@ let verify_command ~signature_kind
       list
     | invalid ]
     Deferred.Or_error.t =
-  let checked_command = check ~signature_kind command in
+  let checked_command =
+    check ~allowed_empty_fee_payer ~signature_kind command
+  in
   let to_verify =
     match checked_command with
     | `Valid _ ->

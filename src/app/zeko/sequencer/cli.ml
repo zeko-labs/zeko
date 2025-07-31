@@ -18,6 +18,28 @@ let generate_even_key =
              ( Public_key.compress keypair.public_key
              |> Public_key.Compressed.to_base58_check ) ) ) )
 
+let generate_circuits_config =
+  ( "generate-circuits-config"
+  , Command.basic ~summary:"Generate a circuits config"
+      (Command_unix.Param.return (fun () ->
+           let generate_keypair () =
+             let kp = Keypair.create () in
+             (Public_key.compress kp.public_key, kp.private_key)
+           in
+           let t : Zeko_circuits_config.t =
+             { chain_l1 = Testnet
+             ; chain_l2 = Testnet
+             ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
+             ; holder_accounts_l1 = [ generate_keypair () ]
+             ; helper_token_owner_l1 = generate_keypair ()
+             ; zeko_l1 = generate_keypair ()
+             ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
+             }
+           in
+           Core.printf "%s\n%!"
+             (Yojson.Safe.pretty_to_string @@ Zeko_circuits_config.to_yojson t) )
+      ) )
+
 let migrate =
   ( "migrate"
   , Command.async ~summary:"Run migrations on the database"
@@ -186,5 +208,10 @@ let prover_load =
 
 let () =
   Command.group ~summary:"Sequencer CLI"
-    [ generate_even_key; migrate; dump_ledger; prover_load ]
+    [ generate_even_key
+    ; generate_circuits_config
+    ; migrate
+    ; dump_ledger
+    ; prover_load
+    ]
   |> Command_unix.run

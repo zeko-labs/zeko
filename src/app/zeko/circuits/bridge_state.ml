@@ -239,6 +239,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
      Adding an account is however not a problem.
   *)
   let base_params = Deposit_params.base params in
+  let@ () = with_label __LOC__ in
   let* () =
     Checked.List.map
       ~f:(fun holder_account_l1' ->
@@ -247,6 +248,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
       holder_accounts_l1
     >>= Boolean.Assert.any
   in
+  let@ () = with_label __LOC__ in
   let a =
     { default_account_update with
       public_key = base_params.holder_account_l1
@@ -259,6 +261,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
         constant Account_update.Authorization_kind.typ None_given
     }
   in
+  let@ () = with_label __LOC__ in
   let a', (children : Calls.t) =
     match token_owner_l1 with
     | None ->
@@ -280,9 +283,11 @@ let deposit_action (type deposit_params_var) ~chain_l1
           }
         , (a, []) :: Raw custom_params.nested_children )
   in
+  let@ () = with_label __LOC__ in
   let* children' =
     Calls.hash ~chain:chain_l1 ((a', children) :: Raw base_params.children)
   in
+  let@ () = with_label __LOC__ in
   let hash_prefix = Zeko_constants.deposit_salt in
   let* aux = var_to_hash ~init:hash_prefix Deposit_params.typ params in
   Checked.return
@@ -294,7 +299,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
 
 let withdrawal_action (type withdrawal_params_var) ~chain_l2
     ~(holder_account_l2 : PC.t) ~(token_owner_l2 : Account_id.t option)
-    ~inner_vk_hash
+    ~l2_holder_vk_hash
     (module Withdrawal_params : WITHDRAWAL_PARAMS
       with type var = withdrawal_params_var ) (params : Withdrawal_params.var) :
     Rollup_state.Inner_action.var Checked.t =
@@ -315,7 +320,7 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
     ; authorization_kind =
         { is_signed = Boolean.false_
         ; is_proved = Boolean.true_
-        ; verification_key_hash = inner_vk_hash
+        ; verification_key_hash = l2_holder_vk_hash
         }
     }
   in
