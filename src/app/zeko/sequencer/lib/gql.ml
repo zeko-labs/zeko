@@ -1046,10 +1046,9 @@ module Types = struct
               ~resolve:(fun _ -> Fn.id)
           ] )
 
-    let prove_transfer =
-      obj "ProveTransferPayload" ~fields:(fun _ ->
-          [ field "accountUpdateKey" ~typ:(non_null string)
-              ~doc:"Key for querying the account update"
+    let proof_key =
+      obj "ProofKeyPayload" ~fields:(fun _ ->
+          [ field "key" ~typ:(non_null string) ~doc:"Key for querying the proof"
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
           ] )
@@ -1302,71 +1301,446 @@ module Types = struct
             ]
     end
 
-    module Bridge = struct
-      module Direction = struct
-        let arg_typ =
-          enum "TransferDirection"
-            ~values:
-              [ enum_value "DEPOSIT" ~value:Transfer.Deposit
-              ; enum_value "WITHDRAW" ~value:Transfer.Withdraw
+    module Provers = struct
+      open Zeko_types
+      open Snark_params.Tick
+
+      module Deposit_params = struct
+        type input = Zeko_types.Bridge.Finalize_deposit.Deposit_params_base.t
+
+        let arg_typ ~proof_cache_db =
+          obj "DepositParamsInput"
+            ~coerce:(fun children holder_account_l1 amount recipient timeout ->
+              Zeko_types.Bridge.Finalize_deposit.Deposit_params_base
+              .of_serializable ~proof_cache_db
+                { children =
+                    Yojson.Safe.from_string children
+                    |> Mina_base.Zkapp_command.account_updates_of_json
+                    |> Mina_base.Zkapp_command.Call_forest
+                       .of_account_updates_map ~f:Account_update.of_graphql_repr
+                         ~account_update_depth:(fun au -> au.body.call_depth)
+                    |> Mina_base.Zkapp_command.Call_forest
+                       .accumulate_hashes_predicated
+                         ~signature_kind:Zeko_circuits_config.t.chain_l1
+                ; holder_account_l1
+                ; amount = Currency.Amount.of_uint64 amount
+                ; recipient
+                ; timeout =
+                    Mina_numbers.Global_slot_since_genesis.of_int timeout
+                } )
+            ~split:(fun f (x : input) ->
+              let x =
+                Zeko_types.Bridge.Finalize_deposit.Deposit_params_base
+                .to_serializable x
+              in
+              f
+                ( Yojson.Safe.to_string
+                @@ Mina_base.Zkapp_command.account_updates_to_json x.children )
+                x.holder_account_l1
+                (Currency.Amount.to_uint64 x.amount)
+                x.recipient
+                (Mina_numbers.Global_slot_since_genesis.to_int x.timeout) )
+            ~fields:
+              [ arg "children" ~typ:(non_null string)
+              ; arg "holderAccountL1" ~typ:(non_null PublicKey.arg_typ)
+              ; arg "amount" ~typ:(non_null UInt64.arg_typ)
+              ; arg "recipient" ~typ:(non_null PublicKey.arg_typ)
+              ; arg "timeout" ~typ:(non_null int)
               ]
       end
 
-      module Transfer_input = struct
-        type input = Transfer.TR.t
+      module Withdrawal_params = struct
+        type input =
+          Zeko_types.Bridge.Finalize_withdrawal.Withdrawal_params_base.t
 
-        let arg_typ =
-          obj "TransferInput"
-            ~coerce:(fun amount recipient ->
-              Transfer.TR.{ amount = Amount.of_uint64 amount; recipient } )
+        let arg_typ ~proof_cache_db =
+          obj "WithdrawalParamsInput"
+            ~coerce:(fun children amount recipient ->
+              Zeko_types.Bridge.Finalize_withdrawal.Withdrawal_params_base
+              .of_serializable ~proof_cache_db
+                { children =
+                    Yojson.Safe.from_string children
+                    |> Mina_base.Zkapp_command.account_updates_of_json
+                    |> Mina_base.Zkapp_command.Call_forest
+                       .of_account_updates_map ~f:Account_update.of_graphql_repr
+                         ~account_update_depth:(fun au -> au.body.call_depth)
+                    |> Mina_base.Zkapp_command.Call_forest
+                       .accumulate_hashes_predicated
+                         ~signature_kind:Zeko_circuits_config.t.chain_l1
+                ; amount = Currency.Amount.of_uint64 amount
+                ; recipient
+                } )
             ~split:(fun f (x : input) ->
-              f (Currency.Amount.to_uint64 x.amount) x.recipient )
+              let x =
+                Zeko_types.Bridge.Finalize_withdrawal.Withdrawal_params_base
+                .to_serializable x
+              in
+              f
+                ( Yojson.Safe.to_string
+                @@ Mina_base.Zkapp_command.account_updates_to_json x.children )
+                (Currency.Amount.to_uint64 x.amount)
+                x.recipient )
             ~fields:
-              [ arg "amount" ~typ:(non_null UInt64.arg_typ)
+              [ arg "children" ~typ:(non_null string)
+              ; arg "amount" ~typ:(non_null UInt64.arg_typ)
               ; arg "recipient" ~typ:(non_null PublicKey.arg_typ)
               ]
       end
 
-      module Request = struct
-        type input = Transfer.t
+      module Folder = struct
+        module Ase_with_length = struct
+          module Stmt = struct
+            type input = Ase.With_length.Stmt.t
+
+            let arg_typ =
+              obj "AseWithLengthStmtInput"
+                ~coerce:(fun action_state length : Ase.With_length.Stmt.t ->
+                  { action_state = Field.of_string action_state; length } )
+                ~split:(fun f (x : input) ->
+                  f (Field.to_string x.action_state) x.length )
+                ~fields:
+                  [ arg "actionState" ~typ:(non_null string)
+                  ; arg "length" ~typ:(non_null UInt32.arg_typ)
+                  ]
+          end
+
+          type input = Stmt.input * F.t list
+
+          let arg_typ =
+            obj "AseWithLengthInput"
+              ~coerce:(fun stmt fields ->
+                (stmt, List.map fields ~f:Field.of_string) )
+              ~split:(fun f ((stmt, fields) : input) ->
+                f stmt (List.map fields ~f:Field.to_string) )
+              ~fields:
+                [ arg "stmt" ~typ:(non_null Stmt.arg_typ)
+                ; arg "fields" ~typ:(non_null @@ list @@ non_null string)
+                ]
+        end
+
+        module Ase_without_length = struct
+          module Stmt = struct
+            type input = Ase.Without_length.Stmt.t
+
+            let arg_typ =
+              obj "AseWithoutLengthStmtInput"
+                ~coerce:(fun action_state -> Field.of_string action_state)
+                ~split:(fun f (x : input) -> f (Field.to_string x))
+                ~fields:[ arg "actionState" ~typ:(non_null string) ]
+          end
+
+          type input = Stmt.input * F.t list
+
+          let arg_typ =
+            obj "AseWithoutLengthInput"
+              ~coerce:(fun stmt fields ->
+                (stmt, List.map fields ~f:Field.of_string) )
+              ~split:(fun f ((stmt, fields) : input) ->
+                f stmt (List.map fields ~f:Field.to_string) )
+              ~fields:
+                [ arg "stmt" ~typ:(non_null Stmt.arg_typ)
+                ; arg "fields" ~typ:(non_null @@ list @@ non_null string)
+                ]
+        end
+
+        module Check_accepted_mina = struct
+          module Stmt = struct
+            type input = Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t
+
+            let arg_typ ~proof_cache_db =
+              obj "CheckAcceptedMinaStmtInput"
+                ~coerce:(fun params action_state deposit_index n_steps
+                             is_rejected is_accepted :
+                             Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t ->
+                  { params
+                  ; action_state =
+                      Zeko_circuits.Rollup_state.Outer_action_state
+                      .unsafe_value_of_field
+                      @@ Field.of_string action_state
+                  ; deposit_index
+                  ; n_steps
+                  ; is_rejected
+                  ; is_accepted
+                  } )
+                ~split:(fun f (x : input) ->
+                  f x.params
+                    ( Field.to_string
+                    @@ Zeko_circuits.Rollup_state.Outer_action_state.raw
+                         x.action_state )
+                    x.deposit_index x.n_steps x.is_rejected x.is_accepted )
+                ~fields:
+                  [ arg "params"
+                      ~typ:(non_null @@ Deposit_params.arg_typ ~proof_cache_db)
+                  ; arg "actionState" ~typ:(non_null string)
+                  ; arg "depositIndex" ~typ:(non_null UInt32.arg_typ)
+                  ; arg "nSteps" ~typ:(non_null UInt32.arg_typ)
+                  ; arg "isRejected" ~typ:(non_null bool)
+                  ; arg "isAccepted" ~typ:(non_null bool)
+                  ]
+          end
+
+          module Init = struct
+            type input = Bridge.Finalize_deposit.Check_accepted_mina.Init.t
+
+            let arg_typ ~proof_cache_db =
+              obj "CheckAcceptedMinaInitInput"
+                ~coerce:(fun params original_action_state deposit_index :
+                             Bridge.Finalize_deposit.Check_accepted_mina.Init.t ->
+                  { params
+                  ; original_action_state =
+                      Zeko_circuits.Rollup_state.Outer_action_state
+                      .unsafe_value_of_field
+                      @@ Field.of_string original_action_state
+                  ; deposit_index
+                  } )
+                ~split:(fun f (x : input) ->
+                  f x.params
+                    ( Field.to_string
+                    @@ Zeko_circuits.Rollup_state.Outer_action_state.raw
+                         x.original_action_state )
+                    x.deposit_index )
+                ~fields:
+                  [ arg "params"
+                      ~typ:(non_null @@ Deposit_params.arg_typ ~proof_cache_db)
+                  ; arg "orignalActionState" ~typ:(non_null string)
+                  ; arg "depositIndex" ~typ:(non_null UInt32.arg_typ)
+                  ]
+          end
+
+          module Elem = struct
+            type input = Bridge.Finalize_deposit.Check_accepted_mina.Elem.t
+
+            let arg_typ =
+              obj "CheckAcceptedMinaElemInput"
+                ~coerce:(fun actions ->
+                  Utils.actions_to_outer_action
+                    (List.map actions ~f:Field.of_string |> Array.of_list) )
+                ~split:(fun f (x : input) ->
+                  f
+                    ( Utils.actions_of_outer_action x
+                    |> Array.map ~f:Field.to_string
+                    |> Array.to_list ) )
+                ~fields:
+                  [ arg "actions" ~typ:(non_null @@ list @@ non_null string) ]
+          end
+
+          type input = Init.input * Elem.input list
+
+          let arg_typ ~proof_cache_db =
+            obj "CheckAcceptedMinaInput"
+              ~coerce:(fun init elems -> (init, elems))
+              ~split:(fun f ((init, elems) : input) -> f init elems)
+              ~fields:
+                [ arg "init" ~typ:(non_null @@ Init.arg_typ ~proof_cache_db)
+                ; arg "elems" ~typ:(non_null @@ list @@ non_null Elem.arg_typ)
+                ]
+        end
+      end
+
+      module Outer_action_witness = struct
+        module Witness = struct
+          type input = Bridge.Outer_action_witness.Witness.serializable
+
+          let arg_typ =
+            obj "OuterActionWitnessInput"
+              ~coerce:(fun aux children slot_range_lower slot_range_upper ->
+                Bridge.Outer_action_witness.Witness.
+                  { aux = Field.of_string aux
+                  ; children =
+                      Yojson.Safe.from_string children
+                      |> Mina_base.Zkapp_command.account_updates_of_json
+                      |> Mina_base.Zkapp_command.Call_forest
+                         .of_account_updates_map
+                           ~f:Account_update.of_graphql_repr
+                           ~account_update_depth:(fun au -> au.body.call_depth)
+                      |> Mina_base.Zkapp_command.Call_forest
+                         .accumulate_hashes_predicated
+                           ~signature_kind:Zeko_circuits_config.t.chain_l1
+                  ; slot_range =
+                      { lower =
+                          Mina_numbers.Global_slot_since_genesis.of_int
+                            slot_range_lower
+                      ; upper =
+                          Mina_numbers.Global_slot_since_genesis.of_int
+                            slot_range_upper
+                      }
+                  } )
+              ~split:(fun f (x : input) ->
+                f (Field.to_string x.aux)
+                  ( Yojson.Safe.to_string
+                  @@ Mina_base.Zkapp_command.account_updates_to_json x.children
+                  )
+                  (Mina_numbers.Global_slot_since_genesis.to_int
+                     x.slot_range.lower )
+                  (Mina_numbers.Global_slot_since_genesis.to_int
+                     x.slot_range.upper ) )
+              ~fields:
+                [ arg "aux" ~typ:(non_null string)
+                ; arg "children" ~typ:(non_null string)
+                ; arg "slotRangeLower" ~typ:(non_null int)
+                ; arg "slotRangeUpper" ~typ:(non_null int)
+                ]
+        end
+
+        type input = Bridge.Outer_action_witness.serializable
 
         let arg_typ =
-          obj "TransferRequestInput"
-            ~coerce:(fun transfer direction -> Transfer.{ transfer; direction })
-            ~split:(fun f ({ transfer; direction } : input) ->
-              f transfer direction )
+          obj "OuterActionInput"
+            ~coerce:(fun public_key witness ->
+              Bridge.Outer_action_witness.{ public_key; witness } )
+            ~split:(fun f (x : input) -> f x.public_key x.witness)
             ~fields:
-              [ arg "transfer" ~typ:(non_null Transfer_input.arg_typ)
-              ; arg "direction" ~typ:(non_null @@ Direction.arg_typ)
+              [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
+              ; arg "witness" ~typ:(non_null Witness.arg_typ)
               ]
       end
 
-      module Claim = struct
-        open Snark_params.Tick
+      module Inner_action_witness = struct
+        module Witness = struct
+          type input = Bridge.Inner_action_witness.Witness.serializable
 
-        type input = Transfer.claim
+          let arg_typ =
+            obj "InnerActionWitnessInput"
+              ~coerce:(fun aux children ->
+                Bridge.Inner_action_witness.Witness.
+                  { aux = Field.of_string aux
+                  ; children =
+                      Yojson.Safe.from_string children
+                      |> Mina_base.Zkapp_command.account_updates_of_json
+                      |> Mina_base.Zkapp_command.Call_forest
+                         .of_account_updates_map
+                           ~f:Account_update.of_graphql_repr
+                           ~account_update_depth:(fun au -> au.body.call_depth)
+                      |> Mina_base.Zkapp_command.Call_forest
+                         .accumulate_hashes_predicated
+                           ~signature_kind:Zeko_circuits_config.t.chain_l1
+                  } )
+              ~split:(fun f (x : input) ->
+                f (Field.to_string x.aux)
+                  ( Yojson.Safe.to_string
+                  @@ Mina_base.Zkapp_command.account_updates_to_json x.children
+                  ) )
+              ~fields:
+                [ arg "aux" ~typ:(non_null string)
+                ; arg "children" ~typ:(non_null string)
+                ]
+        end
+
+        type input = Bridge.Inner_action_witness.serializable
 
         let arg_typ =
-          obj "TransferClaimInput"
-            ~coerce:(fun is_new pointer before after transfer ->
-              Transfer.
-                { is_new
-                ; pointer = Field.of_string pointer
-                ; before
-                ; after
-                ; transfer
-                } )
-            ~split:(fun f (x : input) ->
-              f x.is_new (Field.to_string x.pointer) x.before x.after x.transfer
-              )
+          obj "InnerActionInput"
+            ~coerce:(fun public_key witness ->
+              Bridge.Inner_action_witness.{ public_key; witness } )
+            ~split:(fun f (x : input) -> f x.public_key x.witness)
             ~fields:
-              [ arg "isNew" ~typ:(non_null bool)
-              ; arg "pointer" ~typ:(non_null string)
-              ; arg "before"
-                  ~typ:(non_null (list @@ non_null Transfer_input.arg_typ))
-              ; arg "after"
-                  ~typ:(non_null (list @@ non_null Transfer_input.arg_typ))
-              ; arg "transfer" ~typ:(non_null Request.arg_typ)
+              [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
+              ; arg "witness" ~typ:(non_null Witness.arg_typ)
+              ]
+      end
+
+      module Deposit_request = struct
+        type input = { deposit_params : Deposit_params.input }
+
+        let arg_typ ~proof_cache_db =
+          obj "DepositRequestInput"
+            ~coerce:(fun deposit_params -> { deposit_params })
+            ~split:(fun f (x : input) -> f x.deposit_params)
+            ~fields:
+              [ arg "depositParams"
+                  ~typ:(non_null @@ Deposit_params.arg_typ ~proof_cache_db)
+              ]
+      end
+
+      module Withdrawal_request = struct
+        type input = Withdrawal_params.input
+
+        let arg_typ ~proof_cache_db = Withdrawal_params.arg_typ ~proof_cache_db
+      end
+
+      module Finalize_deposit = struct
+        type input =
+          { ase : Ase.With_length.Stmt.t * Field.t list
+          ; check_accepted :
+              Bridge.Finalize_deposit.Check_accepted_mina.Init.t
+              * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list
+          ; prev_next_deposit : Unsigned.uint32
+          }
+
+        let arg_typ ~proof_cache_db =
+          obj "FinalizeDepositInput"
+            ~coerce:(fun ase check_accepted prev_next_deposit ->
+              { ase; check_accepted; prev_next_deposit } )
+            ~split:(fun f (x : input) ->
+              f x.ase x.check_accepted x.prev_next_deposit )
+            ~fields:
+              [ arg "ase" ~typ:(non_null Folder.Ase_with_length.arg_typ)
+              ; arg "checkAccepted"
+                  ~typ:
+                    ( non_null
+                    @@ Folder.Check_accepted_mina.arg_typ ~proof_cache_db )
+              ; arg "prevNextDeposit" ~typ:(non_null UInt32.arg_typ)
+              ]
+      end
+
+      module Finalize_withdrawal = struct
+        type input =
+          { public_key : Public_key.Compressed.t
+          ; commit : Zeko_circuits.Rollup_state.Outer_action.Commit.t
+          ; before_commit : Zeko_circuits.Rollup_state.Outer_action_state.t
+          ; commit_ase : Ase.Without_length.Stmt.t * Field.t list
+          ; before_withdrawal : Zeko_circuits.Rollup_state.Inner_action_state.t
+          ; withdrawal_ase : Ase.With_length.Stmt.t * Field.t list
+          ; prev_next_withdrawal : Unsigned.uint32
+          ; withdrawal_params : Withdrawal_params.input
+          }
+
+        let arg_typ ~proof_cache_db =
+          obj "FinalizeWithdrawalInput"
+            ~coerce:(fun public_key commit before_commit commit_ase
+                         before_withdrawal withdrawal_ase prev_next_withdrawal
+                         withdrawal_params ->
+              { public_key
+              ; commit =
+                  ( match commit with
+                  | Commit commit ->
+                      commit
+                  | Witness _ ->
+                      failwith "Supplied witness for commit" )
+              ; before_commit =
+                  Zeko_circuits.Rollup_state.Outer_action_state
+                  .unsafe_value_of_field before_commit
+              ; commit_ase
+              ; before_withdrawal =
+                  Zeko_circuits.Rollup_state.Inner_action_state
+                  .unsafe_value_of_field before_withdrawal
+              ; withdrawal_ase
+              ; prev_next_withdrawal
+              ; withdrawal_params
+              } )
+            ~split:(fun f (x : input) ->
+              f x.public_key (Commit x.commit)
+                (Zeko_circuits.Rollup_state.Outer_action_state.raw
+                   x.before_commit )
+                x.commit_ase
+                (Zeko_circuits.Rollup_state.Inner_action_state.raw
+                   x.before_withdrawal )
+                x.withdrawal_ase x.prev_next_withdrawal x.withdrawal_params )
+            ~fields:
+              [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
+              ; arg "commit"
+                  ~typ:(non_null Folder.Check_accepted_mina.Elem.arg_typ)
+              ; arg "beforeCommit"
+                  ~typ:(non_null Folder.Ase_without_length.Stmt.arg_typ)
+              ; arg "commitAse"
+                  ~typ:(non_null Folder.Ase_without_length.arg_typ)
+              ; arg "beforeWithdrawal"
+                  ~typ:(non_null Folder.Ase_without_length.Stmt.arg_typ)
+              ; arg "withdrawalAse"
+                  ~typ:(non_null Folder.Ase_with_length.arg_typ)
+              ; arg "prevNextWithdrawal" ~typ:(non_null UInt32.arg_typ)
+              ; arg "withdrawalParams"
+                  ~typ:(non_null @@ Withdrawal_params.arg_typ ~proof_cache_db)
               ]
       end
     end
@@ -1682,7 +2056,7 @@ module Mutations = struct
       ~resolve:(fun { ctx = sequencer; _ } () zkapp_command_stable ->
         let zkapp_command =
           Zkapp_command.write_all_proofs_to_disk
-            ~signature_kind:sequencer.config.network_id
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
             ~proof_cache_db:sequencer.merger_ctx.proof_cache_db
             zkapp_command_stable
         in
@@ -1706,37 +2080,120 @@ module Mutations = struct
             in
             return (Ok cmd_with_hash) )
 
-  let prove_transfer_request =
-    io_field "proveTransferRequest" ~doc:"Prove rollup transfer request"
-      ~typ:(non_null Types.Payload.prove_transfer)
-      ~args:
-        Arg.[ arg "input" ~typ:(non_null Types.Input.Bridge.Request.arg_typ) ]
-      ~resolve:(fun { ctx = sequencer; _ } () transfer ->
-        let key = Int.to_string @@ Random.int Int.max_value in
-        don't_wait_for
-        @@ Snark_queue.enqueue_prove_transfer_request
-             Zeko_sequencer.(sequencer.snark_q)
-             ~logger:Zeko_sequencer.(sequencer.logger)
-             ~zkapp_pk:Zeko_sequencer.(sequencer.config.zkapp_pk)
-             ~key ~transfer ;
-        return (Ok key) )
+  module Provers = struct
+    let deposit_request ~proof_cache_db =
+      io_field "proveDepositRequest" ~doc:"Prove deposit request"
+        ~typ:(non_null Types.Payload.proof_key)
+        ~args:
+          Arg.
+            [ arg "input"
+                ~typ:
+                  ( non_null
+                  @@ Types.Input.Provers.Deposit_request.arg_typ ~proof_cache_db
+                  )
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } () { deposit_params } ->
+          let ( + ) a b = Currency.Fee.add a b |> Option.value_exn in
+          let account_creation_fee =
+            Zeko_constants.constraint_constants.account_creation_fee
+            + Zeko_constants.constraint_constants.account_creation_fee
+            |> Currency.Amount.of_fee
+          in
+          if Currency.Amount.(deposit_params.amount < account_creation_fee) then
+            return (Error "Amount must be at least 2 account creation fees")
+          else
+            let key = Int.to_string @@ Random.int Int.max_value in
+            don't_wait_for
+            @@ Bridge_prover.deposit_request
+                 Zeko_sequencer.(sequencer.bridge_prover)
+                 ~logger:Zeko_sequencer.(sequencer.logger)
+                 ~key ~deposit_params ;
+            return (Ok key) )
 
-  let prove_transfer_claim =
-    io_field "proveTransferClaim" ~doc:"Prove rollup transfer claim"
-      ~typ:(non_null Types.Payload.prove_transfer)
-      ~args:Arg.[ arg "input" ~typ:(non_null Types.Input.Bridge.Claim.arg_typ) ]
-      ~resolve:(fun { ctx = sequencer; _ } () claim ->
-        let key = Int.to_string @@ Random.int Int.max_value in
-        don't_wait_for
-        @@ Snark_queue.enqueue_prove_transfer_claim
-             Zeko_sequencer.(sequencer.snark_q)
-             ~logger:Zeko_sequencer.(sequencer.logger)
-             ~zkapp_pk:Zeko_sequencer.(sequencer.config.zkapp_pk)
-             ~key ~claim ;
-        return (Ok key) )
+    let withdrawal_request ~proof_cache_db =
+      io_field "proveWithdrawalRequest" ~doc:"Prove withdrawal request"
+        ~typ:(non_null Types.Payload.proof_key)
+        ~args:
+          Arg.
+            [ arg "input"
+                ~typ:
+                  ( non_null
+                  @@ Types.Input.Provers.Withdrawal_request.arg_typ
+                       ~proof_cache_db )
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } () withdrawal_params ->
+          let key = Int.to_string @@ Random.int Int.max_value in
+          don't_wait_for
+          @@ Bridge_prover.withdrawal_request
+               Zeko_sequencer.(sequencer.bridge_prover)
+               ~logger:Zeko_sequencer.(sequencer.logger)
+               ~key ~withdrawal_params ;
+          return (Ok key) )
 
-  let commands =
-    [ send_payment; send_zkapp; prove_transfer_request; prove_transfer_claim ]
+    let finalize_deposit ~proof_cache_db =
+      io_field "finalizeDeposit" ~doc:"Finalize a deposit"
+        ~typ:(non_null Types.Payload.proof_key)
+        ~args:
+          Arg.
+            [ arg "input"
+                ~typ:
+                  ( non_null
+                  @@ Types.Input.Provers.Finalize_deposit.arg_typ
+                       ~proof_cache_db )
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } ()
+                      { ase; check_accepted; prev_next_deposit } ->
+          let key = Int.to_string @@ Random.int Int.max_value in
+          don't_wait_for
+          @@ Bridge_prover.finalize_deposit
+               Zeko_sequencer.(sequencer.bridge_prover)
+               ~logger:Zeko_sequencer.(sequencer.logger)
+               ~key ~ase ~check_accepted ~prev_next_deposit ;
+          return (Ok key) )
+
+    let finalize_withdrawal ~proof_cache_db =
+      io_field "finalizeWithdrawal" ~doc:"Finalize a withdrawal"
+        ~typ:(non_null Types.Payload.proof_key)
+        ~args:
+          Arg.
+            [ arg "input"
+                ~typ:
+                  ( non_null
+                  @@ Types.Input.Provers.Finalize_withdrawal.arg_typ
+                       ~proof_cache_db )
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } ()
+                      { public_key
+                      ; commit
+                      ; before_commit
+                      ; commit_ase
+                      ; before_withdrawal
+                      ; withdrawal_ase
+                      ; prev_next_withdrawal
+                      ; withdrawal_params
+                      } ->
+          let key = Int.to_string @@ Random.int Int.max_value in
+          don't_wait_for
+          @@ Bridge_prover.finalize_withdrawal
+               Zeko_sequencer.(sequencer.bridge_prover)
+               ~logger:Zeko_sequencer.(sequencer.logger)
+               ~key ~public_key ~commit ~before_commit ~commit_ase
+               ~before_withdrawal ~withdrawal_ase ~prev_next_withdrawal
+               ~withdrawal_params:
+                 (Zeko_types.Bridge.Finalize_withdrawal.Withdrawal_params_base
+                  .to_serializable withdrawal_params ) ;
+          return (Ok key) )
+
+    let commands ~proof_cache_db =
+      [ deposit_request ~proof_cache_db
+      ; withdrawal_request ~proof_cache_db
+      ; finalize_deposit ~proof_cache_db
+      ; finalize_withdrawal ~proof_cache_db
+      ]
+  end
+
+  let commands ~proof_cache_db =
+    [ send_payment; send_zkapp ] @ Provers.commands ~proof_cache_db
 end
 
 module Queries = struct
@@ -1772,10 +2229,10 @@ module Queries = struct
          participating in"
       ~typ:(non_null string)
       ~args:Arg.[]
-      ~resolve:(fun { ctx = sequencer; _ } () ->
+      ~resolve:(fun _ () ->
         "zeko:"
         ^
-        match Zeko_sequencer.(sequencer.config.network_id) with
+        match Zeko_circuits_config.Inputs.chain_l2 with
         | Mina_signature_kind.Testnet ->
             "testnet"
         | Mina_signature_kind.Mainnet ->
@@ -1867,27 +2324,26 @@ module Queries = struct
       ~typ:(non_null Types.genesis_constants)
       ~resolve:(fun _ () -> ())
 
-  let transfer_account_update =
-    field "transferAccountUpdate"
-      ~doc:"Query proved account update for transfer in a JSON format"
+  let proved_forest =
+    io_field "provedForest" ~doc:"Query proved forest in a JSON format"
       ~typ:string
       ~args:Arg.[ arg "key" ~typ:(non_null string) ]
       ~resolve:(fun { ctx = sequencer; _ } () key ->
         match
-          Transfer.Transfers_memory.get
-            Zeko_sequencer.(sequencer.snark_q.transfers_memory)
+          Bridge_prover.Proofs_memory.get
+            Zeko_sequencer.(sequencer.bridge_prover.proofs_memory)
             key
         with
         | None ->
-            None
-        | Some (_, Ok call_forest) ->
-            Some
-              ( Yojson.Safe.to_string
-              @@ Zkapp_command.account_updates_to_json
-                   (Zkapp_command.Call_forest.map call_forest
-                      ~f:Account_update.read_all_proofs_from_disk ) )
-        | Some (_, Error msg) ->
-            Some msg )
+            return (Ok None)
+        | Some (_, Ok forest) ->
+            return
+              (Ok
+                 (Some
+                    ( Yojson.Safe.to_string
+                    @@ Zkapp_command.account_updates_to_json forest ) ) )
+        | Some (_, Error err) ->
+            return (Error (Error.to_string_mach err)) )
 
   let state_hashes =
     field "stateHashes" ~doc:"Get current state of the rollup"
@@ -1961,7 +2417,7 @@ module Queries = struct
     ; accounts_for_pk
     ; token_accounts
     ; genesis_constants
-    ; transfer_account_update
+    ; proved_forest
     ; state_hashes
     ; token_owner
     ; network_id
@@ -1971,5 +2427,6 @@ module Queries = struct
     @ Archive.commands
 end
 
-let schema =
-  Graphql_async.Schema.(schema Queries.commands ~mutations:Mutations.commands)
+let schema ~proof_cache_db =
+  Graphql_async.Schema.(
+    schema Queries.commands ~mutations:(Mutations.commands ~proof_cache_db))

@@ -11,24 +11,43 @@ let constraint_constants = Zeko_constants.constraint_constants
 let print_endline = Core.print_endline
 
 let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-    ~sequencer_key ~da_key ~network ~account_creation_fee () =
+    ~sequencer_key ~da_key ~account_creation_fee () =
   let logger = Logger.create () in
   let sender_keypair =
     Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
   in
-  let zkapp_keypair = Keypair.create () in
-  printf "zkapp secret key: %s\n%!"
-    (Private_key.to_base58_check zkapp_keypair.private_key) ;
-  printf "zkapp public key: %s\n%!"
-    Public_key.(Compressed.to_base58_check @@ compress zkapp_keypair.public_key) ;
+  let outer_kp =
+    Keypair.of_private_key_exn @@ snd Zeko_circuits_config.t.zeko_l1
+  in
+  let holder_kp =
+    Keypair.of_private_key_exn @@ snd
+    @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1
+  in
+  let token_holder_kp =
+    Keypair.of_private_key_exn
+    @@ snd Zeko_circuits_config.t.helper_token_owner_l1
+  in
+  printf "outer secret key: %s\n%!"
+    (Private_key.to_base58_check outer_kp.private_key) ;
+  printf "outer public key: %s\n%!"
+    Public_key.(Compressed.to_base58_check @@ compress outer_kp.public_key) ;
+  printf "holder secret key: %s\n%!"
+    (Private_key.to_base58_check holder_kp.private_key) ;
+  printf "holder public key: %s\n%!"
+    Public_key.(Compressed.to_base58_check @@ compress holder_kp.public_key) ;
+  printf "token holder secret key: %s\n%!"
+    (Private_key.to_base58_check token_holder_kp.private_key) ;
+  printf "token holder public key: %s\n%!"
+    Public_key.(
+      Compressed.to_base58_check @@ compress token_holder_kp.public_key) ;
 
   Thread_safe.block_on_async_exn (fun () ->
       let%bind nonce =
         Sequencer_lib.Gql_client.infer_nonce l1_uri
           (Public_key.compress sender_keypair.public_key)
       in
-      let%bind initial_inner_account =
-        Sequencer_lib.Deploy.Z.Inner.initial_account ()
+      let%bind `Inner inner_account, `Holder holder_account =
+        Sequencer_lib.Deploy.Z.Inner.initial_accounts ()
       in
       let old_ledger_witness, new_ledger, imt_hash =
         let ledger =
@@ -36,8 +55,10 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
         in
         match ledger_input with
         | None ->
-            L.create_new_account_exn ledger Zeko_constants.inner_account_id
-              initial_inner_account ;
+            List.iter [ inner_account; holder_account ] ~f:(fun acc ->
+                L.create_new_account_exn ledger
+                  (Account_id.create acc.public_key acc.token_id)
+                  acc ) ;
             let tids =
               Account_id.derive_token_id ~owner:Zeko_constants.inner_account_id
               ::
@@ -77,11 +98,12 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
                 :: (match faucet_aid with None -> [] | Some aid -> [ aid ]) )
             in
 
-            print_endline "(* Overwrite inner account *)" ;
-            L.set_at_index_exn ledger 0 initial_inner_account ;
+            print_endline "(* Overwrite initial accounts *)" ;
+            List.iteri [ inner_account; holder_account ] ~f:(fun i acc ->
+                L.set_at_index_exn ledger i acc ) ;
 
             let accounts_diff =
-              (0, initial_inner_account)
+              (0, inner_account) :: (1, holder_account)
               ::
               ( match faucet_aid with
               | None ->
@@ -127,8 +149,9 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
             , imt_hash )
       in
       let%bind command =
-        Sequencer_lib.Deploy.deploy_command_exn ~signature_kind:network
-          ~signer:sender_keypair ~zkapp:zkapp_keypair
+        Sequencer_lib.Deploy.deploy_command_exn
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+          ~signer:sender_keypair ~outer_kp ~holder_kp ~token_holder_kp
           ~fee:(Currency.Fee.of_mina_int_exn 1)
           ~nonce ~account_creation_fee ~initial_ledger:new_ledger
           ~account_set_hash:imt_hash ~pause_key ~sequencer:sequencer_key ~da_key
@@ -217,7 +240,6 @@ let () =
         and sequencer_key =
           flag "--sequencer-key" (required string) ~doc:"string Sequencer key"
         and da_key = flag "--da-key" (required string) ~doc:"string Da key"
-        and network = flag "--network" (optional string) ~doc:"string Network"
         and account_creation_fee =
           flag "--account-creation-fee" (required string)
             ~doc:"float Account creation fee in mina"
@@ -250,15 +272,6 @@ let () =
           string_to_even_pc sequencer_key
           |> Option.value_exn ~message:"Sequencer key odd"
         in
-        let network =
-          match network with
-          | None | Some "testnet" ->
-              Mina_signature_kind.Testnet
-          | Some "mainnet" ->
-              Mainnet
-          | Some network ->
-              Other_network network
-        in
         let account_creation_fee =
           Currency.Fee.of_mina_string_exn account_creation_fee
         in
@@ -266,4 +279,4 @@ let () =
           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
         in
         run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-          ~sequencer_key ~da_key ~network ~account_creation_fee )
+          ~sequencer_key ~da_key ~account_creation_fee )

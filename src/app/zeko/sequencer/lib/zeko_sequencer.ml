@@ -18,16 +18,14 @@ module Sequencer = struct
       { max_pool_size : int
       ; commitment_period_sec : float
       ; db_dir : string option
-      ; zkapp_pk : Public_key.Compressed.t
       ; signer : Keypair.t
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
-      ; network_id : Mina_signature_kind.t
       ; deposit_delay_blocks : int
       ; da_key : Even_PC.t
       ; fee_modifier : float
       ; minimum_fee : float
-      ; genesis_timestamp : Time.t
+      ; l1_config : Utils.Slot.l1_config
       ; slot_acceptance : Time.Span.t
       }
   end
@@ -148,7 +146,8 @@ module Sequencer = struct
         in
         let%bind command =
           Committer.prove_commit ~logger ~proof_cache_db ~provers ~executor
-            ~archive ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
+            ~archive ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+            ~archive_uri:config.archive_uri ~l1_config:config.l1_config
             commit_witness
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
@@ -194,7 +193,7 @@ module Sequencer = struct
     ; logger : Logger.t
     ; archive : Archive.t
     ; config : Config.t
-    ; snark_q : Snark_queue.t
+    ; bridge_prover : Bridge_prover.t
     ; merger : Merger.M.t
     ; merger_ctx : Merger.Context.t
     ; da_client : Da_layer.Client.t
@@ -298,8 +297,21 @@ module Sequencer = struct
         (Error (Error.of_string "Sequencer is under the load, try again later"))
     else
       Throttle.enqueue t.apply_q (fun () ->
+          (* TODO: instead apply directly from prover *)
+          let is_deposit_finalization =
+            let is_empty_fee_payer =
+              let fee_payer = User_command.fee_payer command in
+              let fee_payer' =
+                Account_id.create Public_key.Compressed.empty Token_id.default
+              in
+              Account_id.equal fee_payer fee_payer'
+            in
+            let is_correct_forest = true (* TODO *) in
+            is_empty_fee_payer && is_correct_forest
+          in
+
           let%bind.Deferred.Result () =
-            if skip_validity_check then return (Ok ())
+            if skip_validity_check || is_deposit_finalization then return (Ok ())
             else
               let weight = User_command.weight command in
               let required_fee = calculate_required_fee t weight in
@@ -319,7 +331,7 @@ module Sequencer = struct
           in
 
           let l1_global_slot =
-            Utils.l1_global_slot ~genesis_timestamp:t.config.genesis_timestamp
+            Utils.Slot.global_slot ~l1_config:t.config.l1_config
           in
           let acceptable_future_slot =
             Global_slot_since_genesis.add l1_global_slot
@@ -363,7 +375,8 @@ module Sequencer = struct
               in
               match%bind
                 try_with (fun () ->
-                    Verifier.verify_command ~signature_kind:t.config.network_id
+                    Verifier.verify_command
+                      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                       { data = verifiable; status = Applied } )
                 >>| Result.map_error ~f:Error.of_exn
                 >>| Result.join
@@ -372,6 +385,11 @@ module Sequencer = struct
                   return (Ok ())
               | Ok (`Valid_assuming _) ->
                   return (Error (Error.of_string "Invalid proof"))
+              | Ok (`Invalid_keys keys)
+                when List.equal Public_key.Compressed.equal keys
+                       [ Public_key.Compressed.empty ]
+                     && is_deposit_finalization ->
+                  return (Ok ())
               | Ok (#Verifier.invalid as invalid) ->
                   return (Error (Verifier.invalid_to_error invalid))
               | Error e ->
@@ -385,8 +403,8 @@ module Sequencer = struct
             in
             return
               (Zeko_transaction_logic.apply_user_command_unchecked
-                 ~signature_kind:t.config.network_id ~sequencer_pk
-                 ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
+                 ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                 ~sequencer_pk ~zeko_env:Zeko_transaction_logic.zeko_dummy_env
                  ~constraint_constants ~global_slot:l1_global_slot l t.imt
                  command )
           in
@@ -455,7 +473,7 @@ module Sequencer = struct
         Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
       in
       let l1_global_slot =
-        Utils.l1_global_slot ~genesis_timestamp:t.config.genesis_timestamp
+        Utils.Slot.global_slot ~l1_config:t.config.l1_config
       in
       let ledger = L.of_database t.ledger in
 
@@ -505,30 +523,33 @@ module Sequencer = struct
             | Error e ->
                 `Error (Error.of_string (Caqti_error.show e)) )
 
+  let current_synced_outer_action_state t =
+    Utils.get_synced_outer_action_state_exn (L.of_database t.ledger)
+
   let update_inner_account t =
     let logger = t.logger in
     let old_synced_outer_action_state, old_deposits_length =
-      let s =
-        Utils.get_synced_outer_action_state_exn (L.of_database t.ledger)
-      in
+      let s = current_synced_outer_action_state t in
       C.Rollup_state.Outer_action_state.With_length.(raw s, length s)
     in
     let%bind all_new_actions =
       Gql_client.fetch_actions t.config.archive_uri
-        ~from_action_state:old_synced_outer_action_state t.config.zkapp_pk
+        ~from_action_state:old_synced_outer_action_state
+        Zeko_circuits_config.Inputs.zeko_l1
     in
     [%log info] "All new actions: %d" (List.length all_new_actions) ;
     let%bind current_height = Gql_client.fetch_block_height t.config.l1_uri in
     (* Find pointer for actions to be processed *)
     let processed_pointer, processed_new_actions =
       List.fold all_new_actions ~init:(old_synced_outer_action_state, [])
-        ~f:(fun (curr_state, curr_actions) (action, block_height) ->
+        ~f:(fun (curr_state, curr_actions) (action, block_height, _, _) ->
           if block_height + t.config.deposit_delay_blocks <= current_height then
             ( Zkapp_account.Actions_impl.(push_hash curr_state (hash action))
             , action :: curr_actions )
           else (curr_state, curr_actions) )
       |> Tuple2.map_snd ~f:List.rev
     in
+    let proof_cache_db = t.merger_ctx.proof_cache_db in
     if Field.equal old_synced_outer_action_state processed_pointer then (
       (* In case no new actions are to process, we don't need to update inner account *)
       [%log info] "No new actions to process" ;
@@ -538,9 +559,9 @@ module Sequencer = struct
         (List.length processed_new_actions)
         (Field.to_string old_synced_outer_action_state)
         (Field.to_string processed_pointer) ;
-      let%bind tree =
-        let%map (body, account_update_digest, calls), proof =
-          Zeko_prover.Client.inner_sync t.snark_q.provers
+      let%bind forest =
+        let%map (body, _, calls), proof =
+          Zeko_prover.Client.inner_sync t.bridge_prover.provers
             ~public_key:Zeko_constants.inner_public_key
             ~ase_elms:
               (List.map processed_new_actions ~f:Zkapp_account.Actions_impl.hash)
@@ -550,40 +571,10 @@ module Sequencer = struct
                 }
                 : C.Ase.With_length.Stmt.t )
         in
-        let proof_cache_db = t.merger_ctx.proof_cache_db in
         (* see #286 *)
-        match Is_compile_simple_real.is_compile_simple_real with
-        | Some eq ->
-            let proof_eq, _ = Type_equal.detuple2 eq in
-            let account_update : Account_update.t =
-              Account_update.with_aux ~body
-                ~authorization:
-                  (Control.Poly.Proof
-                     (Proof_cache_tag.write_proof_to_disk proof_cache_db
-                        (Type_equal.conv proof_eq proof) ) )
-            in
-            Zkapp_command.Call_forest.Tree.
-              { account_update
-              ; account_update_digest
-              ; calls =
-                  Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
-                    ~proof_cache_db calls
-              }
-        | None ->
-            let account_update : Account_update.t =
-              Account_update.with_aux
-                ~body:{ body with authorization_kind = None_given }
-                ~authorization:Control.Poly.None_given
-            in
-            Zkapp_command.Call_forest.Tree.
-              { account_update
-              ; account_update_digest =
-                  Zkapp_command.Digest.Account_update.create
-                    ~signature_kind:t.config.network_id account_update
-              ; calls =
-                  Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
-                    ~proof_cache_db calls
-              }
+        Utils.attach_proof_to_forest
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~proof_cache_db
+          ~body ~calls ~proof
       in
       let fee = Currency.Fee.of_mina_int_exn 0 in
       let command : Zkapp_command.t =
@@ -598,7 +589,9 @@ module Sequencer = struct
                 }
             ; authorization = Signature.dummy
             }
-        ; account_updates = Zkapp_command.Call_forest.cons_tree tree []
+        ; account_updates =
+            Zkapp_command.Call_forest.map forest
+              ~f:(Account_update.write_all_proofs_to_disk ~proof_cache_db)
         ; memo = Signed_command_memo.empty
         }
       in
@@ -661,7 +654,8 @@ module Sequencer = struct
     let%bind commited_ledger_hash =
       match Sys.getenv "ZEKO_OVERRIDE_BOOTSTRAP_HASH" with
       | None ->
-          Gql_client.infer_state config.l1_uri ~zkapp_pk:config.zkapp_pk
+          Gql_client.infer_state config.l1_uri
+            ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
             ~signer_pk:(Public_key.compress config.signer.public_key)
           >>| Utils.value_of_zkapp_state
                 Zeko_circuits.Rollup_state.Outer_state.typ
@@ -732,7 +726,7 @@ module Sequencer = struct
             | Some (Zkapp_command command, _) ->
                 apply_events_and_actions t
                   (Zkapp_command.write_all_proofs_to_disk
-                     ~signature_kind:t.config.network_id
+                     ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                      ~proof_cache_db:t.merger_ctx.proof_cache_db command )
             | _ ->
                 Ok ( (* No events nor actions to add *) )
@@ -763,10 +757,10 @@ module Sequencer = struct
     State.Last_committed_ledger.set t.state ~data:sparse_ledger ;
     return ()
 
-  let create ~logger ~zkapp_pk ~max_pool_size ~commitment_period_sec ~da_config
-      ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-      ~l1_network_id ~l2_network_id ~deposit_delay_blocks ~provers ~da_key
-      ~fee_modifier ~minimum_fee ~slot_acceptance =
+  let create ~logger ~max_pool_size ~commitment_period_sec ~da_config ~da_quorum
+      ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
+      ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
+      ~proof_cache_db ~l1_config =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let ledger =
@@ -781,7 +775,6 @@ module Sequencer = struct
           (Option.map db_dir ~f:(fun db_dir -> Filename.concat db_dir "imt"))
         ~depth:constraint_constants.ledger_depth ()
     in
-    let%bind genesis_timestamp = Gql_client.fetch_genesis_timestamp l1_uri in
     let config =
       Config.
         { max_pool_size
@@ -789,14 +782,12 @@ module Sequencer = struct
         ; db_dir
         ; l1_uri
         ; archive_uri
-        ; zkapp_pk
         ; signer
-        ; network_id = Utils.signature_kind l2_network_id
         ; deposit_delay_blocks
         ; da_key
         ; fee_modifier
         ; minimum_fee
-        ; genesis_timestamp
+        ; l1_config
         ; slot_acceptance
         }
     in
@@ -812,11 +803,9 @@ module Sequencer = struct
     in
     let executor =
       Executor.create ~l1_uri:config.l1_uri
-        ~signature_kind:(Utils.signature_kind l1_network_id)
-        ~signer ~kvdb ()
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ~kvdb ()
     in
     let archive = Archive.create ~kvdb in
-    let proof_cache_db = Proof_cache_tag.create_identity_db () in
     let merger_ctx =
       Merger.Context.
         { provers
@@ -840,7 +829,7 @@ module Sequencer = struct
       ; archive
       ; config
       ; da_client
-      ; snark_q = Snark_queue.create ~provers
+      ; bridge_prover = Bridge_prover.create ~provers ~proof_cache_db
       ; merger
       ; merger_ctx
       ; closed = Ivar.create ()
@@ -851,9 +840,10 @@ module Sequencer = struct
       if is_empty t then bootstrap ~logger t da_config else return ()
     in
     let%bind () =
-      Committer.recommit_all ~logger ~genesis_timestamp ~proof_cache_db
-        ~provers:t.snark_q.provers ~executor:t.merger_ctx.executor ~archive
-        ~db_pool ~zkapp_pk:config.zkapp_pk ~archive_uri:config.archive_uri
+      Committer.recommit_all ~logger ~proof_cache_db
+        ~provers:t.bridge_prover.provers ~executor:t.merger_ctx.executor
+        ~archive ~db_pool ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+        ~archive_uri:config.archive_uri ~l1_config
     in
     let%bind () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)

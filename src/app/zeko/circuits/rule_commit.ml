@@ -10,14 +10,14 @@ open Checked.Let_syntax
 module Ase_outer_inst = Ase.Without_length.Make (struct
   module Action_state = Outer_action_state
 
-  let get_iterations = Zeko_constants.Max_excess_actions.commit_outer
+  let get_iterations = Zeko_constants.Max_excess_actions.Commit.outer
 end)
 
 (** Used to prove the length of the inner action state as stored on the outer account. *)
 module Ase_inner_inst = Ase.With_length.Make (struct
   module Action_state = Inner_action_state
 
-  let get_iterations = Zeko_constants.Max_excess_actions.commit_inner
+  let get_iterations = Zeko_constants.Max_excess_actions.Commit.inner
 end)
 
 (** Proves both Ase_outer_inst and Ase_inner_inst, to circumvent limitation of two recursive proof verifications per proof. *)

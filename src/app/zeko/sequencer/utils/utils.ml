@@ -47,6 +47,87 @@ let value_of_zkapp_state (typ : ('var, 'value) Typ.t) (x : field Zkapp_state.V.t
     ( Zkapp_state.V.to_list x |> Array.of_list
     , typ.constraint_system_auxiliary () )
 
+let value_to_fields (type var value) (typ : (var, value) Typ.t) (x : value) :
+    Field.t array =
+  let (Typ typ) = typ in
+  let fields, _aux = typ.value_to_fields x in
+  fields
+
+let value_of_fields (type var value aux) (typ : (var, value, aux) Typ.typ')
+    (fields : Field.t array) (aux : aux) : value =
+  typ.value_of_fields (fields, aux)
+
+let value_to_hash ~(init : string)
+    (typ : ('var, 'value) Snark_params.Tick.Typ.t) (x : 'value) : Field.t =
+  let (Typ typ) = typ in
+  let fields, _aux = typ.value_to_fields x in
+  Random_oracle.hash ~init:(Hash_prefix_create.salt init) fields
+
+let commit_to_actions x =
+  [ value_to_fields
+      Typ.(F.typ * Zeko_circuits.Rollup_state.Outer_action.Commit.typ)
+      (Field.of_int 0, x)
+  ]
+
+let witness_to_actions x =
+  [ value_to_fields
+      Typ.(F.typ * Zeko_circuits.Rollup_state.Outer_action.Witness.typ)
+      (Field.of_int 1, x)
+  ]
+
+let actions_to_outer_action x : Zeko_circuits.Rollup_state.Outer_action.t =
+  if Field.equal x.(0) Field.zero then
+    let (Typ typ) = Zeko_circuits.Rollup_state.Outer_action.Commit.typ in
+    Commit
+      (typ.value_of_fields
+         ( Array.sub ~pos:1 ~len:(Array.length x - 1) x
+         , typ.constraint_system_auxiliary () ) )
+  else if Field.equal x.(0) Field.one then
+    let (Typ typ) =
+      Zeko_circuits.Rollup_state.Outer_action.Witness.Without_forest.typ
+    in
+    Witness
+      (typ.value_of_fields
+         ( Array.sub ~pos:1 ~len:(Array.length x - 1) x
+         , typ.constraint_system_auxiliary () ) )
+  else failwith "Invalid outer action"
+
+let actions_of_outer_action :
+    Zeko_circuits.Rollup_state.Outer_action.t -> field array = function
+  | Commit x ->
+      let (Typ typ) =
+        Typ.(F.typ * Zeko_circuits.Rollup_state.Outer_action.Commit.typ)
+      in
+      typ.value_to_fields (Field.of_int 0, x) |> fst
+  | Witness x ->
+      let (Typ typ) =
+        Typ.(
+          F.typ
+          * Zeko_circuits.Rollup_state.Outer_action.Witness.Without_forest.typ)
+      in
+      typ.value_to_fields (Field.of_int 1, x) |> fst
+
+let actions_to_inner_action x :
+    Zeko_circuits.Rollup_state.Inner_action.Without_forest.t =
+  if Field.equal x.(0) Field.zero then
+    let (Typ typ) =
+      Zeko_circuits.Rollup_state.Inner_action.Without_forest.typ
+    in
+    typ.value_of_fields
+      ( Array.sub ~pos:1 ~len:(Array.length x - 1) x
+      , typ.constraint_system_auxiliary () )
+  else failwith "Invalid inner action"
+
+let actions_of_inner_action x =
+  let (Typ typ) = Typ.(F.typ * Zeko_circuits.Rollup_state.Inner_action.typ) in
+  typ.value_to_fields (Field.of_int 0, x) |> fst
+
+let actions_of_inner_action_without_forest x =
+  let (Typ typ) =
+    Typ.(F.typ * Zeko_circuits.Rollup_state.Inner_action.Without_forest.typ)
+  in
+  typ.value_to_fields (Field.of_int 0, x) |> fst
+
 let update_state pk command state =
   let open Zkapp_basic in
   let account_id = Account_id.create pk Token_id.default in
@@ -216,6 +297,41 @@ let command_slot_range (command : User_command.t) : Slot_range.t option =
              slot_range_intersection (Some valid_while) (Some global_slot)
              |> slot_range_intersection acc )
 
-let l1_global_slot ~genesis_timestamp =
-  (Time.abs_diff (Time.now ()) genesis_timestamp |> Time.Span.to_sec) /. 180.
-  |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int
+module Slot = struct
+  type l1_config = { fork_timestamp : Time.t; fork_slot : Slot.t }
+
+  let global_slot ~l1_config =
+    (Time.abs_diff (Time.now ()) l1_config.fork_timestamp |> Time.Span.to_sec)
+    /. 180.
+    |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int
+end
+
+let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =
+  match Is_compile_simple_real.is_compile_simple_real with
+  | Some eq ->
+      let proof_eq, _ = Type_equal.detuple2 eq in
+      let account_update =
+        Account_update.with_aux ~body
+          ~authorization:
+            (Control.Poly.Proof
+               (Proof_cache_tag.write_proof_to_disk proof_cache_db
+                  (Type_equal.conv proof_eq proof) ) )
+        |> Account_update.read_all_proofs_from_disk
+      in
+      Zkapp_command.Call_forest.cons_aux account_update
+        ~digest_account_update:(fun _ ->
+          Zkapp_command.Digest.Account_update.create ~signature_kind
+            account_update )
+        ~calls []
+  | None ->
+      let account_update =
+        Account_update.with_aux
+          ~body:{ body with authorization_kind = None_given }
+          ~authorization:Control.Poly.None_given
+        |> Account_update.read_all_proofs_from_disk
+      in
+      Zkapp_command.Call_forest.cons_aux account_update
+        ~digest_account_update:(fun _ ->
+          Zkapp_command.Digest.Account_update.create ~signature_kind
+            account_update )
+        ~calls []

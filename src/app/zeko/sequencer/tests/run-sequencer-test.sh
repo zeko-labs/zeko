@@ -24,6 +24,7 @@ SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 
 export ZEKO_SIGNATURE_KIND=testnet
+export ZEKO_CIRCUITS_CONFIG=test
 
 TMP_DIR=$(mktemp -d)
 
@@ -47,10 +48,10 @@ $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --random-sk --net
 da3_pid=$!
 
 if [ "$MODE" = "fake" ]; then
-    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9990 > /dev/null &
+    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9990 &
     prover1_pid=$!
 
-    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9991 > /dev/null &
+    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9991 &
     prover2_pid=$!
 else
     $SEQUENCER_BUILD_ROOT/prover/cli.exe run-server --port 9990 &

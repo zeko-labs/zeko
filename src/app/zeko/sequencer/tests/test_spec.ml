@@ -357,20 +357,32 @@ end
 
 module Sequencer_spec = struct
   type t =
-    { zkapp_keypair : Keypair.t
+    { outer_kp : Keypair.t
+    ; holder_kp : Keypair.t
+    ; token_holder_kp : Keypair.t
     ; signer : Keypair.t
     ; ephemeral_ledger : L.t (* The ledger to test the expected outcome *)
     ; specs : Transaction_spec.t list (* Transaction specs *)
     ; sequencer : Sequencer.t Handle.valid_t
     ; da_key : Even_PC.t
     ; accounts : Keypair.t list
+    ; l1_config : Utils.Slot.l1_config
     }
 
   let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir ~logger
-      ~postgres_uri ~gql_uri ~da_config ~l1_network_id ~l2_network_id ~provers
-      ~slot_acceptance () =
-    let zkapp_keypair = Keypair.create () in
-
+      ~postgres_uri ~gql_uri ~da_config ~provers ~slot_acceptance () =
+    let _reset = run @@ fun () -> Gql_client.For_tests.reset_state gql_uri in
+    let outer_kp =
+      Keypair.of_private_key_exn @@ snd Zeko_circuits_config.t.zeko_l1
+    in
+    let holder_kp =
+      Keypair.of_private_key_exn @@ snd
+      @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1
+    in
+    let token_holder_kp =
+      Keypair.of_private_key_exn
+      @@ snd Zeko_circuits_config.t.helper_token_owner_l1
+    in
     print_endline "(* Create signer *)" ;
     let rec create_even_signer () =
       let signer = Keypair.create () in
@@ -393,9 +405,14 @@ module Sequencer_spec = struct
           (Keypair.create (), Int64.of_float (1000. *. 1e8)) )
     in
 
-    let initial_inner_account = run Deploy.Z.Inner.initial_account in
+    let `Inner inner_account, `Holder holder_account =
+      run Deploy.Z.Inner.initial_accounts
+    in
     let genesis_accounts =
-      (Zeko_constants.inner_account_id, initial_inner_account)
+      ( Account_id.create inner_account.public_key inner_account.token_id
+      , inner_account )
+      :: ( Account_id.create holder_account.public_key holder_account.token_id
+         , holder_account )
       :: ( Array.concat [ init_ledger; funded_accounts ]
          |> Array.map ~f:(fun (keypair, balance) ->
                 let pk = Signature_lib.Public_key.compress keypair.public_key in
@@ -450,14 +467,21 @@ module Sequencer_spec = struct
         in
         ( print_endline
         @@ Public_key.(
-             Compressed.to_base58_check @@ compress zkapp_keypair.public_key) ) ;
+             Compressed.to_base58_check @@ compress outer_kp.public_key) ) ;
+        ( print_endline
+        @@ Public_key.(
+             Compressed.to_base58_check @@ compress holder_kp.public_key) ) ;
+        ( print_endline
+        @@ Public_key.(
+             Compressed.to_base58_check @@ compress token_holder_kp.public_key)
+        ) ;
         let%bind nonce =
           Gql_client.infer_nonce gql_uri (Public_key.compress signer.public_key)
         in
         let%bind command =
           Deploy.deploy_command_exn
-            ~signature_kind:(Utils.signature_kind l1_network_id)
-            ~signer ~zkapp:zkapp_keypair
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer
+            ~outer_kp ~holder_kp ~token_holder_kp
             ~fee:(Currency.Fee.of_mina_int_exn 1)
             ~nonce ~initial_ledger:ephemeral_ledger
             ~account_creation_fee:constraint_constants.account_creation_fee
@@ -471,26 +495,36 @@ module Sequencer_spec = struct
         let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
         return () ) ;
 
+    let l1_config : Utils.Slot.l1_config =
+      let genesis_timestamp =
+        run @@ fun () -> Gql_client.fetch_genesis_timestamp gql_uri
+      in
+      { fork_timestamp = genesis_timestamp
+      ; fork_slot = Mina_numbers.Global_slot_since_genesis.zero
+      }
+    in
+
     print_endline "(* Init sequencer *)" ;
     let sequencer =
       run (fun () ->
-          Sequencer.create ~logger
-            ~zkapp_pk:
-              Signature_lib.Public_key.(compress zkapp_keypair.public_key)
-            ~max_pool_size:10 ~commitment_period_sec:0. ~da_config ~da_quorum:2
-            ~db_dir ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-            ~l1_network_id ~l2_network_id ~deposit_delay_blocks:delay_deposit
+          Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
+            ~da_config ~da_quorum:2 ~db_dir ~postgres_uri ~l1_uri:gql_uri
+            ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:delay_deposit
             ~provers ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01
-            ~slot_acceptance )
+            ~slot_acceptance
+            ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
+            ~l1_config )
     in
-
     Quickcheck.Generator.return
-      { zkapp_keypair
+      { outer_kp
+      ; holder_kp
+      ; token_holder_kp
       ; signer
       ; ephemeral_ledger
       ; specs
       ; sequencer = Handle.make sequencer
       ; da_key
       ; accounts = Array.map funded_accounts ~f:fst |> Array.to_list
+      ; l1_config
       }
 end
