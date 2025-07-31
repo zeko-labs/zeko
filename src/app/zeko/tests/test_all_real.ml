@@ -265,6 +265,18 @@ open struct
         ; fork = None
         }
 
+      let protocol_constants : Genesis_constants.Protocol.t =
+        { k = 1
+        ; slots_per_epoch = 1000
+        ; slots_per_sub_window = 1
+        ; grace_period_slots = 1
+        ; delta = 1
+        ; genesis_state_timestamp = Int64.one
+        }
+
+      let consensus_constants =
+        Consensus.Constants.create ~constraint_constants ~protocol_constants
+
       let () = assert (Int.(constraint_constants.ledger_depth = 35))
 
       let intermediate_ledger_hashes =
@@ -843,41 +855,10 @@ open struct
     ]
 
   let witness_to_actions x =
-    let fields =
-      value_to_fields
+    [ value_to_fields
         Typ.(F.typ * Rollup_state.Outer_action.Witness.typ)
         (Field.of_int 1, x)
-    in
-    [ fields ]
-
-  let witness_without_forest_to_actions x =
-    let fields =
-      value_to_fields
-        Typ.(F.typ * Rollup_state.Outer_action.Witness.Without_forest.typ)
-        (Field.of_int 1, x)
-    in
-    [ fields ]
-
-  let outer_action_of_actions : field array list -> Rollup_state.Outer_action.t
-      = function
-    | [ x ] ->
-        if Field.equal x.(0) Field.zero then
-          let (Typ typ) = Rollup_state.Outer_action.Commit.typ in
-          Commit
-            (typ.value_of_fields
-               ( Array.to_list x |> List.tl_exn |> Array.of_list
-               , typ.constraint_system_auxiliary () ) )
-        else if Field.equal x.(0) Field.one then
-          let (Typ typ) =
-            Rollup_state.Outer_action.Witness.Without_forest.typ
-          in
-          Witness
-            (typ.value_of_fields
-               ( Array.to_list x |> List.tl_exn |> Array.of_list
-               , typ.constraint_system_auxiliary () ) )
-        else failwith __LOC__
-    | _ ->
-        failwith __LOC__
+    ]
 
   module Inputs = struct
     let inner_public_key = point_of_string "39992"
@@ -1024,26 +1005,10 @@ open struct
             Zkapp_command.Digest.Forest.equal a b )
           calls deposit_witness.children ) ;
       let h = Zkapp_account.Actions_impl.hash au.actions in
-      let actions = witness_to_actions deposit_witness in
-      let () =
-        match outer_action_of_actions actions with
-        | Witness _witness ->
-            ()
-        | Commit _ ->
-            failwith __LOC__
-      in
-      let h' = Zkapp_account.Actions_impl.hash actions in
-      let h'' =
-        Zkapp_account.Actions_impl.hash
-          (witness_without_forest_to_actions
-             { aux = deposit_witness.aux
-             ; children_digest =
-                 Zkapp_command.Call_forest.hash deposit_witness.children
-             ; slot_range = deposit_witness.slot_range
-             } )
+      let h' =
+        Zkapp_account.Actions_impl.hash (witness_to_actions deposit_witness)
       in
       assert (Field.equal h h') ;
-      assert (Field.equal h h'') ;
       h
 
     let mid_outer_action_state =
@@ -1063,15 +1028,7 @@ open struct
       }
 
     let commit_action =
-      let actions = commit_to_actions commit_witness in
-      let () =
-        match outer_action_of_actions actions with
-        | Commit _commit_witness ->
-            ()
-        | Witness _ ->
-            failwith __LOC__
-      in
-      Zkapp_account.Actions_impl.hash actions
+      Zkapp_account.Actions_impl.hash (commit_to_actions commit_witness)
 
     let target_outer_action_state =
       Rollup_state.Outer_action_state.(

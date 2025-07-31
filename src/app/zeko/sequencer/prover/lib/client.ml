@@ -52,8 +52,6 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) ~logger provers =
 
 let queue_size t = Throttle.num_jobs_waiting_to_start t.q
 
-let wait_to_finish t = Throttle.capacity_available t.q
-
 (* Get the reference of next available prover.
    If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
 let send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
@@ -114,9 +112,9 @@ let transaction_snark ?proving_timeout t input =
       failwith "Unexpected response from prover"
 
 let ase_with_length ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Folder (Ase_with_length input))
+  send ?proving_timeout t (Prover.Input.Ase (With_length input))
   >>| function
-  | Prover.Output.Folder (Ase_with_length ase) ->
+  | Prover.Output.Ase (With_length ase) ->
       ase
   | Prover.Output.Error err ->
       failwith err
@@ -124,26 +122,16 @@ let ase_with_length ?proving_timeout t input =
       failwith "Unexpected response from prover"
 
 let ase_without_length ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Folder (Ase_without_length input))
+  send ?proving_timeout t (Prover.Input.Ase (Without_length input))
   >>| function
-  | Prover.Output.Folder (Ase_without_length ase) ->
+  | Prover.Output.Ase (Without_length ase) ->
       ase
   | Prover.Output.Error err ->
       failwith err
   | _ ->
       failwith "Unexpected response from prover"
 
-let check_accepted_mina ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Folder (Check_accepted_mina input))
-  >>| function
-  | Prover.Output.Folder (Check_accepted_mina check_accepted) ->
-      check_accepted
-  | Prover.Output.Error err ->
-      failwith err
-  | _ ->
-      failwith "Unexpected response from prover"
-
-let folder (type target) t ~source ~elems ~max_excess
+let ase (type target) t ~source ~elems ~max_excess
     (prover : _ -> _ -> (Compile_simple.Proof.t option * target) Deferred.t) =
   let elems_to_prove, excess =
     let i = ref 0 in
@@ -163,9 +151,8 @@ let folder (type target) t ~source ~elems ~max_excess
 let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
   let%bind ase =
     let%map proof, target, excess =
-      folder t ~source:ase_source ~elems:ase_elms
-        ~max_excess:Zeko_constants.Max_excess_actions.Inner_sync.outer
-        ase_with_length
+      ase t ~source:ase_source ~elems:ase_elms
+        ~max_excess:Zeko_constants.Max_excess_actions.inner_sync ase_with_length
     in
     Inner_sync.Ase_inst.
       { proof; proof_target = target; init = ase_source; excess }
@@ -192,12 +179,12 @@ let verify_both_ases ?proving_timeout t input =
 let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
     ~new_inner_actions ~unprocessed_actions ~(old_inner_acc : Account.t)
     ~old_inner_acc_path ~(new_inner_acc : Account.t) ~new_inner_acc_path
-    ~da_signature ~da_key ~slot_range =
+    ~da_signature ~da_key =
   (* Counting length of inner action state *)
   let%bind inner_ase =
     let%map proof, target, excess =
-      folder t ~source:inner_ase_source ~elems:new_inner_actions
-        ~max_excess:Zeko_constants.Max_excess_actions.Commit.inner
+      ase t ~source:inner_ase_source ~elems:new_inner_actions
+        ~max_excess:Zeko_constants.Max_excess_actions.commit_inner
         ase_with_length
     in
     Outer_commit.Ase_inner_inst.
@@ -213,14 +200,15 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
       Rollup_state.Outer_action_state.With_length.raw outer_action_state
     in
     let%map proof, target, excess =
-      folder t ~source:action_state ~elems:unprocessed_actions
-        ~max_excess:Zeko_constants.Max_excess_actions.Commit.outer
+      ase t ~source:action_state ~elems:unprocessed_actions
+        ~max_excess:Zeko_constants.Max_excess_actions.commit_outer
         ase_without_length
     in
     Outer_commit.Ase_outer_inst.
       { proof; proof_target = target; init = action_state; excess }
   in
   let%bind verify_both_ases = verify_both_ases t (outer_ase, inner_ase) in
+
   send ?proving_timeout t
     (Prover.Input.Outer_commit
        { txn_snark
@@ -232,7 +220,18 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
        ; new_inner_acc_path
        ; da_signature
        ; da_key
-       ; slot_range
+       ; slot_range =
+           ( if Slot_range.equal (fst txn_snark).slot_range Slot_range.infinite
+           then
+             Zeko_util.
+               { lower = Slot.zero
+               ; upper =
+                   Slot.(
+                     sub Zeko_constants.commit_max_valid_while
+                       Mina_numbers.Global_slot_span.one
+                     |> Option.value_exn)
+               }
+           else (fst txn_snark).slot_range )
        } )
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
@@ -242,149 +241,16 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
   | _ ->
       failwith "Unexpected response from prover"
 
-let outer_action_witness ?proving_timeout t witness =
-  send ?proving_timeout t Prover.Input.(Bridge (Outer_action_witness witness))
-  >>| function
-  | Prover.Output.Call_forest (parent_with_calls, proof) ->
-      Ok (parent_with_calls, proof)
-  | Prover.Output.Error err ->
-      Error err
-  | _ ->
-      failwith "Unexpected response from prover"
+let submit_deposit ?proving_timeout:_ _t ~outer_pk:_ ~deposit:_ =
+  failwith "Not implemented"
 
-let inner_action_witness ?proving_timeout t witness =
-  send ?proving_timeout t Prover.Input.(Bridge (Inner_action_witness witness))
-  >>| function
-  | Prover.Output.Call_forest (parent_with_calls, proof) ->
-      Ok (parent_with_calls, proof)
-  | Prover.Output.Error err ->
-      Error err
-  | _ ->
-      failwith "Unexpected response from prover"
+let submit_withdrawal ?proving_timeout:_ _t ~withdrawal:_ =
+  failwith "Not implemented"
 
-let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
-    ~inner_authorization_kind ~(ase : Ase.With_length.Stmt.t * Field.t list)
-    ~(check_accepted :
-       Bridge.Finalize_deposit.Check_accepted_mina.Init.t
-       * Field.t
-       * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list )
-    ~prev_next_deposit =
-  let%bind ase =
-    let ase_source, ase_elms = ase in
-    let%map proof, target, excess =
-      folder t ~source:ase_source ~elems:ase_elms
-        ~max_excess:Zeko_constants.Max_excess_actions.Finalize_deposit.outer
-        ase_with_length
-    in
-    Bridge.Finalize_deposit.Ase_inst.
-      { proof; proof_target = target; init = ase_source; excess }
-  in
-  let%bind check_accepted =
-    let init, deposit_hash, elems = check_accepted in
-    let source : Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t =
-      { params = init.params
-      ; action_state =
-          Zkapp_account.Actions_impl.push_hash
-            (Rollup_state.Outer_action_state.raw init.original_action_state)
-            deposit_hash
-          |> Rollup_state.Outer_action_state.unsafe_value_of_field
-      ; deposit_index = init.deposit_index
-      ; n_steps = Zeko_util.Checked32.zero
-      ; is_rejected = false
-      ; is_accepted = false
-      }
-    in
-    let%map proof, target, excess =
-      folder t ~source ~elems
-        ~max_excess:
-          Zeko_constants.Max_excess_actions.Finalize_deposit.check_accepted
-        check_accepted_mina
-    in
-    ( { proof; proof_source = source; proof_target = target; init; excess }
-      : Bridge.Finalize_deposit.Check_accepted_mina.serializable )
-  in
-  send ?proving_timeout t
-    Prover.Input.(
-      Bridge
-        (Finalize_deposit
-           { public_key
-           ; may_use_token
-           ; inner_authorization_kind
-           ; ase
-           ; check_accepted
-           ; prev_next_deposit
-           } ))
-  >>| function
-  | Prover.Output.Call_forest (parent_with_calls, proof) ->
-      Ok (parent_with_calls, proof)
-  | Prover.Output.Error err ->
-      Error err
-  | _ ->
-      failwith "Unexpected response from prover"
+let process_deposit ?proving_timeout:_ _t ~is_new:_ ~pointer:_ ~before:_
+    ~after:_ ~deposit:_ =
+  failwith "Not implemented"
 
-let inner_receive ?proving_timeout t witness =
-  send ?proving_timeout t Prover.Input.(Bridge (Inner_receive witness))
-  >>| function
-  | Prover.Output.Call_forest (parent_with_calls, proof) ->
-      Ok (parent_with_calls, proof)
-  | Prover.Output.Error err ->
-      Error err
-  | _ ->
-      failwith "Unexpected response from prover"
-
-let finalize_withdrawal ?proving_timeout t ~public_key ~may_use_token
-    ~outer_authorization_kind ~commit ~before_commit ~commit_ase
-    ~before_withdrawal ~withdrawal_ase ~prev_next_withdrawal ~withdrawal_params
-    =
-  let%bind commit_ase =
-    let source, elems = commit_ase in
-    let%map proof, target, excess =
-      folder t ~source ~elems
-        ~max_excess:Zeko_constants.Max_excess_actions.Finalize_withdrawal.outer
-        ase_without_length
-    in
-    Bridge.Finalize_withdrawal.Ase_outer_inst.
-      { proof; proof_target = target; init = source; excess }
-  in
-  let%bind withdrawal_ase =
-    let source, elems = withdrawal_ase in
-    let%map proof, target, excess =
-      folder t ~source ~elems
-        ~max_excess:Zeko_constants.Max_excess_actions.Finalize_withdrawal.inner
-        ase_with_length
-    in
-    Bridge.Finalize_withdrawal.Ase_inner_inst.
-      { proof; proof_target = target; init = source; excess }
-  in
-  send ?proving_timeout t
-    Prover.Input.(
-      Bridge
-        (Finalize_withdrawal
-           { public_key
-           ; may_use_token
-           ; outer_authorization_kind
-           ; commit
-           ; before_commit
-           ; commit_ase
-           ; before_withdrawal
-           ; withdrawal_ase
-           ; prev_next_withdrawal
-           ; withdrawal_params
-           } ))
-  >>| function
-  | Prover.Output.Call_forest (parent_with_calls, proof) ->
-      Ok (parent_with_calls, proof)
-  | Prover.Output.Error err ->
-      Error err
-  | _ ->
-      failwith "Unexpected response from prover"
-
-let outer_token_owner ?proving_timeout t witness =
-  send ?proving_timeout t Prover.Input.(Bridge (Outer_token_owner witness))
-  >>| function
-  | Prover.Output.Call_forest (parent_with_calls, proof) ->
-      Ok (parent_with_calls, proof)
-  | Prover.Output.Error err ->
-      Error err
-  | _ ->
-      failwith "Unexpected response from prover"
+let process_withdrawal ?proving_timeout:_ _t ~outer_pk:_ ~is_new:_ ~pointer:_
+    ~before:_ ~after:_ ~withdrawal:_ =
+  failwith "Not implemented"

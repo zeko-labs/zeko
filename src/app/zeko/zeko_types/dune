@@ -3,7 +3,6 @@
  (libraries
   zeko_circuits
   zeko_constants
-  zeko_circuits_config
   ;; mina ;;
   mina_base
   mina_ledger)

@@ -1,0 +1,72 @@
+open Mina_base
+module Field = Snark_params.Tick.Field
+
+type direction = Deposit | Withdraw
+
+module TR = struct
+  (* FIXME *)
+  type t =
+    { amount : Currency.Amount.t
+    ; recipient : Signature_lib.Public_key.Compressed.t
+    }
+  [@@deriving yojson]
+end
+
+type t = { transfer : TR.t; direction : direction }
+
+type claim =
+  { is_new : bool
+  ; pointer : Field.t
+  ; before : TR.t list
+  ; after : TR.t list
+  ; transfer : t
+  }
+
+(**
+  Hash table that holds the item only for the specified lifetime.
+  Used to store proved transfer requested by users.
+*)
+module Transfers_memory = struct
+  open Base
+
+  type t_ =
+    ( ( Account_update.t
+      , Zkapp_command.Digest.Account_update.t
+      , Zkapp_command.Digest.Forest.t )
+      Zkapp_command.Call_forest.t
+    , string )
+    Result.t
+
+  type t =
+    { table : (string, float * t_) Hashtbl.t
+    ; queue : (string * float) Queue.t
+    ; lifetime : float
+    }
+
+  let create ~lifetime =
+    { table = Hashtbl.create (module String)
+    ; queue = Queue.create ()
+    ; lifetime
+    }
+
+  let cleanup t =
+    let now = Unix.gettimeofday () in
+    let rec loop () =
+      match Queue.peek t.queue with
+      | Some (key, timestamp) when Float.(now -. timestamp > t.lifetime) ->
+          Hashtbl.remove t.table key ;
+          (Queue.dequeue_exn t.queue : string * float) |> ignore ;
+          loop ()
+      | _ ->
+          ()
+    in
+    loop ()
+
+  let add t key account_update_result =
+    let now = Unix.time () in
+    Hashtbl.set t.table ~key ~data:(now, account_update_result) ;
+    Queue.enqueue t.queue (key, now) ;
+    cleanup t
+
+  let get t key = Hashtbl.find t.table key
+end

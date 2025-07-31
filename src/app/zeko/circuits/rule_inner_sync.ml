@@ -5,7 +5,7 @@ open Snark_params.Tick
 module Ase_inst = Ase.With_length.Make (struct
   module Action_state = Outer_action_state
 
-  let get_iterations = Zeko_constants.Max_excess_actions.Inner_sync.outer
+  let get_iterations = Zeko_constants.Max_excess_actions.inner_sync
 end)
 
 module Witness = struct

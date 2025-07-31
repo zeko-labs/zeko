@@ -9,53 +9,34 @@ module Graphql_cohttp_async =
 
 let run ~logger ~port ~db_dir ~genesis_account ~block_period ~network_id
     ~disable_proofs =
-  let create_state () =
-    let () =
-      let open Core in
-      match Unix.system ("rm -rf " ^ db_dir) with
-      | Ok () ->
-          ()
-      | Error (`Exit_non_zero result) ->
-          [%log error] "Failed to remove db_dir: %s" db_dir ;
-          exit result
-      | Error (`Signal signal) ->
-          [%log error] "Failed to remove db_dir: %s, signal: %s" db_dir
-            (Signal.to_string signal) ;
-          exit 1
-    in
-    let t =
-      State.create ~logger
-        ~signature_kind:(Utils.signature_kind network_id)
-        ~disable_proofs ~db_dir
-        ~block_period:
-          (Option.map block_period
-             ~f:(Fn.compose Time_ns.Span.of_sec Int.to_float) )
-        ()
-    in
-    ( if Option.is_some genesis_account then
-      let account_id =
-        Account_id.create
-          (Signature_lib.Public_key.Compressed.of_base58_check_exn
-             (Option.value_exn genesis_account) )
-          Token_id.default
-      in
-      let account =
-        Account.create account_id
-          (Currency.Balance.of_uint64
-             (Unsigned.UInt64.of_int64 1_000_000_000_000L) )
-      in
-      ( Ledger.Db.get_or_create_account t.db account_id account
-        : ([ `Added | `Existed ] * Ledger.Db.Location.t) Or_error.t )
-      |> ignore ) ;
-    t
+  let t =
+    State.create ~logger
+      ~signature_kind:(Sequencer_lib.Utils.signature_kind network_id)
+      ~disable_proofs ~db_dir
+      ~block_period:
+        (Option.map block_period
+           ~f:(Fn.compose Time_ns.Span.of_sec Int.to_float) )
+      ()
   in
-  let t = ref @@ create_state () in
+
+  ( if Option.is_some genesis_account then
+    let account_id =
+      Account_id.create
+        (Signature_lib.Public_key.Compressed.of_base58_check_exn
+           (Option.value_exn genesis_account) )
+        Token_id.default
+    in
+    let account =
+      Account.create account_id
+        (Currency.Balance.of_uint64
+           (Unsigned.UInt64.of_int64 1_000_000_000_000L) )
+    in
+    ( Ledger.Db.get_or_create_account t.db account_id account
+      : ([ `Added | `Existed ] * Ledger.Db.Location.t) Or_error.t )
+    |> ignore ) ;
+
   let graphql_callback =
-    Graphql_cohttp_async.make_callback
-      (fun ~with_seq_no:_ _req -> !t)
-      (Gql.schema ~reset_callback:(fun () ->
-           State.shutdown !t ;
-           t := create_state () ) )
+    Graphql_cohttp_async.make_callback (fun ~with_seq_no:_ _req -> t) Gql.schema
   in
   let () =
     Cohttp_async.Server.create_expert
