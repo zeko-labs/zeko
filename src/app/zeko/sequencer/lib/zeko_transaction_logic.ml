@@ -154,12 +154,6 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
   let source_ledger =
     let accounts_referenced =
       User_command.accounts_referenced (Signed_command command)
-      |> List.map ~f:(fun id ->
-             if
-               Signature_lib.Public_key.Compressed.(
-                 Account_id.public_key id = empty)
-             then Zeko_constants.inner_account_id
-             else id )
     in
     Sparse_ledger.of_ledger_subset_exn ledger accounts_referenced
   in
@@ -232,12 +226,6 @@ let apply_zkapp_command_unchecked ~signature_kind ~sequencer_pk ~zeko_env
   let source_ledger =
     let accounts_referenced =
       User_command.accounts_referenced (Zkapp_command command)
-      |> List.map ~f:(fun id ->
-             if
-               Signature_lib.Public_key.Compressed.(
-                 Account_id.public_key id = empty)
-             then Zeko_constants.inner_account_id
-             else id )
     in
     Sparse_ledger.of_ledger_subset_exn ledger accounts_referenced
   in

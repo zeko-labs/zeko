@@ -1,5 +1,0 @@
-(library
- (name zeko_circuits_config)
- (libraries zeko_circuits zeko_constants)
- (preprocess
-  (pps ppx_mina ppx_jane)))

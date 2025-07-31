@@ -50,15 +50,13 @@ struct
   module Ase_outer_inst = Ase.Without_length.Make (struct
     module Action_state = Rollup_state.Outer_action_state
 
-    let get_iterations =
-      Zeko_constants.Max_excess_actions.Finalize_withdrawal.outer
+    let get_iterations = Int.pow 2 10
   end)
 
   module Ase_inner_inst = Ase.With_length.Make (struct
     module Action_state = Rollup_state.Inner_action_state
 
-    let get_iterations =
-      Zeko_constants.Max_excess_actions.Finalize_withdrawal.inner
+    let get_iterations = Int.pow 2 10
   end)
 
   module Witness = struct
@@ -75,7 +73,7 @@ struct
       ; prev_next_withdrawal : Checked32.t
       ; withdrawal_params : Withdrawal_params.t
       ; helper_token_owner_l1_vk_hash : F.t
-      ; l2_holder_vk_hash : F.t
+      ; inner_vk_hash : F.t
       }
     [@@deriving snarky]
   end
@@ -95,7 +93,7 @@ struct
                ; prev_next_withdrawal
                ; withdrawal_params
                ; helper_token_owner_l1_vk_hash
-               ; l2_holder_vk_hash
+               ; inner_vk_hash
                } =
           exists Witness.typ ~compute:(V.get w)
         in
@@ -117,7 +115,7 @@ struct
         let* () =
           let* action =
             withdrawal_action ~chain_l2 ~holder_account_l2 ~token_owner_l2
-              ~l2_holder_vk_hash
+              ~inner_vk_hash
               (module Withdrawal_params)
               withdrawal_params
           in
@@ -170,7 +168,6 @@ struct
           ; authorization_kind = authorization_signed ()
           ; use_full_commitment = Boolean.true_
           ; may_use_token = constant May_use_token.typ Parents_own_token
-          ; implicit_account_creation_fee = constant Boolean.typ false
           ; update =
               { default_account_update.update with
                 app_state =

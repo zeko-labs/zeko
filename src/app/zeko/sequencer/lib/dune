@@ -9,7 +9,6 @@
   parallel_merger
   zeko_constants
   indexed_merkle_tree
-  utils
   ;; mina ;;
   mina_base
   mina_base.import

@@ -44,14 +44,7 @@ type t =
   ; disable_proofs : bool
   ; logger : Logger.t
   ; proof_cache_db : Proof_cache_tag.cache_db
-  ; mutable shifted_slot_by :
-      Mina_numbers.Global_slot_since_genesis.global_slot_span
   }
-
-let shift_slots t by =
-  t.shifted_slot_by <- Mina_numbers.Global_slot_span.add t.shifted_slot_by by
-
-let shutdown t = Ledger.Db.close t.db
 
 let db t = t.db
 
@@ -79,7 +72,6 @@ let apply_command t ~command =
     (Time.abs_diff (Time.now ()) Constants.genesis_timestamp |> Time.Span.to_sec)
     /. 180.
     |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int
-    |> Fn.flip Mina_numbers.Global_slot_since_genesis.add t.shifted_slot_by
   in
   let%bind.Result partialy_applied_txn =
     Ledger.apply_transaction_first_pass
@@ -233,7 +225,6 @@ let create ~logger ~disable_proofs ~block_period ~db_dir ~signature_kind () =
     ; disable_proofs
     ; logger
     ; proof_cache_db = Proof_cache_tag.create_identity_db ()
-    ; shifted_slot_by = Mina_numbers.Global_slot_span.zero
     }
   in
   match block_period with

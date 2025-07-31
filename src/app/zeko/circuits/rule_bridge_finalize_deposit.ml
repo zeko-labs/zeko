@@ -58,8 +58,7 @@ struct
   end
 
   module Check_accepted_params = struct
-    let get_iterations =
-      Zeko_constants.Max_excess_actions.Finalize_deposit.check_accepted
+    let get_iterations = Int.pow 2 7
   end
 
   module Check_accepted_inst = Check_accepted.Make (Check_accepted_params)
@@ -67,8 +66,7 @@ struct
   module Ase_inst = Ase.With_length.Make (struct
     module Action_state = Rollup_state.Outer_action_state
 
-    let get_iterations =
-      Zeko_constants.Max_excess_actions.Finalize_deposit.outer
+    let get_iterations = Int.pow 2 8
   end)
 
   module Witness = struct
@@ -159,7 +157,6 @@ struct
       ; authorization_kind = authorization_signed ()
       ; use_full_commitment = Boolean.true_
       ; may_use_token = constant May_use_token.typ Parents_own_token
-      ; implicit_account_creation_fee = constant Boolean.typ false
       ; update =
           { default_account_update.update with
             app_state =
