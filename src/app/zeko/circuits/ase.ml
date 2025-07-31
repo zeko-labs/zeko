@@ -24,13 +24,13 @@ module M_with_length = struct
 
   let name = "action state extension with length"
 
-  let leaf_iterations = Int.pow 2 11
+  let leaf_iterations = Int.pow 2 2
 
-  let leaf_option_iterations = Int.pow 2 10
+  let leaf_option_iterations = Int.pow 2 2
 
-  let extend_iterations = Int.pow 2 10
+  let extend_iterations = Int.pow 2 2
 
-  let extend_option_iterations = Int.pow 2 9
+  let extend_option_iterations = Int.pow 2 2
 
   let wrap_domain = Some `N14
 end
@@ -49,13 +49,13 @@ module M_without_length = struct
 
   let name = "action state extension without length"
 
-  let leaf_iterations = Int.pow 2 11
+  let leaf_iterations = Int.pow 2 2
 
-  let leaf_option_iterations = Int.pow 2 10
+  let leaf_option_iterations = Int.pow 2 2
 
-  let extend_iterations = Int.pow 2 10
+  let extend_iterations = Int.pow 2 2
 
-  let extend_option_iterations = Int.pow 2 9
+  let extend_option_iterations = Int.pow 2 2
 
   let wrap_domain = Some `N14
 end
