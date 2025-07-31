@@ -47,32 +47,32 @@ let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
 
 module Max_excess_actions = struct
   module Inner_sync = struct
-    let outer = Int.pow 2 10
+    let outer = Int.pow 2 2
   end
 
   module Commit = struct
-    let inner = Int.pow 2 10
+    let inner = Int.pow 2 2
 
-    let outer = Int.pow 2 10
+    let outer = Int.pow 2 2
   end
 
   module Finalize_cancelled_deposit = struct
-    let outer = Int.pow 2 10
+    let outer = Int.pow 2 2
 
-    let outer_with_length = Int.pow 2 10
+    let outer_with_length = Int.pow 2 2
 
-    let check_accepted = Int.pow 2 7
+    let check_accepted = Int.pow 2 2
   end
 
   module Finalize_deposit = struct
-    let outer = Int.pow 2 8
+    let outer = Int.pow 2 2
 
-    let check_accepted = Int.pow 2 7
+    let check_accepted = Int.pow 2 2
   end
 
   module Finalize_withdrawal = struct
-    let inner = Int.pow 2 10
+    let inner = Int.pow 2 2
 
-    let outer = Int.pow 2 10
+    let outer = Int.pow 2 2
   end
 end

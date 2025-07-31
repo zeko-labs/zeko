@@ -117,13 +117,13 @@ struct
 
     let name = "check_accepted"
 
-    let leaf_iterations = Int.pow 2 8
+    let leaf_iterations = Int.pow 2 2
 
-    let leaf_option_iterations = Int.pow 2 7
+    let leaf_option_iterations = Int.pow 2 2
 
-    let extend_iterations = Int.pow 2 8
+    let extend_iterations = Int.pow 2 2
 
-    let extend_option_iterations = Int.pow 2 7
+    let extend_option_iterations = Int.pow 2 2
 
     let wrap_domain = Some `N14
   end
