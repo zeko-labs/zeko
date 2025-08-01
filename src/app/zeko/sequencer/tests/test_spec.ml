@@ -372,16 +372,16 @@ module Sequencer_spec = struct
   let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir ~logger
       ~postgres_uri ~gql_uri ~da_config ~provers ~slot_acceptance () =
     let _reset = run @@ fun () -> Gql_client.For_tests.reset_state gql_uri in
-    let outer_kp =
-      Keypair.of_private_key_exn @@ snd Zeko_circuits_config.t.zeko_l1
+    let deploy_config =
+      Option.value_exn ~message:"ZEKO_DEPLOY_CONFIG is not set"
+        Zeko_circuits_config.deploy_config
     in
+    let outer_kp = Keypair.of_private_key_exn deploy_config.zeko_l1 in
     let holder_kp =
-      Keypair.of_private_key_exn @@ snd
-      @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1
+      Keypair.of_private_key_exn @@ List.hd_exn deploy_config.holder_accounts_l1
     in
     let token_holder_kp =
-      Keypair.of_private_key_exn
-      @@ snd Zeko_circuits_config.t.helper_token_owner_l1
+      Keypair.of_private_key_exn deploy_config.helper_token_owner_l1
     in
     print_endline "(* Create signer *)" ;
     let rec create_even_signer () =

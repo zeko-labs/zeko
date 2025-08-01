@@ -16,16 +16,16 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
   let sender_keypair =
     Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
   in
-  let outer_kp =
-    Keypair.of_private_key_exn @@ snd Zeko_circuits_config.t.zeko_l1
+  let deploy_config =
+    Option.value_exn ~message:"ZEKO_DEPLOY_CONFIG is not set"
+      Zeko_circuits_config.deploy_config
   in
+  let outer_kp = Keypair.of_private_key_exn deploy_config.zeko_l1 in
   let holder_kp =
-    Keypair.of_private_key_exn @@ snd
-    @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1
+    Keypair.of_private_key_exn @@ List.hd_exn deploy_config.holder_accounts_l1
   in
   let token_holder_kp =
-    Keypair.of_private_key_exn
-    @@ snd Zeko_circuits_config.t.helper_token_owner_l1
+    Keypair.of_private_key_exn deploy_config.helper_token_owner_l1
   in
   printf "outer secret key: %s\n%!"
     (Private_key.to_base58_check outer_kp.private_key) ;
