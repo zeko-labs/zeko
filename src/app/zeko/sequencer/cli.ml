@@ -26,19 +26,30 @@ let generate_circuits_config =
              let kp = Keypair.create () in
              (Public_key.compress kp.public_key, kp.private_key)
            in
+           let holder_accounts_l1 = [ generate_keypair () ] in
+           let helper_token_owner_l1 = generate_keypair () in
+           let zeko_l1 = generate_keypair () in
            let t : Zeko_circuits_config.t =
              { chain_l1 = Testnet
              ; chain_l2 = Testnet
              ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
-             ; holder_accounts_l1 = [ generate_keypair () ]
-             ; helper_token_owner_l1 = generate_keypair ()
-             ; zeko_l1 = generate_keypair ()
+             ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
+             ; helper_token_owner_l1 = fst helper_token_owner_l1
+             ; zeko_l1 = fst zeko_l1
              ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
              }
            in
-           Core.printf "%s\n%!"
-             (Yojson.Safe.pretty_to_string @@ Zeko_circuits_config.to_yojson t) )
-      ) )
+           let deploy_config : Zeko_circuits_config.Deploy.t =
+             { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
+             ; helper_token_owner_l1 = snd helper_token_owner_l1
+             ; zeko_l1 = snd zeko_l1
+             }
+           in
+           Core.printf "circuits config: %s\n%!"
+             (Yojson.Safe.pretty_to_string @@ Zeko_circuits_config.to_yojson t) ;
+           Core.printf "deploy config: %s\n%!"
+             ( Yojson.Safe.pretty_to_string
+             @@ Zeko_circuits_config.Deploy.to_yojson deploy_config ) ) ) )
 
 let migrate =
   ( "migrate"

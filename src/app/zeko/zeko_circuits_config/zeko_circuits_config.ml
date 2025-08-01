@@ -12,14 +12,23 @@ type t =
   { chain_l1 : Mina_signature_kind.t
   ; chain_l2 : Mina_signature_kind.t
   ; max_valid_while_size : Zeko_circuits.Zeko_util.Slot.t
-  ; holder_accounts_l1 : (Public_key.Compressed.t * Private_key.t) list
-  ; helper_token_owner_l1 : Public_key.Compressed.t * Private_key.t
-  ; zeko_l1 : Public_key.Compressed.t * Private_key.t
+  ; holder_accounts_l1 : Public_key.Compressed.t list
+  ; helper_token_owner_l1 : Public_key.Compressed.t
+  ; zeko_l1 : Public_key.Compressed.t
   ; withdrawal_delay : Global_slot_span.t
   }
 [@@deriving yojson]
 
-let t =
+module Deploy = struct
+  type t =
+    { holder_accounts_l1 : Private_key.t list
+    ; helper_token_owner_l1 : Private_key.t
+    ; zeko_l1 : Private_key.t
+    }
+  [@@deriving yojson]
+end
+
+let (t, deploy_config) : t * Deploy.t option =
   match Sys.getenv_opt "ZEKO_CIRCUITS_CONFIG" with
   | None ->
       failwith "ZEKO_CIRCUITS_CONFIG is not set"
@@ -30,29 +39,46 @@ let t =
         in
         (Public_key.compress kp.public_key, kp.private_key)
       in
-      { chain_l1 = Testnet
-      ; chain_l2 = Testnet
-      ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
-      ; holder_accounts_l1 =
-          [ keypair_of_b58_sk
-              "EKDkANpuXLT3AYp4ySHoYfVsjfTM8syQeNd6oTSr5KgS7jnFgXQU"
-          ; keypair_of_b58_sk
-              "EKE9coDZMm84U8whQmm2JibDijKT2Qe1YWN4xMdJzUbTBfwdUzwF"
-          ; keypair_of_b58_sk
-              "EKFK44pD33YEQUUgSFDvFmt4rHYZxVUDENh4Pz9iRxaSPNBKNXuV"
-          ]
-      ; helper_token_owner_l1 =
-          keypair_of_b58_sk
-            "EKFLJEQouWgCQrBKTrMf8EKvRzuJRsd5hKoo6GWJFdjiS1MFn3np"
-      ; zeko_l1 =
-          keypair_of_b58_sk
-            "EKEFFD7uJayycrse8A2ixBR2Wu7cA5GnGS5ydcYNyzhvr1EPPvj8"
-      ; withdrawal_delay = Global_slot_span.of_int 5
-      }
+      let holder_accounts_l1 =
+        [ keypair_of_b58_sk
+            "EKDkANpuXLT3AYp4ySHoYfVsjfTM8syQeNd6oTSr5KgS7jnFgXQU"
+        ; keypair_of_b58_sk
+            "EKE9coDZMm84U8whQmm2JibDijKT2Qe1YWN4xMdJzUbTBfwdUzwF"
+        ; keypair_of_b58_sk
+            "EKFK44pD33YEQUUgSFDvFmt4rHYZxVUDENh4Pz9iRxaSPNBKNXuV"
+        ]
+      in
+      let helper_token_owner_l1 =
+        keypair_of_b58_sk "EKFLJEQouWgCQrBKTrMf8EKvRzuJRsd5hKoo6GWJFdjiS1MFn3np"
+      in
+      let zeko_l1 =
+        keypair_of_b58_sk "EKEFFD7uJayycrse8A2ixBR2Wu7cA5GnGS5ydcYNyzhvr1EPPvj8"
+      in
+      ( { chain_l1 = Testnet
+        ; chain_l2 = Testnet
+        ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
+        ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
+        ; helper_token_owner_l1 = fst helper_token_owner_l1
+        ; zeko_l1 = fst zeko_l1
+        ; withdrawal_delay = Global_slot_span.of_int 5
+        }
+      , Some
+          { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
+          ; helper_token_owner_l1 = snd helper_token_owner_l1
+          ; zeko_l1 = snd zeko_l1
+          } )
   | Some path -> (
       match Yojson.Safe.from_file path |> of_yojson with
       | Ok t ->
-          t
+          let deploy_config =
+            Option.map (Sys.getenv_opt "ZEKO_DEPLOY_CONFIG") ~f:(fun path ->
+                match Yojson.Safe.from_file path |> Deploy.of_yojson with
+                | Ok deploy ->
+                    deploy
+                | Error err ->
+                    failwithf "Failed to parse Zeko deploy config: %s" err () )
+          in
+          (t, deploy_config)
       | Error err ->
           failwithf "Failed to parse Zeko circuits config: %s" err () )
 
@@ -66,13 +92,13 @@ module Inputs = struct
   let max_valid_while_size =
     Zeko_circuits.Zeko_util.Slot.to_int t.max_valid_while_size
 
-  let holder_accounts_l1 = List.map t.holder_accounts_l1 ~f:fst
+  let holder_accounts_l1 = t.holder_accounts_l1
 
   let holder_account_l2 = Zeko_constants.inner_holder_key
 
-  let helper_token_owner_l1 = fst t.helper_token_owner_l1
+  let helper_token_owner_l1 = t.helper_token_owner_l1
 
-  let zeko_l1 = fst t.zeko_l1
+  let zeko_l1 = t.zeko_l1
 
   let zeko_l2 = Zeko_constants.inner_public_key
 
