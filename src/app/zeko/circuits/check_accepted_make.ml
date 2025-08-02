@@ -1,4 +1,3 @@
-open Core_kernel
 open Mina_base
 open Snark_params.Tick
 open Zeko_util
@@ -117,13 +116,17 @@ struct
 
     let name = "check_accepted"
 
-    let leaf_iterations = Int.pow 2 8
+    let leaf_iterations =
+      Zeko_constants.Folder_iterations.Check_accepted.leaf_iterations
 
-    let leaf_option_iterations = Int.pow 2 7
+    let leaf_option_iterations =
+      Zeko_constants.Folder_iterations.Check_accepted.leaf_option_iterations
 
-    let extend_iterations = Int.pow 2 8
+    let extend_iterations =
+      Zeko_constants.Folder_iterations.Check_accepted.extend_iterations
 
-    let extend_option_iterations = Int.pow 2 7
+    let extend_option_iterations =
+      Zeko_constants.Folder_iterations.Check_accepted.extend_option_iterations
 
     let wrap_domain = Some `N14
   end

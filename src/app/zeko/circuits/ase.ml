@@ -1,6 +1,5 @@
 (** Rules for proving extensions of action states with length too *)
 
-open Core_kernel
 open Snark_params.Tick
 open Zeko_util
 
@@ -24,13 +23,17 @@ module M_with_length = struct
 
   let name = "action state extension with length"
 
-  let leaf_iterations = Int.pow 2 11
+  let leaf_iterations =
+    Zeko_constants.Folder_iterations.Ase.With_length.leaf_iterations
 
-  let leaf_option_iterations = Int.pow 2 10
+  let leaf_option_iterations =
+    Zeko_constants.Folder_iterations.Ase.With_length.leaf_option_iterations
 
-  let extend_iterations = Int.pow 2 10
+  let extend_iterations =
+    Zeko_constants.Folder_iterations.Ase.With_length.extend_iterations
 
-  let extend_option_iterations = Int.pow 2 9
+  let extend_option_iterations =
+    Zeko_constants.Folder_iterations.Ase.With_length.extend_option_iterations
 
   let wrap_domain = Some `N14
 end
@@ -49,13 +52,17 @@ module M_without_length = struct
 
   let name = "action state extension without length"
 
-  let leaf_iterations = Int.pow 2 11
+  let leaf_iterations =
+    Zeko_constants.Folder_iterations.Ase.Without_length.leaf_iterations
 
-  let leaf_option_iterations = Int.pow 2 10
+  let leaf_option_iterations =
+    Zeko_constants.Folder_iterations.Ase.Without_length.leaf_option_iterations
 
-  let extend_iterations = Int.pow 2 10
+  let extend_iterations =
+    Zeko_constants.Folder_iterations.Ase.Without_length.extend_iterations
 
-  let extend_option_iterations = Int.pow 2 9
+  let extend_option_iterations =
+    Zeko_constants.Folder_iterations.Ase.Without_length.extend_option_iterations
 
   let wrap_domain = Some `N14
 end

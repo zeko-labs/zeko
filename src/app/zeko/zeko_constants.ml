@@ -76,3 +76,37 @@ module Max_excess_actions = struct
     let outer = Int.pow 2 10
   end
 end
+
+module Folder_iterations = struct
+  module Ase = struct
+    module With_length = struct
+      let leaf_iterations = Int.pow 2 11
+
+      let leaf_option_iterations = Int.pow 2 10
+
+      let extend_iterations = Int.pow 2 10
+
+      let extend_option_iterations = Int.pow 2 9
+    end
+
+    module Without_length = struct
+      let leaf_iterations = Int.pow 2 11
+
+      let leaf_option_iterations = Int.pow 2 10
+
+      let extend_iterations = Int.pow 2 10
+
+      let extend_option_iterations = Int.pow 2 9
+    end
+  end
+
+  module Check_accepted = struct
+    let leaf_iterations = Int.pow 2 8
+
+    let leaf_option_iterations = Int.pow 2 7
+
+    let extend_iterations = Int.pow 2 8
+
+    let extend_option_iterations = Int.pow 2 7
+  end
+end
