@@ -76,3 +76,47 @@ module Max_excess_actions = struct
     let outer = Int.pow 2 10
   end
 end
+
+module type FOLDER_ITERATIONS = sig
+  val leaf_iterations : int
+
+  val leaf_option_iterations : int
+
+  val extend_iterations : int
+
+  val extend_option_iterations : int
+end
+
+module Folder_iterations = struct
+  module Ase = struct
+    module With_length : FOLDER_ITERATIONS = struct
+      let leaf_iterations = Int.pow 2 11
+
+      let leaf_option_iterations = Int.pow 2 10
+
+      let extend_iterations = Int.pow 2 10
+
+      let extend_option_iterations = Int.pow 2 9
+    end
+
+    module Without_length : FOLDER_ITERATIONS = struct
+      let leaf_iterations = Int.pow 2 11
+
+      let leaf_option_iterations = Int.pow 2 10
+
+      let extend_iterations = Int.pow 2 10
+
+      let extend_option_iterations = Int.pow 2 9
+    end
+  end
+
+  module Check_accepted : FOLDER_ITERATIONS = struct
+    let leaf_iterations = Int.pow 2 8
+
+    let leaf_option_iterations = Int.pow 2 7
+
+    let extend_iterations = Int.pow 2 8
+
+    let extend_option_iterations = Int.pow 2 7
+  end
+end
