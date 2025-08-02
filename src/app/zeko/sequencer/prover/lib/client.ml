@@ -144,7 +144,12 @@ let check_accepted_mina ?proving_timeout t input =
       failwith "Unexpected response from prover"
 
 let folder (type target) t ~source ~elems ~max_excess
-    (prover : _ -> _ -> (Compile_simple.Proof.t option * target) Deferred.t) =
+    (module Folder_iterations : Zeko_constants.FOLDER_ITERATIONS)
+    (prover :
+         ?proving_timeout:float
+      -> _
+      -> _
+      -> (Compile_simple.Proof.t option * target) Deferred.t ) =
   let elems_to_prove, excess =
     let i = ref 0 in
     let l = List.length elems in
@@ -157,7 +162,16 @@ let folder (type target) t ~source ~elems ~max_excess
   | [] ->
       return (None, source, excess)
   | elems_to_prove ->
-      let%bind proof, target = prover t (source, elems_to_prove) in
+      (* TODO: This is a hack to get the number of proofs. *)
+      let number_of_proofs =
+        (List.length elems_to_prove / Folder_iterations.extend_option_iterations)
+        + 1
+        |> Float.of_int
+      in
+      let%bind proof, target =
+        prover ~proving_timeout:(20. *. number_of_proofs) t
+          (source, elems_to_prove)
+      in
       return (proof, target, excess)
 
 let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
@@ -165,6 +179,7 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
     let%map proof, target, excess =
       folder t ~source:ase_source ~elems:ase_elms
         ~max_excess:Zeko_constants.Max_excess_actions.Inner_sync.outer
+        (module Zeko_constants.Folder_iterations.Ase.With_length)
         ase_with_length
     in
     Inner_sync.Ase_inst.
@@ -198,6 +213,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
     let%map proof, target, excess =
       folder t ~source:inner_ase_source ~elems:new_inner_actions
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.inner
+        (module Zeko_constants.Folder_iterations.Ase.With_length)
         ase_with_length
     in
     Outer_commit.Ase_inner_inst.
@@ -215,6 +231,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
     let%map proof, target, excess =
       folder t ~source:action_state ~elems:unprocessed_actions
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.outer
+        (module Zeko_constants.Folder_iterations.Ase.Without_length)
         ase_without_length
     in
     Outer_commit.Ase_outer_inst.
@@ -274,6 +291,7 @@ let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
     let%map proof, target, excess =
       folder t ~source:ase_source ~elems:ase_elms
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_deposit.outer
+        (module Zeko_constants.Folder_iterations.Ase.With_length)
         ase_with_length
     in
     Bridge.Finalize_deposit.Ase_inst.
@@ -298,6 +316,7 @@ let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
       folder t ~source ~elems
         ~max_excess:
           Zeko_constants.Max_excess_actions.Finalize_deposit.check_accepted
+        (module Zeko_constants.Folder_iterations.Check_accepted)
         check_accepted_mina
     in
     ( { proof; proof_source = source; proof_target = target; init; excess }
@@ -341,6 +360,7 @@ let finalize_withdrawal ?proving_timeout t ~public_key ~may_use_token
     let%map proof, target, excess =
       folder t ~source ~elems
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_withdrawal.outer
+        (module Zeko_constants.Folder_iterations.Ase.Without_length)
         ase_without_length
     in
     Bridge.Finalize_withdrawal.Ase_outer_inst.
@@ -351,6 +371,7 @@ let finalize_withdrawal ?proving_timeout t ~public_key ~may_use_token
     let%map proof, target, excess =
       folder t ~source ~elems
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_withdrawal.inner
+        (module Zeko_constants.Folder_iterations.Ase.With_length)
         ase_with_length
     in
     Bridge.Finalize_withdrawal.Ase_inner_inst.
