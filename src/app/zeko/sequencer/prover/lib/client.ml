@@ -20,16 +20,16 @@ type lazy_connection =
 
 type prover = lazy_connection ref * Tcp.Where_to_connect.inet
 
-type t = { q : prover Throttle.t; logger : Logger.t }
+type t = { q : prover Priority_throttle.t; logger : Logger.t }
 
 let create ?(ping_interval = 15.) ?(ping_timeout = 10.) ~logger provers =
   let connections = List.map provers ~f:(fun x -> (ref (try_connect x), x)) in
-  let q = Throttle.create_with ~continue_on_error:true connections in
+  let q = Priority_throttle.create_with ~continue_on_error:true connections in
   (* Start pinging *)
   let ping_loop () =
     List.iter connections ~f:(fun _ ->
         don't_wait_for
-        @@ Throttle.enqueue q (fun (connection_ref, _) ->
+        @@ Priority_throttle.enqueue q (fun (connection_ref, _) ->
                match%bind !connection_ref with
                | Error err ->
                    [%log error] "Error pinging prover: %s"
@@ -50,16 +50,16 @@ let create ?(ping_interval = 15.) ?(ping_timeout = 10.) ~logger provers =
   every ~continue_on_error:true (Time.Span.of_sec ping_interval) ping_loop ;
   { q; logger }
 
-let queue_size t = Throttle.num_jobs_waiting_to_start t.q
+let queue_size t = Priority_throttle.num_jobs_waiting_to_start t.q
 
-let wait_to_finish t = Throttle.capacity_available t.q
+let wait_to_finish t = Priority_throttle.prior_jobs_done t.q
 
 (* Get the reference of next available prover.
    If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
-let send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
+let send' enqueue ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
     (input : Prover.Input.t) : Prover.Output.t Deferred.t =
   let logger = t.logger in
-  Throttle.enqueue t.q (fun (connection_ref, where_to_connect) ->
+  enqueue t.q (fun (connection_ref, where_to_connect) ->
       let rec go ~attempts =
         let%bind result =
           match%bind !connection_ref with
@@ -103,6 +103,18 @@ let send ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
       in
       go ~attempts )
 
+type sendfn =
+     ?proving_timeout:float
+  -> ?attempts:int
+  -> ?cooldown:float
+  -> t
+  -> Prover.Input.t
+  -> Prover.Output.t Deferred.t
+
+let send : sendfn = send' Priority_throttle.enqueue
+
+let send_with_priority : sendfn = send' Priority_throttle.push_front
+
 let transaction_snark ?proving_timeout t input =
   send ?proving_timeout t (Prover.Input.Txn_snark input)
   >>| function
@@ -113,8 +125,8 @@ let transaction_snark ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let ase_with_length ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Folder (Ase_with_length input))
+let ase_with_length ~(sendfn : sendfn) ?proving_timeout t input =
+  sendfn ?proving_timeout t (Prover.Input.Folder (Ase_with_length input))
   >>| function
   | Prover.Output.Folder (Ase_with_length ase) ->
       ase
@@ -123,8 +135,8 @@ let ase_with_length ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let ase_without_length ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Folder (Ase_without_length input))
+let ase_without_length ~(sendfn : sendfn) ?proving_timeout t input =
+  sendfn ?proving_timeout t (Prover.Input.Folder (Ase_without_length input))
   >>| function
   | Prover.Output.Folder (Ase_without_length ase) ->
       ase
@@ -180,12 +192,13 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
       folder t ~source:ase_source ~elems:ase_elms
         ~max_excess:Zeko_constants.Max_excess_actions.Inner_sync.outer
         (module Zeko_constants.Folder_iterations.Ase.With_length)
-        ase_with_length
+        (ase_with_length ~sendfn:send_with_priority)
     in
     Inner_sync.Ase_inst.
       { proof; proof_target = target; init = ase_source; excess }
   in
-  send ?proving_timeout t (Prover.Input.Inner_sync { public_key; ase })
+  send_with_priority ?proving_timeout t
+    (Prover.Input.Inner_sync { public_key; ase })
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       (parent_with_calls, proof)
@@ -195,7 +208,7 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
       failwith "Unexpected response from prover"
 
 let verify_both_ases ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Verify_both_ases input)
+  send_with_priority ?proving_timeout t (Prover.Input.Verify_both_ases input)
   >>| function
   | Prover.Output.Verify_both_ases snark ->
       snark
@@ -214,7 +227,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
       folder t ~source:inner_ase_source ~elems:new_inner_actions
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.inner
         (module Zeko_constants.Folder_iterations.Ase.With_length)
-        ase_with_length
+        (ase_with_length ~sendfn:send_with_priority)
     in
     Outer_commit.Ase_inner_inst.
       { proof; proof_target = target; init = inner_ase_source; excess }
@@ -232,13 +245,13 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
       folder t ~source:action_state ~elems:unprocessed_actions
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.outer
         (module Zeko_constants.Folder_iterations.Ase.Without_length)
-        ase_without_length
+        (ase_without_length ~sendfn:send_with_priority)
     in
     Outer_commit.Ase_outer_inst.
       { proof; proof_target = target; init = action_state; excess }
   in
   let%bind verify_both_ases = verify_both_ases t (outer_ase, inner_ase) in
-  send ?proving_timeout t
+  send_with_priority ?proving_timeout t
     (Prover.Input.Outer_commit
        { txn_snark
        ; public_key
@@ -292,7 +305,7 @@ let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
       folder t ~source:ase_source ~elems:ase_elms
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_deposit.outer
         (module Zeko_constants.Folder_iterations.Ase.With_length)
-        ase_with_length
+        (ase_with_length ~sendfn:send)
     in
     Bridge.Finalize_deposit.Ase_inst.
       { proof; proof_target = target; init = ase_source; excess }
@@ -361,7 +374,7 @@ let finalize_withdrawal ?proving_timeout t ~public_key ~may_use_token
       folder t ~source ~elems
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_withdrawal.outer
         (module Zeko_constants.Folder_iterations.Ase.Without_length)
-        ase_without_length
+        (ase_without_length ~sendfn:send)
     in
     Bridge.Finalize_withdrawal.Ase_outer_inst.
       { proof; proof_target = target; init = source; excess }
@@ -372,7 +385,7 @@ let finalize_withdrawal ?proving_timeout t ~public_key ~may_use_token
       folder t ~source ~elems
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_withdrawal.inner
         (module Zeko_constants.Folder_iterations.Ase.With_length)
-        ase_with_length
+        (ase_with_length ~sendfn:send)
     in
     Bridge.Finalize_withdrawal.Ase_inner_inst.
       { proof; proof_target = target; init = source; excess }
