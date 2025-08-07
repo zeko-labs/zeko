@@ -1037,6 +1037,7 @@ module Types = struct
       ; chain_l1 : Mina_signature_kind.t
       ; chain_l2 : Mina_signature_kind.t
       ; withdrawal_delay : int
+      ; outer_action_delay : int
       }
 
     let signature_kind_to_string = function
@@ -1074,6 +1075,9 @@ module Types = struct
           ; field "withdrawalDelay" ~typ:(non_null int)
               ~args:Arg.[]
               ~resolve:(fun _ t -> t.withdrawal_delay)
+          ; field "outerActionDelay" ~typ:(non_null int)
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.outer_action_delay)
           ] )
   end
 
@@ -2428,7 +2432,7 @@ module Queries = struct
     field "circuitsConfig" ~doc:"Get the circuits config"
       ~typ:(non_null Types.Circuits_config.t)
       ~args:Arg.[]
-      ~resolve:(fun { ctx = _; _ } () ->
+      ~resolve:(fun { ctx = sequencer; _ } () ->
         let open Zeko_circuits_config in
         { Types.Circuits_config.zeko_l1 = Inputs.zeko_l1
         ; zeko_l2 = Inputs.zeko_l2
@@ -2439,6 +2443,9 @@ module Queries = struct
         ; chain_l2 = Inputs.chain_l2
         ; withdrawal_delay =
             Mina_numbers.Global_slot_span.to_int Inputs.withdrawal_delay
+        ; outer_action_delay =
+            Mina_numbers.Global_slot_span.to_int
+              sequencer.config.commit_validity_period
         } )
 
   let sequencer_pk =

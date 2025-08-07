@@ -513,7 +513,8 @@ module Sequencer_spec = struct
             ~provers ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01
             ~slot_acceptance
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
-            ~l1_config )
+            ~l1_config
+            ~commit_validity_period:(Global_slot_span.of_int 10) )
     in
     Quickcheck.Generator.return
       { outer_kp

@@ -11,7 +11,8 @@ module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_quorum
     ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
-    ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance () =
+    ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
+    ~commit_validity_period () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
     let genesis_timestamp =
@@ -37,7 +38,7 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_quorum
               Keypair.of_private_key_exn
               @@ Private_key.of_base58_check_exn signer)
           ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
-          ~proof_cache_db ~l1_config )
+          ~proof_cache_db ~l1_config ~commit_validity_period )
   in
 
   Sequencer.run_committer sequencer ;
@@ -110,6 +111,10 @@ let () =
        flag "--slot-acceptance"
          (optional_with_default 60. float)
          ~doc:"float Slot acceptance in minutes"
+     and commit_validity_period =
+       flag "--commit-validity-period"
+         (optional_with_default 20 int)
+         ~doc:"int Commit validity period in slots"
      in
      let slot_acceptance = Time.Span.of_min slot_acceptance_m in
      let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
@@ -127,8 +132,12 @@ let () =
      let provers = List.map provers ~f:Host_and_port.of_string in
      let logger = Logger.create () in
      let postgres_uri = Uri.of_string postgres_uri in
+     let commit_validity_period =
+       Mina_numbers.Global_slot_span.of_int commit_validity_period
+     in
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_quorum
        ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
-       ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance )
+       ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
+       ~commit_validity_period )
   |> Command_unix.run
