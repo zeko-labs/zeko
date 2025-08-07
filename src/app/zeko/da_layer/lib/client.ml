@@ -263,12 +263,15 @@ let enqueue_diff t ~target_ledger_hash ~ledger_openings ~diff ~genesis =
   in
   Condition.broadcast t.pushed_diff ()
 
-let rec start_posting_diffs_from t
+let rec start_posting_diffs_from ?pushed_diff t
     ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
     ~source_ledger_hash () =
   if Ivar.is_full t.stop then return ()
   else
     let logger = t.logger in
+    let pushed_diff =
+      Option.value pushed_diff ~default:(Condition.wait t.pushed_diff)
+    in
     match%bind
       Pool.use
         (fun c -> Diff_table.get_diff_by_source c source_ledger_hash)
@@ -281,10 +284,10 @@ let rec start_posting_diffs_from t
             option} for node %s, waiting"
           source_ledger_hash
           (Host_and_port.to_string node_location.value) ;
-        let%bind () =
-          Deferred.any [ Condition.wait t.pushed_diff; Ivar.read t.stop ]
-        in
-        start_posting_diffs_from t ~node_location ~source_ledger_hash ()
+        let%bind () = Deferred.any [ pushed_diff; Ivar.read t.stop ] in
+        start_posting_diffs_from
+          ~pushed_diff:(Condition.wait t.pushed_diff)
+          t ~node_location ~source_ledger_hash ()
     | Some { diff; ledger_openings; target_ledger_hash; _ } -> (
         match%bind
           Rpc.post_diff ~logger:t.logger ~node_location ~ledger_openings ~diff
@@ -373,7 +376,10 @@ let start_client t ~target_ledger_hash =
   Deferred.List.iter ~how:`Parallel t.config.nodes ~f:(fun node_location ->
       catch_up t ~node_location ~target_ledger_hash )
 
-let rec get_signature t ~da_key ~ledger_hash =
+let rec get_signature ?pushed_signature t ~da_key ~ledger_hash =
+  let pushed_signature =
+    Option.value pushed_signature ~default:(Condition.wait t.pushed_signature)
+  in
   let%bind signatures =
     Pool.use (fun c -> Signature_table.get_signatures c ledger_hash) t.db_pool
     >>| caqti_ok_exn ~msg:"Failed to get signatures from db: %s"
@@ -388,11 +394,12 @@ let rec get_signature t ~da_key ~ledger_hash =
   else
     let logger = t.logger in
     [%log info] "Not enough signatures, waiting for more" ;
-    let%bind () =
-      Deferred.any [ Condition.wait t.pushed_signature; Ivar.read t.stop ]
-    in
+    let%bind () = Deferred.any [ pushed_signature; Ivar.read t.stop ] in
     if Ivar.is_full t.stop then failwith "Da layer client stopped"
-    else get_signature t ~da_key ~ledger_hash
+    else
+      get_signature
+        ~pushed_signature:(Condition.wait t.pushed_signature)
+        t ~da_key ~ledger_hash
 
 (** Useful for querying data, will fallback to the next node in list in case the first one fails *)
 let try_all_nodes ~config ~f =
