@@ -27,6 +27,7 @@ module Sequencer = struct
       ; minimum_fee : float
       ; l1_config : Utils.Slot.l1_config
       ; slot_acceptance : Time.Span.t
+      ; commit_validity_period : Global_slot_span.t
       }
   end
 
@@ -760,7 +761,7 @@ module Sequencer = struct
   let create ~logger ~max_pool_size ~commitment_period_sec ~da_config ~da_quorum
       ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
       ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
-      ~proof_cache_db ~l1_config =
+      ~proof_cache_db ~l1_config ~commit_validity_period =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let ledger =
@@ -789,6 +790,7 @@ module Sequencer = struct
         ; minimum_fee
         ; l1_config
         ; slot_acceptance
+        ; commit_validity_period
         }
     in
     let%bind db_pool = Db.create_and_migrate ~postgres_uri ~logger in
