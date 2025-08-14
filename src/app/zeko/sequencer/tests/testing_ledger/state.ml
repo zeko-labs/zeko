@@ -113,7 +113,7 @@ let apply_command t ~command =
     | Applied, Zkapp_command zkapp_command ->
         Zkapp_command.(
           Call_forest.iteri (Poly.account_updates zkapp_command)
-            ~f:(fun _ update ->
+            ~f:(fun i update ->
               let account =
                 let account_id =
                   Account_id.create
@@ -126,8 +126,8 @@ let apply_command t ~command =
                     ~f:(Ledger.get l)
                   |> join |> value_exn)
               in
-              Archive.add_account_update t.archive ~height:t.block_height update
-                account
+              Archive.add_account_update t.archive ~height:t.block_height i
+                update account
                 (Some
                    Archive.Transaction_info.
                      { status = Applied
@@ -140,6 +140,10 @@ let apply_command t ~command =
                      ; authorization_kind =
                          Account_update.Body.authorization_kind
                          @@ Account_update.Poly.body update
+                     ; sequence_no = 0
+                     ; zkapp_account_update_ids =
+                         Zkapp_command.Poly.account_updates zkapp_command
+                         |> List.mapi ~f:(fun i _ -> i)
                      } ) ))
     | _ ->
         ()

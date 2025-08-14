@@ -60,6 +60,8 @@ module Transaction_info = struct
     ; hash : Transaction_hash.t
     ; memo : Signed_command_memo.t
     ; authorization_kind : Account_update.Authorization_kind.t
+    ; sequence_no : int
+    ; zkapp_account_update_ids : int list
     }
   [@@deriving sexp, yojson]
 end
@@ -165,8 +167,9 @@ module Archive = struct
   let store_actions t account_id actions =
     Kvdb.set t Actions ~key:account_id ~data:actions
 
-  let add_actions t ?(height = 0) (account_update : Account_update.t)
-      transaction_info (account : Account.t) =
+  let add_actions t ?(height = 0) account_update_id
+      (account_update : Account_update.t) transaction_info (account : Account.t)
+      =
     match account_update.body.actions with
     | [] ->
         ()
@@ -177,7 +180,7 @@ module Archive = struct
               Some { Block_info.dummy with height }
           ; transaction_info
           ; action_state = zkapp.action_state
-          ; account_update_id = 0
+          ; account_update_id
           ; actions
           }
         in
@@ -208,9 +211,10 @@ module Archive = struct
         let previous = query_events t account in
         store_events t account (event :: previous)
 
-  let add_account_update t ?(height = 0) (account_update : Account_update.t)
-      account transaction_info =
-    add_actions t ~height account_update transaction_info account ;
+  let add_account_update t ?(height = 0) account_update_id
+      (account_update : Account_update.t) account transaction_info =
+    add_actions t ~height account_update_id account_update transaction_info
+      account ;
     add_events t ~height account_update transaction_info
 
   let get_actions t account_id ~from ~to_ =
