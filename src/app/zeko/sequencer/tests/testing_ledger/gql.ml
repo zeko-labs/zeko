@@ -1377,6 +1377,13 @@ module Types = struct
                   Yojson.Safe.to_string
                   @@ Account_update.Authorization_kind.to_yojson
                        v.authorization_kind )
+            ; field "sequenceNumber" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.sequence_no)
+            ; field "zkappAccountUpdateIds"
+                ~typ:(non_null @@ list @@ non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ v -> v.zkapp_account_update_ids)
             ] )
     end
 

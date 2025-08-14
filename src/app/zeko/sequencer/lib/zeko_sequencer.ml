@@ -244,7 +244,7 @@ module Sequencer = struct
   let apply_events_and_actions t command =
     let ledger = L.of_database t.ledger in
     Zkapp_command.(Call_forest.to_list (Poly.account_updates command))
-    |> List.map ~f:(fun update ->
+    |> List.mapi ~f:(fun i update ->
            let%bind.Result account =
              match
                let account_id =
@@ -263,7 +263,7 @@ module Sequencer = struct
                  Error (Error.of_string "Account not present in the db")
            in
            Ok
-             (Archive.add_account_update t.archive update account
+             (Archive.add_account_update t.archive i update account
                 (Some
                    Archive.Transaction_info.
                      { status = Applied
@@ -275,6 +275,10 @@ module Sequencer = struct
                      ; memo = Zkapp_command.Poly.memo command
                      ; authorization_kind =
                          Account_update.Body.authorization_kind update.body
+                     ; sequence_no = 0
+                     ; zkapp_account_update_ids =
+                         Zkapp_command.Poly.account_updates command
+                         |> List.mapi ~f:(fun i _ -> i)
                      } ) ) )
     |> Or_error.combine_errors |> Result.map ~f:ignore
 
