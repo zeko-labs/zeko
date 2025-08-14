@@ -149,7 +149,7 @@ module Sequencer = struct
           Committer.prove_commit ~logger ~proof_cache_db ~provers ~executor
             ~archive ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
             ~archive_uri:config.archive_uri ~l1_config:config.l1_config
-            commit_witness
+            ~commit_validity_period:config.commit_validity_period commit_witness
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
         State.Last_committed_ledger.set sequencer_state ~data:new_inner_ledger ;
@@ -845,7 +845,7 @@ module Sequencer = struct
       Committer.recommit_all ~logger ~proof_cache_db
         ~provers:t.bridge_prover.provers ~executor:t.merger_ctx.executor
         ~archive ~db_pool ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
-        ~archive_uri:config.archive_uri ~l1_config
+        ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
     in
     let%bind () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)

@@ -68,6 +68,7 @@ end
 
 let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     ~(archive : Archive.t) ~zkapp_pk ~archive_uri ~l1_config
+    ~commit_validity_period
     ({ old_inner_ledger
      ; new_inner_ledger
      ; processed_actions_pointer
@@ -151,8 +152,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
         { lower = current_slot
         ; upper =
             Mina_numbers.(
-              Global_slot_since_genesis.add current_slot
-                (Global_slot_span.of_int 10))
+              Global_slot_since_genesis.add current_slot commit_validity_period)
         }
       in
       { lower = current_slot
@@ -193,7 +193,8 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   return command
 
 let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
-    ~(executor : Executor.t) ~archive ~zkapp_pk ~archive_uri ~l1_config =
+    ~(executor : Executor.t) ~archive ~zkapp_pk ~archive_uri ~l1_config
+    ~commit_validity_period =
   let%bind { ledger_hash; _ } =
     Gql_client.infer_state executor.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress executor.signer.public_key)
@@ -222,7 +223,7 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
         in
         let%bind command =
           prove_commit ~logger ~proof_cache_db ~provers ~executor ~archive
-            ~zkapp_pk ~archive_uri ~l1_config witness
+            ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period witness
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
         recommit_next ~conn target_ledger_hash
