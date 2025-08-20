@@ -1,3 +1,4 @@
+open Core_kernel
 open Snark_params.Tick
 open Zeko_util
 open Checked.Let_syntax
@@ -37,10 +38,20 @@ struct
   let hash_entry =
     var_to_hash ~init:Zeko_constants.indexed_merkle_tree_salt Entry.typ
 
-  (* TODO: consider different salt per level. *)
-  let merge_hashes left right =
-    var_to_hash ~init:"indexed merkle tree" Typ.(F.typ * F.typ) (left, right)
+  let empty_path =
+    List.init height ~f:Fn.id
+    |> List.fold_map ~init:Field.zero ~f:(fun acc _ ->
+           let next =
+             Random_oracle.hash
+               ~init:
+                 (Hash_prefix_create.salt
+                    Zeko_constants.indexed_merkle_tree_merge_salt )
+               [| acc; acc |]
+           in
+           (next, constant Field.typ acc) )
+    |> snd
 
+  (* TODO: consider different salt per level. *)
   (* NB: The first element in the list is the neighbor of init, and the next element
      is a level up, and so on. This is the same as what the Mina code base does. *)
   let implied_root_raw (init : F.var) (path : Path.var) : F.var Checked.t =
@@ -50,7 +61,9 @@ struct
             ~typ:Typ.(F.typ * F.typ)
             ~then_:(hash_other, acc) ~else_:(acc, hash_other)
         in
-        merge_hashes left right )
+        var_to_hash ~init:Zeko_constants.indexed_merkle_tree_merge_salt
+          Typ.(F.typ * F.typ)
+          (left, right) )
 
   let implied_root (entry : Entry.var) (path : Path.var) : F.var Checked.t =
     let* init = hash_entry entry in
@@ -84,19 +97,13 @@ struct
       | None ->
           Checked.return root
     in
-    let* is_y_most_left, _empty_root =
-      foldl path_y
-        ~init:(Boolean.true_, Field.(constant typ zero))
-        ~f:(fun (acc, prev_empty_hash) PathStep.{ hash_other; is_right } ->
+    let* is_y_most_left =
+      foldl (List.zip_exn path_y empty_path) ~init:Boolean.true_
+        ~f:(fun acc (PathStep.{ hash_other; is_right }, empty_hash) ->
           let* is_valid_left =
-            Field.Checked.equal prev_empty_hash hash_other
-            >>= Boolean.( &&& ) acc
+            Field.Checked.equal empty_hash hash_other >>= Boolean.( &&& ) acc
           in
-          let* acc =
-            if_ is_right ~typ:Boolean.typ ~then_:acc ~else_:is_valid_left
-          in
-          let*| empty_hash = merge_hashes prev_empty_hash prev_empty_hash in
-          (acc, empty_hash) )
+          if_ is_right ~typ:Boolean.typ ~then_:acc ~else_:is_valid_left )
     in
     let* () =
       match check with
