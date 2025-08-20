@@ -69,7 +69,7 @@ struct
     let* init = hash_entry entry in
     implied_root_raw init path
 
-  let add_key_var ?check ~x ~path_x ~y ~path_y ~z () =
+  let add_key_var ~check ~x ~path_x ~y ~path_y ~z () =
     let* () =
       with_label __LOC__ (fun () -> assert_x_less_than_y_less_than_z ~x ~y ~z)
     in
@@ -79,24 +79,13 @@ struct
       implied_root_raw Field.(constant typ zero) path_y
     in
     let* root_intermediate =
-      match check with
-      | Some check ->
-          if_ check ~typ:F.typ ~then_:root_intermediate
-            ~else_:root_intermediate'
-      | None ->
-          Checked.return root_intermediate
+      if_ check ~typ:F.typ ~then_:root_intermediate ~else_:root_intermediate'
     in
     let* () =
       assert_equal ~label:__LOC__ F.typ root_intermediate root_intermediate'
     in
     let* root_new = implied_root { key = y; next_key = z } path_y in
-    let* root =
-      match check with
-      | Some check ->
-          if_ check ~typ:F.typ ~then_:root ~else_:root_new
-      | None ->
-          Checked.return root
-    in
+    let* root = if_ check ~typ:F.typ ~then_:root ~else_:root_new in
     (* Check that no empty indices have been skipped. *)
     let* is_y_most_left =
       foldl (List.zip_exn path_y empty_path) ~init:Boolean.true_
@@ -107,12 +96,8 @@ struct
           if_ is_right ~typ:Boolean.typ ~then_:acc ~else_:is_valid_left )
     in
     let* () =
-      match check with
-      | Some check ->
-          if_ check ~typ:Boolean.typ ~then_:is_y_most_left ~else_:Boolean.true_
-          >>= Boolean.Assert.is_true
-      | None ->
-          Checked.return ()
+      if_ check ~typ:Boolean.typ ~then_:is_y_most_left ~else_:Boolean.true_
+      >>= Boolean.Assert.is_true
     in
     Checked.return (`Before_adding_y root, `After_adding_y root_new)
 

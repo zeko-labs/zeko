@@ -48,7 +48,7 @@ end) : sig
   end
 
   val add_key_var :
-       ?check:Boolean.var
+       check:Boolean.var
     -> x:Key.var
     -> path_x:Path.var
     -> y:Key.var
