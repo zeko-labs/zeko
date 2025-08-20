@@ -97,6 +97,7 @@ struct
       | None ->
           Checked.return root
     in
+    (* Check that no empty indices have been skipped. *)
     let* is_y_most_left =
       foldl (List.zip_exn path_y empty_path) ~init:Boolean.true_
         ~f:(fun acc (PathStep.{ hash_other; is_right }, empty_hash) ->
