@@ -166,9 +166,7 @@ struct
       in
       let input =
         let open Random_oracle.Input.Chunked in
-        append
-          (Ledger_hash.var_to_field target_ledger |> field)
-          (Account_set.to_input_var target_acc_set)
+        Ledger_hash.var_to_field target_ledger |> field
       in
       let* payload =
         make_checked (fun () ->
