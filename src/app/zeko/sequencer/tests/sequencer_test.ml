@@ -16,7 +16,7 @@ let constraint_constants = Zeko_constants.constraint_constants
 let start_time = Time.now ()
 
 let logger =
-  Cli_lib.Stdout_log.setup false Logger.Level.Debug ;
+  Cli_lib.Stdout_log.setup false Logger.Level.Spam ;
   Logger.create ()
 
 let gql_uri =

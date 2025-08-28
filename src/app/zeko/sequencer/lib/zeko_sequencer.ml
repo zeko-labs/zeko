@@ -804,7 +804,7 @@ module Sequencer = struct
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let provers =
-      Zeko_prover.Client.create ~logger
+      Zeko_prover.Client.create ~logger ~db_pool
         (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
     in
     let executor =

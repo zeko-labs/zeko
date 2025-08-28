@@ -46,6 +46,15 @@ module Make_folder (System : sig
        Elem.t list * (trans * Compile_simple.Proof.t)
     -> (trans * Compile_simple.Proof.t) Promise.t
 
+  (* type merge_input =
+       { left : trans
+       ; left_proof : Compile_simple.Proof.t
+       ; right : trans
+       ; right_proof : Compile_simple.Proof.t
+       }
+
+     val merge : merge_input -> (trans * Compile_simple.Proof.t) Promise.t *)
+
   val leaf_iterations : int
 
   val leaf_option_iterations : int
@@ -57,23 +66,38 @@ end) =
 struct
   type out_t = Compile_simple.Proof.t option * System.Stmt.t [@@deriving yojson]
 
-  let fold ~source ~elems : out_t Promise.t =
+  let fold
+      ~(source :
+         [ `Extend of System.trans * Compile_simple.Proof.t
+         | `Full of System.Stmt.t ] ) ~elems : out_t Promise.t =
     match elems with
-    | [] ->
+    | [] -> (
         (* No need for folding, everything goes to excess *)
-        Promise.return (None, source)
+        match source with
+        | `Full source ->
+            Promise.return (None, source)
+        | `Extend (trans, proof) ->
+            Promise.return (Some proof, trans.target) )
     | elems_to_prove ->
         (* Need to fold *)
-        let leaf_prover, (leaf_elems, rest) =
-          if List.length elems_to_prove > System.leaf_iterations then
-            (* Full leaf *)
-            (System.leaf, List.split_n elems_to_prove System.leaf_iterations)
-          else
-            (* Partial leaf *)
-            ( System.leaf_option
-            , List.split_n elems_to_prove System.leaf_option_iterations )
+        let%bind.Promise leaf, rest =
+          match source with
+          | `Full source ->
+              let leaf_prover, (leaf_elems, rest) =
+                if List.length elems_to_prove > System.leaf_iterations then
+                  (* Full leaf *)
+                  ( System.leaf
+                  , List.split_n elems_to_prove System.leaf_iterations )
+                else
+                  (* Partial leaf *)
+                  ( System.leaf_option
+                  , List.split_n elems_to_prove System.leaf_option_iterations )
+              in
+              let%map.Promise leaf = leaf_prover (leaf_elems, source) in
+              (leaf, rest)
+          | `Extend (trans, proof) ->
+              Promise.return ((trans, proof), elems_to_prove)
         in
-        let%bind.Promise leaf = leaf_prover (leaf_elems, source) in
         let rec extend_rest elems_to_prove acc =
           match elems_to_prove with
           | [] ->
@@ -114,8 +138,14 @@ module Input = struct
 
   module Folder = struct
     type t =
-      | Ase_with_length of (Ase.With_length.Stmt.t * F.t list)
-      | Ase_without_length of (Ase.Without_length.Stmt.t * F.t list)
+      | Ase_with_length of
+          ( [ `Full of Ase.With_length.Stmt.t
+            | `Extend of Ase.With_length.trans * Compile_simple.Proof.t ]
+          * F.t list )
+      | Ase_without_length of
+          ( [ `Full of Ase.Without_length.Stmt.t
+            | `Extend of Ase.Without_length.trans * Compile_simple.Proof.t ]
+          * F.t list )
       | Check_accepted_mina of
           ( Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t
           * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list )
@@ -253,7 +283,8 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
   | Folder (Check_accepted_mina (source, elems)) ->
       let%map snark =
         time ?fake_proving_time ~logger "Folder.Check_accepted_mina.fold"
-          (Folder_check_accepted_mina.fold ~source ~elems |> Promise.to_deferred)
+          ( Folder_check_accepted_mina.fold ~source:(`Full source) ~elems
+          |> Promise.to_deferred )
       in
       Output.(Folder (Check_accepted_mina snark))
   | Verify_both_ases (outer, inner) ->
