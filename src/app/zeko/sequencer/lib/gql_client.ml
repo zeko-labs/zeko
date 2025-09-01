@@ -318,6 +318,36 @@ let fetch_state uri aid =
     |> List.map ~f:Field.of_string
     |> Zkapp_state.V.of_list_exn)
 
+let fetch_vk_hash uri aid =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!, $tokenId: TokenId!) {
+              account(publicKey: $pk, token: $tokenId){
+                verificationKey {
+                  hash
+                }
+              }
+            }
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String
+                ( Account_id.public_key aid
+                |> Signature_lib.Public_key.Compressed.to_base58_check ) )
+          ; ("tokenId", `String (Account_id.token_id aid |> Token_id.to_string))
+          ]
+    end
+  in
+  let%map result = Graphql_client.query_json_exn q uri in
+  Yojson.Safe.Util.(
+    result |> member "account" |> member "verificationKey" |> member "hash"
+    |> to_string |> Field.of_string)
+
 let infer_state uri ~zkapp_pk ~signer_pk =
   let%bind committed_state =
     fetch_state uri

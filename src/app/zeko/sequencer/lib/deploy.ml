@@ -310,3 +310,56 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
   in
   Utils.sign_zkapp_command ~signature_kind command
     [ outer_kp; holder_kp; token_holder_kp; signer ]
+
+let update_verification_keys ~signature_kind ~(signer : Keypair.t)
+    ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)
+    (upgrades : (Compile_simple.Verification_key.t * Keypair.t) list) =
+  let aus =
+    List.map upgrades ~f:(fun (vk, kp) ->
+        Account_update.with_aux
+          ~body:
+            { Body.dummy with
+              public_key = Public_key.compress kp.public_key
+            ; update =
+                { Update.dummy with
+                  verification_key =
+                    Set
+                      (Verification_key_wire.Stable.Latest.M.of_binable
+                         ( match
+                             Is_compile_simple_real.is_compile_simple_real
+                           with
+                         | Some eq ->
+                             let _, vk_eq = Type_equal.detuple2 eq in
+                             Type_equal.conv vk_eq vk
+                         | None ->
+                             Pickles.Side_loaded.Verification_key.dummy ) )
+                }
+            ; use_full_commitment = true
+            ; authorization_kind = Signature
+            }
+          ~authorization:(Control.Poly.Signature Signature.dummy) )
+  in
+  let call_forest =
+    Zkapp_command.Call_forest.accumulate_hashes
+      ~hash_account_update:
+        (Zkapp_command.Call_forest.Digest.Account_update.create ~signature_kind)
+    @@ Zkapp_command.Call_forest.of_account_updates
+         ~account_update_depth:(fun _ -> 0)
+         aus
+  in
+  let command : Zkapp_command.t =
+    { fee_payer =
+        { Account_update.Fee_payer.body =
+            { public_key = Public_key.compress signer.public_key
+            ; fee
+            ; valid_until = None
+            ; nonce
+            }
+        ; authorization = Signature.dummy
+        }
+    ; account_updates = call_forest
+    ; memo = Signed_command_memo.empty
+    }
+  in
+  Utils.sign_zkapp_command ~signature_kind command
+    (signer :: List.map upgrades ~f:snd)

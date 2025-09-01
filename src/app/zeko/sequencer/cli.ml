@@ -5,6 +5,7 @@ open Signature_lib
 open Cli_lib
 open Mina_base
 open Mina_ledger
+module Field = Snark_params.Tick.Field
 module Sequencer = Zeko_sequencer.Sequencer
 
 let generate_even_key =
@@ -50,6 +51,120 @@ let generate_circuits_config =
            Core.printf "deploy config: %s\n%!"
              ( Yojson.Safe.pretty_to_string
              @@ Zeko_circuits_config.Deploy.to_yojson deploy_config ) ) ) )
+
+let update_verification_keys =
+  ( "update-verification-keys"
+  , Command.async ~summary:"Run migrations on the database"
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and only_check =
+         flag "--only-check"
+           (optional_with_default false bool)
+           ~doc:"bool Only check if the verification keys are up to date"
+       in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let sender =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+         in
+         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
+           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
+         in
+         let open Zeko_types in
+         let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
+
+         let pp label (real_vk, old_vk) =
+           let hash = Compile_simple.Verification_key.hash real_vk in
+           [%log info]
+             !"%s vk:\n\
+               real: %{sexp: Field.t}\n\
+               fetched: %{sexp: Field.t}\n\
+               equal: %b"
+             label hash old_vk (Field.equal hash old_vk)
+         in
+
+         let%bind fetched_core_rollup_vk =
+           Gql_client.fetch_vk_hash l1_uri
+             ( Account_id.of_public_key
+             @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
+         and fetched_helper_token_owner_vk =
+           Gql_client.fetch_vk_hash l1_uri
+             ( Account_id.of_public_key
+             @@ Public_key.decompress_exn
+                  Zeko_circuits_config.t.helper_token_owner_l1 )
+         and fetched_bridge_holder_vk =
+           Gql_client.fetch_vk_hash l1_uri
+             ( Account_id.of_public_key @@ Public_key.decompress_exn
+             @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
+         in
+         let%bind core_rollup_vk =
+           Inner_rules_inst.tag |> Compile_simple.Verification_key.of_tag
+           |> Promise.to_deferred
+         and bridge_holder_vk =
+           Bridge_inst_mina.System_L1_enabled.tag
+           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
+         and helper_token_owner_vk =
+           Bridge_inst_mina.System_L1_token_owner.tag
+           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
+         in
+         let deploy_config =
+           Option.value_exn Zeko_circuits_config.deploy_config
+         in
+         let core_rollup =
+           ( core_rollup_vk
+           , fetched_core_rollup_vk
+           , Keypair.of_private_key_exn deploy_config.zeko_l1 )
+         in
+         let bridge_holders =
+           List.map deploy_config.holder_accounts_l1 ~f:(fun sk ->
+               ( bridge_holder_vk
+               , fetched_bridge_holder_vk
+               , Keypair.of_private_key_exn sk ) )
+         in
+         let helper_token_owner =
+           ( helper_token_owner_vk
+           , fetched_helper_token_owner_vk
+           , Keypair.of_private_key_exn deploy_config.helper_token_owner_l1 )
+         in
+         let take2 (a, b, _) = (a, b) in
+         pp "Core rollup" (take2 core_rollup) ;
+         pp "Bridge holder" (take2 @@ List.hd_exn bridge_holders) ;
+         pp "Helper token owner" (take2 helper_token_owner) ;
+
+         if only_check then return ()
+         else
+           let%bind nonce =
+             Sequencer_lib.Gql_client.infer_nonce l1_uri
+               (Public_key.compress sender.public_key)
+           in
+           let to_update =
+             List.filter_map
+               ([ core_rollup; helper_token_owner ] @ bridge_holders)
+               ~f:(fun (new_vk, old_vk, kp) ->
+                 let hash = Compile_simple.Verification_key.hash new_vk in
+                 if Field.equal hash old_vk then None else Some (new_vk, kp) )
+           in
+           let command =
+             Deploy.update_verification_keys
+               ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
+               ~fee:(Currency.Fee.of_mina_string_exn "0.1")
+               ~nonce to_update
+             |> Zkapp_command.read_all_proofs_from_disk
+           in
+           match%map Gql_client.send_zkapp l1_uri command with
+           | Ok _ ->
+               let txn_hash =
+                 Mina_transaction.Transaction_hash.hash_command
+                   (Zkapp_command command)
+               in
+               [%log info] "Successfully sent zkapp command: %s"
+                 (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
+           | Error (`Failed_request err) ->
+               [%log error] "Failed request: %s" err
+           | Error (`Graphql_error err) ->
+               [%log error] "Graphql request: %s" err ) )
 
 let migrate =
   ( "migrate"
@@ -221,6 +336,7 @@ let () =
   Command.group ~summary:"Sequencer CLI"
     [ generate_even_key
     ; generate_circuits_config
+    ; update_verification_keys
     ; migrate
     ; dump_ledger
     ; prover_load
