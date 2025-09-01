@@ -47,33 +47,33 @@ let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
 
 module Max_excess_actions = struct
   module Inner_sync = struct
-    let outer = Int.pow 2 10
+    let outer = Int.pow 2 9
   end
 
   module Commit = struct
-    let inner = Int.pow 2 10
+    let inner = Int.pow 2 9
 
-    let outer = Int.pow 2 10
+    let outer = Int.pow 2 9
   end
 
   module Finalize_cancelled_deposit = struct
-    let outer = Int.pow 2 10
+    let outer = Int.pow 2 3
 
-    let outer_with_length = Int.pow 2 10
+    let outer_with_length = Int.pow 2 3
 
-    let check_accepted = Int.pow 2 7
+    let check_accepted = Int.pow 2 2
   end
 
   module Finalize_deposit = struct
-    let outer = Int.pow 2 8
+    let outer = Int.pow 2 7
 
-    let check_accepted = Int.pow 2 7
+    let check_accepted = Int.pow 2 6
   end
 
   module Finalize_withdrawal = struct
-    let inner = Int.pow 2 10
+    let inner = Int.pow 2 9
 
-    let outer = Int.pow 2 10
+    let outer = Int.pow 2 9
   end
 end
 
@@ -90,33 +90,33 @@ end
 module Folder_iterations = struct
   module Ase = struct
     module With_length : FOLDER_ITERATIONS = struct
-      let leaf_iterations = Int.pow 2 11
+      let leaf_iterations = Int.pow 2 10
 
-      let leaf_option_iterations = Int.pow 2 10
+      let leaf_option_iterations = Int.pow 2 9
 
-      let extend_iterations = Int.pow 2 10
+      let extend_iterations = Int.pow 2 9
 
-      let extend_option_iterations = Int.pow 2 9
+      let extend_option_iterations = Int.pow 2 8
     end
 
     module Without_length : FOLDER_ITERATIONS = struct
-      let leaf_iterations = Int.pow 2 11
+      let leaf_iterations = Int.pow 2 10
 
-      let leaf_option_iterations = Int.pow 2 10
+      let leaf_option_iterations = Int.pow 2 9
 
-      let extend_iterations = Int.pow 2 10
+      let extend_iterations = Int.pow 2 9
 
-      let extend_option_iterations = Int.pow 2 9
+      let extend_option_iterations = Int.pow 2 8
     end
   end
 
   module Check_accepted : FOLDER_ITERATIONS = struct
-    let leaf_iterations = Int.pow 2 8
+    let leaf_iterations = Int.pow 2 5
 
-    let leaf_option_iterations = Int.pow 2 7
+    let leaf_option_iterations = Int.pow 2 4
 
-    let extend_iterations = Int.pow 2 8
+    let extend_iterations = Int.pow 2 4
 
-    let extend_option_iterations = Int.pow 2 7
+    let extend_option_iterations = Int.pow 2 3
   end
 end
