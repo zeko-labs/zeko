@@ -2163,13 +2163,13 @@ module Mutations = struct
           if Currency.Amount.(deposit_params.amount < account_creation_fee) then
             return (Error "Amount must be at least 2 account creation fees")
           else
-            let key = Int.to_string @@ Random.int Int.max_value in
-            don't_wait_for
-            @@ Bridge_prover.deposit_request
-                 Zeko_sequencer.(sequencer.bridge_prover)
-                 ~logger:Zeko_sequencer.(sequencer.logger)
-                 ~key ~deposit_params ;
-            return (Ok key) )
+            let key, d =
+              Bridge_prover.Deposit_request.f
+                ~t:Zeko_sequencer.(sequencer.bridge_prover)
+                ~logger:Zeko_sequencer.(sequencer.logger)
+                { deposit_params }
+            in
+            don't_wait_for d ; return (Ok key) )
 
     let withdrawal_request ~proof_cache_db =
       io_field "proveWithdrawalRequest" ~doc:"Prove withdrawal request"
@@ -2183,13 +2183,13 @@ module Mutations = struct
                        ~proof_cache_db )
             ]
         ~resolve:(fun { ctx = sequencer; _ } () withdrawal_params ->
-          let key = Int.to_string @@ Random.int Int.max_value in
-          don't_wait_for
-          @@ Bridge_prover.withdrawal_request
-               Zeko_sequencer.(sequencer.bridge_prover)
-               ~logger:Zeko_sequencer.(sequencer.logger)
-               ~key ~withdrawal_params ;
-          return (Ok key) )
+          let key, d =
+            Bridge_prover.Withdrawal_request.f
+              ~t:Zeko_sequencer.(sequencer.bridge_prover)
+              ~logger:Zeko_sequencer.(sequencer.logger)
+              { withdrawal_params }
+          in
+          don't_wait_for d ; return (Ok key) )
 
     let finalize_deposit ~proof_cache_db =
       io_field "finalizeDeposit" ~doc:"Finalize a deposit"
@@ -2203,14 +2203,23 @@ module Mutations = struct
                        ~proof_cache_db )
             ]
         ~resolve:(fun { ctx = sequencer; _ } ()
-                      { ase; check_accepted; prev_next_deposit } ->
-          let key = Int.to_string @@ Random.int Int.max_value in
-          don't_wait_for
-          @@ Bridge_prover.finalize_deposit
-               Zeko_sequencer.(sequencer.bridge_prover)
-               ~logger:Zeko_sequencer.(sequencer.logger)
-               ~key ~ase ~check_accepted ~prev_next_deposit ;
-          return (Ok key) )
+                      { ase = ase_source, ase_elems
+                      ; check_accepted =
+                          check_accepted_init, check_accepted_elems
+                      ; prev_next_deposit
+                      } ->
+          let key, d =
+            Bridge_prover.Finalize_deposit.f
+              ~t:Zeko_sequencer.(sequencer.bridge_prover)
+              ~logger:Zeko_sequencer.(sequencer.logger)
+              { ase_source
+              ; ase_elems
+              ; check_accepted_init
+              ; check_accepted_elems
+              ; prev_next_deposit
+              }
+          in
+          don't_wait_for d ; return (Ok key) )
 
     let finalize_withdrawal ~proof_cache_db =
       io_field "finalizeWithdrawal" ~doc:"Finalize a withdrawal"
@@ -2227,23 +2236,30 @@ module Mutations = struct
                       { public_key
                       ; commit
                       ; before_commit
-                      ; commit_ase
+                      ; commit_ase = commit_ase_source, commit_ase_elems
                       ; before_withdrawal
-                      ; withdrawal_ase
+                      ; withdrawal_ase =
+                          withdrawal_ase_source, withdrawal_ase_elems
                       ; prev_next_withdrawal
                       ; withdrawal_params
                       } ->
-          let key = Int.to_string @@ Random.int Int.max_value in
-          don't_wait_for
-          @@ Bridge_prover.finalize_withdrawal
-               Zeko_sequencer.(sequencer.bridge_prover)
-               ~logger:Zeko_sequencer.(sequencer.logger)
-               ~key ~public_key ~commit ~before_commit ~commit_ase
-               ~before_withdrawal ~withdrawal_ase ~prev_next_withdrawal
-               ~withdrawal_params:
-                 (Zeko_types.Bridge.Finalize_withdrawal.Withdrawal_params_base
-                  .to_serializable withdrawal_params ) ;
-          return (Ok key) )
+          let key, d =
+            Bridge_prover.Finalize_withdrawal.f
+              ~t:Zeko_sequencer.(sequencer.bridge_prover)
+              ~logger:Zeko_sequencer.(sequencer.logger)
+              { public_key
+              ; commit
+              ; before_commit
+              ; commit_ase_source
+              ; commit_ase_elems
+              ; before_withdrawal
+              ; withdrawal_ase_source
+              ; withdrawal_ase_elems
+              ; prev_next_withdrawal
+              ; withdrawal_params
+              }
+          in
+          don't_wait_for d ; return (Ok key) )
 
     let commands ~proof_cache_db =
       [ deposit_request ~proof_cache_db
@@ -2396,14 +2412,16 @@ module Queries = struct
             key
         with
         | None ->
+            return (Error "Invalid key")
+        | Some (_, `Pending) ->
             return (Ok None)
-        | Some (_, Ok forest) ->
+        | Some (_, `Done (Ok forest)) ->
             return
               (Ok
                  (Some
                     ( Yojson.Safe.to_string
                     @@ Zkapp_command.account_updates_to_json forest ) ) )
-        | Some (_, Error err) ->
+        | Some (_, `Done (Error err)) ->
             return (Error (Error.to_string_mach err)) )
 
   let state_hashes =

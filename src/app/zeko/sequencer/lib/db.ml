@@ -83,6 +83,68 @@ let migrations : Db.Migration.t list =
           (Caqti_request.exec Caqti_type.unit
              {sql| CREATE INDEX idx_commit_target ON "commit" (target_ledger_hash) |sql} )
           () )
+  ; Db.Migration.make 4 "ase_cache_schema" (fun (module Conn : CONNECTION) ->
+        let%bind () =
+          let%bind () =
+            Conn.exec
+              (Caqti_request.exec Caqti_type.unit
+                 {sql| CREATE TABLE ase_cache_with_length (
+                    id SERIAL PRIMARY KEY,
+                    source_hash TEXT NOT NULL,
+                    source_length INTEGER NOT NULL,
+                    target_hash TEXT NOT NULL,
+                    proof BYTEA NOT NULL,
+                    extension_length INTEGER NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    
+                    UNIQUE (source_hash, target_hash),
+                    CHECK (source_hash <> target_hash),
+                    CHECK (source_length >= 0),
+                    CHECK (extension_length >= 0)
+                  ) |sql} )
+              ()
+          in
+          let%bind () =
+            Conn.exec
+              (Caqti_request.exec Caqti_type.unit
+                 {sql| CREATE INDEX idx_ase_cache_with_length_source ON ase_cache_with_length (source_hash) |sql} )
+              ()
+          in
+          Conn.exec
+            (Caqti_request.exec Caqti_type.unit
+               {sql| CREATE INDEX idx_ase_cache_with_length_created_at ON ase_cache_with_length (created_at) |sql} )
+            ()
+        in
+        let%bind () =
+          let%bind () =
+            Conn.exec
+              (Caqti_request.exec Caqti_type.unit
+                 {sql| CREATE TABLE ase_cache_without_length (
+                    id SERIAL PRIMARY KEY,
+                    source_hash TEXT NOT NULL,
+                    target_hash TEXT NOT NULL,
+                    proof BYTEA NOT NULL,
+                    extension_length INTEGER NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    
+                    UNIQUE (source_hash, target_hash),
+                    CHECK (source_hash <> target_hash),
+                    CHECK (extension_length >= 0)
+                  ) |sql} )
+              ()
+          in
+          let%bind () =
+            Conn.exec
+              (Caqti_request.exec Caqti_type.unit
+                 {sql| CREATE INDEX idx_ase_cache_without_length_source ON ase_cache_without_length (source_hash) |sql} )
+              ()
+          in
+          Conn.exec
+            (Caqti_request.exec Caqti_type.unit
+               {sql| CREATE INDEX idx_ase_cache_without_length_created_at ON ase_cache_without_length (created_at) |sql} )
+            ()
+        in
+        return () )
   ]
 
 let create_and_migrate ~postgres_uri ~logger =

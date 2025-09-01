@@ -5,12 +5,14 @@
   zeko_constants
   zeko_types
   utils
+  relational_db
   ;; mina ;;
   mina_base
   mina_ledger
+  mina_caqti
   ;; opam ;;
   cohttp
   cohttp-async
   async_kernel)
  (preprocess
-  (pps ppx_jane ppx_mina ppx_version)))
+  (pps ppx_jane ppx_mina ppx_version h_list.ppx)))

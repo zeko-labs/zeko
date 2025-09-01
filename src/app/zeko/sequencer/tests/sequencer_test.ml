@@ -16,7 +16,7 @@ let constraint_constants = Zeko_constants.constraint_constants
 let start_time = Time.now ()
 
 let logger =
-  Cli_lib.Stdout_log.setup false Logger.Level.Debug ;
+  Cli_lib.Stdout_log.setup false Logger.Level.Spam ;
   Logger.create ()
 
 let gql_uri =
@@ -667,7 +667,7 @@ let () =
         let%map transfer_forest =
           Bridge_prover.(
             prove !sequencer.bridge_prover
-              (deposit_request ~logger ~deposit_params))
+              (Deposit_request.f ~logger { deposit_params }))
           >>| Or_error.ok_exn
         in
         let transferrer_update =
@@ -946,7 +946,13 @@ let () =
         let%map transfer_forest =
           Bridge_prover.(
             prove !sequencer.bridge_prover
-              (finalize_deposit ~logger ~ase ~check_accepted ~prev_next_deposit))
+              (Finalize_deposit.f ~logger
+                 { ase_source = fst ase
+                 ; ase_elems = snd ase
+                 ; check_accepted_init = fst check_accepted
+                 ; check_accepted_elems = snd check_accepted
+                 ; prev_next_deposit
+                 } ))
           >>| Or_error.ok_exn
         in
         let transferrer_update =
@@ -1021,7 +1027,7 @@ let () =
         let%map transfer_forest =
           Bridge_prover.(
             prove !sequencer.bridge_prover
-              (withdrawal_request ~logger ~withdrawal_params))
+              (Withdrawal_request.f ~logger { withdrawal_params }))
           >>| Or_error.ok_exn
         in
         let transferrer_update =
@@ -1297,19 +1303,22 @@ let () =
         let%map transfer_forest =
           Bridge_prover.(
             prove !sequencer.bridge_prover
-              (finalize_withdrawal ~logger
-                 ~public_key:
-                   (List.hd_exn Zeko_circuits_config.Inputs.holder_accounts_l1)
-                 ~commit:last_commit
-                 ~before_commit:
-                   (C.Rollup_state.Outer_action_state.unsafe_value_of_field
-                      before_last_commit )
-                 ~commit_ase ~before_withdrawal ~withdrawal_ase
-                 ~prev_next_withdrawal:
-                   (Option.value prev_next_withdrawal ~default:UInt32.zero)
-                 ~withdrawal_params:
-                   (Bridge.Finalize_withdrawal.Withdrawal_params_base
-                    .to_serializable withdrawal_params ) ))
+              (Finalize_withdrawal.f ~logger
+                 { public_key =
+                     List.hd_exn Zeko_circuits_config.Inputs.holder_accounts_l1
+                 ; commit = last_commit
+                 ; before_commit =
+                     C.Rollup_state.Outer_action_state.unsafe_value_of_field
+                       before_last_commit
+                 ; commit_ase_source = fst commit_ase
+                 ; commit_ase_elems = snd commit_ase
+                 ; before_withdrawal
+                 ; withdrawal_ase_source = fst withdrawal_ase
+                 ; withdrawal_ase_elems = snd withdrawal_ase
+                 ; prev_next_withdrawal =
+                     Option.value prev_next_withdrawal ~default:UInt32.zero
+                 ; withdrawal_params
+                 } ))
           >>| Or_error.ok_exn
         in
         let transferrer_update =

@@ -487,6 +487,20 @@ module Txn_snark = Make_serializable_snark (struct
 end)
 
 module Ase = struct
+  module type Trans = sig
+    type t
+
+    val source_hash : t -> F.t
+
+    val target_hash : t -> F.t
+  end
+
+  module type Stmt = sig
+    type t [@@deriving yojson]
+
+    val state : t -> F.t
+  end
+
   module With_length = struct
     include Ase.With_length
 
@@ -494,12 +508,22 @@ module Ase = struct
       type t = Ase.With_length.Stmt.t =
         { action_state : F.t; length : Checked32.t }
       [@@deriving yojson]
+
+      let state (t : t) = t.action_state
     end
 
     module Elem = F
 
     type trans = Ase.With_length.trans = { source : Stmt.t; target : Stmt.t }
     [@@deriving yojson]
+
+    module Trans = struct
+      type t = trans [@@deriving yojson]
+
+      let source_hash (x : t) = x.source.action_state
+
+      let target_hash (x : t) = x.target.action_state
+    end
   end
 
   module Without_length = struct
@@ -507,12 +531,22 @@ module Ase = struct
 
     module Stmt = struct
       type t = F.t [@@deriving yojson]
+
+      let state (x : t) = x
     end
 
     module Elem = F
 
     type trans = Ase.Without_length.trans = { source : Stmt.t; target : Stmt.t }
     [@@deriving yojson]
+
+    module Trans = struct
+      type t = trans [@@deriving yojson]
+
+      let source_hash (x : t) = x.source
+
+      let target_hash (x : t) = x.target
+    end
   end
 
   module type Ase_inst_intf = sig
