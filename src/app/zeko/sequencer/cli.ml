@@ -52,15 +52,14 @@ let generate_circuits_config =
              ( Yojson.Safe.pretty_to_string
              @@ Zeko_circuits_config.Deploy.to_yojson deploy_config ) ) ) )
 
-let update_verification_keys =
-  ( "update-verification-keys"
-  , Command.async ~summary:"Run migrations on the database"
+let update_outer_verification_keys =
+  ( "update-outer-verification-keys"
+  , Command.async ~summary:"Update the verification keys of the zkApp"
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
        and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
        and only_check =
-         flag "--only-check"
-           (optional_with_default false bool)
+         flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
        in
        fun () ->
@@ -89,18 +88,18 @@ let update_verification_keys =
            Gql_client.fetch_vk_hash l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
+         and fetched_bridge_holder_vk =
+           Gql_client.fetch_vk_hash l1_uri
+             ( Account_id.of_public_key @@ Public_key.decompress_exn
+             @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
          and fetched_helper_token_owner_vk =
            Gql_client.fetch_vk_hash l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn
                   Zeko_circuits_config.t.helper_token_owner_l1 )
-         and fetched_bridge_holder_vk =
-           Gql_client.fetch_vk_hash l1_uri
-             ( Account_id.of_public_key @@ Public_key.decompress_exn
-             @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
          in
          let%bind core_rollup_vk =
-           Inner_rules_inst.tag |> Compile_simple.Verification_key.of_tag
+           Outer_rules_inst.tag |> Compile_simple.Verification_key.of_tag
            |> Promise.to_deferred
          and bridge_holder_vk =
            Bridge_inst_mina.System_L1_enabled.tag
@@ -336,7 +335,7 @@ let () =
   Command.group ~summary:"Sequencer CLI"
     [ generate_even_key
     ; generate_circuits_config
-    ; update_verification_keys
+    ; update_outer_verification_keys
     ; migrate
     ; dump_ledger
     ; prover_load
