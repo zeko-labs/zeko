@@ -8,6 +8,8 @@ open Mina_ledger
 module Field = Snark_params.Tick.Field
 module Sequencer = Zeko_sequencer.Sequencer
 
+let take2 (a, b, _) = (a, b)
+
 let generate_even_key =
   ( "generate-even-key"
   , Command.basic ~summary:"Generate a private key with an even public key"
@@ -52,15 +54,14 @@ let generate_circuits_config =
              ( Yojson.Safe.pretty_to_string
              @@ Zeko_circuits_config.Deploy.to_yojson deploy_config ) ) ) )
 
-let update_verification_keys =
-  ( "update-verification-keys"
-  , Command.async ~summary:"Run migrations on the database"
+let update_outer_verification_keys =
+  ( "update-outer-verification-keys"
+  , Command.async ~summary:"Update the verification keys of the outer zkApps"
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
        and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
        and only_check =
-         flag "--only-check"
-           (optional_with_default false bool)
+         flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
        in
        fun () ->
@@ -79,28 +80,28 @@ let update_verification_keys =
            let hash = Compile_simple.Verification_key.hash real_vk in
            [%log info]
              !"%s vk:\n\
+               curr: %{sexp: Field.t}\n\
                real: %{sexp: Field.t}\n\
-               fetched: %{sexp: Field.t}\n\
                equal: %b"
              label hash old_vk (Field.equal hash old_vk)
          in
 
-         let%bind fetched_core_rollup_vk =
+         let%bind fetched_outer_vk =
            Gql_client.fetch_vk_hash l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
+         and fetched_bridge_holder_vk =
+           Gql_client.fetch_vk_hash l1_uri
+             ( Account_id.of_public_key @@ Public_key.decompress_exn
+             @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
          and fetched_helper_token_owner_vk =
            Gql_client.fetch_vk_hash l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn
                   Zeko_circuits_config.t.helper_token_owner_l1 )
-         and fetched_bridge_holder_vk =
-           Gql_client.fetch_vk_hash l1_uri
-             ( Account_id.of_public_key @@ Public_key.decompress_exn
-             @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
          in
-         let%bind core_rollup_vk =
-           Inner_rules_inst.tag |> Compile_simple.Verification_key.of_tag
+         let%bind outer_vk =
+           Outer_rules_inst.tag |> Compile_simple.Verification_key.of_tag
            |> Promise.to_deferred
          and bridge_holder_vk =
            Bridge_inst_mina.System_L1_enabled.tag
@@ -112,9 +113,9 @@ let update_verification_keys =
          let deploy_config =
            Option.value_exn Zeko_circuits_config.deploy_config
          in
-         let core_rollup =
-           ( core_rollup_vk
-           , fetched_core_rollup_vk
+         let outer =
+           ( outer_vk
+           , fetched_outer_vk
            , Keypair.of_private_key_exn deploy_config.zeko_l1 )
          in
          let bridge_holders =
@@ -128,8 +129,7 @@ let update_verification_keys =
            , fetched_helper_token_owner_vk
            , Keypair.of_private_key_exn deploy_config.helper_token_owner_l1 )
          in
-         let take2 (a, b, _) = (a, b) in
-         pp "Core rollup" (take2 core_rollup) ;
+         pp "Core rollup" (take2 outer) ;
          pp "Bridge holder" (take2 @@ List.hd_exn bridge_holders) ;
          pp "Helper token owner" (take2 helper_token_owner) ;
 
@@ -141,7 +141,7 @@ let update_verification_keys =
            in
            let to_update =
              List.filter_map
-               ([ core_rollup; helper_token_owner ] @ bridge_holders)
+               ([ outer; helper_token_owner ] @ bridge_holders)
                ~f:(fun (new_vk, old_vk, kp) ->
                  let hash = Compile_simple.Verification_key.hash new_vk in
                  if Field.equal hash old_vk then None else Some (new_vk, kp) )
@@ -165,6 +165,199 @@ let update_verification_keys =
                [%log error] "Failed request: %s" err
            | Error (`Graphql_error err) ->
                [%log error] "Graphql request: %s" err ) )
+
+let update_inner_verification_keys =
+  ( "update-inner-verification-keys"
+  , Command.async ~summary:"Update the verification keys of the inner zkApps"
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and da_node = flag "--da-node" (required string) ~doc:"string DA node"
+       and _only_check =
+         flag "--only-check" no_arg
+           ~doc:"bool Only check if the verification keys are up to date"
+       in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let sender =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+         in
+         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
+           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
+         in
+         let open Zeko_types in
+         let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
+
+         (* Fetch current state *)
+         let%bind commited_ledger_hash =
+           Gql_client.infer_state l1_uri
+             ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+             ~signer_pk:(Public_key.compress sender.public_key)
+           >>| Utils.value_of_zkapp_state
+                 Zeko_circuits.Rollup_state.Outer_state.typ
+           >>| fun { ledger_hash; _ } -> ledger_hash
+         in
+
+         (* Sync ledger *)
+         let ledger =
+           Ledger.create_ephemeral
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+         in
+         let da_config = Da_layer.Client.Config.of_string_list [ da_node ] in
+         let%bind () =
+           Da_layer.Client.map_diffs ~logger ~config:da_config
+             ~depth:Zeko_constants.constraint_constants.ledger_depth
+             ~source_ledger_hash:`Genesis
+             ~target_ledger_hash:commited_ledger_hash
+             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+               assert (
+                 Ledger_hash.equal
+                   (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
+                   (Ledger.merkle_root ledger) ) ;
+               let progress =
+                 Float.of_int current_chunk /. Float.of_int chunks_length
+               in
+               [%log info] "Sync progress: %.2f%%" (progress *. 100.0) ;
+               let changed_accounts =
+                 Da_layer.Diff.Stable.Latest.changed_accounts diff
+                 |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+               in
+               List.iter changed_accounts ~f:(fun (index, account) ->
+                   Ledger.set_at_index_exn ledger index account ) ;
+               return () )
+           >>| Or_error.ok_exn >>| ignore
+         in
+
+         let pp label (real_vk, old_vk) =
+           let hash = Compile_simple.Verification_key.hash real_vk in
+           [%log info]
+             !"%s vk:\n\
+               curr: %{sexp: Field.t}\n\
+               real: %{sexp: Field.t}\n\
+               equal: %b"
+             label hash old_vk (Field.equal hash old_vk)
+         in
+         let get_acc ledger pk =
+           let aid = Account_id.of_public_key @@ Public_key.decompress_exn pk in
+           let%bind.Option loc = Ledger.location_of_account ledger aid in
+           let%map.Option acc = Ledger.get ledger loc in
+           (acc, Ledger.index_of_account_exn ledger aid)
+         in
+         let get_vk ledger pk =
+           let%bind.Option acc, _ = get_acc ledger pk in
+           let%bind.Option zkapp = acc.zkapp in
+           zkapp.verification_key
+         in
+
+         (* Get vks from synced ledger *)
+         let fetched_inner_vk =
+           get_vk ledger Zeko_circuits_config.Inputs.inner_public_key
+           |> Option.value_exn |> With_hash.hash
+         in
+         let fetched_bridge_holder_vk =
+           get_vk ledger Zeko_circuits_config.Inputs.holder_account_l2
+           |> Option.value_exn |> With_hash.hash
+         in
+
+         (* Get compiled vks *)
+         let%bind inner_vk =
+           Inner_rules_inst.tag |> Compile_simple.Verification_key.of_tag
+           |> Promise.to_deferred
+         and bridge_holder_vk =
+           Bridge_inst_mina.System_L2.tag
+           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
+         in
+         (* let deploy_config =
+              Option.value_exn Zeko_circuits_config.deploy_config
+            in *)
+         let inner =
+           ( inner_vk
+           , fetched_inner_vk
+           , Zeko_circuits_config.Inputs.inner_public_key )
+         in
+         let bridge_holder =
+           ( bridge_holder_vk
+           , fetched_bridge_holder_vk
+           , Zeko_circuits_config.Inputs.holder_account_l2 )
+         in
+         pp "Core rollup" (take2 inner) ;
+         pp "Bridge holder" (take2 bridge_holder) ;
+
+         (* Find accounts to update *)
+         let diff =
+           List.filter_map [ inner; bridge_holder ]
+             ~f:(fun (new_vk, old_vk, pk) ->
+               let hash = Compile_simple.Verification_key.hash new_vk in
+               if Field.equal hash old_vk then None else Some (new_vk, pk) )
+           |> List.map ~f:(fun (new_vk, pk) ->
+                  let acc, index = get_acc ledger pk |> Option.value_exn in
+                  let zkapp = acc.zkapp |> Option.value_exn in
+                  ( index
+                  , { acc with
+                      zkapp =
+                        Some
+                          { zkapp with
+                            verification_key =
+                              Some
+                                (Verification_key_wire.Stable.Latest.M
+                                 .of_binable
+                                   ( match
+                                       Is_compile_simple_real
+                                       .is_compile_simple_real
+                                     with
+                                   | Some eq ->
+                                       let _, vk_eq = Type_equal.detuple2 eq in
+                                       Type_equal.conv vk_eq new_vk
+                                   | None ->
+                                       Pickles.Side_loaded.Verification_key
+                                       .dummy ) )
+                          }
+                    } ) )
+         in
+
+         (* Update the ledegr *)
+         let source_ledger_hash = Ledger.merkle_root ledger in
+         let ledger_openings =
+           Sparse_ledger.of_ledger_subset_exn ledger
+             (List.map diff ~f:(fun (_, acc) -> Account.identifier acc))
+         in
+         List.iter diff ~f:(fun (index, acc) ->
+             Ledger.set_at_index_exn ledger index acc ) ;
+         let target_ledger_hash = Ledger.merkle_root ledger in
+
+         (* Distribute diff to DA layer *)
+         let diff =
+           Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:diff
+             ~command_with_action_step_flags:None
+         in
+         let%bind () =
+           Da_layer.Client.distribute_diff ~logger ~config:da_config
+             ~ledger_openings ~diff
+         in
+         let%bind command =
+           let%map nonce =
+             Sequencer_lib.Gql_client.infer_nonce l1_uri
+               (Public_key.compress sender.public_key)
+           in
+           Deploy.update_outer_state
+             ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
+             ~fee:(Currency.Fee.of_mina_string_exn "0.1")
+             ~nonce ~precondition:source_ledger_hash ~target:target_ledger_hash
+           |> Zkapp_command.read_all_proofs_from_disk
+         in
+         match%map Gql_client.send_zkapp l1_uri command with
+         | Ok _ ->
+             let txn_hash =
+               Mina_transaction.Transaction_hash.hash_command
+                 (Zkapp_command command)
+             in
+             [%log info] "Successfully sent zkapp command: %s"
+               (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
+         | Error (`Failed_request err) ->
+             [%log error] "Failed request: %s" err
+         | Error (`Graphql_error err) ->
+             [%log error] "Graphql request: %s" err ) )
 
 let migrate =
   ( "migrate"
@@ -336,7 +529,8 @@ let () =
   Command.group ~summary:"Sequencer CLI"
     [ generate_even_key
     ; generate_circuits_config
-    ; update_verification_keys
+    ; update_outer_verification_keys
+    ; update_inner_verification_keys
     ; migrate
     ; dump_ledger
     ; prover_load

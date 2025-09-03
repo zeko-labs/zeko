@@ -363,3 +363,67 @@ let update_verification_keys ~signature_kind ~(signer : Keypair.t)
   in
   Utils.sign_zkapp_command ~signature_kind command
     (signer :: List.map upgrades ~f:snd)
+
+let update_outer_state ~signature_kind ~(signer : Keypair.t)
+    ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)
+    ~(precondition : Ledger_hash.t) ~(target : Ledger_hash.t) =
+  let au =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Zeko_circuits_config.t.zeko_l1
+        ; update =
+            { Update.dummy with
+              app_state =
+                (* Needs to be updated when we change order of outer rollup state *)
+                (* TODO: make it dependent on the outer rollup state type *)
+                [ Keep; Keep; Set target; Keep; Keep; Keep; Keep; Keep ]
+            }
+        ; preconditions =
+            { Preconditions.accept with
+              account =
+                { Zkapp_precondition.Account.accept with
+                  state =
+                    [ Ignore
+                    ; Ignore
+                    ; Check precondition
+                    ; Ignore
+                    ; Ignore
+                    ; Ignore
+                    ; Ignore
+                    ; Ignore
+                    ]
+                }
+            }
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+  in
+  let call_forest =
+    Zkapp_command.Call_forest.accumulate_hashes
+      ~hash_account_update:
+        (Zkapp_command.Call_forest.Digest.Account_update.create ~signature_kind)
+    @@ Zkapp_command.Call_forest.of_account_updates
+         ~account_update_depth:(fun _ -> 0)
+         [ au ]
+  in
+  let command : Zkapp_command.t =
+    { fee_payer =
+        { Account_update.Fee_payer.body =
+            { public_key = Public_key.compress signer.public_key
+            ; fee
+            ; valid_until = None
+            ; nonce
+            }
+        ; authorization = Signature.dummy
+        }
+    ; account_updates = call_forest
+    ; memo = Signed_command_memo.empty
+    }
+  in
+  Utils.sign_zkapp_command ~signature_kind command
+    ( signer
+    :: [ Keypair.of_private_key_exn
+           (Option.value_exn Zeko_circuits_config.deploy_config).zeko_l1
+       ] )
