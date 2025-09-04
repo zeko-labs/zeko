@@ -93,7 +93,12 @@ struct
           let* is_valid_left =
             Field.Checked.equal empty_hash hash_other >>= Boolean.( &&& ) acc
           in
-          if_ is_right ~typ:Boolean.typ ~then_:acc ~else_:is_valid_left )
+          let* is_valid_right =
+            Field.Checked.equal empty_hash hash_other
+            >>| Boolean.not >>= Boolean.( &&& ) acc
+          in
+          if_ is_right ~typ:Boolean.typ ~then_:is_valid_right
+            ~else_:is_valid_left )
     in
     let* () =
       if_ check ~typ:Boolean.typ ~then_:is_y_most_left ~else_:Boolean.true_
