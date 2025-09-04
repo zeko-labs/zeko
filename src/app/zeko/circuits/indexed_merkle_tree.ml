@@ -88,17 +88,18 @@ struct
     let* root = if_ check ~typ:F.typ ~then_:root ~else_:root_new in
     (* Check that no empty indices have been skipped. *)
     let* is_y_most_left =
-      foldl (List.zip_exn path_y empty_path) ~init:Boolean.true_
-        ~f:(fun acc (PathStep.{ hash_other; is_right }, empty_hash) ->
-          let* is_valid_left =
-            Field.Checked.equal empty_hash hash_other >>= Boolean.( &&& ) acc
-          in
-          let* is_valid_right =
+      (* if is_right, then hash_other != empty_hash, else hash_other == empty_hash
+         <=> (!(empty_hash == hash_other) && is_right) || (empty_hash == hash_other && !is_right) .\ A := empty_hash == hash_other, B := is_right
+         <=> (!A && B) || (A && !B)
+         <=> !(A == B)
+         <=> not (empty_hash == hash_other && is_right)*)
+      let* checks =
+        Checked.List.map (List.zip_exn path_y empty_path)
+          ~f:(fun (PathStep.{ hash_other; is_right }, empty_hash) ->
             Field.Checked.equal empty_hash hash_other
-            >>| Boolean.not >>= Boolean.( &&& ) acc
-          in
-          if_ is_right ~typ:Boolean.typ ~then_:is_valid_right
-            ~else_:is_valid_left )
+            >>= Boolean.( &&& ) is_right >>| Boolean.not )
+      in
+      Boolean.all checks
     in
     let* () =
       if_ check ~typ:Boolean.typ ~then_:is_y_most_left ~else_:Boolean.true_
