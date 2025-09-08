@@ -1,24 +1,44 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: $0 <fake|real> <num_provers>" >&2
+  exit 1
+}
+
+if [ "$#" -ne 2 ]; then
+  usage
+fi
+
+MODE="$1"
+NUM_PROVERS="$2"
+PROVER_PIDS=()
+PROVERS=()
+
+case "$MODE" in
+fake | real) ;;
+*)
+  echo "Error: first argument must be 'fake' or 'real'" >&2
+  usage
+  ;;
+esac
+
+if ! [[ "$NUM_PROVERS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: second argument must be a positive integer" >&2
+  usage
+fi
 
 cleanup() {
-    local exit_status=$1
-    echo "Cleaning up..."
-    kill $l1_pid $da1_pid $da2_pid $da3_pid $prover1_pid $prover2_pid 2>/dev/null
-    rm -rf "$TMP_DIR"
-    docker rm -f pg-sequencer 2>/dev/null
-    exit ${exit_status:-0}
+  local exit_status=$1
+  echo "Cleaning up..."
+  kill ${l1_pid:-} ${da1_pid:-} ${da2_pid:-} ${da3_pid:-} "${PROVER_PIDS[@]}" 2>/dev/null
+  rm -rf "$TMP_DIR"
+  docker rm -f pg-sequencer 2>/dev/null
+  exit ${exit_status:-0}
 }
 
 trap 'cleanup 1' SIGINT SIGTERM
 trap 'cleanup $?' EXIT
-
-if [ "$1" = "fake" ] || [ "$1" = "real" ]; then
-    echo "Mode: $1"
-    MODE=$1
-else
-    echo "Error: First argument must be either 'fake' or 'real'"
-    exit 1
-fi
 
 SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
@@ -47,49 +67,50 @@ da2_pid=$!
 $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --random-sk --network-id testnet --db-dir "$TMP_DIR/da3_db" &
 da3_pid=$!
 
+# Launch provers
 if [ "$MODE" = "fake" ]; then
-    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9990 > /dev/null 2>&1 &
-    prover1_pid=$!
-
-    $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe run-server --port 9991 > /dev/null 2>&1 &
-    prover2_pid=$!
+  BIN="$SEQUENCER_BUILD_ROOT/prover/cli_fake.exe"
 else
-    $SEQUENCER_BUILD_ROOT/prover/cli.exe run-server --port 9990 &
-    prover1_pid=$!
-
-    $SEQUENCER_BUILD_ROOT/prover/cli.exe run-server --port 9991 &
-    prover2_pid=$!
+  BIN="$SEQUENCER_BUILD_ROOT/prover/cli.exe"
 fi
+for ((i = 0; i < NUM_PROVERS; i++)); do
+  PORT=$((9990 + i))
+  $BIN run-server --port "$PORT" >/dev/null 2>&1 &
+  PROVER_PID=$!
+  PROVER_PIDS+=("$PROVER_PID")
+  PROVERS+=("localhost:$PORT")
+done
 
 # Wait for ports to be open
 echo "Waiting for services to start..."
 
 wait_for_port() {
-    local port=$1
-    local pid=$2
-    while ! nc -z localhost $port; do
-        sleep 1
+  local port=$1
+  local pid=$2
+  while ! nc -z localhost $port; do
+    sleep 1
 
-        if ! kill -0 $pid 2>/dev/null; then
-            echo "Process for port $port failed to start"
-            exit 1
-        fi
-    done
+    if ! kill -0 $pid 2>/dev/null; then
+      echo "Process for port $port failed to start"
+      exit 1
+    fi
+  done
 
-    echo "Port $port is now open"
+  echo "Port $port is now open"
 }
 
 wait_for_port 8080 $l1_pid
 wait_for_port 8555 $da1_pid
 wait_for_port 8556 $da2_pid
 wait_for_port 8557 $da3_pid
-wait_for_port 9990 $prover1_pid
-wait_for_port 9991 $prover2_pid
+for idx in "${!PROVER_PIDS[@]}"; do
+  wait_for_port "$((9990 + idx))" "${PROVER_PIDS[$idx]}"
+done
 
 echo "All services started successfully"
 
 if [ "$MODE" = "fake" ]; then
-    $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe
+  $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
 else
-    $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe
+  $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"
 fi
