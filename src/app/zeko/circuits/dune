@@ -35,6 +35,7 @@
   rule_bridge_finalize_deposit
   rule_bridge_inner_receive
   rule_bridge_outer_token_owner
+  rule_change_permissions
   check_accepted_make
   bridge_state
   outer_rules

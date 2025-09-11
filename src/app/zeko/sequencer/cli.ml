@@ -87,18 +87,24 @@ let update_outer_verification_keys =
          in
 
          let%bind fetched_outer_vk =
-           Gql_client.fetch_vk_hash l1_uri
+           Gql_client.fetch_vk l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
+           >>| Compile_simple.Verification_key.of_pickles
+           >>| Compile_simple.Verification_key.hash
          and fetched_bridge_holder_vk =
-           Gql_client.fetch_vk_hash l1_uri
+           Gql_client.fetch_vk l1_uri
              ( Account_id.of_public_key @@ Public_key.decompress_exn
              @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
+           >>| Compile_simple.Verification_key.of_pickles
+           >>| Compile_simple.Verification_key.hash
          and fetched_helper_token_owner_vk =
-           Gql_client.fetch_vk_hash l1_uri
+           Gql_client.fetch_vk l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn
                   Zeko_circuits_config.t.helper_token_owner_l1 )
+           >>| Compile_simple.Verification_key.of_pickles
+           >>| Compile_simple.Verification_key.hash
          in
          let%bind outer_vk =
            Outer_rules_inst.tag |> Compile_simple.Verification_key.of_tag
@@ -173,7 +179,7 @@ let update_inner_verification_keys =
        and log_level = Flag.Log.level
        and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
        and da_node = flag "--da-node" (required string) ~doc:"string DA node"
-       and _only_check =
+       and only_check =
          flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
        in
@@ -284,67 +290,129 @@ let update_inner_verification_keys =
          pp "Core rollup" (take2 inner) ;
          pp "Bridge holder" (take2 bridge_holder) ;
 
-         (* Find accounts to update *)
-         let diff =
-           List.filter_map [ inner; bridge_holder ]
-             ~f:(fun (new_vk, old_vk, pk) ->
-               let hash = Compile_simple.Verification_key.hash new_vk in
-               if Field.equal hash old_vk then None else Some (new_vk, pk) )
-           |> List.map ~f:(fun (new_vk, pk) ->
-                  let acc, index = get_acc ledger pk |> Option.value_exn in
-                  let zkapp = acc.zkapp |> Option.value_exn in
-                  ( index
-                  , { acc with
-                      zkapp =
-                        Some
-                          { zkapp with
-                            verification_key =
-                              Some
-                                (Verification_key_wire.Stable.Latest.M
-                                 .of_binable
-                                   ( match
-                                       Is_compile_simple_real
-                                       .is_compile_simple_real
-                                     with
-                                   | Some eq ->
-                                       let _, vk_eq = Type_equal.detuple2 eq in
-                                       Type_equal.conv vk_eq new_vk
-                                   | None ->
-                                       Pickles.Side_loaded.Verification_key
-                                       .dummy ) )
-                          }
-                    } ) )
-         in
+         if only_check then return ()
+         else
+           (* Find accounts to update *)
+           let diff =
+             List.filter_map [ inner; bridge_holder ]
+               ~f:(fun (new_vk, old_vk, pk) ->
+                 let hash = Compile_simple.Verification_key.hash new_vk in
+                 if Field.equal hash old_vk then None else Some (new_vk, pk) )
+             |> List.map ~f:(fun (new_vk, pk) ->
+                    let acc, index = get_acc ledger pk |> Option.value_exn in
+                    let zkapp = acc.zkapp |> Option.value_exn in
+                    ( index
+                    , { acc with
+                        zkapp =
+                          Some
+                            { zkapp with
+                              verification_key =
+                                Some
+                                  (Verification_key_wire.Stable.Latest.M
+                                   .of_binable
+                                     ( match
+                                         Is_compile_simple_real
+                                         .is_compile_simple_real
+                                       with
+                                     | Some eq ->
+                                         let _, vk_eq =
+                                           Type_equal.detuple2 eq
+                                         in
+                                         Type_equal.conv vk_eq new_vk
+                                     | None ->
+                                         Pickles.Side_loaded.Verification_key
+                                         .dummy ) )
+                            }
+                      } ) )
+           in
 
-         (* Update the ledegr *)
-         let source_ledger_hash = Ledger.merkle_root ledger in
-         let ledger_openings =
-           Sparse_ledger.of_ledger_subset_exn ledger
-             (List.map diff ~f:(fun (_, acc) -> Account.identifier acc))
-         in
-         List.iter diff ~f:(fun (index, acc) ->
-             Ledger.set_at_index_exn ledger index acc ) ;
-         let target_ledger_hash = Ledger.merkle_root ledger in
+           (* Update the ledegr *)
+           let source_ledger_hash = Ledger.merkle_root ledger in
+           let ledger_openings =
+             Sparse_ledger.of_ledger_subset_exn ledger
+               (List.map diff ~f:(fun (_, acc) -> Account.identifier acc))
+           in
+           List.iter diff ~f:(fun (index, acc) ->
+               Ledger.set_at_index_exn ledger index acc ) ;
+           let target_ledger_hash = Ledger.merkle_root ledger in
 
-         (* Distribute diff to DA layer *)
-         let diff =
-           Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:diff
-             ~command_with_action_step_flags:None
+           (* Distribute diff to DA layer *)
+           let diff =
+             Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:diff
+               ~command_with_action_step_flags:None
+           in
+           let%bind () =
+             Da_layer.Client.distribute_diff ~logger ~config:da_config
+               ~ledger_openings ~diff
+           in
+           let%bind command =
+             let%map nonce =
+               Sequencer_lib.Gql_client.infer_nonce l1_uri
+                 (Public_key.compress sender.public_key)
+             in
+             Deploy.update_outer_state
+               ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
+               ~fee:(Currency.Fee.of_mina_string_exn "0.1")
+               ~nonce ~precondition:source_ledger_hash
+               ~target:target_ledger_hash
+             |> Zkapp_command.read_all_proofs_from_disk
+           in
+           match%map Gql_client.send_zkapp l1_uri command with
+           | Ok _ ->
+               let txn_hash =
+                 Mina_transaction.Transaction_hash.hash_command
+                   (Zkapp_command command)
+               in
+               [%log info] "Successfully sent zkapp command: %s"
+                 (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
+           | Error (`Failed_request err) ->
+               [%log error] "Failed request: %s" err
+           | Error (`Graphql_error err) ->
+               [%log error] "Graphql request: %s" err ) )
+
+let update_permissions =
+  ( "update-permissions"
+  , Command.async ~summary:""
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI" in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let sender =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
          in
-         let%bind () =
-           Da_layer.Client.distribute_diff ~logger ~config:da_config
-             ~ledger_openings ~diff
+         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
+           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
+         in
+         let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
+
+         let%bind nonce =
+           Sequencer_lib.Gql_client.infer_nonce l1_uri
+             (Public_key.compress sender.public_key)
          in
          let%bind command =
-           let%map nonce =
-             Sequencer_lib.Gql_client.infer_nonce l1_uri
-               (Public_key.compress sender.public_key)
-           in
-           Deploy.update_outer_state
+           Deploy.update_permissions
              ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
              ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-             ~nonce ~precondition:source_ledger_hash ~target:target_ledger_hash
-           |> Zkapp_command.read_all_proofs_from_disk
+             ~nonce ~gql_uri:l1_uri
+             ~permissions:
+               { edit_state = Either
+               ; send = Proof
+               ; receive = None
+               ; set_delegate = Proof
+               ; set_permissions = Proof
+               ; set_verification_key =
+                   (Either, Mina_numbers.Txn_version.current)
+               ; set_zkapp_uri = Proof
+               ; edit_action_state = Proof
+               ; set_token_symbol = Proof
+               ; increment_nonce = Proof
+               ; set_voting_for = Proof
+               ; set_timing = Proof
+               ; access = None
+               }
+           >>| Zkapp_command.read_all_proofs_from_disk
          in
          match%map Gql_client.send_zkapp l1_uri command with
          | Ok _ ->
@@ -531,6 +599,7 @@ let () =
     ; generate_circuits_config
     ; update_outer_verification_keys
     ; update_inner_verification_keys
+    ; update_permissions
     ; migrate
     ; dump_ledger
     ; prover_load
