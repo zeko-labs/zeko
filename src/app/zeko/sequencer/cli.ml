@@ -350,11 +350,33 @@ let update_inner_verification_keys =
                Sequencer_lib.Gql_client.infer_nonce l1_uri
                  (Public_key.compress sender.public_key)
              in
+             let open Zeko_circuits.Rollup_state in
              Deploy.update_outer_state
                ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
                ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-               ~nonce ~precondition:source_ledger_hash
-               ~target:target_ledger_hash
+               ~nonce
+               ~precondition:
+                 Outer_state.
+                   { pause_key = None
+                   ; paused = None
+                   ; ledger_hash =
+                       Some (Ledger_hash.var_of_t source_ledger_hash)
+                   ; inner_action_state = { state = None; length = None }
+                   ; sequencer = None
+                   ; da_key = None
+                   ; acc_set = None
+                   }
+               ~update:
+                 Outer_state.
+                   { pause_key = None
+                   ; paused = None
+                   ; ledger_hash =
+                       Some (Ledger_hash.var_of_t target_ledger_hash)
+                   ; inner_action_state = { state = None; length = None }
+                   ; sequencer = None
+                   ; da_key = None
+                   ; acc_set = None
+                   }
              |> Zkapp_command.read_all_proofs_from_disk
            in
            match%map Gql_client.send_zkapp l1_uri command with
@@ -413,6 +435,85 @@ let update_permissions =
                ; access = None
                }
            >>| Zkapp_command.read_all_proofs_from_disk
+         in
+         match%map Gql_client.send_zkapp l1_uri command with
+         | Ok _ ->
+             let txn_hash =
+               Mina_transaction.Transaction_hash.hash_command
+                 (Zkapp_command command)
+             in
+             [%log info] "Successfully sent zkapp command: %s"
+               (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
+         | Error (`Failed_request err) ->
+             [%log error] "Failed request: %s" err
+         | Error (`Graphql_error err) ->
+             [%log error] "Graphql request: %s" err ) )
+
+let set_pause =
+  ( "set-pause"
+  , Command.async ~summary:"Set the pause of the outer zkapp"
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and value =
+         flag "--value" (required bool) ~doc:"bool Value to set the pause to"
+       in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let sender =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+         in
+         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
+           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
+         in
+         let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
+
+         (* Fetch current state *)
+         let%bind current_paused =
+           Gql_client.infer_state l1_uri
+             ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+             ~signer_pk:(Public_key.compress sender.public_key)
+           >>| Utils.value_of_zkapp_state
+                 Zeko_circuits.Rollup_state.Outer_state.typ
+           >>| fun { paused; _ } -> paused
+         in
+
+         [%log info] "Current paused: %b" current_paused ;
+
+         let%bind command =
+           let%map nonce =
+             Sequencer_lib.Gql_client.infer_nonce l1_uri
+               (Public_key.compress sender.public_key)
+           in
+           let open Zeko_circuits in
+           Deploy.update_outer_state
+             ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
+             ~fee:(Currency.Fee.of_mina_string_exn "0.1")
+             ~nonce
+             ~precondition:
+               Rollup_state.Outer_state.
+                 { pause_key = None
+                 ; paused = None
+                 ; ledger_hash = None
+                 ; inner_action_state = { state = None; length = None }
+                 ; sequencer = None
+                 ; da_key = None
+                 ; acc_set = None
+                 }
+             ~update:
+               Rollup_state.Outer_state.
+                 { pause_key = None
+                 ; paused =
+                     ( if value then Some Zeko_util.Boolean.true_
+                     else Some Zeko_util.Boolean.false_ )
+                 ; ledger_hash = None
+                 ; inner_action_state = { state = None; length = None }
+                 ; sequencer = None
+                 ; da_key = None
+                 ; acc_set = None
+                 }
+           |> Zkapp_command.read_all_proofs_from_disk
          in
          match%map Gql_client.send_zkapp l1_uri command with
          | Ok _ ->
@@ -600,6 +701,7 @@ let () =
     ; update_outer_verification_keys
     ; update_inner_verification_keys
     ; update_permissions
+    ; set_pause
     ; migrate
     ; dump_ledger
     ; prover_load

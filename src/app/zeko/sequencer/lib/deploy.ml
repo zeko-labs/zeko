@@ -5,6 +5,7 @@ open Account_update
 open Signature_lib
 module Field = Snark_params.Tick.Field
 module L = Mina_ledger.Ledger
+open Zeko_circuits
 
 module Z = struct
   open Zeko_circuits
@@ -366,34 +367,40 @@ let update_verification_keys ~signature_kind ~(signer : Keypair.t)
 
 let update_outer_state ~signature_kind ~(signer : Keypair.t)
     ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)
-    ~(precondition : Ledger_hash.t) ~(target : Ledger_hash.t) =
+    ~(precondition : Rollup_state.Outer_state.fine)
+    ~(update : Rollup_state.Outer_state.fine) =
+  let update =
+    Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine update
+    |> Pickles_types.Vector.Vector_8.map ~f:(function
+         | None ->
+             Zkapp_basic.Set_or_keep.Keep
+         | Some x ->
+             Set
+               ( Field.Var.to_constant x
+               |> Option.value_exn ~message:"Fine fields need to be constants"
+               ) )
+  in
+  let precondition =
+    Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine precondition
+    |> Pickles_types.Vector.Vector_8.map ~f:(function
+         | None ->
+             Zkapp_basic.Or_ignore.Ignore
+         | Some x ->
+             Check
+               ( Field.Var.to_constant x
+               |> Option.value_exn ~message:"Fine fields need to be constants"
+               ) )
+  in
   let au =
     Account_update.with_aux
       ~body:
         { Body.dummy with
           public_key = Zeko_circuits_config.t.zeko_l1
-        ; update =
-            { Update.dummy with
-              app_state =
-                (* Needs to be updated when we change order of outer rollup state *)
-                (* TODO: make it dependent on the outer rollup state type *)
-                [ Keep; Keep; Set target; Keep; Keep; Keep; Keep; Keep ]
-            }
+        ; update = { Update.dummy with app_state = update }
         ; preconditions =
             { Preconditions.accept with
               account =
-                { Zkapp_precondition.Account.accept with
-                  state =
-                    [ Ignore
-                    ; Ignore
-                    ; Check precondition
-                    ; Ignore
-                    ; Ignore
-                    ; Ignore
-                    ; Ignore
-                    ; Ignore
-                    ]
-                }
+                { Zkapp_precondition.Account.accept with state = precondition }
             }
         ; use_full_commitment = true
         ; authorization_kind = Signature
