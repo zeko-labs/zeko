@@ -11,7 +11,7 @@ module Z = struct
   open Zeko_types
 
   let proof_permissions : Permissions.t =
-    { edit_state = Proof
+    { edit_state = Either
     ; send = Proof
     ; receive = None
     ; set_delegate = Proof
@@ -419,6 +419,113 @@ let update_outer_state ~signature_kind ~(signer : Keypair.t)
         ; authorization = Signature.dummy
         }
     ; account_updates = call_forest
+    ; memo = Signed_command_memo.empty
+    }
+  in
+  Utils.sign_zkapp_command ~signature_kind command
+    ( signer
+    :: [ Keypair.of_private_key_exn
+           (Option.value_exn Zeko_circuits_config.deploy_config).zeko_l1
+       ] )
+
+module Change_permissions =
+  Zeko_circuits.Rule_change_permissions.Make (Zeko_circuits_config.Inputs) ()
+
+let update_permissions ~signature_kind ~(signer : Keypair.t)
+    ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~gql_uri
+    ~(permissions : Permissions.t) =
+  let proof_cache_db = Proof_cache_tag.create_identity_db () in
+  let%bind old_vk =
+    Gql_client.fetch_vk gql_uri
+      ( Account_id.of_public_key
+      @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
+  in
+  let%bind temp_vk =
+    let%map vk =
+      Compile_simple.Verification_key.of_tag Change_permissions.tag
+      |> Promise.to_deferred
+    in
+    Verification_key_wire.Stable.Latest.M.of_binable
+    @@
+    match Is_compile_simple_real.is_compile_simple_real with
+    | Some eq ->
+        let _, vk_eq = Type_equal.detuple2 eq in
+        Type_equal.conv vk_eq vk
+    | None ->
+        Pickles.Side_loaded.Verification_key.dummy
+  in
+  let f1 =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Zeko_circuits_config.t.zeko_l1
+        ; update = { Update.dummy with verification_key = Set temp_vk }
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+    |> fun au ->
+    Zkapp_command.Call_forest.of_account_updates
+      ~account_update_depth:(fun _ -> 0)
+      [ au ]
+    |> Zkapp_command.Call_forest.accumulate_hashes
+         ~hash_account_update:
+           (Zkapp_command.Call_forest.Digest.Account_update.create
+              ~signature_kind )
+  in
+  let%map f2 =
+    let [ prover ] = Change_permissions.provers in
+    let%map (_stmt, (body, _, calls)), proof =
+      prover
+        { public_key = Zeko_circuits_config.t.zeko_l1
+        ; vk_hash = temp_vk.hash
+        ; permissions
+        }
+      |> Promise.to_deferred
+    in
+    Utils.attach_proof_to_forest ~signature_kind ~proof_cache_db ~body
+      ~calls:
+        (Zkapp_command.Call_forest.map calls
+           ~f:Account_update.read_all_proofs_from_disk )
+      ~proof
+    |> Zkapp_command.Call_forest.map
+         ~f:(Account_update.write_all_proofs_to_disk ~proof_cache_db)
+  in
+  let f3 =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Zeko_circuits_config.t.zeko_l1
+        ; update =
+            { Update.dummy with
+              verification_key =
+                Set (Verification_key_wire.Stable.Latest.M.of_binable old_vk)
+            }
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+    |> fun au ->
+    Zkapp_command.Call_forest.of_account_updates
+      ~account_update_depth:(fun _ -> 0)
+      [ au ]
+    |> Zkapp_command.Call_forest.accumulate_hashes
+         ~hash_account_update:
+           (Zkapp_command.Call_forest.Digest.Account_update.create
+              ~signature_kind )
+  in
+  let call_forest = f1 @ f2 @ f3 in
+  let command : Zkapp_command.t =
+    { fee_payer =
+        { Account_update.Fee_payer.body =
+            { public_key = Public_key.compress signer.public_key
+            ; fee
+            ; valid_until = None
+            ; nonce
+            }
+        ; authorization = Signature.dummy
+        }
+    ; account_updates = Utils.rehash_forest ~signature_kind call_forest
     ; memo = Signed_command_memo.empty
     }
   in

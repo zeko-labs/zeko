@@ -318,7 +318,7 @@ let fetch_state uri aid =
     |> List.map ~f:Field.of_string
     |> Zkapp_state.V.of_list_exn)
 
-let fetch_vk_hash uri aid =
+let fetch_vk uri aid =
   let q =
     object
       method query =
@@ -327,7 +327,7 @@ let fetch_vk_hash uri aid =
             query ($pk: PublicKey!, $tokenId: TokenId!) {
               account(publicKey: $pk, token: $tokenId){
                 verificationKey {
-                  hash
+                  verificationKey
                 }
               }
             }
@@ -345,8 +345,9 @@ let fetch_vk_hash uri aid =
   in
   let%map result = Graphql_client.query_json_exn q uri in
   Yojson.Safe.Util.(
-    result |> member "account" |> member "verificationKey" |> member "hash"
-    |> to_string |> Field.of_string)
+    result |> member "account" |> member "verificationKey"
+    |> member "verificationKey" |> to_string
+    |> Side_loaded_verification_key.of_base64 |> Or_error.ok_exn)
 
 let infer_state uri ~zkapp_pk ~signer_pk =
   let%bind committed_state =
