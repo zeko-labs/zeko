@@ -94,6 +94,16 @@ let var_to_app_state_fine =
       let none = Set_or_keep.Checked.make_unsafe Boolean.false_ Run.Field.zero
     end )
 
+let var_to_optional_fine =
+  var_to_state_generic_fine
+    ( module struct
+      type var = Field.Var.t option
+
+      let some = Option.some
+
+      let none = None
+    end )
+
 (** To be used with deriving snarky, a simple field *)
 module F = struct
   type t = field
