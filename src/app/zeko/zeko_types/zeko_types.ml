@@ -751,13 +751,13 @@ module Outer_commit = struct
     type serializable =
       { txn_snark : Txn_snark.serializable
       ; public_key : Public_key.Compressed.t
-      ; verify_both_ases : Verify_both_ases.serializable
       ; old_inner_acc : Account.t
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t
       ; new_inner_acc_path : Path.t
       ; da_multisig : Multisig.Witness.t
       ; slot_range : Slot_range.t
+      ; verify_both_ases : Verify_both_ases.serializable
       }
     [@@deriving yojson]
 
@@ -773,16 +773,18 @@ module Outer_commit = struct
          ; slot_range
          } :
           serializable ) ~vk_hash : t =
-      { txn_snark = Txn_snark.of_serializable txn_snark
-      ; public_key
-      ; vk_hash
+      { base_witness =
+          { txn_snark = Txn_snark.of_serializable txn_snark
+          ; public_key
+          ; vk_hash
+          ; old_inner_acc
+          ; old_inner_acc_path
+          ; new_inner_acc
+          ; new_inner_acc_path
+          ; da_multisig
+          ; slot_range
+          }
       ; verify_both_ases = Verify_both_ases.of_serializable verify_both_ases
-      ; old_inner_acc
-      ; old_inner_acc_path
-      ; new_inner_acc
-      ; new_inner_acc_path
-      ; da_multisig
-      ; slot_range
       }
   end
 end

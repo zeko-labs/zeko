@@ -373,7 +373,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       in
       Output.Verify_check_accepted_and_ase_cancelled_deposit (stmt, proof)
   | Outer_commit input ->
-      let Compile_simple.[ prove; _; _ ] =
+      let Compile_simple.[ prove; _; _; _ ] =
         Lazy.force Outer_rules_inst.provers
       in
       let%bind vk_hash =
@@ -394,7 +394,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
   | Bridge (Outer_action_witness input) ->
-      let Compile_simple.[ _; prove; _ ] =
+      let Compile_simple.[ _; _; prove; _ ] =
         Lazy.force Outer_rules_inst.provers
       in
       let%bind vk_hash =
