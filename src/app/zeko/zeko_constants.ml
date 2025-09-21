@@ -56,6 +56,8 @@ module Max_excess_actions = struct
     let inner = Int.pow 2 9
 
     let outer = Int.pow 2 9
+
+    let count_commits = Int.pow 2 9
   end
 
   module Finalize_cancelled_deposit = struct
@@ -121,6 +123,8 @@ module Folder_iterations = struct
 
     let extend_option_iterations = Int.pow 2 3
   end
+
+  module Count_commits : FOLDER_ITERATIONS = Check_accepted
 end
 
 let multisig_salt = "multisig"

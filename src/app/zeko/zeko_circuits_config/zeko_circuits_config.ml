@@ -90,6 +90,8 @@ module Inputs = struct
   let max_valid_while_size =
     Zeko_circuits.Zeko_util.Slot.to_int t.max_valid_while_size
 
+  let max_sequencer_inactivity = 24 * 60 * 30 / 3 (* A month in slots *)
+
   let holder_accounts_l1 = t.holder_accounts_l1
 
   let holder_account_l2 = Zeko_constants.inner_holder_key
