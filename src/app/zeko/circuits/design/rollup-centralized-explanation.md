@@ -10,6 +10,7 @@ It should be possible to have a stake in the rollup.
 And above all, it should be secure.
 
 To that end, here is a summary of what we want from the core protocol:
+
 - The core rollup protocol does not handle transfer of value/MINA.
 - There is an associated token called ZEKO, using the fungible
   token standard, minted on the L1.
@@ -25,8 +26,8 @@ To that end, here is a summary of what we want from the core protocol:
   to ensure that sequencer does not waste work synchronizing something that
   might be rolled back immediately.
 - Actions on the outside:
-  + Witness (witness arbitrary account update)
-  + Commit (sequencer committed)
+  - Witness (witness arbitrary account update)
+  - Commit (sequencer committed)
 - There is a backup special committee that can pause the rollup.
   Being paused is indicated by a field on the outer account.
 
@@ -42,6 +43,7 @@ of actions.
 Withdrawals happen correspondingly, the other way around.
 We also wish to support timeouts on deposits.
 We do this by regarding a deposit as having three states:
+
 - Unknown
 - Accepted
 - Rejected
