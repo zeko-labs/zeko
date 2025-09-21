@@ -141,6 +141,106 @@ let do_commit
     }
   ]
 
+let count_commits original_action_state actions =
+  let f (acc_action_state, n) = function
+    | (Commit _) as action ->
+      List.append action acc_action_state, n + 1
+    | (Witness _) as action ->
+      List.append action acc_action_state, n
+  in
+  List.fold_left ~init:(original_action_state, 0) ~f actions
+
+val max_sequencer_inactivity : nat
+
+(* Emergency commit in case of sequencer's inactivity *)
+let do_emergency_commit
+  ~txn_snark
+  ~valid_while
+  ~new_actions
+  ~new_inner_actions
+  ~old_inner_action_state_length
+  ~unsynchronized_actions
+  ~pause_key
+  ~da_key
+  ~outer_action_state_before_last_commit
+  ~last_commit
+  ~actions_since_last_commit
+  =
+  (* doesn't need to be at the same time as macroslot,
+     can be early or late depending on other factors *)
+  assert valid_while.upper - valid_while.lower < max_valid_while_size ;
+
+  (* The vk for the inner account ensures that the outer action state as recorded only goes forward. *)
+  let old_inner = get_account inner_pk txn_snark.source in
+  let new_inner = get_account inner_pk txn_snark.target in
+
+  let synchronized_outer_action_state = new_inner.app_state.outer_action_state in
+
+  (* The new actions must be the difference between old synchronized outer action state and new synchronized outer action state. *)
+  assert
+    List.append new_actions old_inner.app_state.outer_action_state
+    = synchronized_outer_action_state ;
+
+  let synchronized_outer_action_state_length =
+    List.length new_actions + old_inner.app_state.outer_action_state_length in
+
+  let action_state =
+    (* We don't force sequencer to match on latest action state,
+       since it's unreliable and might roll back. *)
+    List.append unsynchronized_actions synchronized_outer_action_state in
+
+  (* Emergency checks *)
+  let () =
+    let (target_action_state, n_commits) = count_commits
+      (List.append last_commit outer_action_state_before_last_commit)
+      actions_since_last_commit
+    in
+    (* Check that there has not been any commit after last commit *)
+    assert n_commits = 0 ;
+    assert target_action_state = action_state ;
+    assert valid_while.lower - last_commit.valid_while.upper >= max_sequencer_inactivity
+  in
+
+  let ledger = txn_snark.target in
+  let inner_action_state = new_inner.action_state in
+  let inner_action_state_length = List.length new_inner_actions + old_inner_action_state_length in
+
+  [ { public_key = zeko_pk
+    ; actions = Commit
+      { ledger
+      ; inner_action_state
+      ; inner_action_state_length
+      ; synchronized_outer_action_state
+      ; synchronized_outer_action_state_length
+      ; valid_while
+      }
+    ; app_state =
+      { ledger
+      ; inner_action_state
+      ; inner_action_state_length
+      ; sequencer
+      ; paused = false
+      ; pause_key
+      ; da_key
+      ; acc_set = txn_snark.target_acc_set
+      }
+    ; preconditions =
+      { app_state =
+        { ledger = txn_snark.source
+        ; inner_action_state = old_inner.action_state
+        ; inner_action_state_length = old_inner_action_state_length
+        (* ; sequencer *)
+        ; paused = false
+        ; pause_key
+        ; da_key
+        ; acc_set = txn_snark.source_acc_set
+        }
+      ; valid_while
+      ; action_state
+      }
+    }
+  ]
+
 let do_witness_outer ~aux ~children ~valid_while =
   [ { public_key = zeko_pk
     ; actions = [ Witness { aux ; children ; valid_while } ]
