@@ -119,6 +119,30 @@ can profit from those deposits being processed.
 
 To prevent this from happening, we also specify a maximum size for the slot range.
 
+## Emergency commit
+
+When the sequencer goes offline, we need a way to unblock the system
+without decentralization of sequencing already in place.
+
+An emergency commit may be issued by anyone once enough time has
+passed since the upper bound of the last commit slot range.
+That upper bound witnesses the latest possible time a commit could
+have occurred; if the current slot is past it by a fixed margin,
+then no commit has happened since.
+
+Malicious sequencer can not pick a very large upper bound, since the slot range is capped by max_valid_size.
+
+However, we can only certify “no commit happened” relative to one of
+the last five outer action states. To make this check viable,
+the sequencer must maintain rolling commits over at least five slots
+within the max_sequencer_inactivity window. With a sufficiently
+large window (e.g., on the order of a month), this obligation is
+trivial for a healthy sequencer.
+
+In effect, the emergency commit seals the gap with a bounded slot
+range, restores liveness, and lets subsequent sequencers resume
+committing under the usual rules.
+
 ## ZEKO token
 
 The ZEKO token will use the
