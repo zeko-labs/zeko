@@ -813,104 +813,110 @@ module Bridge = struct
       }
   end
 
+  module Deposit_params_base = struct
+    type t = Bridge_state.Deposit_params_base.t
+
+    type serializable =
+      { children :
+          ( Account_update.Stable.Latest.t
+          , Zkapp_command.Digest.Account_update.t
+          , Zkapp_command.Digest.Forest.t )
+          Zkapp_command.Call_forest.t
+      ; holder_account_l1 : Public_key.Compressed.t
+      ; amount : Currency.Amount.t
+      ; recipient : Public_key.Compressed.t
+      ; timeout : Slot.t
+      }
+    [@@deriving yojson]
+
+    let of_serializable ~proof_cache_db
+        ({ children; holder_account_l1; amount; recipient; timeout } :
+          serializable ) : t =
+      { children =
+          Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+            ~proof_cache_db children
+      ; holder_account_l1
+      ; amount
+      ; recipient
+      ; timeout
+      }
+
+    let to_serializable
+        ({ children; holder_account_l1; amount; recipient; timeout } : t) :
+        serializable =
+      { children =
+          Zkapp_command.Call_forest.With_hashes.read_all_proofs_from_disk
+            children
+      ; holder_account_l1
+      ; amount
+      ; recipient
+      ; timeout
+      }
+
+    let to_yojson = Fn.compose serializable_to_yojson to_serializable
+
+    let of_yojson json =
+      Ppx_deriving_yojson_runtime.(
+        serializable_of_yojson json
+        >|= of_serializable
+              ~proof_cache_db:(Proof_cache_tag.create_identity_db ()))
+  end
+
+  module Check_accepted_mina = struct
+    include Bridge_inst_mina.Check_accepted
+    include Bridge_inst_mina.Check_accepted.Definition
+
+    module Stmt = struct
+      type t = Bridge_inst_mina.Check_accepted.Definition.Stmt.t =
+        { params : Deposit_params_base.t
+        ; action_state : Outer_action_state.t
+        ; deposit_index : Checked32.t
+        ; n_steps : Checked32.t
+        ; is_rejected : bool
+        ; is_accepted : bool
+        }
+      [@@deriving yojson]
+    end
+
+    module Elem = struct
+      type t = Bridge_inst_mina.Check_accepted.Definition.Elem.t
+
+      include
+        Snarky_serializable_unsafe
+          (Bridge_inst_mina.Check_accepted.Definition.Elem)
+    end
+
+    module Init = struct
+      type t = Bridge_inst_mina.Check_accepted.Definition.Init.t =
+        { params : Deposit_params_base.t
+        ; original_action_state : Outer_action_state.t
+        ; deposit_index : Checked32.t
+        }
+      [@@deriving yojson]
+    end
+
+    type serializable =
+      { proof : Compile_simple.Proof.t option
+      ; proof_source : Stmt.t
+      ; proof_target : Stmt.t
+      ; init : Init.t
+      ; excess : Elem.t list
+      }
+    [@@deriving yojson]
+
+    let of_serializable
+        ({ proof; proof_source; proof_target; init; excess } : serializable) =
+      Bridge_inst_mina.Rule_bridge_finalize_deposit.Check_accepted_inst.make
+        ?proof ~proof_source ~proof_target init excess
+
+    let of_serializable_cancelled_deposit
+        ({ proof; proof_source; proof_target; init; excess } : serializable) =
+      Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+      .Check_accepted_inst
+      .make ?proof ~proof_source ~proof_target init excess
+  end
+
   module Finalize_deposit = struct
-    module Deposit_params_base = struct
-      type t = Bridge_state.Deposit_params_base.t
-
-      type serializable =
-        { children :
-            ( Account_update.Stable.Latest.t
-            , Zkapp_command.Digest.Account_update.t
-            , Zkapp_command.Digest.Forest.t )
-            Zkapp_command.Call_forest.t
-        ; holder_account_l1 : Public_key.Compressed.t
-        ; amount : Currency.Amount.t
-        ; recipient : Public_key.Compressed.t
-        ; timeout : Slot.t
-        }
-      [@@deriving yojson]
-
-      let of_serializable ~proof_cache_db
-          ({ children; holder_account_l1; amount; recipient; timeout } :
-            serializable ) : t =
-        { children =
-            Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
-              ~proof_cache_db children
-        ; holder_account_l1
-        ; amount
-        ; recipient
-        ; timeout
-        }
-
-      let to_serializable
-          ({ children; holder_account_l1; amount; recipient; timeout } : t) :
-          serializable =
-        { children =
-            Zkapp_command.Call_forest.With_hashes.read_all_proofs_from_disk
-              children
-        ; holder_account_l1
-        ; amount
-        ; recipient
-        ; timeout
-        }
-
-      let to_yojson = Fn.compose serializable_to_yojson to_serializable
-
-      let of_yojson json =
-        Ppx_deriving_yojson_runtime.(
-          serializable_of_yojson json
-          >|= of_serializable
-                ~proof_cache_db:(Proof_cache_tag.create_identity_db ()))
-    end
-
-    module Check_accepted_mina = struct
-      include Bridge_inst_mina.Check_accepted
-      include Bridge_inst_mina.Check_accepted.Definition
-
-      module Stmt = struct
-        type t = Bridge_inst_mina.Check_accepted.Definition.Stmt.t =
-          { params : Deposit_params_base.t
-          ; action_state : Outer_action_state.t
-          ; deposit_index : Checked32.t
-          ; n_steps : Checked32.t
-          ; is_rejected : bool
-          ; is_accepted : bool
-          }
-        [@@deriving yojson]
-      end
-
-      module Elem = struct
-        type t = Bridge_inst_mina.Check_accepted.Definition.Elem.t
-
-        include
-          Snarky_serializable_unsafe
-            (Bridge_inst_mina.Check_accepted.Definition.Elem)
-      end
-
-      module Init = struct
-        type t = Bridge_inst_mina.Check_accepted.Definition.Init.t =
-          { params : Deposit_params_base.t
-          ; original_action_state : Outer_action_state.t
-          ; deposit_index : Checked32.t
-          }
-        [@@deriving yojson]
-      end
-
-      type serializable =
-        { proof : Compile_simple.Proof.t option
-        ; proof_source : Stmt.t
-        ; proof_target : Stmt.t
-        ; init : Init.t
-        ; excess : Elem.t list
-        }
-      [@@deriving yojson]
-
-      let of_serializable
-          ({ proof; proof_source; proof_target; init; excess } : serializable) =
-        Bridge_inst_mina.Rule_bridge_finalize_deposit.Check_accepted_inst.make
-          ?proof ~proof_source ~proof_target init excess
-    end
-
     module Ase_inst = Ase.Make_serializable_ase (struct
       module Ase_system = Ase.With_length
       module Action_state = Outer_action_state.With_length
@@ -950,6 +956,96 @@ module Bridge = struct
       }
   end
 
+  module Commit = struct
+    type t = Rollup_state.Outer_action.Commit.t
+
+    include Snarky_serializable_unsafe (Rollup_state.Outer_action.Commit)
+  end
+
+  module Finalize_cancelled_deposit = struct
+    module Ase_outer_inst = Ase.Make_serializable_ase (struct
+      module Ase_system = Ase.Without_length
+      module Action_state = Outer_action_state
+
+      module Ase_inst =
+        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit.Ase_outer_inst
+    end)
+
+    module Ase_outer_with_length_inst = Ase.Make_serializable_ase (struct
+      module Ase_system = Ase.With_length
+      module Action_state = Outer_action_state.With_length
+
+      module Ase_inst =
+        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+        .Ase_outer_with_length_inst
+    end)
+
+    module Verify_two_outer_ases = Make_serializable_snark (struct
+      module Stmt = struct
+        type t = Ase_outer_inst.Stmt.t * Ase_outer_with_length_inst.Stmt.t
+        [@@deriving yojson]
+      end
+
+      module System =
+        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+        .Verify_two_outer_ases
+    end)
+
+    module Verify_check_accepted_and_ase = Make_serializable_snark (struct
+      module Stmt = struct
+        type t = Check_accepted_mina.Stmt.t * Ase_outer_with_length_inst.Stmt.t
+        [@@deriving yojson]
+      end
+
+      module System =
+        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+        .Verify_check_accepted_and_ase
+    end)
+
+    type t = Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t
+      ; may_use_token :
+          Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit.May_use_token
+          .t
+      ; outer_authorization_kind : Rule_bridge_finalize_cancelled_deposit.A.t
+      ; commit : Commit.t
+      ; before_commit : Outer_action_state.t
+      ; verify_two_outer_ases : Verify_two_outer_ases.serializable
+      ; verify_check_accepted_and_ase :
+          Verify_check_accepted_and_ase.serializable
+      ; prev_next_cancelled_deposit : Checked32.t
+      }
+    [@@deriving yojson]
+
+    let of_serializable
+        ({ public_key
+         ; may_use_token
+         ; outer_authorization_kind
+         ; commit
+         ; before_commit
+         ; verify_two_outer_ases
+         ; verify_check_accepted_and_ase
+         ; prev_next_cancelled_deposit
+         } :
+          serializable ) ~vk_hash ~helper_token_owner_l1_vk_hash : t =
+      { public_key
+      ; vk_hash
+      ; may_use_token
+      ; outer_authorization_kind
+      ; commit
+      ; before_commit_ase = before_commit
+      ; verify_two_outer_ases =
+          Verify_two_outer_ases.of_serializable verify_two_outer_ases
+      ; verify_check_accepted_and_ase =
+          Verify_check_accepted_and_ase.of_serializable
+            verify_check_accepted_and_ase
+      ; prev_next_cancelled_deposit
+      ; helper_token_owner_l1_vk_hash
+      }
+  end
+
   module Inner_receive = struct
     type t = Bridge_inst_mina.Rule_bridge_inner_receive.Witness.t
 
@@ -979,12 +1075,6 @@ module Bridge = struct
     end)
 
     type t = Bridge_inst_mina.Rule_bridge_finalize_withdrawal.Witness.t
-
-    module Commit = struct
-      type t = Rollup_state.Outer_action.Commit.t
-
-      include Snarky_serializable_unsafe (Rollup_state.Outer_action.Commit)
-    end
 
     module Withdrawal_params_base = struct
       type t = Bridge_state.Withdrawal_params_base.t

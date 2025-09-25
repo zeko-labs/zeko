@@ -45,6 +45,8 @@ let deposit_salt = "Deposit_params - qFB3jXP*)"
 
 let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
 
+let bridge_prover_cache = "bridge prover cache"
+
 module Max_excess_actions = struct
   module Inner_sync = struct
     let outer = Int.pow 2 9

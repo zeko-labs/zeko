@@ -487,10 +487,33 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
   | _ ->
       failwith "Unexpected response from prover"
 
-let verify_both_ases ?proving_timeout t input =
-  send_with_priority ?proving_timeout t (Prover.Input.Verify_both_ases input)
+let verify_both_ases_commit ?proving_timeout t input =
+  send_with_priority ?proving_timeout t
+    (Prover.Input.Verify_both_ases_commit input)
   >>| function
-  | Prover.Output.Verify_both_ases snark ->
+  | Prover.Output.Verify_both_ases_commit snark ->
+      snark
+  | Prover.Output.Error err ->
+      failwith err
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let verify_two_outer_ases_cancelled_deposit ?proving_timeout t input =
+  send_with_priority ?proving_timeout t
+    (Prover.Input.Verify_two_outer_ases_cancelled_deposit input)
+  >>| function
+  | Prover.Output.Verify_two_outer_ases_cancelled_deposit snark ->
+      snark
+  | Prover.Output.Error err ->
+      failwith err
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let verify_check_accepted_and_ase_cancelled_deposit ?proving_timeout t input =
+  send_with_priority ?proving_timeout t
+    (Prover.Input.Verify_check_accepted_and_ase_cancelled_deposit input)
+  >>| function
+  | Prover.Output.Verify_check_accepted_and_ase_cancelled_deposit snark ->
       snark
   | Prover.Output.Error err ->
       failwith err
@@ -530,7 +553,9 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
     Outer_commit.Ase_outer_inst.
       { proof; proof_target = target; init = action_state; excess }
   in
-  let%bind verify_both_ases = verify_both_ases t (outer_ase, inner_ase) in
+  let%bind verify_both_ases =
+    verify_both_ases_commit t (outer_ase, inner_ase)
+  in
   send_with_priority ?proving_timeout t
     (Prover.Input.Outer_commit
        { txn_snark
@@ -575,10 +600,9 @@ let inner_action_witness ?proving_timeout t witness =
 let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
     ~inner_authorization_kind ~(ase : Ase.With_length.Stmt.t * Field.t list)
     ~(check_accepted :
-       Bridge.Finalize_deposit.Check_accepted_mina.Init.t
+       Bridge.Check_accepted_mina.Init.t
        * Field.t
-       * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list )
-    ~prev_next_deposit =
+       * Bridge.Check_accepted_mina.Elem.t list ) ~prev_next_deposit =
   let%bind ase =
     let ase_source, ase_elms = ase in
     let%map proof, target, excess =
@@ -591,7 +615,7 @@ let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
   in
   let%bind check_accepted =
     let init, deposit_hash, elems = check_accepted in
-    let source : Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t =
+    let source : Bridge.Check_accepted_mina.Stmt.t =
       { params = init.params
       ; action_state =
           Zkapp_account.Actions_impl.push_hash
@@ -611,7 +635,7 @@ let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
         check_accepted_mina
     in
     ( { proof; proof_source = source; proof_target = target; init; excess }
-      : Bridge.Finalize_deposit.Check_accepted_mina.serializable )
+      : Bridge.Check_accepted_mina.serializable )
   in
   send ?proving_timeout t
     Prover.Input.(
@@ -623,6 +647,102 @@ let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
            ; ase
            ; check_accepted
            ; prev_next_deposit
+           } ))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error err
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let finalize_cancelled_deposit ?proving_timeout t ~public_key ~may_use_token
+    ~outer_authorization_kind ~commit ~before_commit
+    ~(commit_ase : Ase.Without_length.Stmt.t * Field.t list)
+    ~(sync_ase : Ase.With_length.Stmt.t * Field.t list)
+    ~(check_accepted :
+       Bridge.Check_accepted_mina.Init.t
+       * Field.t
+       * Bridge.Check_accepted_mina.Elem.t list )
+    ~(check_accepted_ase : Ase.With_length.Stmt.t * Field.t list)
+    ~prev_next_cancelled_deposit =
+  let%bind commit_ase =
+    let ase_source, ase_elms = commit_ase in
+    let%map proof, target, excess =
+      ase_cached_folder_without_length t ~source:ase_source ~elems:ase_elms
+        ~max_excess:
+          Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit.outer
+        (ase_without_length ~sendfn:send)
+    in
+    Bridge.Finalize_cancelled_deposit.Ase_outer_inst.
+      { proof; proof_target = target; init = ase_source; excess }
+  in
+  let%bind sync_ase =
+    let ase_source, ase_elms = sync_ase in
+    let%map proof, target, excess =
+      ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
+        ~max_excess:
+          Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit
+          .outer_with_length
+        (ase_with_length ~sendfn:send)
+    in
+    Bridge.Finalize_cancelled_deposit.Ase_outer_with_length_inst.
+      { proof; proof_target = target; init = ase_source; excess }
+  in
+  let%bind verify_two_outer_ases =
+    verify_two_outer_ases_cancelled_deposit t (commit_ase, sync_ase)
+  in
+  let%bind check_accepted =
+    let init, deposit_hash, elems = check_accepted in
+    let source : Bridge.Check_accepted_mina.Stmt.t =
+      { params = init.params
+      ; action_state =
+          Zkapp_account.Actions_impl.push_hash
+            (Rollup_state.Outer_action_state.raw init.original_action_state)
+            deposit_hash
+          |> Rollup_state.Outer_action_state.unsafe_value_of_field
+      ; deposit_index = init.deposit_index
+      ; n_steps = Zeko_util.Checked32.zero
+      ; is_rejected = false
+      ; is_accepted = false
+      }
+    in
+    let%map proof, target, excess =
+      check_accepted_folder t ~source ~elems
+        ~max_excess:
+          Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit
+          .check_accepted check_accepted_mina
+    in
+    ( { proof; proof_source = source; proof_target = target; init; excess }
+      : Bridge.Check_accepted_mina.serializable )
+  in
+  let%bind check_accepted_ase =
+    let ase_source, ase_elms = check_accepted_ase in
+    let%map proof, target, excess =
+      ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
+        ~max_excess:
+          Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit.outer
+        (ase_with_length ~sendfn:send)
+    in
+    Bridge.Finalize_cancelled_deposit.Ase_outer_with_length_inst.
+      { proof; proof_target = target; init = ase_source; excess }
+  in
+  let%bind verify_check_accepted_and_ase =
+    verify_check_accepted_and_ase_cancelled_deposit t
+      (check_accepted, check_accepted_ase)
+  in
+  send ?proving_timeout t
+    Prover.Input.(
+      Bridge
+        (Finalize_cancelled_deposit
+           { public_key
+           ; may_use_token
+           ; outer_authorization_kind
+           ; commit
+           ; before_commit
+           ; verify_two_outer_ases
+           ; verify_check_accepted_and_ase
+           ; prev_next_cancelled_deposit
            } ))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->

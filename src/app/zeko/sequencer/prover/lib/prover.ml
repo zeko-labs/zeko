@@ -123,8 +123,7 @@ end
 
 module Folder_with_length = Make_folder (Ase.With_length)
 module Folder_without_length = Make_folder (Ase.Without_length)
-module Folder_check_accepted_mina =
-  Make_folder (Bridge.Finalize_deposit.Check_accepted_mina)
+module Folder_check_accepted_mina = Make_folder (Bridge.Check_accepted_mina)
 
 (* Unfortunately yojson doesn't support GADTs so it can't be one type, or maybe I'm just bad *)
 module Input = struct
@@ -147,8 +146,8 @@ module Input = struct
             | `Extend of Ase.Without_length.trans * Compile_simple.Proof.t ]
           * F.t list )
       | Check_accepted_mina of
-          ( Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t
-          * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list )
+          ( Bridge.Check_accepted_mina.Stmt.t
+          * Bridge.Check_accepted_mina.Elem.t list )
     [@@deriving yojson]
   end
 
@@ -157,6 +156,8 @@ module Input = struct
       | Outer_action_witness of Bridge.Outer_action_witness.serializable
       | Inner_action_witness of Bridge.Inner_action_witness.serializable
       | Finalize_deposit of Bridge.Finalize_deposit.serializable
+      | Finalize_cancelled_deposit of
+          Bridge.Finalize_cancelled_deposit.serializable
       | Inner_receive of Bridge.Inner_receive.serializable
       | Finalize_withdrawal of Bridge.Finalize_withdrawal.serializable
       | Outer_token_owner of Bridge.Outer_token_owner.serializable
@@ -168,9 +169,20 @@ module Input = struct
     | Txn_snark of Txn_snark.t
     | Folder of Folder.t
     | Inner_sync of Inner_sync.Witness.serializable
-    | Verify_both_ases of
+    | Verify_both_ases_commit of
         ( Outer_commit.Ase_outer_inst.serializable
         * Outer_commit.Ase_inner_inst.serializable )
+    | Verify_two_outer_ases_cancelled_deposit of
+        ( Zeko_types.Bridge.Finalize_cancelled_deposit.Ase_outer_inst
+          .serializable
+        * Zeko_types.Bridge.Finalize_cancelled_deposit
+          .Ase_outer_with_length_inst
+          .serializable )
+    | Verify_check_accepted_and_ase_cancelled_deposit of
+        ( Zeko_types.Bridge.Check_accepted_mina.serializable
+        * Zeko_types.Bridge.Finalize_cancelled_deposit
+          .Ase_outer_with_length_inst
+          .serializable )
     | Outer_commit of Outer_commit.Witness.serializable
     | Bridge of Bridge.t
   [@@deriving yojson]
@@ -190,7 +202,14 @@ module Output = struct
     | Pong
     | Txn_snark of (Zeko_stmt.t * Compile_simple.Proof.t)
     | Folder of Folder.t
-    | Verify_both_ases of Outer_commit.Verify_both_ases.serializable
+    | Verify_both_ases_commit of Outer_commit.Verify_both_ases.serializable
+    | Verify_two_outer_ases_cancelled_deposit of
+        Zeko_types.Bridge.Finalize_cancelled_deposit.Verify_two_outer_ases
+        .serializable
+    | Verify_check_accepted_and_ase_cancelled_deposit of
+        Zeko_types.Bridge.Finalize_cancelled_deposit
+        .Verify_check_accepted_and_ase
+        .serializable
     | Call_forest of
         ( Account_update.Body.t
         * Zkapp_command.Digest.Account_update.t
@@ -287,7 +306,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
           |> Promise.to_deferred )
       in
       Output.(Folder (Check_accepted_mina snark))
-  | Verify_both_ases (outer, inner) ->
+  | Verify_both_ases_commit (outer, inner) ->
       let Compile_simple.[ prove ] = Rule_commit.Verify_both_ases.provers in
       let%map stmt, proof =
         time ?fake_proving_time ~logger "Rule_commit.verify_both_ases"
@@ -297,7 +316,43 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
                 , Ase_inner_inst.of_serializable inner )
           |> Promise.to_deferred )
       in
-      Output.Verify_both_ases (stmt, proof)
+      Output.Verify_both_ases_commit (stmt, proof)
+  | Verify_two_outer_ases_cancelled_deposit (outer, outer_with_length) ->
+      let Compile_simple.[ prove ] =
+        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+        .Verify_two_outer_ases
+        .provers
+      in
+      let%map stmt, proof =
+        time ?fake_proving_time ~logger
+          "Finalize_cancelled_deposit.Verify_two_outer_ases"
+          ( prove
+              Bridge.Finalize_cancelled_deposit.
+                ( Ase_outer_inst.of_serializable outer
+                , Ase_outer_with_length_inst.of_serializable outer_with_length
+                )
+          |> Promise.to_deferred )
+      in
+      Output.Verify_two_outer_ases_cancelled_deposit (stmt, proof)
+  | Verify_check_accepted_and_ase_cancelled_deposit
+      (check_accepted, outer_with_length) ->
+      let Compile_simple.[ prove ] =
+        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+        .Verify_check_accepted_and_ase
+        .provers
+      in
+      let%map stmt, proof =
+        time ?fake_proving_time ~logger
+          "Finalize_cancelled_deposit.Verify_check_accepted_and_ase"
+          ( prove
+              Bridge.Finalize_cancelled_deposit.
+                ( Zeko_types.Bridge.Check_accepted_mina
+                  .of_serializable_cancelled_deposit check_accepted
+                , Ase_outer_with_length_inst.of_serializable outer_with_length
+                )
+          |> Promise.to_deferred )
+      in
+      Output.Verify_check_accepted_and_ase_cancelled_deposit (stmt, proof)
   | Outer_commit input ->
       let Compile_simple.[ prove; _; _ ] = Outer_rules_inst.provers in
       let%bind vk_hash =
@@ -370,6 +425,38 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       let%map (_stmt, parent_with_calls), proof =
         time ?fake_proving_time ~logger "Bridge_mina.System_L2.finalize_deposit"
           ( prove (Bridge.Finalize_deposit.of_serializable ~vk_hash input)
+          |> Promise.to_deferred )
+      in
+      Output.Call_forest
+        ( Tuple3.map_trd parent_with_calls
+            ~f:
+              (Zkapp_command.Call_forest.map
+                 ~f:Account_update.read_all_proofs_from_disk )
+        , proof )
+  | Bridge (Finalize_cancelled_deposit input) ->
+      let Compile_simple.[ prove; _; _ ] =
+        Bridge_inst_mina.System_L1_enabled.provers
+      in
+      let%bind vk_hash =
+        Compile_simple.Verification_key.of_tag
+          Bridge_inst_mina.System_L1_enabled.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%bind helper_token_owner_l1_vk_hash =
+        Compile_simple.Verification_key.of_tag
+          Bridge_inst_mina.System_L1_token_owner.tag
+        |> Promise.to_deferred
+        (* To make fake tests work *)
+        >>| Compile_simple.Verification_key.hash
+      in
+      let%map (_stmt, parent_with_calls), proof =
+        time ?fake_proving_time ~logger
+          "Bridge_mina.System_L1.finalize_cancelled_deposit"
+          ( prove
+              (Bridge.Finalize_cancelled_deposit.of_serializable ~vk_hash
+                 ~helper_token_owner_l1_vk_hash input )
           |> Promise.to_deferred )
       in
       Output.Call_forest

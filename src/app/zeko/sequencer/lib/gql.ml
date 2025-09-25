@@ -1360,13 +1360,13 @@ module Types = struct
       open Snark_params.Tick
 
       module Deposit_params = struct
-        type input = Zeko_types.Bridge.Finalize_deposit.Deposit_params_base.t
+        type input = Zeko_types.Bridge.Deposit_params_base.t
 
         let arg_typ ~proof_cache_db =
           obj "DepositParamsInput"
             ~coerce:(fun children holder_account_l1 amount recipient timeout ->
-              Zeko_types.Bridge.Finalize_deposit.Deposit_params_base
-              .of_serializable ~proof_cache_db
+              Zeko_types.Bridge.Deposit_params_base.of_serializable
+                ~proof_cache_db
                 { children =
                     Yojson.Safe.from_string children
                     |> Mina_base.Zkapp_command.account_updates_of_json
@@ -1383,10 +1383,7 @@ module Types = struct
                     Mina_numbers.Global_slot_since_genesis.of_int timeout
                 } )
             ~split:(fun f (x : input) ->
-              let x =
-                Zeko_types.Bridge.Finalize_deposit.Deposit_params_base
-                .to_serializable x
-              in
+              let x = Zeko_types.Bridge.Deposit_params_base.to_serializable x in
               f
                 ( Yojson.Safe.to_string
                 @@ Mina_base.Zkapp_command.account_updates_to_json x.children )
@@ -1499,13 +1496,13 @@ module Types = struct
 
         module Check_accepted_mina = struct
           module Stmt = struct
-            type input = Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t
+            type input = Bridge.Check_accepted_mina.Stmt.t
 
             let arg_typ ~proof_cache_db =
               obj "CheckAcceptedMinaStmtInput"
                 ~coerce:(fun params action_state deposit_index n_steps
                              is_rejected is_accepted :
-                             Bridge.Finalize_deposit.Check_accepted_mina.Stmt.t ->
+                             Bridge.Check_accepted_mina.Stmt.t ->
                   { params
                   ; action_state =
                       Zeko_circuits.Rollup_state.Outer_action_state
@@ -1534,12 +1531,12 @@ module Types = struct
           end
 
           module Init = struct
-            type input = Bridge.Finalize_deposit.Check_accepted_mina.Init.t
+            type input = Bridge.Check_accepted_mina.Init.t
 
             let arg_typ ~proof_cache_db =
               obj "CheckAcceptedMinaInitInput"
                 ~coerce:(fun params original_action_state deposit_index :
-                             Bridge.Finalize_deposit.Check_accepted_mina.Init.t ->
+                             Bridge.Check_accepted_mina.Init.t ->
                   { params
                   ; original_action_state =
                       Zeko_circuits.Rollup_state.Outer_action_state
@@ -1562,7 +1559,7 @@ module Types = struct
           end
 
           module Elem = struct
-            type input = Bridge.Finalize_deposit.Check_accepted_mina.Elem.t
+            type input = Bridge.Check_accepted_mina.Elem.t
 
             let arg_typ =
               obj "CheckAcceptedMinaElemInput"
@@ -1716,8 +1713,8 @@ module Types = struct
         type input =
           { ase : Ase.With_length.Stmt.t * Field.t list
           ; check_accepted :
-              Bridge.Finalize_deposit.Check_accepted_mina.Init.t
-              * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list
+              Bridge.Check_accepted_mina.Init.t
+              * Bridge.Check_accepted_mina.Elem.t list
           ; prev_next_deposit : Unsigned.uint32
           }
 

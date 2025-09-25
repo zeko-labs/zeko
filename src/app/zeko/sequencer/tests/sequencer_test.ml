@@ -888,8 +888,8 @@ let () =
         in
         let nearest_commit_index = nearest_commit_index + my_deposit_index in
         let check_accepted :
-            Bridge.Finalize_deposit.Check_accepted_mina.Init.t
-            * Bridge.Finalize_deposit.Check_accepted_mina.Elem.t list =
+            Bridge.Check_accepted_mina.Init.t
+            * Bridge.Check_accepted_mina.Elem.t list =
           ( { params = deposit_params
             ; original_action_state =
                 C.Rollup_state.Outer_action_state.unsafe_value_of_field
