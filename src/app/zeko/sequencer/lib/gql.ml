@@ -1734,6 +1734,66 @@ module Types = struct
               ]
       end
 
+      module Finalize_cancelled_deposit = struct
+        type input =
+          { public_key : Public_key.Compressed.t
+          ; commit : Zeko_circuits.Rollup_state.Outer_action.Commit.t
+          ; before_commit : Zeko_circuits.Rollup_state.Outer_action_state.t
+          ; commit_ase : Ase.Without_length.Stmt.t * Field.t list
+          ; sync_ase : Ase.With_length.Stmt.t * Field.t list
+          ; check_accepted :
+              Bridge.Check_accepted_mina.Init.t
+              * Bridge.Check_accepted_mina.Elem.t list
+          ; check_accepted_ase : Ase.With_length.Stmt.t * Field.t list
+          ; prev_next_cancelled_deposit : Unsigned.uint32
+          }
+
+        let arg_typ ~proof_cache_db =
+          obj "FinalizeCancelledDepositInput"
+            ~coerce:(fun public_key commit before_commit commit_ase sync_ase
+                         check_accepted check_accepted_ase
+                         prev_next_cancelled_deposit ->
+              { public_key
+              ; commit =
+                  ( match commit with
+                  | Commit commit ->
+                      commit
+                  | Witness _ ->
+                      failwith "Supplied witness for commit" )
+              ; before_commit =
+                  Zeko_circuits.Rollup_state.Outer_action_state
+                  .unsafe_value_of_field before_commit
+              ; commit_ase
+              ; sync_ase
+              ; check_accepted
+              ; check_accepted_ase
+              ; prev_next_cancelled_deposit
+              } )
+            ~split:(fun f (x : input) ->
+              f x.public_key (Commit x.commit)
+                (Zeko_circuits.Rollup_state.Outer_action_state.raw
+                   x.before_commit )
+                x.commit_ase x.sync_ase x.check_accepted x.check_accepted_ase
+                x.prev_next_cancelled_deposit )
+            ~fields:
+              [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
+              ; arg "commit"
+                  ~typ:(non_null Folder.Check_accepted_mina.Elem.arg_typ)
+              ; arg "beforeCommit"
+                  ~typ:(non_null Folder.Ase_without_length.Stmt.arg_typ)
+              ; arg "commitAse"
+                  ~typ:(non_null Folder.Ase_without_length.arg_typ)
+              ; arg "syncAse" ~typ:(non_null Folder.Ase_with_length.arg_typ)
+              ; arg "checkAccepted"
+                  ~typ:
+                    ( non_null
+                    @@ Folder.Check_accepted_mina.arg_typ ~proof_cache_db )
+              ; arg "checkAcceptedAse"
+                  ~typ:(non_null Folder.Ase_with_length.arg_typ)
+              ; arg "prevNextCancelledDeposit" ~typ:(non_null UInt32.arg_typ)
+              ]
+      end
+
       module Finalize_withdrawal = struct
         type input =
           { public_key : Public_key.Compressed.t
