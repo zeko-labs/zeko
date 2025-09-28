@@ -442,10 +442,10 @@ open struct
         let (Typ typ) = Account_set.typ in
         typ.value_of_fields ([| x |], typ.constraint_system_auxiliary ())
 
-      let of_account_set x =
-        let (Typ typ) = Account_set.typ in
-        let fields, _aux = typ.value_to_fields x in
-        match fields with [| f |] -> f | _ -> failwith __LOC__
+      (* let of_account_set x =
+         let (Typ typ) = Account_set.typ in
+         let fields, _aux = typ.value_to_fields x in
+         match fields with [| f |] -> f | _ -> failwith __LOC__ *)
 
       let derive pk =
         Mina_base.Account_id.create pk Mina_base.Token_id.default
@@ -777,9 +777,9 @@ open struct
       let da_signature =
         let input =
           let open Random_oracle.Input.Chunked in
-          append
-            (stmt.target_ledger |> field)
-            (stmt.target_acc_set |> of_account_set |> field)
+          (* append *)
+          stmt.target_ledger |> field
+          (* (stmt.target_acc_set |> of_account_set |> field) *)
         in
         let payload =
           Random_oracle.hash
@@ -945,7 +945,7 @@ open struct
 
   module Inner_rules = Inner_rules.Make (Inputs) ()
 
-  let Compile_simple.[ _; finalize_withdrawal; _ ] =
+  let Compile_simple.[ cancel_deposit; finalize_withdrawal; _ ] =
     Bridge.System_L1_enabled.provers
 
   let Compile_simple.[ finalize_deposit; inner_receive ] =
@@ -1224,6 +1224,368 @@ open struct
               ]) )
   end
 
+  module Cancel_deposit = struct
+    let recipient = Keypair.create ()
+
+    let amount = Currency.Amount.of_mina_string_exn "5"
+
+    let deposit_params : Bridge_state.Deposit_params_base.t =
+      { children = []
+      ; holder_account_l1 =
+          List.random_element Inputs.holder_accounts_l1 |> Option.value_exn
+      ; amount
+      ; recipient = Public_key.compress recipient.public_key
+      ; timeout = Slot.of_int 50
+      }
+
+    let deposit_slot_range : Slot_range.t = Slot_range.infinite
+
+    (* Lower range later than the timeout of the deposit *)
+    let commit_slot_range : Slot_range.t =
+      { lower = Slot.of_int 60; upper = Slot.of_int 70 }
+
+    let deposit_witness : Rollup_state.Outer_action.Witness.t =
+      { aux =
+          value_to_hash ~init:Zeko_constants.deposit_salt
+            Bridge_state.Deposit_params_base.typ deposit_params
+      ; children =
+          Zkapp_command.Call_forest.cons ~signature_kind:Inputs.chain_l1
+            (Account_update.with_aux
+               ~body:
+                 { Mina_base.Account_update.Body.dummy with
+                   use_full_commitment = true
+                 ; public_key = deposit_params.holder_account_l1
+                 ; balance_change = Currency.Amount.Signed.(of_unsigned amount)
+                 ; may_use_token = Parents_own_token
+                 ; authorization_kind = None_given
+                 }
+               ~authorization:
+                 (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
+                 Control.Poly.None_given )
+            []
+      ; slot_range = deposit_slot_range
+      }
+
+    let original_action_state = Zkapp_account.Actions.empty_state_element
+
+    let deposit_action =
+      let (_stmt, (au, _au_digest, calls)), _proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        outer_action_witness
+          { public_key = Inputs.zeko_l1
+          ; vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag Outer_rules.tag )
+              |> Compile_simple.Verification_key.hash
+          ; witness = deposit_witness
+          }
+      in
+      assert (Public_key.Compressed.equal au.public_key Inputs.zeko_l1) ;
+      assert (
+        List.equal
+          (fun a b ->
+            let a = With_stack_hash.stack_hash a in
+            let b = With_stack_hash.stack_hash b in
+            Zkapp_command.Digest.Forest.equal a b )
+          calls deposit_witness.children ) ;
+      let h = Zkapp_account.Actions_impl.hash au.actions in
+      let actions = witness_to_actions deposit_witness in
+      let () =
+        match outer_action_of_actions actions with
+        | Witness _witness ->
+            ()
+        | Commit _ ->
+            failwith __LOC__
+      in
+      let h' = Zkapp_account.Actions_impl.hash actions in
+      let h'' =
+        Zkapp_account.Actions_impl.hash
+          (witness_without_forest_to_actions
+             { aux = deposit_witness.aux
+             ; children_digest =
+                 Zkapp_command.Call_forest.hash deposit_witness.children
+             ; slot_range = deposit_witness.slot_range
+             } )
+      in
+      assert (Field.equal h h') ;
+      assert (Field.equal h h'') ;
+      h
+
+    let mid_outer_action_state =
+      Rollup_state.Outer_action_state.(
+        With_length.unsafe_value_of_fields
+          ~state:
+            ( Zkapp_account.Actions_impl.push_hash original_action_state
+                deposit_action
+            |> unsafe_value_of_field )
+          ~length:Checked32.one)
+
+    let commit_witness : Rollup_state.Outer_action.Commit.t =
+      { ledger = Field.zero
+      ; inner_action_state = Rollup_state.Inner_action_state.With_length.empty
+      ; synchronized_outer_action_state = mid_outer_action_state
+      ; slot_range = commit_slot_range
+      }
+
+    let commit_action =
+      let actions = commit_to_actions commit_witness in
+      let () =
+        match outer_action_of_actions actions with
+        | Commit _commit_witness ->
+            ()
+        | Witness _ ->
+            failwith __LOC__
+      in
+      Zkapp_account.Actions_impl.hash actions
+
+    let target_outer_action_state =
+      Rollup_state.Outer_action_state.(
+        With_length.unsafe_value_of_fields
+          ~state:
+            ( Zkapp_account.Actions_impl.push_hash
+                Rollup_state.Outer_action_state.(
+                  With_length.state mid_outer_action_state |> raw)
+                commit_action
+            |> unsafe_value_of_field )
+          ~length:(Checked32.of_int 2))
+
+    let () =
+      let verify_two_outer_ases =
+        let commit_ase =
+          let action_state =
+            Rollup_state.Outer_action_state.With_length.raw
+              target_outer_action_state
+          in
+          Bridge.Rule_bridge_finalize_cancelled_deposit.Ase_outer_inst.make
+            ~proof_source:action_state ~proof_target:action_state action_state
+            []
+        in
+        let sync_ase =
+          let action_state : Ase.With_length.Stmt.t =
+            { action_state =
+                Rollup_state.Outer_action_state.With_length.raw
+                  mid_outer_action_state
+            ; length =
+                Rollup_state.Outer_action_state.With_length.length
+                  mid_outer_action_state
+            }
+          in
+          Bridge.Rule_bridge_finalize_cancelled_deposit
+          .Ase_outer_with_length_inst
+          .make ~proof_source:action_state ~proof_target:action_state
+            action_state [ commit_action ]
+        in
+        let [ prover ] =
+          Bridge.Rule_bridge_finalize_cancelled_deposit.Verify_two_outer_ases
+          .provers
+        in
+        let stmt, proof =
+          Promise.block_on_async_exn @@ fun () -> prover (commit_ase, sync_ase)
+        in
+        Bridge.Rule_bridge_finalize_cancelled_deposit.Verify_two_outer_ases
+        .make_unchecked ~proof stmt
+      in
+      let verify_check_accepted_and_ase =
+        let check_accepted =
+          let Bridge.Check_accepted.{ source; target }, proof =
+            Promise.block_on_async_exn
+            @@ fun () ->
+            Bridge.Check_accepted.leaf_option
+              ( [ Commit commit_witness ]
+              , { params = deposit_params
+                ; action_state =
+                    Rollup_state.Outer_action_state.With_length.state
+                      mid_outer_action_state
+                ; deposit_index = Checked32.zero
+                ; n_steps = Checked32.zero
+                ; is_rejected = false
+                ; is_accepted = false
+                } )
+          in
+          assert (Bool.(target.is_accepted = false)) ;
+          assert (Bool.(target.is_rejected = true)) ;
+          assert (
+            Field.equal
+              Rollup_state.Outer_action_state.(
+                With_length.state target_outer_action_state |> raw)
+              (Rollup_state.Outer_action_state.raw target.action_state) ) ;
+          Bridge.Rule_bridge_finalize_cancelled_deposit.Check_accepted_inst.make
+            ~proof_source:source ~proof_target:target ~proof
+            { params = deposit_params
+            ; original_action_state =
+                Rollup_state.Outer_action_state.unsafe_value_of_field
+                  original_action_state
+            ; deposit_index = Checked32.zero
+            }
+            []
+        in
+        let check_accepted_ase =
+          let action_state : Ase.With_length.Stmt.t =
+            { action_state =
+                Rollup_state.Outer_action_state.With_length.raw
+                  target_outer_action_state
+            ; length =
+                Rollup_state.Outer_action_state.With_length.length
+                  target_outer_action_state
+            }
+          in
+          Bridge.Rule_bridge_finalize_cancelled_deposit
+          .Ase_outer_with_length_inst
+          .make ~proof_source:action_state ~proof_target:action_state
+            action_state []
+        in
+        let [ prover ] =
+          Bridge.Rule_bridge_finalize_cancelled_deposit
+          .Verify_check_accepted_and_ase
+          .provers
+        in
+        let stmt, proof =
+          Promise.block_on_async_exn
+          @@ fun () -> prover (check_accepted, check_accepted_ase)
+        in
+        Bridge.Rule_bridge_finalize_cancelled_deposit
+        .Verify_check_accepted_and_ase
+        .make_unchecked ~proof stmt
+      in
+      let holder_l1 =
+        Inputs.holder_accounts_l1 |> List.random_element |> Option.value_exn
+      in
+      let (_stmt, (au, _au_digest, calls)), _proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        cancel_deposit
+          { public_key = holder_l1
+          ; vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag
+                Bridge.System_L1_enabled.tag )
+              |> Compile_simple.Verification_key.hash
+          ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
+          ; outer_authorization_kind = Rule_bridge_finalize_deposit.A.None_given
+          ; commit = commit_witness
+          ; before_commit_ase =
+              Rollup_state.Outer_action_state.With_length.state
+                mid_outer_action_state
+          ; verify_two_outer_ases
+          ; verify_check_accepted_and_ase
+          ; prev_next_cancelled_deposit = Checked32.zero
+          ; helper_token_owner_l1_vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag
+                Bridge.System_L1_token_owner.tag )
+              |> Compile_simple.Verification_key.hash
+          }
+      in
+      assert (
+        Currency.Amount.Signed.equal au.balance_change
+          Currency.Amount.Signed.(of_unsigned amount |> negate) ) ;
+      assert (Public_key.Compressed.equal au.public_key holder_l1) ;
+
+      let (helper_token_owner, helper_account), witness_outer =
+        match calls with
+        | [ { elt =
+                { account_update = helper_token_owner
+                ; calls =
+                    [ { elt = { account_update = helper_account; calls = []; _ }
+                      ; _
+                      }
+                    ]
+                ; _
+                }
+            ; _
+            }
+          ; { elt = { account_update = witness_outer; calls = []; _ }; _ }
+          ] ->
+            ((helper_token_owner, helper_account), witness_outer)
+        | _ ->
+            failwith
+              "finalize_withdrawal calls: no helper token owner or witness \
+               outer"
+      in
+
+      assert (
+        Public_key.Compressed.equal witness_outer.body.public_key Inputs.zeko_l1 ) ;
+      assert (
+        Zkapp_basic.Or_ignore.equal Field.equal
+          witness_outer.body.preconditions.account.action_state
+          (Zkapp_basic.Or_ignore.Check
+             (Rollup_state.Outer_action_state.With_length.raw
+                target_outer_action_state ) ) ) ;
+
+      assert (
+        Public_key.Compressed.equal helper_account.body.public_key
+          (Public_key.compress recipient.public_key) ) ;
+      assert (
+        Token_id.equal helper_account.body.token_id
+          (Account_id.derive_token_id
+             ~owner:
+               ( Account_id.of_public_key
+               @@ Public_key.decompress_exn Inputs.helper_token_owner_l1 ) ) ) ;
+
+      assert (
+        Zkapp_state.State_length_vec.equal
+          (fun a b -> Zkapp_basic.Or_ignore.equal Field.equal a b)
+          helper_account.body.preconditions.account.state
+          Zkapp_state.State_length_vec.(
+            of_list_exn
+              [ Zkapp_basic.Or_ignore.Check Checked32.(to_field zero)
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ; Zkapp_basic.Or_ignore.Ignore
+              ]) ) ;
+      assert (
+        Zkapp_state.State_length_vec.equal
+          (fun a b -> Zkapp_basic.Set_or_keep.equal Field.equal a b)
+          helper_account.body.update.app_state
+          Zkapp_state.State_length_vec.(
+            of_list_exn
+              [ Zkapp_basic.Set_or_keep.Set Checked32.(to_field one)
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ; Zkapp_basic.Set_or_keep.Keep
+              ]) ) ;
+      assert (
+        Public_key.Compressed.equal helper_token_owner.body.public_key
+          Inputs.helper_token_owner_l1 ) ;
+
+      let (_stmt, (helper_token_owner', _au_digest, calls)), _proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        outer_token_owner
+          { public_key = Inputs.helper_token_owner_l1
+          ; vk_hash =
+              ( Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag
+                Bridge.System_L1_token_owner.tag )
+              |> Compile_simple.Verification_key.hash
+          ; a = helper_account.body
+          }
+      in
+      let helper_account' =
+        match calls with
+        | [ { elt = { account_update; calls = []; _ }; _ } ] ->
+            account_update
+        | _ ->
+            failwith "outer_token_owner calls: no helper account"
+      in
+      assert (
+        Account_update.Body.equal helper_token_owner' helper_token_owner.body ) ;
+      assert (Account_update.Body.equal helper_account'.body helper_account.body)
+  end
+
   module Withdrawal = struct
     let recipient = Keypair.create ()
 
@@ -1377,7 +1739,7 @@ open struct
               Compile_simple.Verification_key.of_tag
                 Bridge.System_L1_token_owner.tag )
               |> Compile_simple.Verification_key.hash
-          ; inner_vk_hash =
+          ; l2_holder_vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag Inner_rules.tag )
@@ -1495,6 +1857,7 @@ open struct
   end
 
   include Deposit
+  include Cancel_deposit
   include Withdrawal
 end
 
