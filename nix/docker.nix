@@ -74,6 +74,27 @@ let
       };
     };
 in {
+  zeko-image-full = dockerTools.buildLayeredImage {
+    name = "zeko";
+    tag = "latest";
+    inherit created;
+    contents = [
+      ocamlPackages_mina.devnet.zeko
+      coreutils
+      findutils
+      bashInteractive
+      procps
+      curl
+      jq
+    ];
+    config = {
+      Entrypoint = [ "/bin/zeko-run" ];
+      Env = [ "ZEKO_SIGNATURE_KIND=testnet" ];
+      Cmd = [ "-p" "1925" ];
+      WorkingDir = "/root";
+    };
+  };
+
   mina-image-slim = dockerTools.streamLayeredImage {
     name = "mina";
     inherit created;
