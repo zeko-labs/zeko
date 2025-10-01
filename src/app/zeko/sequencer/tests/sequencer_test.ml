@@ -28,9 +28,10 @@ let da_config =
   Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555"; "127.0.0.1:8556" ]
 
 let provers =
-  [ Host_and_port.create ~host:"localhost" ~port:9990
-  ; Host_and_port.create ~host:"localhost" ~port:9991
-  ]
+  let args = Sys.get_argv () |> Array.to_list in
+  if List.length args <= 1 then
+    failwith "No provers provided as command-line arguments."
+  else List.tl_exn args |> List.map ~f:Host_and_port.of_string
 
 let run = Thread_safe.block_on_async_exn
 
