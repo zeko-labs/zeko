@@ -1463,8 +1463,10 @@ open struct
               Compile_simple.Verification_key.of_tag
                 Bridge.System_L1_enabled.tag )
               |> Compile_simple.Verification_key.hash
-          ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
-          ; outer_authorization_kind = Rule_bridge_finalize_deposit.A.None_given
+          ; may_use_token =
+              Bridge.Rule_bridge_finalize_cancelled_deposit.May_use_token.No
+          ; outer_authorization_kind =
+              Rule_bridge_finalize_cancelled_deposit.A.None_given
           ; commit = commit_witness
           ; before_commit_ase =
               Rollup_state.Outer_action_state.With_length.state

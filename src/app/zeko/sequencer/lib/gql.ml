@@ -1564,8 +1564,10 @@ module Types = struct
             let arg_typ =
               obj "CheckAcceptedMinaElemInput"
                 ~coerce:(fun actions ->
-                  Utils.actions_to_outer_action
-                    (List.map actions ~f:Field.of_string |> Array.of_list) )
+                  Result.try_with (fun () ->
+                      Utils.actions_to_outer_action
+                        (List.map actions ~f:Field.of_string |> Array.of_list) )
+                  |> Result.map_error ~f:Error.of_exn )
                 ~split:(fun f (x : input) ->
                   f
                     ( Utils.actions_of_outer_action x
@@ -1720,8 +1722,15 @@ module Types = struct
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeDepositInput"
-            ~coerce:(fun ase check_accepted prev_next_deposit ->
-              { ase; check_accepted; prev_next_deposit } )
+            ~coerce:(fun ase (check_accepted_init, check_accepted_elems)
+                         prev_next_deposit ->
+              let%map.Result check_accepted_elems =
+                Result.all check_accepted_elems
+              in
+              { ase
+              ; check_accepted = (check_accepted_init, check_accepted_elems)
+              ; prev_next_deposit
+              } )
             ~split:(fun f (x : input) ->
               f x.ase x.check_accepted x.prev_next_deposit )
             ~fields:
@@ -1751,21 +1760,26 @@ module Types = struct
         let arg_typ ~proof_cache_db =
           obj "FinalizeCancelledDepositInput"
             ~coerce:(fun public_key commit before_commit commit_ase sync_ase
-                         check_accepted check_accepted_ase
-                         prev_next_cancelled_deposit ->
+                         (check_accepted_init, check_accepted_elems)
+                         check_accepted_ase prev_next_cancelled_deposit ->
+              let%bind.Result check_accepted_elems =
+                Result.all check_accepted_elems
+              in
+              let%map.Result commit =
+                match%bind.Result commit with
+                | Commit commit ->
+                    Ok commit
+                | Witness _ ->
+                    Error (Error.of_string "Supplied witness for commit")
+              in
               { public_key
-              ; commit =
-                  ( match commit with
-                  | Commit commit ->
-                      commit
-                  | Witness _ ->
-                      failwith "Supplied witness for commit" )
+              ; commit
               ; before_commit =
                   Zeko_circuits.Rollup_state.Outer_action_state
                   .unsafe_value_of_field before_commit
               ; commit_ase
               ; sync_ase
-              ; check_accepted
+              ; check_accepted = (check_accepted_init, check_accepted_elems)
               ; check_accepted_ase
               ; prev_next_cancelled_deposit
               } )
@@ -1811,13 +1825,15 @@ module Types = struct
             ~coerce:(fun public_key commit before_commit commit_ase
                          before_withdrawal withdrawal_ase prev_next_withdrawal
                          withdrawal_params ->
+              let%map.Result commit =
+                match%bind.Result commit with
+                | Commit commit ->
+                    Ok commit
+                | Witness _ ->
+                    Error (Error.of_string "Supplied witness for commit")
+              in
               { public_key
-              ; commit =
-                  ( match commit with
-                  | Commit commit ->
-                      commit
-                  | Witness _ ->
-                      failwith "Supplied witness for commit" )
+              ; commit
               ; before_commit =
                   Zeko_circuits.Rollup_state.Outer_action_state
                   .unsafe_value_of_field before_commit
@@ -2259,12 +2275,14 @@ module Mutations = struct
                   @@ Types.Input.Provers.Finalize_deposit.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } ()
-                      { ase = ase_source, ase_elems
-                      ; check_accepted =
-                          check_accepted_init, check_accepted_elems
-                      ; prev_next_deposit
-                      } ->
+        ~resolve:(fun { ctx = sequencer; _ } () witness ->
+          let%bind.Deferred.Result { ase = ase_source, ase_elems
+                                   ; check_accepted =
+                                       check_accepted_init, check_accepted_elems
+                                   ; prev_next_deposit
+                                   } =
+            return (Result.map_error witness ~f:Error.to_string_hum)
+          in
           let key, d =
             Bridge_prover.Finalize_deposit.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)
@@ -2289,17 +2307,21 @@ module Mutations = struct
                   @@ Types.Input.Provers.Finalize_withdrawal.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } ()
-                      { public_key
-                      ; commit
-                      ; before_commit
-                      ; commit_ase = commit_ase_source, commit_ase_elems
-                      ; before_withdrawal
-                      ; withdrawal_ase =
-                          withdrawal_ase_source, withdrawal_ase_elems
-                      ; prev_next_withdrawal
-                      ; withdrawal_params
-                      } ->
+        ~resolve:(fun { ctx = sequencer; _ } () witness ->
+          let%bind.Deferred.Result { public_key
+                                   ; commit
+                                   ; before_commit
+                                   ; commit_ase =
+                                       commit_ase_source, commit_ase_elems
+                                   ; before_withdrawal
+                                   ; withdrawal_ase =
+                                       ( withdrawal_ase_source
+                                       , withdrawal_ase_elems )
+                                   ; prev_next_withdrawal
+                                   ; withdrawal_params
+                                   } =
+            return (Result.map_error witness ~f:Error.to_string_hum)
+          in
           let key, d =
             Bridge_prover.Finalize_withdrawal.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)

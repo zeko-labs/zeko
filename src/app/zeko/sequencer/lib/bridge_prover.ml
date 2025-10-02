@@ -403,11 +403,11 @@ module Finalize_cancelled_deposit = struct
                     Zeko_prover.Client.finalize_cancelled_deposit t.provers
                       ~public_key
                       ~may_use_token:
-                        Bridge_inst_mina.Rule_bridge_finalize_withdrawal
+                        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
                         .May_use_token
                         .No
                       ~outer_authorization_kind:
-                        Zeko_circuits.Rule_bridge_finalize_withdrawal.A
+                        Zeko_circuits.Rule_bridge_finalize_cancelled_deposit.A
                         .None_given ~commit ~before_commit
                       ~commit_ase:(commit_ase_source, commit_ase_elems)
                       ~sync_ase:(sync_ase_source, sync_ase_elems)
@@ -446,7 +446,7 @@ module Finalize_cancelled_deposit = struct
                       ((helper_token_owner, helper_account), witness_outer)
                   | _ ->
                       failwith
-                        "finalize_withdrawal calls: no helper token owner or \
+                        "cancel_deposit calls: no helper token owner or \
                          witness outer"
                 in
                 let witness_forest =
