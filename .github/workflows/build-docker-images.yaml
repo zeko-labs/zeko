@@ -20,9 +20,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-docker-image:
-    name: Build and Publish Docker Image
+  build-sequencer-docker-image:
+    name: Build and Publish Zeko Docker Images
     runs-on: zeko-gha-runner
+    strategy:
+      matrix:
+        package: [zeko, zeko-da] 
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -50,28 +53,25 @@ jobs:
         id: checktag
         uses: tyriis/docker-image-tag-exists@v2.0.1
         with:
-          registry: ghcr.io
-          repository: zeko-labs/zeko
+          registry: docker.io
+          repository: zekolabs/${{ matrix.package }}
           tag: ${{ env.TAG }}
 
-      - name: Install Nix
+      - name: ❄️ Install Nix
         if: steps.checktag.outputs.tag == 'not found'
         uses: cachix/install-nix-action@v27
 
-      - name: 🛠️ Build Zeko OCI image
-        run: nix build .#zeko-image-full
+      - name: 🛠️ Build ${{ matrix.package }} OCI image
+        run: nix build .#${{ matrix.package }}-image
         
-      - name: 🚚 Load and Push Zeko docker image
+      - name: 🚚 Load and Push ${{ matrix.package }} docker image
         run: |
-          # load built artifact to docker
           IMAGE_TAR=$(readlink -f result)
-          IMAGE_NAME="docker.io/${{ github.repository }}/zeko:${{ env.TAG }}"
-
-          # Load tarball into Docker
+          IMAGE_BASE="docker.io/${{ github.repository }}/${{ matrix.package }}"
           docker load < "$IMAGE_TAR"
 
-          # Re-tag with docker.io repo path
-          docker tag zeko:latest "$IMAGE_NAME"
+          docker tag ${{ matrix.package }}:latest "$IMAGE_BASE:${{ env.TAG }}"
+          docker tag ${{ matrix.package }}:latest "$IMAGE_BASE:latest"
 
-          # Push to Docker Hub
-          docker push "$IMAGE_NAME"
+          docker push "$IMAGE_BASE:${{ env.TAG }}"
+          docker push "$IMAGE_BASE:latest"

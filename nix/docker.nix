@@ -74,7 +74,7 @@ let
       };
     };
 in {
-  zeko-image-full = dockerTools.buildLayeredImage {
+  zeko-image = dockerTools.buildLayeredImage {
     name = "zeko";
     tag = "latest";
     inherit created;
@@ -92,6 +92,36 @@ in {
       Env = [ "ZEKO_SIGNATURE_KIND=testnet" ];
       Cmd = [ "-p" "1925" ];
       WorkingDir = "/root";
+    };
+  };
+  zeko-da-image = dockerTools.buildLayeredImage {
+    name = "zeko-da";
+    tag = "latest";
+    inherit created;
+    contents = [
+      ocamlPackages_mina.devnet.zeko_da
+      coreutils
+      findutils
+      bashInteractive
+      procps
+      curl
+      jq
+    ];
+    config = {
+      Entrypoint = [ "/bin/zeko-da" ];
+      Env = [ "ZEKO_SIGNATURE_KIND=testnet" ];
+      Cmd = [
+        "run-node"
+        "--port"
+        "1924"
+        "--db-dir"
+        "/db"
+        "--network-id"
+        "testnet"
+      ];
+      Expose = 1924;
+      Volumes = { "/db" = { }; };
+      WorkingDir = "/db";
     };
   };
 
