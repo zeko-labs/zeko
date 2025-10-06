@@ -632,7 +632,9 @@ let () =
   let open Mina_numbers in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:0 ~postgres_uri ~gql_uri
-       ~da_config ~provers ~slot_acceptance:(Time.Span.of_min 10.) () )
+       ~da_config ~provers ~slot_acceptance:(Time.Span.of_min 10.)
+       ~commit_validity_period:(Global_slot_span.of_int 20)
+       () )
     ~f:(fun { outer_kp; sequencer; signer; l1_config; _ } ->
       (* Create l1 accounts *)
       let l1_accounts =
@@ -699,13 +701,13 @@ let () =
           [ signer ]
         |> Zkapp_command.read_all_proofs_from_disk
       in
-      let deposit ~amount ~(account : Keypair.t) :
+      let deposit ~amount ~(account : Keypair.t) ~timeout :
           C.Bridge_state.Deposit_params_base.t =
         let current_slot : Global_slot_since_genesis.t =
           Utils.Slot.global_slot ~l1_config
         in
         let timeout =
-          C.Zeko_util.Slot.add current_slot (Global_slot_span.of_int 20)
+          C.Zeko_util.Slot.add current_slot (Global_slot_span.of_int timeout)
         in
         { children = []
         ; holder_account_l1 =
@@ -723,9 +725,9 @@ let () =
       print_endline "(* Send 1-3 deposits *)" ;
       let deposits =
         run (fun () ->
-            let deposit1 = deposit ~amount:10 ~account:account1 in
-            let deposit2 = deposit ~amount:20 ~account:account2 in
-            let deposit3 = deposit ~amount:30 ~account:account3 in
+            let deposit1 = deposit ~amount:10 ~account:account1 ~timeout:40 in
+            let deposit2 = deposit ~amount:20 ~account:account2 ~timeout:40 in
+            let deposit3 = deposit ~amount:30 ~account:account3 ~timeout:40 in
 
             let%bind _ =
               submit_deposit ~fee:6 account1 deposit1
@@ -772,9 +774,9 @@ let () =
       let deposits =
         deposits
         @ run (fun () ->
-              let deposit4 = deposit ~amount:40 ~account:account1 in
-              let deposit5 = deposit ~amount:50 ~account:account2 in
-              let deposit6 = deposit ~amount:60 ~account:account3 in
+              let deposit4 = deposit ~amount:40 ~account:account1 ~timeout:40 in
+              let deposit5 = deposit ~amount:50 ~account:account2 ~timeout:40 in
+              let deposit6 = deposit ~amount:60 ~account:account3 ~timeout:40 in
 
               let%bind _ =
                 submit_deposit ~fee:3 account1 deposit4
@@ -819,7 +821,7 @@ let () =
           let target_ledger_hash = get_root !sequencer in
           [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
 
-      print_endline "(* Sync the latest commit  *)" ;
+      print_endline "(* Sync the latest commit *)" ;
       run (fun () ->
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
@@ -1005,6 +1007,273 @@ let () =
                 apply_user_command !sequencer (Zkapp_command command)
               in
               [%test_eq: unit Or_error.t] result (Ok ()) ) ) ;
+
+      print_endline "(* Send 7-9 deposits *)" ;
+      let timeout_deposits =
+        run (fun () ->
+            let deposit7 = deposit ~amount:70 ~account:account1 ~timeout:10 in
+            let deposit8 = deposit ~amount:80 ~account:account2 ~timeout:10 in
+            let deposit9 = deposit ~amount:90 ~account:account3 ~timeout:10 in
+
+            let%bind _ =
+              submit_deposit ~fee:3 account1 deposit7
+              >>= Gql_client.send_zkapp gql_uri
+            in
+            let%bind _ =
+              submit_deposit ~fee:2 account2 deposit8
+              >>= Gql_client.send_zkapp gql_uri
+            in
+            let%bind _ =
+              submit_deposit ~fee:1 account3 deposit9
+              >>= Gql_client.send_zkapp gql_uri
+            in
+            let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+            return
+              [ (account1, deposit7)
+              ; (account2, deposit8)
+              ; (account3, deposit9)
+              ] )
+      in
+
+      (* deposit timeout has to be more than commit validity period *)
+      (* canceled deposit timeout has to be less than commit validity period *)
+      (* shift has to be more than timeout but less than commit validity period for canceled deposit *)
+      print_endline "(* Commit 7-9 deposits after timeout *)" ;
+      run (fun () ->
+          let%bind _shifted = Gql_client.For_tests.shift_slots gql_uri 15 in
+          Utils.Slot.For_tests.add_to_global_slot := 15 ;
+          let%bind commit_result = commit !sequencer in
+          let%bind _txn_snark = commit_result in
+          let%bind () =
+            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
+          in
+          let%bind () =
+            Executor.wait_to_finish !sequencer.merger_ctx.executor
+          in
+          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%map { ledger_hash = committed_ledger_hash; _ } =
+            Gql_client.infer_state gql_uri
+              ~signer_pk:(Public_key.compress signer.public_key)
+              ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Utils.value_of_zkapp_state
+                  Zeko_circuits.Rollup_state.Outer_state.typ
+          in
+          let target_ledger_hash = get_root !sequencer in
+          [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
+
+      let cancel_deposit ~fee (signer : Keypair.t) deposit_params =
+        let%bind nonce =
+          Gql_client.fetch_nonce gql_uri
+            (Signature_lib.Public_key.compress signer.public_key)
+        in
+        let fee_payer =
+          Account_update.Fee_payer.
+            { body =
+                { public_key = Public_key.compress signer.public_key
+                ; fee = Currency.Fee.of_mina_int_exn fee
+                ; valid_until = None
+                ; nonce = Account.Nonce.of_uint32 nonce
+                }
+            ; authorization = Signature.dummy
+            }
+        in
+        let%bind actions =
+          Gql_client.fetch_actions gql_uri
+            (Public_key.compress outer_kp.public_key)
+          >>| List.map ~f:(fun (fields, _, before, after) ->
+                  ( Utils.actions_to_outer_action (List.hd_exn fields)
+                  , before
+                  , after ) )
+        in
+        let ( my_deposit_index
+            , (_my_deposit, `Before before_my_deposit_action_state, _) ) =
+          let hashed_deposit =
+            Utils.value_to_hash ~init:Zeko_constants.deposit_salt
+              C.Bridge_state.Deposit_params_base.typ deposit_params
+          in
+          List.findi actions ~f:(fun _ (action, _, _) ->
+              match action with
+              | Commit _ ->
+                  false
+              | Witness witness ->
+                  Field.equal hashed_deposit witness.aux )
+          |> Option.value_exn ~message:"Did not find my deposit"
+        in
+        let ( nearest_commit_index
+            , ( nearest_commit
+              , `Before before_nearest_commit_action_state
+              , `After after_nearest_commit_action_state ) ) =
+          List.sub actions ~pos:my_deposit_index
+            ~len:(List.length actions - my_deposit_index)
+          |> List.find_mapi ~f:(fun i (action, before, after) ->
+                 match action with
+                 | Commit commit ->
+                     Some (i, (commit, before, after))
+                 | Witness _ ->
+                     None )
+          |> Option.value_exn ~message:"Did not find nearest commit"
+        in
+        let nearest_commit_index = nearest_commit_index + my_deposit_index in
+        let check_accepted :
+            Bridge.Check_accepted_mina.Init.t
+            * Bridge.Check_accepted_mina.Elem.t list =
+          ( { params = deposit_params
+            ; original_action_state =
+                C.Rollup_state.Outer_action_state.unsafe_value_of_field
+                  before_my_deposit_action_state
+            ; deposit_index = UInt32.of_int my_deposit_index
+            }
+          , List.sub actions ~pos:my_deposit_index
+              ~len:(nearest_commit_index - my_deposit_index + 1)
+            |> List.map ~f:(fun (action, _, _) -> action) )
+        in
+        let commit_ase : Ase.Without_length.Stmt.t * Field.t list =
+          ( after_nearest_commit_action_state
+          , List.sub actions ~pos:(nearest_commit_index + 1)
+              ~len:(List.length actions - nearest_commit_index - 1)
+            |> List.map ~f:(fun (action, _, _) ->
+                   [ Utils.actions_of_outer_action action ]
+                   |> Zkapp_account.Actions_impl.hash ) )
+        in
+        let check_accepted_ase : Ase.With_length.Stmt.t * Field.t list =
+          ( { action_state = fst commit_ase
+            ; length =
+                Zeko_circuits.Zeko_util.Checked32.of_int
+                  (nearest_commit_index + 1)
+            }
+          , snd commit_ase )
+        in
+        let sync_ase : Ase.With_length.Stmt.t * Field.t list =
+          let commit_sync_index =
+            ( Zeko_circuits.Rollup_state.Outer_action_state.With_length.length
+                nearest_commit.synchronized_outer_action_state
+            |> Account_nonce.to_int )
+            - 1
+          in
+          ( { action_state =
+                C.Rollup_state.Outer_action_state.(
+                  With_length.raw nearest_commit.synchronized_outer_action_state)
+            ; length =
+                C.Rollup_state.Outer_action_state.(
+                  With_length.length
+                    nearest_commit.synchronized_outer_action_state)
+            }
+          , List.sub actions ~pos:(commit_sync_index + 1)
+              ~len:(List.length actions - commit_sync_index - 1)
+            |> List.map ~f:(fun (action, _, _) ->
+                   [ Utils.actions_of_outer_action action ]
+                   |> Zkapp_account.Actions_impl.hash ) )
+        in
+        let%bind prev_next_cancelled_deposit =
+          match%map
+            try_with (fun () ->
+                let%map (next_cancelled_deposit :: _next_withdrawal :: _) =
+                  let helper_aid =
+                    Account_id.create
+                      (Public_key.compress signer.public_key)
+                      (Account_id.derive_token_id
+                         ~owner:
+                           (Account_id.of_public_key
+                              (Public_key.decompress_exn
+                                 Zeko_circuits_config.Inputs
+                                 .helper_token_owner_l1 ) ) )
+                  in
+                  Gql_client.fetch_state gql_uri helper_aid
+                in
+                UInt32.of_string (Field.to_string next_cancelled_deposit) )
+          with
+          | Ok x ->
+              Some x
+          | Error _ ->
+              None
+        in
+        let%map transfer_forest =
+          Bridge_prover.(
+            prove !sequencer.bridge_prover
+              (Finalize_cancelled_deposit.f ~logger
+                 { public_key =
+                     List.hd_exn Zeko_circuits_config.Inputs.holder_accounts_l1
+                 ; commit = nearest_commit
+                 ; before_commit =
+                     C.Rollup_state.Outer_action_state.unsafe_value_of_field
+                       before_nearest_commit_action_state
+                 ; commit_ase_source = fst commit_ase
+                 ; commit_ase_elems = snd commit_ase
+                 ; sync_ase_source = fst sync_ase
+                 ; sync_ase_elems = snd sync_ase
+                 ; check_accepted_init = fst check_accepted
+                 ; check_accepted_elems = snd check_accepted
+                 ; check_accepted_ase_source = fst check_accepted_ase
+                 ; check_accepted_ase_elems = snd check_accepted_ase
+                 ; prev_next_cancelled_deposit =
+                     Option.value prev_next_cancelled_deposit
+                       ~default:UInt32.zero
+                 } ))
+          >>| Or_error.ok_exn
+        in
+        let transferrer_update =
+          Account_update.with_no_aux
+            ~body:
+              { Account_update.Body.dummy with
+                public_key = Public_key.compress signer.public_key
+              ; balance_change =
+                  (let account_creation_fee =
+                     if Option.is_some prev_next_cancelled_deposit then
+                       Currency.Amount.zero
+                     else
+                       constraint_constants.account_creation_fee
+                       |> Currency.Amount.of_fee
+                   in
+                   Currency.Amount.(
+                     Signed.of_unsigned
+                     @@ Option.value_exn
+                          ~message:"Amount insufficient to create 2 accounts"
+                     @@ sub deposit_params.amount account_creation_fee) )
+              ; implicit_account_creation_fee = false
+              ; use_full_commitment = true
+              ; authorization_kind = None_given
+              }
+            ~authorization:Control.Poly.None_given
+        in
+        let transfer_cmd : Zkapp_command.t =
+          { fee_payer
+          ; account_updates =
+              Zkapp_command.Call_forest.cons
+                ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                transferrer_update transfer_forest
+              |> Zkapp_command.Call_forest.map
+                   ~f:(Account_update.write_all_proofs_to_disk ~proof_cache_db)
+              |> Utils.rehash_forest
+                   ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+          ; memo = Signed_command_memo.empty
+          }
+        in
+        Utils.sign_zkapp_command
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 transfer_cmd
+          [ signer ]
+        |> Zkapp_command.read_all_proofs_from_disk
+      in
+      print_endline "(* Cancel timeouted deposits 7-9 *)" ;
+      run (fun () ->
+          let%bind () =
+            Deferred.List.iteri timeout_deposits
+              ~f:(fun i (signer, deposit_params) ->
+                printf "(* Canceling deposit %d *)\n%!" i ;
+                let%bind command =
+                  cancel_deposit ~fee:1 signer deposit_params
+                in
+                let%bind _ = Gql_client.send_zkapp gql_uri command in
+                let%bind _created =
+                  Gql_client.For_tests.create_new_block gql_uri
+                in
+                let%map status =
+                  Gql_client.For_tests.get_zkapp_command_status gql_uri
+                    (Mina_transaction.Transaction_hash.hash_command
+                       (Zkapp_command command) )
+                in
+                [%test_eq: string list list option] status None )
+          in
+          return () ) ;
 
       print_endline "Started test 'withdrawals'" ;
 

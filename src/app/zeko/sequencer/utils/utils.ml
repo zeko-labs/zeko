@@ -300,11 +300,17 @@ let command_slot_range (command : User_command.t) : Slot_range.t option =
 module Slot = struct
   type l1_config = { fork_timestamp : Time.t; fork_slot : Slot.t }
 
+  module For_tests = struct
+    let add_to_global_slot = ref 0
+  end
+
   let global_slot ~l1_config =
     let after_fork_slot =
       (Time.abs_diff (Time.now ()) l1_config.fork_timestamp |> Time.Span.to_sec)
       /. 180.
-      |> Float.to_int |> Mina_numbers.Global_slot_span.of_int
+      |> Float.to_int
+      |> ( + ) !For_tests.add_to_global_slot
+      |> Mina_numbers.Global_slot_span.of_int
     in
     Mina_numbers.Global_slot_since_genesis.add l1_config.fork_slot
       after_fork_slot
