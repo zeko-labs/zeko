@@ -41,8 +41,7 @@ let () =
 
 let () =
   let random_pk = (Keypair.create ()).public_key |> Public_key.compress in
-  let deposit_params : Zeko_types.Bridge.Finalize_deposit.Deposit_params_base.t
-      =
+  let deposit_params : Zeko_types.Bridge.Deposit_params_base.t =
     { children = []
     ; holder_account_l1 = random_pk
     ; amount = Currency.Amount.one

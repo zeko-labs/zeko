@@ -84,7 +84,7 @@ module Deposit_request = struct
     let (Typ typ) = typ in
     typ.value_to_fields t |> fst
     |> Random_oracle.hash
-         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
 
   let f ~t ~logger ({ deposit_params } as request : t) =
@@ -150,7 +150,7 @@ module Withdrawal_request = struct
     let (Typ typ) = typ in
     typ.value_to_fields t |> fst
     |> Random_oracle.hash
-         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
 
   let f ~t ~logger ({ withdrawal_params } as request : t) =
@@ -245,7 +245,7 @@ module Finalize_deposit = struct
     Array.append t ase_elems
     |> Array.append check_accepted_elems
     |> Random_oracle.hash
-         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
 
   let f ~t ~logger
@@ -291,6 +291,191 @@ module Finalize_deposit = struct
                       ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
                     |> Utils.rehash_forest
                          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 )
+            >>| Result.map_error ~f:(fun e -> Exn.to_string e)
+          in
+          match result with
+          | Error e ->
+              [%log warn] "prove failed %s" e ;
+              Error (Error.of_string e)
+          | Ok forest ->
+              Ok forest ) )
+end
+
+module Finalize_cancelled_deposit = struct
+  type t =
+    { public_key : Public_key.Compressed.t
+    ; commit : Rollup_state.Outer_action.Commit.t
+    ; before_commit : Rollup_state.Outer_action_state.t
+    ; commit_ase_source : Ase.Without_length.Stmt.t
+    ; sync_ase_source : Ase.With_length.Stmt.t
+    ; check_accepted_init : Bridge_inst_mina.Check_accepted.Definition.Init.t
+    ; check_accepted_ase_source : Ase.With_length.Stmt.t
+    ; prev_next_cancelled_deposit : Zeko_util.Checked32.t
+    }
+  [@@deriving snarky]
+
+  type t_ =
+    { public_key : Public_key.Compressed.t
+    ; commit : Rollup_state.Outer_action.Commit.t
+    ; before_commit : Rollup_state.Outer_action_state.t
+    ; commit_ase_source : Ase.Without_length.Stmt.t
+    ; sync_ase_source : Ase.With_length.Stmt.t
+    ; check_accepted_init : Bridge_inst_mina.Check_accepted.Definition.Init.t
+    ; check_accepted_ase_source : Ase.With_length.Stmt.t
+    ; prev_next_cancelled_deposit : Zeko_util.Checked32.t
+    ; commit_ase_elems : Field.t list
+    ; sync_ase_elems : Field.t list
+    ; check_accepted_elems :
+        Bridge_inst_mina.Check_accepted.Definition.Elem.t list
+    ; check_accepted_ase_elems : Field.t list
+    }
+
+  let key
+      ({ public_key
+       ; commit
+       ; before_commit
+       ; commit_ase_source
+       ; sync_ase_source
+       ; check_accepted_init
+       ; check_accepted_ase_source
+       ; prev_next_cancelled_deposit
+       ; commit_ase_elems
+       ; sync_ase_elems
+       ; check_accepted_elems = _
+       ; check_accepted_ase_elems
+       } :
+        t_ ) =
+    let (Typ typ) = typ in
+    let t =
+      typ.value_to_fields
+        { public_key
+        ; commit
+        ; before_commit
+        ; commit_ase_source
+        ; sync_ase_source
+        ; check_accepted_init
+        ; check_accepted_ase_source
+        ; prev_next_cancelled_deposit
+        }
+      |> fst
+    in
+    let commit_ase_elems = Array.of_list commit_ase_elems in
+    let sync_ase_elems = Array.of_list sync_ase_elems in
+    let check_accepted_ase_elems = Array.of_list check_accepted_ase_elems in
+    Array.append t commit_ase_elems
+    |> Array.append sync_ase_elems
+    |> Array.append check_accepted_ase_elems
+    |> Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
+    |> Field.to_string
+
+  let f ~t ~logger
+      ({ public_key
+       ; commit
+       ; before_commit
+       ; commit_ase_source
+       ; sync_ase_source
+       ; check_accepted_init
+       ; check_accepted_ase_source
+       ; prev_next_cancelled_deposit
+       ; commit_ase_elems
+       ; sync_ase_elems
+       ; check_accepted_elems
+       ; check_accepted_ase_elems
+       } as request :
+        t_ ) =
+    let key = key request in
+    ( key
+    , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
+          let%map result =
+            try_with (fun () ->
+                let%bind ( (cancelled_deposit_body, _, calls)
+                         , cancelled_deposit_proof ) =
+                  let deposit, check_accepted_elems =
+                    ( List.hd_exn check_accepted_elems
+                    , List.tl_exn check_accepted_elems )
+                  in
+                  let deposit_hash =
+                    Zkapp_account.Actions_impl.hash
+                      [ Utils.actions_of_outer_action deposit ]
+                  in
+                  match%map
+                    Zeko_prover.Client.finalize_cancelled_deposit t.provers
+                      ~public_key
+                      ~may_use_token:
+                        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+                        .May_use_token
+                        .No
+                      ~outer_authorization_kind:
+                        Zeko_circuits.Rule_bridge_finalize_cancelled_deposit.A
+                        .None_given ~commit ~before_commit
+                      ~commit_ase:(commit_ase_source, commit_ase_elems)
+                      ~sync_ase:(sync_ase_source, sync_ase_elems)
+                      ~check_accepted:
+                        (check_accepted_init, deposit_hash, check_accepted_elems)
+                      ~check_accepted_ase:
+                        (check_accepted_ase_source, check_accepted_ase_elems)
+                      ~prev_next_cancelled_deposit
+                  with
+                  | Error e ->
+                      failwith e
+                  | Ok x ->
+                      x
+                in
+                let (_, helper_account), witness_outer =
+                  match calls with
+                  | [ { elt =
+                          { account_update = helper_token_owner
+                          ; calls =
+                              [ { elt =
+                                    { account_update = helper_account
+                                    ; calls = []
+                                    ; _
+                                    }
+                                ; _
+                                }
+                              ]
+                          ; _
+                          }
+                      ; _
+                      }
+                    ; { elt = { account_update = witness_outer; calls = []; _ }
+                      ; _
+                      }
+                    ] ->
+                      ((helper_token_owner, helper_account), witness_outer)
+                  | _ ->
+                      failwith
+                        "cancel_deposit calls: no helper token owner or \
+                         witness outer"
+                in
+                let witness_forest =
+                  Zkapp_command.Call_forest.cons
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                    witness_outer []
+                in
+                let%map helper_forest =
+                  match%map
+                    Zeko_prover.Client.outer_token_owner t.provers
+                      { public_key =
+                          Zeko_circuits_config.Inputs.helper_token_owner_l1
+                      ; a = helper_account.body
+                      }
+                  with
+                  | Error e ->
+                      failwith e
+                  | Ok ((body, _, calls), proof) ->
+                      Utils.attach_proof_to_forest
+                        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                        ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+                in
+                let children = helper_forest @ witness_forest in
+                Utils.attach_proof_to_forest
+                  ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                  ~proof_cache_db:t.proof_cache_db ~body:cancelled_deposit_body
+                  ~calls:children ~proof:cancelled_deposit_proof
+                |> Utils.rehash_forest
+                     ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 )
             >>| Result.map_error ~f:(fun e -> Exn.to_string e)
           in
           match result with
@@ -359,7 +544,7 @@ module Finalize_withdrawal = struct
     Array.append t commit_ase_elems
     |> Array.append withdrawal_ase_elems
     |> Random_oracle.hash
-         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+         ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
 
   let f ~t ~logger

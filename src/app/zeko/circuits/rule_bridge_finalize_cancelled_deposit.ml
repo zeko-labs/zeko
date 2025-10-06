@@ -179,9 +179,11 @@ struct
                } =
           exists Witness.typ ~compute:(V.get w)
         in
+        let@ () = with_label __LOC__ in
         let* (commit_ase, sync_ase), verify_two_outer_ases =
           Verify_two_outer_ases.get verify_two_outer_ases
         in
+        let@ () = with_label __LOC__ in
         let* ( ( ({ params
                   ; action_state = mid_outer_action_state'
                   ; deposit_index
@@ -197,20 +199,25 @@ struct
              , verify_check_accepted_and_ase ) =
           Verify_check_accepted_and_ase.get verify_check_accepted_and_ase
         in
+        let@ () = with_label __LOC__ in
         let helper_token_id =
           let account_id =
             Account_id.create helper_token_owner_l1 Token_id.default
           in
           Account_id.derive_token_id ~owner:account_id |> constant Token_id.typ
         in
+        let@ () = with_label __LOC__ in
         let* () = Boolean.(Assert.is_true @@ not is_accepted) in
+        let@ () = with_label __LOC__ in
         let* () = Boolean.Assert.is_true is_rejected in
+        let@ () = with_label __LOC__ in
         let* () =
           assert_equal ~label:__LOC__ Rollup_state.Outer_action_state.typ
             (Rollup_state.Outer_action_state.With_length.state_var
                mid_outer_action_state )
             mid_outer_action_state'
         in
+        let@ () = with_label __LOC__ in
         let* next_cancelled_deposit =
           Checked32.Checked.(
             sub
@@ -218,6 +225,7 @@ struct
                  mid_outer_action_state )
               n_steps)
         in
+        let@ () = with_label __LOC__ in
         let* next_cancelled_deposit' = Checked32.Checked.succ deposit_index in
         let* () =
           assert_equal ~label:__LOC__ Checked32.typ next_cancelled_deposit
@@ -229,6 +237,7 @@ struct
               fun () -> prev_next_cancelled_deposit < next_cancelled_deposit)
         in
         let* () =
+          let@ () = with_label __LOC__ in
           let* commit_ase_source' =
             Rollup_state.Outer_action.push_commit_var commit before_commit_ase
           in
@@ -251,6 +260,7 @@ struct
             Rollup_state.Outer_action_state.With_length.typ sync_ase.target
             outer_action_state
         in
+        let@ () = with_label __LOC__ in
         let base_params = Deposit_params.base params in
         let helper_token_owner =
           { default_account_update with
@@ -266,6 +276,7 @@ struct
           ; authorization_kind = authorization_signed ()
           ; use_full_commitment = Boolean.true_
           ; may_use_token = constant May_use_token.typ Parents_own_token
+          ; implicit_account_creation_fee = constant Boolean.typ false
           ; update =
               { default_account_update.update with
                 app_state =
@@ -328,6 +339,7 @@ struct
                 of_unsigned base_params.amount |> negate)
           }
         in
+        let@ () = with_label __LOC__ in
         let*| out =
           make_outputs ~chain:chain_l1 account_update
             [ (helper_token_owner, [ (helper_account, []) ])
