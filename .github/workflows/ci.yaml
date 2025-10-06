@@ -14,7 +14,7 @@ jobs:
     runs-on: zeko-gha-runner
     steps:
       - name: 📥 Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: recursive
       # Prepare build environment(Go/OCaml/Rust)
