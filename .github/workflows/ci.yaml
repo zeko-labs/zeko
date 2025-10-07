@@ -11,16 +11,16 @@ concurrency:
 jobs:
   build-and-test:
     name: "Build & Test"
-    runs-on: zeko-gha-runner
+    runs-on: warp-ubuntu-latest-x64-8x
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
-        #with:
-        #  submodules: recursive
-      - name: 📥 Checkout submodules
-        run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive --depth=1
+        with:
+          submodules: recursive
+      # - name: 📥 Checkout submodules
+      #   run: |
+      #     git submodule sync --recursive
+      #     git submodule update --init --recursive --depth=1
       # Prepare build environment(Go/OCaml/Rust)
       - name: 🐹 Setup go
         uses: actions/setup-go@v6
@@ -57,7 +57,7 @@ jobs:
             libssl-dev \
             pkg-config zlib1g-dev \
             capnproto \
-            netcat
+            netcat-traditional
           git clone https://github.com/ocaml/opam-repository.git \
             --depth 1 ./opam-repository
           git -C ./opam-repository fetch origin 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
@@ -70,7 +70,7 @@ jobs:
           export OPAMYES=1
       # Retrieve .opam from cache
       - name: 🧩 Get opam dependency cache
-        uses: actions/cache@v4
+        uses: WarpBuilds/cache@v1
         id: opam_dependencies
         with:
           path: /root/.opam
@@ -84,7 +84,7 @@ jobs:
           opam clean --logs -cs --quiet
       # Retrieve _build dir from cache before initiating a build
       - name: 🧩 Get zeko build cache
-        uses: actions/cache@v4
+        uses: WarpBuilds/cache@v1
         id: zeko_build
         with:
           path: ./_build

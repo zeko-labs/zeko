@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build-sequencer-docker-image:
     name: Build and Publish Zeko Docker Images
-    runs-on: zeko-gha-runner
+    runs-on: warp-ubuntu-latest-x64-4x
     strategy:
       matrix:
         package: [zeko, zeko-da] 
