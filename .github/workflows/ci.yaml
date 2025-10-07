@@ -73,7 +73,7 @@ jobs:
         uses: WarpBuilds/cache@v1
         id: opam_dependencies
         with:
-          path: /root/.opam
+          path: ~/.opam
           key: zeko_opam_dependencies-${{ hashFiles('./opam.export') }}
       # Install opam dependencies
       - name: 🏗️  Install opam dependencies
