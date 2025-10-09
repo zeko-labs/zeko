@@ -122,3 +122,7 @@ module Folder_iterations = struct
     let extend_option_iterations = Int.pow 2 3
   end
 end
+
+let multisig_salt = "multisig"
+
+let da_multisig_max_length = 10

@@ -37,9 +37,11 @@
   rule_bridge_outer_token_owner
   rule_change_permissions
   check_accepted_make
+  comparison_gadget
   bridge_state
   outer_rules
   inner_rules
+  multisig
   rule_pause
   rule_commit
   rule_inner_action_witness
