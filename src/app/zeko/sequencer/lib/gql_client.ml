@@ -365,6 +365,7 @@ let infer_state uri ~zkapp_pk ~signer_pk =
       ~f:(fun acc command ->
         match Utils.update_state zkapp_pk command acc with
         | `Precondition_failed ->
+            printf "precondition failed\n" ;
             Stop acc
         | `Skipped ->
             Continue acc
