@@ -17,10 +17,6 @@ jobs:
         uses: actions/checkout@v5
         with:
           submodules: recursive
-      # - name: 📥 Checkout submodules
-      #   run: |
-      #     git submodule sync --recursive
-      #     git submodule update --init --recursive --depth=1
       # Prepare build environment(Go/OCaml/Rust)
       - name: 🐹 Setup go
         uses: actions/setup-go@v6

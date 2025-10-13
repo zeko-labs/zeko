@@ -330,8 +330,8 @@
             libp2p_helper kimchi_bindings_stubs snarky_js validation trace-tool
             zkapp-cli;
           inherit (dockerImages)
-            zeko-image zeko-da-image mina-image-slim mina-image-full
-            mina-archive-image-full mina-image-instr-full;
+            zeko-image zeko-da-image zeko-archive-relay-image mina-image-slim
+            mina-image-full mina-archive-image-full mina-image-instr-full;
           mina-deb = debianPackages.mina;
           impure-shell = (import ./nix/impure-shell.nix pkgs).inputDerivation;
         }) // {
