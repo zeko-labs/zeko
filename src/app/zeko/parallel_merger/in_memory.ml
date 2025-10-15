@@ -240,7 +240,9 @@ end) :
     | Some last ->
         let () =
           don't_wait_for
-            (Tree.add_job_exn last.value context ~id:(generate_id ()) ~data)
+            (within' ~monitor:Monitor.main (fun () ->
+                 Tree.add_job_exn last.value context ~id:(generate_id ()) ~data )
+            )
         in
         last.id
 
