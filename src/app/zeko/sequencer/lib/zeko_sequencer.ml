@@ -652,7 +652,9 @@ module Sequencer = struct
     else
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
       every ~start:(after period) ~stop:(Ivar.read t.closed) period (fun () ->
-          don't_wait_for @@ Deferred.ignore_m @@ commit t )
+          don't_wait_for
+            (within' ~monitor:Monitor.main (fun () ->
+                 commit t >>= Deferred.ignore_m ) ) )
 
   let bootstrap ~logger ({ config; _ } as t) da_config =
     [%log info] "Bootstrapping" ;
