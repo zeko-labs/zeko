@@ -5,13 +5,14 @@ open Mina_ledger
 open Signature_lib
 open Zeko_types
 module L = Ledger
+module Field = Snark_params.Tick.Field
 
 let constraint_constants = Zeko_constants.constraint_constants
 
 let print_endline = Core.print_endline
 
 let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-    ~sequencer_key ~da_key ~account_creation_fee () =
+    ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee () =
   let logger = Logger.create () in
   let sender_keypair =
     Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
@@ -167,7 +168,13 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
           ~signer:sender_keypair ~outer_kp ~holder_kp ~token_holder_kp
           ~fee:(Currency.Fee.of_mina_int_exn 1)
           ~nonce ~account_creation_fee ~initial_ledger:new_ledger
-          ~account_set_hash:imt_hash ~pause_key ~sequencer:sequencer_key ~da_key
+          ~account_set_hash:imt_hash ~pause_key ~sequencer:sequencer_key
+          ~da_key:
+            (Multisig.commit
+               { public_keys =
+                   List.sort da_keys ~compare:Public_key.Compressed.compare
+               ; quorum = Field.of_int da_quorum
+               } )
           ()
       in
 
@@ -252,7 +259,12 @@ let () =
           flag "--pause-key" (required string) ~doc:"string Pause key"
         and sequencer_key =
           flag "--sequencer-key" (required string) ~doc:"string Sequencer key"
-        and da_key = flag "--da-key" (required string) ~doc:"string Da key"
+        and da_keys =
+          flag "--da-keys" (required string)
+            ~doc:"string List of DA keys, separated by commas"
+        and da_quorum =
+          flag "--da-quorum" (required int)
+            ~doc:"int Quorum for the DA signature count"
         and account_creation_fee =
           flag "--account-creation-fee" (required string)
             ~doc:"float Account creation fee in mina"
@@ -274,8 +286,9 @@ let () =
           Public_key.Compressed.of_base58_check_exn x
           |> Zeko_types.Even_PC.create |> Or_error.ok
         in
-        let da_key =
-          string_to_even_pc da_key |> Option.value_exn ~message:"DA key odd"
+        let da_keys =
+          String.split ~on:',' da_keys
+          |> List.map ~f:Public_key.Compressed.of_base58_check_exn
         in
         let pause_key =
           string_to_even_pc pause_key
@@ -292,4 +305,4 @@ let () =
           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
         in
         run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-          ~sequencer_key ~da_key ~account_creation_fee )
+          ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee )

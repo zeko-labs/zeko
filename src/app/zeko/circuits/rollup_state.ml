@@ -196,7 +196,7 @@ module Outer_state = struct
     ; ledger_hash : Ledger_hash.t  (** The ledger hash of the rollup *)
     ; inner_action_state : Inner_action_state.With_length.t
     ; sequencer : Even_PC.t
-    ; da_key : Even_PC.t
+    ; da_key : Multisig.Commitment.t
     ; acc_set : Account_set.t
     }
   [@@deriving snarky]
@@ -207,7 +207,7 @@ module Outer_state = struct
     ; ledger_hash : Ledger_hash.var option
     ; inner_action_state : Inner_action_state.With_length.fine
     ; sequencer : Even_PC.var option
-    ; da_key : Even_PC.var option
+    ; da_key : Multisig.Commitment.var option
     ; acc_set : Account_set.var option
     }
 
@@ -242,7 +242,7 @@ module Outer_state = struct
     ; Whole (Ledger_hash.typ, ledger_hash)
     ; Recursive (Inner_action_state.With_length.fine inner_action_state)
     ; Whole (Even_PC.typ, sequencer)
-    ; Whole (Even_PC.typ, da_key)
+    ; Whole (Multisig.Commitment.typ, da_key)
     ; Whole (Account_set.typ, acc_set)
     ]
 end
