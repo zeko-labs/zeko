@@ -654,7 +654,7 @@ module Sequencer = struct
       every ~start:(after period) ~stop:(Ivar.read t.closed) period (fun () ->
           don't_wait_for
             (within' ~monitor:Monitor.main (fun () ->
-                 Deferred.ignore_m @@ commit t ) ) )
+                 commit t >>= Deferred.ignore_m ) ) )
 
   let bootstrap ~logger ({ config; _ } as t) da_config =
     [%log info] "Bootstrapping" ;
