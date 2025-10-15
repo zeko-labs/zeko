@@ -75,7 +75,6 @@ let of_witness_var ({ signatures; quorum; _ } : Witness.var) :
         (Random_oracle.Checked.pack_input input) )
 
 let check ~signature_kind ({ signatures; quorum } : Witness.var) payload =
-  (* TODO: Is this correct? *)
   let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
   let payload = Random_oracle.Input.Chunked.field payload in
   let@ () = with_label __LOC__ in
