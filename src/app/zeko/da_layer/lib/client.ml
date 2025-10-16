@@ -228,14 +228,6 @@ module Config = struct
     }
 
   let of_node_locations nodes = { nodes }
-
-  let fetch_public_keys ~logger t =
-    let%map fetched_da_keys =
-      Deferred.List.map ~how:`Parallel t.nodes ~f:(fun node_location ->
-          Rpc.get_node_public_key ~logger ~node_location () )
-      >>| Result.all >>| Or_error.ok_exn
-    in
-    List.sort fetched_da_keys ~compare:Public_key.Compressed.compare
 end
 
 type t =
@@ -246,21 +238,9 @@ type t =
   ; pushed_diff : unit Condition.t
   ; pushed_signature : unit Condition.t
   ; stop : unit Ivar.t
-  ; da_keys : Public_key.Compressed.t list
   }
 
-let create ~logger ~(config : Config.t) ~quorum ~da_keys ~db_pool =
-  let%map fetched_da_keys = Config.fetch_public_keys ~logger config in
-  let sorted_da_keys =
-    List.sort da_keys ~compare:Public_key.Compressed.compare
-  in
-  if not (List.equal Public_key.Compressed.equal fetched_da_keys sorted_da_keys)
-  then
-    [%log warn]
-      !"DA keys do not match:\n\
-        fetched: %{sexp: Public_key.Compressed.t list}\n\
-        expected: %{sexp: Public_key.Compressed.t list}"
-      fetched_da_keys sorted_da_keys ;
+let create ~logger ~config ~quorum ~db_pool =
   { logger
   ; config
   ; quorum
@@ -268,7 +248,6 @@ let create ~logger ~(config : Config.t) ~quorum ~da_keys ~db_pool =
   ; pushed_diff = Condition.create ()
   ; pushed_signature = Condition.create ()
   ; stop = Ivar.create ()
-  ; da_keys = sorted_da_keys
   }
 
 let stop t = Ivar.fill t.stop ()
@@ -397,7 +376,7 @@ let start_client t ~target_ledger_hash =
   Deferred.List.iter ~how:`Parallel t.config.nodes ~f:(fun node_location ->
       catch_up t ~node_location ~target_ledger_hash )
 
-let rec get_multisig ?pushed_signature t ~ledger_hash =
+let rec get_signature ?pushed_signature t ~da_key ~ledger_hash =
   let pushed_signature =
     Option.value pushed_signature ~default:(Condition.wait t.pushed_signature)
   in
@@ -407,22 +386,20 @@ let rec get_multisig ?pushed_signature t ~ledger_hash =
   in
   if List.length signatures >= t.quorum then
     return
-      ( t.quorum
-      , List.map t.da_keys ~f:(fun da_key ->
-            ( da_key
-            , List.find_map signatures ~f:(fun { public_key; signature; _ } ->
-                  if Public_key.Compressed.equal public_key da_key then
-                    Some signature
-                  else None ) ) ) )
+      ( List.length signatures
+      , List.find_map_exn signatures ~f:(fun { public_key; signature; _ } ->
+            if Public_key.Compressed.equal public_key da_key then
+              Some (public_key, signature)
+            else None ) )
   else
     let logger = t.logger in
     [%log info] "Not enough signatures, waiting for more" ;
     let%bind () = Deferred.any [ pushed_signature; Ivar.read t.stop ] in
     if Ivar.is_full t.stop then failwith "Da layer client stopped"
     else
-      get_multisig
+      get_signature
         ~pushed_signature:(Condition.wait t.pushed_signature)
-        t ~ledger_hash
+        t ~da_key ~ledger_hash
 
 (** Useful for querying data, will fallback to the next node in list in case the first one fails *)
 let try_all_nodes ~config ~f =

@@ -523,7 +523,7 @@ let verify_check_accepted_and_ase_cancelled_deposit ?proving_timeout t input =
 let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
     ~new_inner_actions ~unprocessed_actions ~(old_inner_acc : Account.t)
     ~old_inner_acc_path ~(new_inner_acc : Account.t) ~new_inner_acc_path
-    ~da_multisig ~slot_range =
+    ~da_signature ~da_key ~slot_range =
   (* Counting length of inner action state *)
   let%bind inner_ase =
     let%map proof, target, excess =
@@ -565,7 +565,8 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
        ; old_inner_acc_path
        ; new_inner_acc
        ; new_inner_acc_path
-       ; da_multisig
+       ; da_signature
+       ; da_key
        ; slot_range
        } )
   >>| function

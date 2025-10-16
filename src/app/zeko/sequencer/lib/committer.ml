@@ -3,8 +3,8 @@ open Async
 open Mina_base
 open Signature_lib
 open Mina_ledger
-open Zeko_circuits
 open Zeko_types
+open Zeko_circuits
 open Relational_db
 module Field = Snark_params.Tick.Field
 
@@ -13,7 +13,7 @@ module Commit_witness = struct
     { old_inner_ledger : Sparse_ledger.t
     ; new_inner_ledger : Sparse_ledger.t
     ; processed_actions_pointer : Field.t
-    ; da_multisig : Multisig.Witness.t
+    ; signature : Public_key.Compressed.t * Signature.t
     ; txn_snark : Txn_snark.serializable
     }
   [@@deriving yojson]
@@ -72,7 +72,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     ({ old_inner_ledger
      ; new_inner_ledger
      ; processed_actions_pointer
-     ; da_multisig
+     ; signature
      ; txn_snark
      } :
       Commit_witness.t ) =
@@ -145,6 +145,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     (Field.to_string processed_actions_pointer)
     (Field.to_string unprocessed_actions_state) ;
   let%bind forest =
+    let da_key, da_signature = signature in
     let slot_range : Slot_range.t =
       let current_slot = Utils.Slot.global_slot ~l1_config in
       let slot_range : Slot_range.t =
@@ -165,7 +166,9 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
       Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
         ~public_key:zkapp_pk ~inner_ase_source ~new_inner_actions ~old_inner_acc
         ~old_inner_acc_path ~new_inner_acc ~new_inner_acc_path
-        ~unprocessed_actions ~da_multisig ~slot_range
+        ~unprocessed_actions ~da_signature
+        ~da_key:(Even_PC.create_exn da_key)
+        ~slot_range
     in
     (* see #286 *)
     Utils.attach_proof_to_forest ~signature_kind:executor.signature_kind

@@ -653,40 +653,6 @@ module Inner_sync = struct
   end
 end
 
-module Multisig = struct
-  include Multisig
-
-  module Maybe_signature = struct
-    include Multisig.Maybe_signature
-
-    type t = Multisig.Maybe_signature.t =
-      { public_key : Public_key.Compressed.t
-      ; signature : Signature.t
-      ; is_some : bool
-      }
-    [@@deriving yojson]
-  end
-
-  module Witness = struct
-    include Multisig.Witness
-
-    type t = Multisig.Witness.t =
-      { signatures : Maybe_signature.t list; quorum : F.t }
-    [@@deriving yojson]
-
-    let make ~signatures ~quorum =
-      { signatures =
-          List.map signatures ~f:(fun (public_key, signature) ->
-              Maybe_signature.
-                { public_key
-                ; signature = Option.value signature ~default:Signature.dummy
-                ; is_some = Option.is_some signature
-                } )
-      ; quorum = Field.of_int quorum
-      }
-  end
-end
-
 module Outer_commit = struct
   module Path = Make_serializable_path (struct
     module PathStep = struct
@@ -736,7 +702,8 @@ module Outer_commit = struct
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t
       ; new_inner_acc_path : Path.t
-      ; da_multisig : Multisig.Witness.t
+      ; da_signature : Signature.t
+      ; da_key : Even_PC.t
       ; slot_range : Slot_range.t
       }
     [@@deriving yojson]
@@ -749,7 +716,8 @@ module Outer_commit = struct
          ; old_inner_acc_path
          ; new_inner_acc
          ; new_inner_acc_path
-         ; da_multisig
+         ; da_signature
+         ; da_key
          ; slot_range
          } :
           serializable ) ~vk_hash : t =
@@ -761,7 +729,8 @@ module Outer_commit = struct
       ; old_inner_acc_path
       ; new_inner_acc
       ; new_inner_acc_path
-      ; da_multisig
+      ; da_signature
+      ; da_key
       ; slot_range
       }
   end
