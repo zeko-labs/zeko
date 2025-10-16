@@ -47,19 +47,22 @@ module Commitment = struct
 end
 
 let commit { public_keys; quorum } =
-  let padded =
-    public_keys
-    @ List.init
-        (Zeko_constants.da_multisig_max_length - List.length public_keys)
-        ~f:(fun _ -> Maybe_signature.empty_key)
-  in
-  List.fold_left padded ~init:quorum ~f:(fun acc pk ->
-      let input =
-        Random_oracle.Input.Chunked.(append (field acc) (PC.to_input pk))
-      in
-      Random_oracle.hash
-        ~init:(Hash_prefix_create.salt Zeko_constants.multisig_salt)
-        (Random_oracle.pack_input input) )
+  if List.length public_keys > Zeko_constants.da_multisig_max_length then
+    failwith "Public keys length exceeds the maximum length"
+  else
+    let padded =
+      public_keys
+      @ List.init
+          (Zeko_constants.da_multisig_max_length - List.length public_keys)
+          ~f:(fun _ -> Maybe_signature.empty_key)
+    in
+    List.fold_left padded ~init:quorum ~f:(fun acc pk ->
+        let input =
+          Random_oracle.Input.Chunked.(append (field acc) (PC.to_input pk))
+        in
+        Random_oracle.hash
+          ~init:(Hash_prefix_create.salt Zeko_constants.multisig_salt)
+          (Random_oracle.pack_input input) )
 
 let of_witness_var ({ signatures; quorum; _ } : Witness.var) :
     Commitment.var Checked.t =
