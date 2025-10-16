@@ -24,18 +24,8 @@ let gql_uri =
   ; name = "gql-uri"
   }
 
-let da_config_with2 =
+let da_config =
   Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555"; "127.0.0.1:8556" ]
-
-let da_config_with3 =
-  Da_layer.Client.Config.of_string_list
-    [ "127.0.0.1:8555"; "127.0.0.1:8556"; "127.0.0.1:8557" ]
-
-let da_keys =
-  run (fun () ->
-      Da_layer.Client.Config.fetch_public_keys ~logger da_config_with3 )
-
-let da_quorum = 2
 
 let provers =
   let args = Sys.get_argv () |> Array.to_list in
@@ -66,10 +56,10 @@ let () =
 
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:5
-       ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:da_config_with2 ~da_keys
-       ~da_quorum ~provers ~slot_acceptance () )
+       ~postgres_uri:postgres_uri1 ~gql_uri ~da_config ~provers ~slot_acceptance
+       () )
     ~f:(fun
-         { outer_kp; signer; specs; sequencer; da_keys; accounts; l1_config; _ }
+         { outer_kp; signer; specs; sequencer; da_key; accounts; l1_config; _ }
        ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
@@ -225,11 +215,10 @@ let () =
         run (fun () ->
             let%map new_sequencer =
               Sequencer.create ~logger ~max_pool_size:10
-                ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
-                ~da_quorum ~db_dir:None ~postgres_uri:postgres_uri2
-                ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-                ~deposit_delay_blocks:0 ~provers ~fee_modifier:1.0
-                ~minimum_fee:0.01 ~slot_acceptance
+                ~commitment_period_sec:0. ~da_config ~da_quorum:2 ~db_dir:None
+                ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
+                ~signer ~deposit_delay_blocks:0 ~provers ~da_key
+                ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
                 ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
                 ~l1_config
                 ~commit_validity_period:
@@ -258,9 +247,8 @@ let () =
   in
 
   Quickcheck.test ~trials:1
-    (Sequencer_spec.gen ~logger ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers ~slot_acceptance
-       () ) ~f:(fun { specs; sequencer; _ } ->
+    (Sequencer_spec.gen ~logger ~postgres_uri ~gql_uri ~da_config ~provers
+       ~slot_acceptance () ) ~f:(fun { specs; sequencer; _ } ->
       let dummy_signature_command : Zkapp_command.t =
         let command = account_update_send (List.hd_exn specs) in
         { command with
@@ -304,10 +292,9 @@ let () =
         Relational_db.For_tests.create_database ~port:5433 "sequencer" )
   in
   Quickcheck.test ~trials:1
-    (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers ~slot_acceptance
-       () )
-    ~f:(fun { outer_kp; signer; specs; sequencer; da_keys; l1_config; _ } ->
+    (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri ~da_config
+       ~provers ~slot_acceptance () )
+    ~f:(fun { outer_kp; signer; specs; sequencer; da_key; l1_config; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
@@ -328,10 +315,12 @@ let () =
       let new_sequencer =
         run (fun () ->
             Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
-              ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir)
-              ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-              ~deposit_delay_blocks:0 ~provers ~da_keys ~fee_modifier:1.0
-              ~minimum_fee:0.01 ~slot_acceptance
+              ~da_config:
+                (Da_layer.Client.Config.of_string_list
+                   [ "127.0.0.1:8555"; "127.0.0.1:8556"; "127.0.0.1:8557" ] )
+              ~da_quorum:3 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
+              ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:0 ~provers
+              ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10) )
@@ -387,10 +376,9 @@ let () =
         Relational_db.For_tests.create_database ~port:5433 "sequencer" )
   in
   Quickcheck.test ~trials:1
-    (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers ~slot_acceptance
-       () )
-    ~f:(fun { outer_kp; signer; specs; sequencer; da_keys; l1_config; _ } ->
+    (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri ~da_config
+       ~provers ~slot_acceptance () )
+    ~f:(fun { outer_kp; signer; specs; sequencer; da_key; l1_config; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
@@ -452,10 +440,12 @@ let () =
       let new_sequencer =
         run (fun () ->
             Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
-              ~da_config:da_config_with2 ~da_quorum ~db_dir:(Some db_dir)
-              ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-              ~deposit_delay_blocks:0 ~provers ~da_keys ~fee_modifier:1.0
-              ~minimum_fee:0.01 ~slot_acceptance
+              ~da_config:
+                (Da_layer.Client.Config.of_string_list
+                   [ "127.0.0.1:8555"; "127.0.0.1:8556" ] )
+              ~da_quorum:2 ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri:gql_uri
+              ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:0 ~provers
+              ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10) )
@@ -488,8 +478,7 @@ let () =
   in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:5 ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers
-       ~slot_acceptance:(Time.Span.of_min 10.) () )
+       ~da_config ~provers ~slot_acceptance:(Time.Span.of_min 10.) () )
     ~f:(fun { specs; sequencer; signer; outer_kp; l1_config; _ } ->
       run (fun () ->
           let open Mina_numbers in
@@ -644,8 +633,7 @@ let () =
   let open Mina_numbers in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:0 ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers
-       ~slot_acceptance:(Time.Span.of_min 10.)
+       ~da_config ~provers ~slot_acceptance:(Time.Span.of_min 10.)
        ~commit_validity_period:(Global_slot_span.of_int 20)
        () )
     ~f:(fun { outer_kp; sequencer; signer; l1_config; _ } ->

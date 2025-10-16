@@ -2,15 +2,16 @@ open Core
 open Async
 open Sequencer_lib
 open Cli_lib
+open Zeko_types
 open Signature_lib
 module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
 module Sequencer = Zeko_sequencer.Sequencer
 
-let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
-    ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-    ~deposit_delay_blocks ~provers ~fee_modifier ~minimum_fee ~slot_acceptance
+let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_quorum
+    ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
+    ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
     ~commit_validity_period () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
@@ -29,15 +30,15 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     |> Mina_numbers.Global_slot_since_genesis.to_int ) ;
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
-        Sequencer.create ~logger ~max_pool_size ~da_config ~da_keys ~da_quorum
+        Sequencer.create ~logger ~max_pool_size ~da_config ~da_quorum
           ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~deposit_delay_blocks
           ~signer:
             Signature_lib.(
               Keypair.of_private_key_exn
               @@ Private_key.of_base58_check_exn signer)
-          ~provers ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db
-          ~l1_config ~commit_validity_period )
+          ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
+          ~proof_cache_db ~l1_config ~commit_validity_period )
   in
 
   Sequencer.run_committer sequencer ;
@@ -66,6 +67,7 @@ let () =
      and log_level = Flag.Log.level
      and port =
        flag "-p" (optional_with_default 8080 int) ~doc:"int Port to listen on"
+     and da_key = flag "--da-key" (required string) ~doc:"string DA key"
      and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
      and archive_uri =
        flag "--archive-uri" (required string) ~doc:"string archive URI"
@@ -80,9 +82,6 @@ let () =
      and da_nodes =
        flag "--da-node" (listed string)
          ~doc:"string Address of the DA node, can be supplied multiple times"
-     and da_keys =
-       flag "--da-keys" (required string)
-         ~doc:"string List of DA keys, separated by commas"
      and da_quorum =
        flag "--da-quorum" (required int)
          ~doc:"string Quorum for the DA signature count"
@@ -120,9 +119,8 @@ let () =
      let slot_acceptance = Time.Span.of_min slot_acceptance_m in
      let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in
-     let da_keys =
-       String.split ~on:',' da_keys
-       |> List.map ~f:Public_key.Compressed.of_base58_check_exn
+     let da_key =
+       Even_PC.create_exn (Public_key.Compressed.of_base58_check_exn da_key)
      in
      let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
        Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
@@ -138,8 +136,8 @@ let () =
        Mina_numbers.Global_slot_span.of_int commit_validity_period
      in
      Stdout_log.setup log_json log_level ;
-     run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
-       ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-       ~deposit_delay_blocks ~provers ~fee_modifier ~minimum_fee
-       ~slot_acceptance ~commit_validity_period )
+     run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_quorum
+       ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
+       ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
+       ~commit_validity_period )
   |> Command_unix.run

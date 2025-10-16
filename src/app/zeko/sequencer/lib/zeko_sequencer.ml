@@ -22,6 +22,7 @@ module Sequencer = struct
       ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
       ; deposit_delay_blocks : int
+      ; da_key : Even_PC.t
       ; fee_modifier : float
       ; minimum_fee : float
       ; l1_config : Utils.Slot.l1_config
@@ -125,13 +126,13 @@ module Sequencer = struct
            } :
             Context.t ) { new_inner_ledger; processed_actions_pointer }
           txn_snark =
-        let%bind da_multisig =
-          Da_layer.Client.get_multisig da_client
+        let%bind count, signature =
+          Da_layer.Client.get_signature da_client
+            ~da_key:(Even_PC.to_pc config.da_key)
             ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
-          >>| fun (quorum, multisig) ->
-          Multisig.Witness.make ~signatures:multisig ~quorum
         in
-
+        [%log info] "Received %d signatures from da layer" count ;
+        assert (count > 0) ;
         let old_inner_ledger =
           State.Last_committed_ledger.get sequencer_state
           |> Option.value_exn ~message:"No previous committed ledger"
@@ -140,7 +141,7 @@ module Sequencer = struct
           { old_inner_ledger
           ; new_inner_ledger
           ; processed_actions_pointer
-          ; da_multisig
+          ; signature
           ; txn_snark
           }
         in
@@ -763,9 +764,9 @@ module Sequencer = struct
     State.Last_committed_ledger.set t.state ~data:sparse_ledger ;
     return ()
 
-  let create ~logger ~max_pool_size ~commitment_period_sec ~da_config ~da_keys
-      ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-      ~deposit_delay_blocks ~provers ~fee_modifier ~minimum_fee ~slot_acceptance
+  let create ~logger ~max_pool_size ~commitment_period_sec ~da_config ~da_quorum
+      ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer ~deposit_delay_blocks
+      ~provers ~da_key ~fee_modifier ~minimum_fee ~slot_acceptance
       ~proof_cache_db ~l1_config ~commit_validity_period =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
@@ -790,6 +791,7 @@ module Sequencer = struct
         ; archive_uri
         ; signer
         ; deposit_delay_blocks
+        ; da_key
         ; fee_modifier
         ; minimum_fee
         ; l1_config
@@ -798,9 +800,9 @@ module Sequencer = struct
         }
     in
     let%bind db_pool = Db.create_and_migrate ~postgres_uri ~logger in
-    let%bind da_client =
+    let da_client =
       Da_layer.Client.create ~logger ~config:da_config ~quorum:da_quorum
-        ~da_keys ~db_pool
+        ~db_pool
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let provers =

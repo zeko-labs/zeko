@@ -364,15 +364,14 @@ module Sequencer_spec = struct
     ; ephemeral_ledger : L.t (* The ledger to test the expected outcome *)
     ; specs : Transaction_spec.t list (* Transaction specs *)
     ; sequencer : Sequencer.t Handle.valid_t
-    ; da_keys : Public_key.Compressed.t list
+    ; da_key : Even_PC.t
     ; accounts : Keypair.t list
     ; l1_config : Utils.Slot.l1_config
     }
 
   let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir
       ?(commit_validity_period = Global_slot_span.of_int 10) ~logger
-      ~postgres_uri ~gql_uri ~da_config ~da_keys ~da_quorum ~provers
-      ~slot_acceptance () =
+      ~postgres_uri ~gql_uri ~da_config ~provers ~slot_acceptance () =
     let _reset = run @@ fun () -> Gql_client.For_tests.reset_state gql_uri in
     let deploy_config =
       Option.value_exn ~message:"ZEKO_DEPLOY_CONFIG is not set"
@@ -453,6 +452,15 @@ module Sequencer_spec = struct
         Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
           ~ledger:ephemeral_ledger ) ;
 
+    print_endline "(* Get da key *)" ;
+    let da_key =
+      run (fun () ->
+          Da_layer.Client.Rpc.get_node_public_key ~logger
+            ~node_location:(List.hd_exn da_config.nodes)
+            ()
+          >>| Or_error.ok_exn >>| Even_PC.create_exn )
+    in
+
     print_endline "(* Deploy zkapp *)" ;
     run (fun () ->
         let sequencer_pk =
@@ -472,11 +480,6 @@ module Sequencer_spec = struct
           Gql_client.infer_nonce gql_uri (Public_key.compress signer.public_key)
         in
         let%bind command =
-          let da_key =
-            Multisig.commit
-              { public_keys = da_keys; quorum = Field.of_int da_quorum }
-          in
-          printf "Deplying with DA key: %s\n%!" (Field.to_string da_key) ;
           Deploy.deploy_command_exn
             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer
             ~outer_kp ~holder_kp ~token_holder_kp
@@ -503,13 +506,13 @@ module Sequencer_spec = struct
     in
 
     print_endline "(* Init sequencer *)" ;
-
     let sequencer =
       run (fun () ->
           Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
-            ~da_config ~da_keys ~da_quorum ~db_dir ~postgres_uri ~l1_uri:gql_uri
+            ~da_config ~da_quorum:2 ~db_dir ~postgres_uri ~l1_uri:gql_uri
             ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:delay_deposit
-            ~provers ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+            ~provers ~da_key ~fee_modifier:1.0 ~minimum_fee:0.01
+            ~slot_acceptance
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
             ~l1_config ~commit_validity_period )
     in
@@ -521,7 +524,7 @@ module Sequencer_spec = struct
       ; ephemeral_ledger
       ; specs
       ; sequencer = Handle.make sequencer
-      ; da_keys
+      ; da_key
       ; accounts = Array.map funded_accounts ~f:fst |> Array.to_list
       ; l1_config
       }
