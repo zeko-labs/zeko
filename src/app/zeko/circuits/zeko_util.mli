@@ -39,6 +39,9 @@ val var_to_optional_fine :
 val var_to_actions :
   ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t
 
+val var_to_events :
+  ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t
+
 val var_to_hash :
   init:string -> ('var, 'value) Typ.t -> 'var -> Field.Var.t Checked.t
 

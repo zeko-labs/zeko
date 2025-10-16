@@ -281,6 +281,8 @@ let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) :
   in
   actions
 
+let var_to_events = var_to_actions
+
 let var_to_hash ~(init : string) (typ : ('var, 'value) Typ.t) (x : 'var) :
     F.var Checked.t =
   let@ () = make_checked in

@@ -231,6 +231,15 @@ struct
           }
         in
         let@ () = with_label __LOC__ in
+        let* events =
+          let* withdrawal_index =
+            Checked32.Checked.sub next_withdrawal
+              Checked32.(Checked.constant one)
+          in
+          var_to_events
+            Typ.(Checked32.typ * Withdrawal_params.typ)
+            (withdrawal_index, withdrawal_params)
+        in
         let account_update =
           { default_account_update with
             public_key
@@ -240,6 +249,7 @@ struct
           ; balance_change =
               Currency.Amount.Signed.Checked.(
                 of_unsigned base_params.amount |> negate)
+          ; events
           }
         in
         let@ () = with_label __LOC__ in

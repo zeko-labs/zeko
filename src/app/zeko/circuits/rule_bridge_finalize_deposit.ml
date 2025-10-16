@@ -206,6 +206,11 @@ struct
       }
     in
     let@ () = with_label __LOC__ in
+    let* events =
+      var_to_events
+        Typ.(Checked32.typ * Deposit_params.typ)
+        (deposit_index, params)
+    in
     let account_update =
       { default_account_update with
         public_key
@@ -215,6 +220,7 @@ struct
       ; balance_change =
           Currency.Amount.Signed.Checked.(
             of_unsigned base_params.amount |> negate)
+      ; events
       }
     in
     let@ () = with_label __LOC__ in
