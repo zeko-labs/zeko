@@ -281,6 +281,15 @@ let var_to_actions (typ : ('var, 'value) Typ.t) (x : 'var) :
   in
   actions
 
+let var_to_events (typ : ('var, 'value) Typ.t) (x : 'var) :
+    Zkapp_account.Events.var Checked.t =
+  let@ () = make_checked in
+  let empty_events = Zkapp_account.Events.(constant typ []) in
+  let events =
+    Zkapp_account.Events.push_to_data_as_hash empty_events (var_to_fields typ x)
+  in
+  events
+
 let var_to_hash ~(init : string) (typ : ('var, 'value) Typ.t) (x : 'var) :
     F.var Checked.t =
   let@ () = make_checked in
