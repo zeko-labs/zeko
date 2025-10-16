@@ -77,8 +77,7 @@ struct
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t
       ; new_inner_acc_path : Path.t
-      ; da_signature : Signature_lib.Schnorr.Chunked.Signature.t
-      ; da_key : Even_PC.t
+      ; da_multisig : Multisig.Witness.t
       ; slot_range : Slot_range.t
       }
     [@@deriving snarky]
@@ -116,8 +115,7 @@ struct
           ; old_inner_acc_path
           ; new_inner_acc
           ; new_inner_acc_path
-          ; da_signature
-          ; da_key
+          ; da_multisig
           ; slot_range
           } :
            Witness.var ) =
@@ -159,11 +157,6 @@ struct
     let* () =
       with_label __LOC__
       @@ fun () ->
-      (* TODO: Is this correct? *)
-      let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
-      let* da_key_uncompressed =
-        Even_PC.to_pc_var da_key |> Signature_lib.Public_key.decompress_var
-      in
       let input =
         let open Random_oracle.Input.Chunked in
         Ledger_hash.var_to_field target_ledger |> field
@@ -174,12 +167,9 @@ struct
               ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
               (Random_oracle.Checked.pack_input input) )
       in
-      Signature_lib.Schnorr.Chunked.Checked.assert_verifies
-        ~signature_kind:chain_l1
-        (module Shifted)
-        da_signature da_key_uncompressed
-        (Random_oracle.Input.Chunked.field payload)
+      Multisig.check ~signature_kind:chain_l1 da_multisig payload
     in
+    let* da_key = Multisig.of_witness_var da_multisig in
 
     (* Sequencer must take fees. A non-zero magnitude would
        either mean printing or burning L2 MINA. *)
