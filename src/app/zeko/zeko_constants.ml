@@ -125,4 +125,4 @@ end
 
 let multisig_salt = "multisig"
 
-let da_multisig_max_length = 10
+let da_multisig_max_length = 9

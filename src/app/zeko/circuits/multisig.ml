@@ -75,7 +75,6 @@ let of_witness_var ({ signatures; quorum; _ } : Witness.var) :
         (Random_oracle.Checked.pack_input input) )
 
 let check ~signature_kind ({ signatures; quorum } : Witness.var) payload =
-  let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
   let payload = Random_oracle.Input.Chunked.field payload in
   let@ () = with_label __LOC__ in
   let* valid_signatures_count =
@@ -87,6 +86,7 @@ let check ~signature_kind ({ signatures; quorum } : Witness.var) payload =
         let* signature_verifies =
           let* pk_uncompressed = Public_key.decompress_var public_key in
           let@ () = with_label __LOC__ in
+          let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
           Schnorr.Chunked.Checked.verifies ~signature_kind
             (module Shifted)
             signature pk_uncompressed payload
