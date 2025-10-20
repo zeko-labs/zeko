@@ -20,15 +20,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-sequencer-docker-image:
+  build-publish-docker-images:
     name: Build and Publish Zeko Docker Images
     runs-on: warp-ubuntu-latest-x64-4x
     strategy:
       matrix:
-        package: [zeko, zeko-da] 
+        package: [zeko, zeko-da, zeko-archive-relay]
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: 🏷️ Generate Tag
         run: |
           BRANCH_OR_TAG=$(basename ${{ github.ref }})
