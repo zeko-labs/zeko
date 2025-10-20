@@ -74,6 +74,91 @@ let
       };
     };
 in {
+  zeko-image = dockerTools.buildLayeredImage {
+    name = "zeko";
+    tag = "latest";
+    inherit created;
+    contents = [
+      ocamlPackages_mina.devnet.zeko
+      coreutils
+      findutils
+      bashInteractive
+      procps
+      curl
+      jq
+    ];
+    config = {
+      Entrypoint = [ "/bin/zeko-run" ];
+      Env = [ "ZEKO_SIGNATURE_KIND=testnet" ];
+      Cmd = [ "-p" "1925" ];
+      WorkingDir = "/root";
+    };
+  };
+  zeko-da-image = dockerTools.buildLayeredImage {
+    name = "zeko-da";
+    tag = "latest";
+    inherit created;
+    contents = [
+      ocamlPackages_mina.devnet.zeko_da
+      coreutils
+      findutils
+      bashInteractive
+      procps
+      curl
+      jq
+    ];
+    config = {
+      Entrypoint = [ "/bin/zeko-da" ];
+      Env = [ "ZEKO_SIGNATURE_KIND=testnet" ];
+      Cmd = [
+        "run-node"
+        "--port"
+        "1924"
+        "--db-dir"
+        "/db"
+        "--network-id"
+        "testnet"
+      ];
+      Expose = 1924;
+      Volumes = { "/db" = { }; };
+      WorkingDir = "/db";
+    };
+  };
+  zeko-archive-relay-image = dockerTools.buildLayeredImage {
+    name = "zeko-archive-relay";
+    tag = "latest";
+    inherit created;
+    contents = [
+      ocamlPackages_mina.devnet.zeko_archive_relay
+      coreutils
+      findutils
+      bashInteractive
+      procps
+      curl
+      jq
+    ];
+    config = {
+      Entrypoint = [ "/bin/zeko-archive-relay" ];
+      Cmd = [
+        "--zeko-uri"
+        "http://localhost:1925/graphql"
+        "--da-node"
+        "localhost:1924"
+        "--network-id"
+        "testnet"
+        "--ledger-cache"
+        "$HOME/ledger-cache"
+        "--sync-period"
+        "15"
+        "--archive-host"
+        "localhost"
+        "--archive-port"
+        "3086"
+      ];
+      WorkingDir = "/root";
+    };
+  };
+
   mina-image-slim = dockerTools.streamLayeredImage {
     name = "mina";
     inherit created;

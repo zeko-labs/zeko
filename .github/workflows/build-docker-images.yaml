@@ -1,0 +1,77 @@
+name: Publish docker images
+
+on:
+  push:
+    tags:
+    - '*'
+  workflow_dispatch:
+    inputs:
+      docker_tag_prefix:
+        description: "Enter the Docker Tag Prefix (e.g v4)"
+        required: true
+        type: string
+
+env:
+  DOCKER_TAG_PREFIX: ${{ github.event.inputs.docker_tag_prefix }}
+
+# This allows a subsequently queued workflow run to interrupt previous runs
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  build-sequencer-docker-image:
+    name: Build and Publish Zeko Docker Images
+    runs-on: warp-ubuntu-latest-x64-4x
+    strategy:
+      matrix:
+        package: [zeko, zeko-da] 
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v5
+      - name: 🏷️ Generate Tag
+        run: |
+          BRANCH_OR_TAG=$(basename ${{ github.ref }})
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            PREFIX=${{ env.DOCKER_TAG_PREFIX }}
+            SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
+            echo "TAG=$PREFIX-$BRANCH_OR_TAG-$SHORT_SHA" >> $GITHUB_ENV
+          elif [ "${{ github.event_name }}" == "push" ] && [ -n "${{ github.event.ref }}" ]; then
+            echo "TAG=$BRANCH_OR_TAG" >> $GITHUB_ENV
+          else
+            echo "Invalid event. Exiting..."
+            exit 1
+          fi
+      - name: 🔑 Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: zekolabs
+          password: ${{ secrets.DOCKER_PAT }}
+
+      - name: 🔍 Check if Tag already exists
+        id: checktag
+        uses: tyriis/docker-image-tag-exists@v2.0.1
+        with:
+          registry: docker.io
+          repository: zekolabs/${{ matrix.package }}
+          tag: ${{ env.TAG }}
+
+      - name: ❄️ Install Nix
+        if: steps.checktag.outputs.tag == 'not found'
+        uses: cachix/install-nix-action@v27
+
+      - name: 🛠️ Build ${{ matrix.package }} OCI image
+        run: nix build .#${{ matrix.package }}-image
+        
+      - name: 🚚 Load and Push ${{ matrix.package }} docker image
+        run: |
+          IMAGE_TAR=$(readlink -f result)
+          IMAGE_BASE="docker.io/${{ github.repository }}/${{ matrix.package }}"
+          docker load < "$IMAGE_TAR"
+
+          docker tag ${{ matrix.package }}:latest "$IMAGE_BASE:${{ env.TAG }}"
+          docker tag ${{ matrix.package }}:latest "$IMAGE_BASE:latest"
+
+          docker push "$IMAGE_BASE:${{ env.TAG }}"
+          docker push "$IMAGE_BASE:latest"
