@@ -64,7 +64,7 @@ jobs:
         uses: cachix/install-nix-action@v27
 
       - name: 🛠️ Build ${{ matrix.package }} OCI image
-        run: nix build .#${{ matrix.package }}-image
+        run: nix build .?submodules=1#${{ matrix.package }}-image
         
       - name: 🚚 Load and Push ${{ matrix.package }} docker image
         run: |
