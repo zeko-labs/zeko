@@ -139,23 +139,12 @@ in {
     ];
     config = {
       Entrypoint = [ "/bin/zeko-archive-relay" ];
-      Cmd = [
-        "--zeko-uri"
-        "http://localhost:1925/graphql"
-        "--da-node"
-        "localhost:1924"
-        "--network-id"
-        "testnet"
-        "--ledger-cache"
-        "$HOME/ledger-cache"
-        "--sync-period"
-        "15"
-        "--archive-host"
-        "localhost"
-        "--archive-port"
-        "3086"
+      Cmd = [ "--ledger-cache" "/ledger-cache" ];
+      Env = [
+        "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+        "ZEKO_SIGNATURE_KIND=testnet"
       ];
-      WorkingDir = "/root";
+      Volumes = { "/ledger-cache" = { }; };
     };
   };
 

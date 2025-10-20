@@ -69,7 +69,7 @@ jobs:
       - name: 🚚 Load and Push ${{ matrix.package }} docker image
         run: |
           IMAGE_TAR=$(readlink -f result)
-          IMAGE_BASE="docker.io/${{ github.repository }}/${{ matrix.package }}"
+          IMAGE_BASE="docker.io/zekolabs/${{ matrix.package }}"
           docker load < "$IMAGE_TAR"
 
           docker tag ${{ matrix.package }}:latest "$IMAGE_BASE:${{ env.TAG }}"
