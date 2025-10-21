@@ -2194,6 +2194,9 @@ module Mutations = struct
             ~proof_cache_db:sequencer.merger_ctx.proof_cache_db
             zkapp_command_stable
         in
+        let%bind.Deferred.Result () =
+          return @@ Utils.validate_zkapp_command zkapp_command
+        in
         match%bind
           Zeko_sequencer.apply_user_command sequencer
             (Zkapp_command zkapp_command)
