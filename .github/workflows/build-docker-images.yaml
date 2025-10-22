@@ -20,15 +20,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-sequencer-docker-image:
+  build-publish-docker-images:
     name: Build and Publish Zeko Docker Images
     runs-on: warp-ubuntu-latest-x64-4x
     strategy:
       matrix:
-        package: [zeko, zeko-da] 
+        package: [zeko, zeko-da, zeko-archive-relay]
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: 🏷️ Generate Tag
         run: |
           BRANCH_OR_TAG=$(basename ${{ github.ref }})
@@ -62,12 +64,12 @@ jobs:
         uses: cachix/install-nix-action@v27
 
       - name: 🛠️ Build ${{ matrix.package }} OCI image
-        run: nix build .#${{ matrix.package }}-image
+        run: nix build .?submodules=1#${{ matrix.package }}-image
         
       - name: 🚚 Load and Push ${{ matrix.package }} docker image
         run: |
           IMAGE_TAR=$(readlink -f result)
-          IMAGE_BASE="docker.io/${{ github.repository }}/${{ matrix.package }}"
+          IMAGE_BASE="docker.io/zekolabs/${{ matrix.package }}"
           docker load < "$IMAGE_TAR"
 
           docker tag ${{ matrix.package }}:latest "$IMAGE_BASE:${{ env.TAG }}"
