@@ -392,6 +392,102 @@ let update_inner_verification_keys =
            | Error (`Graphql_error err) ->
                [%log error] "Graphql request: %s" err ) )
 
+let update_da_key =
+  ( "update-da-key"
+  , Command.async ~summary:"Update the DA key of the outer zkApp"
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and da_keys =
+         flag "--da-key" (listed string) ~doc:"string list of DA keys"
+       and da_quorum = flag "--quorum" (required int) ~doc:"int DA quorum"
+       and only_check =
+         flag "--only-check" no_arg
+           ~doc:"bool Only check if the verification keys are up to date"
+       in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let sender =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+         in
+         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
+           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
+         in
+         let open Zeko_types in
+         let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
+
+         (* Fetch current da key *)
+         let%bind current_da_key =
+           Gql_client.infer_state l1_uri
+             ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+             ~signer_pk:(Public_key.compress sender.public_key)
+           >>| Utils.value_of_zkapp_state
+                 Zeko_circuits.Rollup_state.Outer_state.typ
+           >>| fun { da_key; _ } -> da_key
+         in
+         let new_da_key =
+           Multisig.commit
+             { public_keys =
+                 List.map da_keys ~f:Public_key.Compressed.of_base58_check_exn
+             ; quorum = Field.of_int da_quorum
+             }
+         in
+
+         [%log info]
+           !"Current DA key: %{sexp: Field.t}\n\
+             New DA key: %{sexp: Field.t}\n\
+             equal: %b"
+           current_da_key new_da_key
+           (Field.equal current_da_key new_da_key) ;
+
+         if only_check then return ()
+         else
+           let%bind command =
+             let%map nonce =
+               Sequencer_lib.Gql_client.infer_nonce l1_uri
+                 (Public_key.compress sender.public_key)
+             in
+             let open Zeko_circuits.Rollup_state in
+             Deploy.update_outer_state
+               ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
+               ~fee:(Currency.Fee.of_mina_string_exn "0.1")
+               ~nonce
+               ~precondition:
+                 Outer_state.
+                   { pause_key = None
+                   ; paused = None
+                   ; ledger_hash = None
+                   ; inner_action_state = { state = None; length = None }
+                   ; sequencer = None
+                   ; da_key = Some (Field.Var.constant current_da_key)
+                   ; acc_set = None
+                   }
+               ~update:
+                 Outer_state.
+                   { pause_key = None
+                   ; paused = None
+                   ; ledger_hash = None
+                   ; inner_action_state = { state = None; length = None }
+                   ; sequencer = None
+                   ; da_key = Some (Field.Var.constant new_da_key)
+                   ; acc_set = None
+                   }
+             |> Zkapp_command.read_all_proofs_from_disk
+           in
+           match%map Gql_client.send_zkapp l1_uri command with
+           | Ok _ ->
+               let txn_hash =
+                 Mina_transaction.Transaction_hash.hash_command
+                   (Zkapp_command command)
+               in
+               [%log info] "Successfully sent zkapp command: %s"
+                 (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
+           | Error (`Failed_request err) ->
+               [%log error] "Failed request: %s" err
+           | Error (`Graphql_error err) ->
+               [%log error] "Graphql request: %s" err ) )
+
 let update_permissions =
   ( "update-permissions"
   , Command.async ~summary:""
@@ -700,6 +796,7 @@ let () =
     ; generate_circuits_config
     ; update_outer_verification_keys
     ; update_inner_verification_keys
+    ; update_da_key
     ; update_permissions
     ; set_pause
     ; migrate

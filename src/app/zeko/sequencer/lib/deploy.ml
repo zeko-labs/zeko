@@ -432,7 +432,9 @@ let update_outer_state ~signature_kind ~(signer : Keypair.t)
   Utils.sign_zkapp_command ~signature_kind command
     ( signer
     :: [ Keypair.of_private_key_exn
-           (Option.value_exn Zeko_circuits_config.deploy_config).zeko_l1
+           (Option.value_exn ~message:"Deploy config not present"
+              Zeko_circuits_config.deploy_config )
+             .zeko_l1
        ] )
 
 module Change_permissions =
