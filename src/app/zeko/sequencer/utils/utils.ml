@@ -435,3 +435,17 @@ let sign_fee_payer ~signature_kind (sequencer_signer : Keypair.t)
                 else command.fee_payer.authorization )
             }
         }
+
+let validate_zkapp_command (command : Zkapp_command.t) =
+  let actions_and_events_valid =
+    Zkapp_command.account_updates_list command
+    |> List.map ~f:Account_update.Poly.body
+    |> List.map ~f:(fun body -> [ body.events; body.actions ])
+    |> List.concat |> List.concat |> List.map ~f:Array.length
+    |> List.for_all ~f:(fun len -> len <= 16)
+  in
+  let%map.Result () =
+    if actions_and_events_valid then Ok ()
+    else Error "Actions and events or not valid"
+  in
+  ()
