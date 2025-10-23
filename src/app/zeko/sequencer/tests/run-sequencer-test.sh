@@ -34,6 +34,7 @@ cleanup() {
   kill ${l1_pid:-} ${da1_pid:-} ${da2_pid:-} ${da3_pid:-} "${PROVER_PIDS[@]}" 2>/dev/null
   rm -rf "$TMP_DIR"
   docker rm -f pg-sequencer 2>/dev/null
+  docker rm -f rabbitmq-sequencer 2>/dev/null
   exit ${exit_status:-0}
 }
 
@@ -55,6 +56,10 @@ docker run --rm --name pg-sequencer \
   -p 5433:5432 \
   -d postgres:16-alpine
 
+docker run -d --name rabbitmq-sequencer \
+  -p 5672:5672 \
+  rabbitmq:latest
+
 $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet --block-period 9999999 &
 l1_pid=$!
 
@@ -75,7 +80,7 @@ else
 fi
 for ((i = 0; i < NUM_PROVERS; i++)); do
   PORT=$((9990 + i))
-  $BIN run-server --port "$PORT" >/dev/null 2>&1 &
+  $BIN run-server --mq-host "localhost:5672" >/dev/null 2>&1 &
   PROVER_PID=$!
   PROVER_PIDS+=("$PROVER_PID")
   PROVERS+=("localhost:$PORT")
@@ -103,9 +108,6 @@ wait_for_port 8080 $l1_pid
 wait_for_port 8555 $da1_pid
 wait_for_port 8556 $da2_pid
 wait_for_port 8557 $da3_pid
-for idx in "${!PROVER_PIDS[@]}"; do
-  wait_for_port "$((9990 + idx))" "${PROVER_PIDS[$idx]}"
-done
 
 echo "All services started successfully"
 

@@ -6,120 +6,33 @@ open Zeko_types
 open Relational_db
 module Field = Snark_params.Tick.Field
 
-let try_connect where_to_connect =
-  match%bind try_with (fun () -> Tcp.connect where_to_connect) with
-  | Ok x ->
-      return (Ok x)
-  | Error exn ->
-      return (Error (Error.of_exn exn))
-
-type lazy_connection =
-  ( ([ `Active ], Socket.Address.Inet.t) Socket.t * Reader.t * Writer.t
-  , Error.t )
-  Result.t
-  Deferred.t
-
-type prover = lazy_connection ref * Tcp.Where_to_connect.inet
-
 type t =
-  { q : prover Priority_throttle.t
-  ; logger : Logger.t
-  ; db_pool : Db.pool option
-  }
+  { mq : Message_queue.Master.t; logger : Logger.t; db_pool : Db.pool option }
 
-let create ?(ping_interval = 15.) ?(ping_timeout = 10.) ?db_pool ~logger provers
-    =
-  let connections = List.map provers ~f:(fun x -> (ref (try_connect x), x)) in
-  let q = Priority_throttle.create_with ~continue_on_error:true connections in
-  (* Start pinging *)
-  let ping_loop () =
-    List.iter connections ~f:(fun _ ->
-        don't_wait_for
-        @@ Priority_throttle.enqueue q (fun (connection_ref, _) ->
-               match%bind !connection_ref with
-               | Error err ->
-                   [%log error] "Error pinging prover: %s"
-                     (Error.to_string_hum err) ;
-                   return ()
-               | Ok (_, r, w) ->
-                   let () =
-                     Prover.Input.to_yojson Prover.Input.Ping
-                     |> Yojson.Safe.to_string |> Writer.write_line w
-                   in
-                   let%bind _result =
-                     Reader.really_read_line
-                       ~wait_time:(Time.Span.of_sec ping_timeout)
-                       r
-                   in
-                   return () ) )
-  in
-  every ~continue_on_error:true (Time.Span.of_sec ping_interval) ping_loop ;
-  { q; logger; db_pool }
+let create ?db_pool ~logger ~mq_host =
+  let%map mq = Message_queue.Master.start mq_host in
+  { mq; logger; db_pool }
 
-let queue_size t = Priority_throttle.num_jobs_waiting_to_start t.q
+let queue_size t = Message_queue.Master.get_queue_size t.mq
 
-let wait_to_finish t = Priority_throttle.prior_jobs_done t.q
-
-(* Get the reference of next available prover.
-   If it fails to connect or times out, replace the reference with new connection and try whole thing again *)
-let send' enqueue ?(proving_timeout = 20.) ?(attempts = 5) ?(cooldown = 2.) t
-    (input : Prover.Input.t) : Prover.Output.t Deferred.t =
-  let logger = t.logger in
-  enqueue t.q (fun (connection_ref, where_to_connect) ->
-      let rec go ~attempts =
-        let%bind result =
-          match%bind !connection_ref with
-          | Error err ->
-              [%log error] "Error connecting to prover: %s"
-                (Error.to_string_hum err) ;
-              return `Connnection_error
-          | Ok (s, r, w) -> (
-              match%map
-                Async.with_timeout
-                  (Time.Span.of_sec proving_timeout)
-                  ( Prover.Input.to_yojson input
-                    |> Yojson.Safe.to_string |> Writer.write_line w ;
-                    Reader.really_read_line
-                      ~wait_time:(Time.Span.of_sec proving_timeout)
-                      r )
-              with
-              | `Result (Some response) -> (
-                  match
-                    Yojson.Safe.from_string response |> Prover.Output.of_yojson
-                  with
-                  | Ok output ->
-                      `Ok output
-                  | Error _ ->
-                      [%log error] "Error parsing response from prover" ;
-                      `Parsing_error )
-              | `Timeout | `Result None ->
-                  Socket.shutdown s `Both ;
-                  [%log warn] "Timeout from prover, remaining attempts: %d"
-                    (attempts - 1) ;
-                  `Timeout )
+let send' t ~sendfn (input : Prover.Input.t) : Prover.Output.t Deferred.t =
+  match%map
+    Utils.retry ~max_attempts:5 ~delay:(Time.Span.of_sec 1.)
+      ~f:(fun () ->
+        let%map response =
+          sendfn t.mq (Prover.Input.to_yojson input |> Yojson.Safe.to_string)
         in
-        match result with
-        | `Timeout | `Connnection_error | `Parsing_error ->
-            let%bind () = after (Time.Span.of_sec cooldown) in
-            connection_ref := try_connect where_to_connect ;
-            if attempts > 0 then go ~attempts:(attempts - 1)
-            else return (Prover.Output.Error "Failed to prove")
-        | `Ok result ->
-            return result
-      in
-      go ~attempts )
+        Yojson.Safe.from_string response |> Prover.Output.of_yojson )
+      ()
+  with
+  | Ok output ->
+      output
+  | Error _ ->
+      failwith "Failed to send job to the message queue"
 
-type sendfn =
-     ?proving_timeout:float
-  -> ?attempts:int
-  -> ?cooldown:float
-  -> t
-  -> Prover.Input.t
-  -> Prover.Output.t Deferred.t
+let send = send' ~sendfn:Message_queue.Master.send
 
-let send : sendfn = send' Priority_throttle.enqueue
-
-let send_with_priority : sendfn = send' Priority_throttle.push_front
+let send_with_priority = send' ~sendfn:Message_queue.Master.send_with_priority
 
 module Ase_cache_with_length_table = struct
   type t =
@@ -358,8 +271,7 @@ let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
        -> extension_length:int
        -> unit Deferred.t )
     (prover :
-         ?proving_timeout:float
-      -> t
+         t
       -> 'source * elem list
       -> (Compile_simple.Proof.t option * stmt) Deferred.t ) =
   let elems_to_prove, excess =
@@ -374,16 +286,8 @@ let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
   | [] ->
       return (None, source, excess)
   | elems_to_prove ->
-      (* TODO: This is a hack to get the number of proofs. *)
-      let number_of_proofs =
-        (List.length elems_to_prove / Folder_iterations.extend_option_iterations)
-        + 1
-        |> Float.of_int
-      in
       let%bind input = map_to_cached_source ~source ~elems:elems_to_prove in
-      let%bind proof, target =
-        prover ~proving_timeout:(20. *. number_of_proofs) t input
-      in
+      let%bind proof, target = prover t input in
       let%bind () =
         match proof with
         | Some proof ->
@@ -427,8 +331,8 @@ let ase_cached_folder_without_length t =
          ~find_ase_by_source:Ase_cache_without_length_table.find_ase_by_source )
     ~cache_ase_proof:cache_ase_without_length
 
-let transaction_snark ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Txn_snark input)
+let transaction_snark t input =
+  send t (Prover.Input.Txn_snark input)
   >>| function
   | Prover.Output.Txn_snark snark ->
       snark
@@ -437,8 +341,8 @@ let transaction_snark ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let ase_with_length ~(sendfn : sendfn) ?proving_timeout t input =
-  sendfn ?proving_timeout t (Prover.Input.Folder (Ase_with_length input))
+let ase_with_length ~sendfn t input =
+  sendfn t (Prover.Input.Folder (Ase_with_length input))
   >>| function
   | Prover.Output.Folder (Ase_with_length ase) ->
       ase
@@ -447,8 +351,8 @@ let ase_with_length ~(sendfn : sendfn) ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let ase_without_length ~(sendfn : sendfn) ?proving_timeout t input =
-  sendfn ?proving_timeout t (Prover.Input.Folder (Ase_without_length input))
+let ase_without_length ~sendfn t input =
+  sendfn t (Prover.Input.Folder (Ase_without_length input))
   >>| function
   | Prover.Output.Folder (Ase_without_length ase) ->
       ase
@@ -457,8 +361,8 @@ let ase_without_length ~(sendfn : sendfn) ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let check_accepted_mina ?proving_timeout t input =
-  send ?proving_timeout t (Prover.Input.Folder (Check_accepted_mina input))
+let check_accepted_mina t input =
+  send t (Prover.Input.Folder (Check_accepted_mina input))
   >>| function
   | Prover.Output.Folder (Check_accepted_mina check_accepted) ->
       check_accepted
@@ -467,7 +371,7 @@ let check_accepted_mina ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
+let inner_sync t ~public_key ~ase_source ~ase_elms =
   let%bind ase =
     let%map proof, target, excess =
       ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
@@ -477,8 +381,7 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
     Inner_sync.Ase_inst.
       { proof; proof_target = target; init = ase_source; excess }
   in
-  send_with_priority ?proving_timeout t
-    (Prover.Input.Inner_sync { public_key; ase })
+  send_with_priority t (Prover.Input.Inner_sync { public_key; ase })
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       (parent_with_calls, proof)
@@ -487,9 +390,8 @@ let inner_sync ?proving_timeout t ~public_key ~ase_source ~ase_elms =
   | _ ->
       failwith "Unexpected response from prover"
 
-let verify_both_ases_commit ?proving_timeout t input =
-  send_with_priority ?proving_timeout t
-    (Prover.Input.Verify_both_ases_commit input)
+let verify_both_ases_commit t input =
+  send_with_priority t (Prover.Input.Verify_both_ases_commit input)
   >>| function
   | Prover.Output.Verify_both_ases_commit snark ->
       snark
@@ -498,8 +400,8 @@ let verify_both_ases_commit ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let verify_two_outer_ases_cancelled_deposit ?proving_timeout t input =
-  send_with_priority ?proving_timeout t
+let verify_two_outer_ases_cancelled_deposit t input =
+  send_with_priority t
     (Prover.Input.Verify_two_outer_ases_cancelled_deposit input)
   >>| function
   | Prover.Output.Verify_two_outer_ases_cancelled_deposit snark ->
@@ -509,8 +411,8 @@ let verify_two_outer_ases_cancelled_deposit ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let verify_check_accepted_and_ase_cancelled_deposit ?proving_timeout t input =
-  send_with_priority ?proving_timeout t
+let verify_check_accepted_and_ase_cancelled_deposit t input =
+  send_with_priority t
     (Prover.Input.Verify_check_accepted_and_ase_cancelled_deposit input)
   >>| function
   | Prover.Output.Verify_check_accepted_and_ase_cancelled_deposit snark ->
@@ -520,10 +422,9 @@ let verify_check_accepted_and_ase_cancelled_deposit ?proving_timeout t input =
   | _ ->
       failwith "Unexpected response from prover"
 
-let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
-    ~new_inner_actions ~unprocessed_actions ~(old_inner_acc : Account.t)
-    ~old_inner_acc_path ~(new_inner_acc : Account.t) ~new_inner_acc_path
-    ~da_multisig ~slot_range =
+let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
+    ~unprocessed_actions ~(old_inner_acc : Account.t) ~old_inner_acc_path
+    ~(new_inner_acc : Account.t) ~new_inner_acc_path ~da_multisig ~slot_range =
   (* Counting length of inner action state *)
   let%bind inner_ase =
     let%map proof, target, excess =
@@ -556,7 +457,7 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
   let%bind verify_both_ases =
     verify_both_ases_commit t (outer_ase, inner_ase)
   in
-  send_with_priority ?proving_timeout t
+  send_with_priority t
     (Prover.Input.Outer_commit
        { txn_snark
        ; public_key
@@ -576,8 +477,8 @@ let outer_commit ?proving_timeout t ~txn_snark ~public_key ~inner_ase_source
   | _ ->
       failwith "Unexpected response from prover"
 
-let outer_action_witness ?proving_timeout t witness =
-  send ?proving_timeout t Prover.Input.(Bridge (Outer_action_witness witness))
+let outer_action_witness t witness =
+  send t Prover.Input.(Bridge (Outer_action_witness witness))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
@@ -586,8 +487,8 @@ let outer_action_witness ?proving_timeout t witness =
   | _ ->
       failwith "Unexpected response from prover"
 
-let inner_action_witness ?proving_timeout t witness =
-  send ?proving_timeout t Prover.Input.(Bridge (Inner_action_witness witness))
+let inner_action_witness t witness =
+  send t Prover.Input.(Bridge (Inner_action_witness witness))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
@@ -596,8 +497,8 @@ let inner_action_witness ?proving_timeout t witness =
   | _ ->
       failwith "Unexpected response from prover"
 
-let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
-    ~inner_authorization_kind ~(ase : Ase.With_length.Stmt.t * Field.t list)
+let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
+    ~(ase : Ase.With_length.Stmt.t * Field.t list)
     ~(check_accepted :
        Bridge.Check_accepted_mina.Init.t
        * Field.t
@@ -636,7 +537,7 @@ let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
     ( { proof; proof_source = source; proof_target = target; init; excess }
       : Bridge.Check_accepted_mina.serializable )
   in
-  send ?proving_timeout t
+  send t
     Prover.Input.(
       Bridge
         (Finalize_deposit
@@ -655,7 +556,7 @@ let finalize_deposit ?proving_timeout t ~public_key ~may_use_token
   | _ ->
       failwith "Unexpected response from prover"
 
-let finalize_cancelled_deposit ?proving_timeout t ~public_key ~may_use_token
+let finalize_cancelled_deposit t ~public_key ~may_use_token
     ~outer_authorization_kind ~commit ~before_commit
     ~(commit_ase : Ase.Without_length.Stmt.t * Field.t list)
     ~(sync_ase : Ase.With_length.Stmt.t * Field.t list)
@@ -730,7 +631,7 @@ let finalize_cancelled_deposit ?proving_timeout t ~public_key ~may_use_token
     verify_check_accepted_and_ase_cancelled_deposit t
       (check_accepted, check_accepted_ase)
   in
-  send ?proving_timeout t
+  send t
     Prover.Input.(
       Bridge
         (Finalize_cancelled_deposit
@@ -751,8 +652,8 @@ let finalize_cancelled_deposit ?proving_timeout t ~public_key ~may_use_token
   | _ ->
       failwith "Unexpected response from prover"
 
-let inner_receive ?proving_timeout t witness =
-  send ?proving_timeout t Prover.Input.(Bridge (Inner_receive witness))
+let inner_receive t witness =
+  send t Prover.Input.(Bridge (Inner_receive witness))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
@@ -761,10 +662,9 @@ let inner_receive ?proving_timeout t witness =
   | _ ->
       failwith "Unexpected response from prover"
 
-let finalize_withdrawal ?proving_timeout t ~public_key ~may_use_token
-    ~outer_authorization_kind ~commit ~before_commit ~commit_ase
-    ~before_withdrawal ~withdrawal_ase ~prev_next_withdrawal ~withdrawal_params
-    =
+let finalize_withdrawal t ~public_key ~may_use_token ~outer_authorization_kind
+    ~commit ~before_commit ~commit_ase ~before_withdrawal ~withdrawal_ase
+    ~prev_next_withdrawal ~withdrawal_params =
   let%bind commit_ase =
     let source, elems = commit_ase in
     let%map proof, target, excess =
@@ -785,7 +685,7 @@ let finalize_withdrawal ?proving_timeout t ~public_key ~may_use_token
     Bridge.Finalize_withdrawal.Ase_inner_inst.
       { proof; proof_target = target; init = source; excess }
   in
-  send ?proving_timeout t
+  send t
     Prover.Input.(
       Bridge
         (Finalize_withdrawal
@@ -808,8 +708,8 @@ let finalize_withdrawal ?proving_timeout t ~public_key ~may_use_token
   | _ ->
       failwith "Unexpected response from prover"
 
-let outer_token_owner ?proving_timeout t witness =
-  send ?proving_timeout t Prover.Input.(Bridge (Outer_token_owner witness))
+let outer_token_owner t witness =
+  send t Prover.Input.(Bridge (Outer_token_owner witness))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)

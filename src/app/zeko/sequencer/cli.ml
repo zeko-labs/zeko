@@ -679,10 +679,8 @@ let dump_ledger =
 let prover_load =
   ( "prover-load"
   , Command.async ~summary:"Dump the ledger"
-      (let%map_open.Command prover =
-         flag "--prover" (required string) ~doc:"string Prover server"
-       and timeout =
-         flag "--timeout" (optional float) ~doc:"float Timeout in seconds"
+      (let%map_open.Command mq_host =
+         flag "--mq-host" (required string) ~doc:"string Message queue host"
        and count =
          flag "--count"
            (optional_with_default 1 int)
@@ -690,11 +688,9 @@ let prover_load =
        in
        fun () ->
          let logger = Logger.create () in
-         let client =
-           Zeko_prover.Client.create ~logger
-             [ Tcp.Where_to_connect.of_host_and_port
-               @@ Core.Host_and_port.of_string prover
-             ]
+         let%bind client =
+           Zeko_prover.Client.create ?db_pool:None ~logger
+             ~mq_host:(Host_and_port.of_string mq_host)
          in
          let open Zeko_types in
          let witness : Base_input.serializable =
@@ -783,8 +779,8 @@ let prover_load =
            Deferred.List.iteri ~how:`Sequential witnesses ~f:(fun i witness ->
                printf "Proving %d/%d\n" i count ;
                let%map _result =
-                 Zeko_prover.Client.transaction_snark ?proving_timeout:timeout
-                   client (Signed_command witness)
+                 Zeko_prover.Client.transaction_snark client
+                   (Signed_command witness)
                in
                () )
          in
