@@ -162,10 +162,10 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     in
 
     let%map (body, _, calls), proof =
-      Zeko_prover.Client.outer_commit ~proving_timeout:30. provers ~txn_snark
-        ~public_key:zkapp_pk ~inner_ase_source ~new_inner_actions ~old_inner_acc
-        ~old_inner_acc_path ~new_inner_acc ~new_inner_acc_path
-        ~unprocessed_actions ~da_multisig ~slot_range
+      Zeko_prover.Client.outer_commit provers ~txn_snark ~public_key:zkapp_pk
+        ~inner_ase_source ~new_inner_actions ~old_inner_acc ~old_inner_acc_path
+        ~new_inner_acc ~new_inner_acc_path ~unprocessed_actions ~da_multisig
+        ~slot_range
     in
     (* see #286 *)
     Utils.attach_proof_to_forest ~signature_kind:executor.signature_kind

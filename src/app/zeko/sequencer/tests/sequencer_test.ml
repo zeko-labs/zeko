@@ -37,11 +37,7 @@ let da_keys =
 
 let da_quorum = 2
 
-let provers =
-  let args = Sys.get_argv () |> Array.to_list in
-  if List.length args <= 1 then
-    failwith "No provers provided as command-line arguments."
-  else List.tl_exn args |> List.map ~f:Host_and_port.of_string
+let mq_host = Host_and_port.of_string "localhost:5672"
 
 let run = Thread_safe.block_on_async_exn
 
@@ -67,7 +63,7 @@ let () =
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:5
        ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:da_config_with2 ~da_keys
-       ~da_quorum ~provers ~slot_acceptance () )
+       ~da_quorum ~mq_host ~slot_acceptance () )
     ~f:(fun
          { outer_kp; signer; specs; sequencer; da_keys; accounts; l1_config; _ }
        ->
@@ -141,9 +137,6 @@ let () =
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
           let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
-          let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
           let%bind { ledger_hash = committed_ledger_hash; _ } =
@@ -172,9 +165,6 @@ let () =
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
           let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
-          let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
           let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
@@ -198,9 +188,6 @@ let () =
         run (fun () ->
             let%bind commit_result = commit !sequencer in
             let%bind _txn_snark = commit_result in
-            let%bind () =
-              Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-            in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
@@ -228,7 +215,7 @@ let () =
                 ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
                 ~da_quorum ~db_dir:None ~postgres_uri:postgres_uri2
                 ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-                ~deposit_delay_blocks:0 ~provers ~fee_modifier:1.0
+                ~deposit_delay_blocks:0 ~mq_host ~fee_modifier:1.0
                 ~minimum_fee:0.01 ~slot_acceptance
                 ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
                 ~l1_config
@@ -259,7 +246,7 @@ let () =
 
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers ~slot_acceptance
+       ~da_config:da_config_with2 ~da_keys ~da_quorum ~mq_host ~slot_acceptance
        () ) ~f:(fun { specs; sequencer; _ } ->
       let dummy_signature_command : Zkapp_command.t =
         let command = account_update_send (List.hd_exn specs) in
@@ -305,7 +292,7 @@ let () =
   in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers ~slot_acceptance
+       ~da_config:da_config_with2 ~da_keys ~da_quorum ~mq_host ~slot_acceptance
        () )
     ~f:(fun { outer_kp; signer; specs; sequencer; da_keys; l1_config; _ } ->
       let commands =
@@ -330,7 +317,7 @@ let () =
             Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir)
               ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-              ~deposit_delay_blocks:0 ~provers ~da_keys ~fee_modifier:1.0
+              ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
               ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
@@ -341,10 +328,6 @@ let () =
       run (fun () ->
           let%bind commit_result = commit new_sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () =
-            Zeko_prover.Client.wait_to_finish
-              new_sequencer.bridge_prover.provers
-          in
           let%bind () =
             Executor.wait_to_finish new_sequencer.merger_ctx.executor
           in
@@ -388,7 +371,7 @@ let () =
   in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers ~slot_acceptance
+       ~da_config:da_config_with2 ~da_keys ~da_quorum ~mq_host ~slot_acceptance
        () )
     ~f:(fun { outer_kp; signer; specs; sequencer; da_keys; l1_config; _ } ->
       let commands =
@@ -413,9 +396,6 @@ let () =
       run (fun () ->
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
           Executor.wait_to_finish !sequencer.merger_ctx.executor ) ;
 
       print_endline "(* Apply second batch *)" ;
@@ -428,9 +408,6 @@ let () =
         run (fun () ->
             let%bind commit_result = commit !sequencer in
             let%bind _txn_snark = commit_result in
-            let%bind () =
-              Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-            in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
@@ -454,7 +431,7 @@ let () =
             Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with2 ~da_quorum ~db_dir:(Some db_dir)
               ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-              ~deposit_delay_blocks:0 ~provers ~da_keys ~fee_modifier:1.0
+              ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
               ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
@@ -488,7 +465,7 @@ let () =
   in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:5 ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers
+       ~da_config:da_config_with2 ~da_keys ~da_quorum ~mq_host
        ~slot_acceptance:(Time.Span.of_min 10.) () )
     ~f:(fun { specs; sequencer; signer; outer_kp; l1_config; _ } ->
       run (fun () ->
@@ -613,9 +590,6 @@ let () =
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
           let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
-          let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
           let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
@@ -644,7 +618,7 @@ let () =
   let open Mina_numbers in
   Quickcheck.test ~trials:1
     (Sequencer_spec.gen ~logger ~number_of_transactions:0 ~postgres_uri ~gql_uri
-       ~da_config:da_config_with2 ~da_keys ~da_quorum ~provers
+       ~da_config:da_config_with2 ~da_keys ~da_quorum ~mq_host
        ~slot_acceptance:(Time.Span.of_min 10.)
        ~commit_validity_period:(Global_slot_span.of_int 20)
        () )
@@ -767,9 +741,6 @@ let () =
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
           let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
-          let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
           let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
@@ -818,9 +789,6 @@ let () =
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
           let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
-          let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
           let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
@@ -838,9 +806,6 @@ let () =
       run (fun () ->
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -1057,9 +1022,6 @@ let () =
           Utils.Slot.For_tests.add_to_global_slot := 15 ;
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -1389,9 +1351,6 @@ let () =
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
           let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
-          let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
           let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
@@ -1445,9 +1404,6 @@ let () =
       run (fun () ->
           let%bind commit_result = commit !sequencer in
           let%bind _txn_snark = commit_result in
-          let%bind () =
-            Zeko_prover.Client.wait_to_finish !sequencer.bridge_prover.provers
-          in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in

@@ -765,7 +765,7 @@ module Sequencer = struct
 
   let create ~logger ~max_pool_size ~commitment_period_sec ~da_config ~da_keys
       ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-      ~deposit_delay_blocks ~provers ~fee_modifier ~minimum_fee ~slot_acceptance
+      ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance
       ~proof_cache_db ~l1_config ~commit_validity_period =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
@@ -803,10 +803,7 @@ module Sequencer = struct
         ~da_keys ~db_pool
     in
     let kvdb = L.Db.zeko_kvdb ledger in
-    let provers =
-      Zeko_prover.Client.create ~logger ~db_pool
-        (List.map provers ~f:Tcp.Where_to_connect.of_host_and_port)
-    in
+    let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in
     let executor =
       Executor.create ~l1_uri:config.l1_uri
         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ~kvdb ()

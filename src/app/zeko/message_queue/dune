@@ -1,0 +1,5 @@
+(library
+ (name message_queue)
+ (libraries logger core_kernel async amqp-client-async)
+ (preprocess
+  (pps ppx_jane ppx_mina)))

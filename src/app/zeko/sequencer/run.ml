@@ -10,7 +10,7 @@ module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-    ~deposit_delay_blocks ~provers ~fee_modifier ~minimum_fee ~slot_acceptance
+    ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance
     ~commit_validity_period () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
@@ -36,7 +36,7 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
             Signature_lib.(
               Keypair.of_private_key_exn
               @@ Private_key.of_base58_check_exn signer)
-          ~provers ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db
+          ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db
           ~l1_config ~commit_validity_period )
   in
 
@@ -86,10 +86,9 @@ let () =
      and da_quorum =
        flag "--da-quorum" (required int)
          ~doc:"string Quorum for the DA signature count"
-     and provers =
-       flag "--prover" (listed string)
-         ~doc:
-           "string Address of the prover server, can be supplied multiple times"
+     and mq_host =
+       flag "--mq-host" (required string)
+         ~doc:"string Address of the message queue host"
      and db_dir =
        flag "--db-dir"
          (optional_with_default "db" string)
@@ -131,7 +130,7 @@ let () =
        Cli_lib.Flag.Types.
          { value = Uri.of_string archive_uri; name = "archive-uri" }
      in
-     let provers = List.map provers ~f:Host_and_port.of_string in
+     let mq_host = Host_and_port.of_string mq_host in
      let logger = Logger.create () in
      let postgres_uri = Uri.of_string postgres_uri in
      let commit_validity_period =
@@ -140,6 +139,6 @@ let () =
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
        ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-       ~deposit_delay_blocks ~provers ~fee_modifier ~minimum_fee
+       ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
        ~slot_acceptance ~commit_validity_period )
   |> Command_unix.run

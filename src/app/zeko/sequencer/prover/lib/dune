@@ -6,6 +6,7 @@
   zeko_types
   utils
   relational_db
+  message_queue
   ;; mina ;;
   mina_base
   mina_ledger

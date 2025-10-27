@@ -547,44 +547,28 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
 
-let run ?fake_proving_time ~logger ~port () =
+let run ?fake_proving_time ~logger ~mq_host () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
-  ignore
-  @@ Tcp.Server.create (Tcp.Where_to_listen.of_port port)
-       ~on_handler_error:`Ignore (fun s r w ->
-         [%log info] "Accepted connection from %s"
-           (Socket.Address.Inet.to_string s) ;
-         let rec loop () =
-           match%bind
-             Reader.really_read_line ~wait_time:(Time.Span.of_sec 30.) r
-           with
-           | None ->
-               return ()
-           | Some input ->
-               Yojson.Safe.from_string input
-               |> Input.of_yojson
-               |> (function
-                    | Ok input -> (
-                        match%bind
-                          try_with (fun () ->
-                              prove ?fake_proving_time ~logger ~proof_cache_db
-                                input )
-                        with
-                        | Ok output ->
-                            return output
-                        | Error e ->
-                            let err = Exn.to_string e in
-                            [%log error] "Error proving: %s" err ;
-                            return (Output.Error err) )
-                    | Error e ->
-                        return (Output.Error e) )
-               >>| Output.to_yojson >>| Yojson.Safe.to_string
-               >>| Writer.write_line w
-               >>= fun () -> loop ()
-         in
-         let%bind () = loop () in
-         return
-           ([%log info] "Closed connection from %s"
-              (Socket.Address.Inet.to_string s) ) ) ;
-  [%log info] "Listening on port %d\n" port ;
+  let handler input =
+    Yojson.Safe.from_string input
+    |> Input.of_yojson
+    |> (function
+         | Ok input -> (
+             match%bind
+               try_with (fun () ->
+                   prove ?fake_proving_time ~logger ~proof_cache_db input )
+             with
+             | Ok output ->
+                 return output
+             | Error e ->
+                 let err = Exn.to_string e in
+                 [%log error] "Error proving: %s" err ;
+                 return (Output.Error err) )
+         | Error e ->
+             return (Output.Error e) )
+    >>| Output.to_yojson >>| Yojson.Safe.to_string
+  in
+  let%bind _server = Message_queue.Worker.start mq_host handler in
+  [%log info] "Listening on message queue %s\n"
+    (Host_and_port.to_string mq_host) ;
   Deferred.never ()
