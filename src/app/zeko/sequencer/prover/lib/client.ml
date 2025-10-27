@@ -19,10 +19,15 @@ let send' t ~sendfn (input : Prover.Input.t) : Prover.Output.t Deferred.t =
   match%map
     Utils.retry ~max_attempts:5 ~delay:(Time.Span.of_sec 1.)
       ~f:(fun () ->
-        let%map response =
+        match%map
           sendfn t.mq (Prover.Input.to_yojson input |> Yojson.Safe.to_string)
-        in
-        Yojson.Safe.from_string response |> Prover.Output.of_yojson )
+        with
+        | Ok response ->
+            Yojson.Safe.from_string response
+            |> Prover.Output.of_yojson
+            |> Result.map_error ~f:Error.of_string
+        | Error err ->
+            Error err )
       ()
   with
   | Ok output ->
@@ -30,9 +35,10 @@ let send' t ~sendfn (input : Prover.Input.t) : Prover.Output.t Deferred.t =
   | Error _ ->
       failwith "Failed to send job to the message queue"
 
-let send = send' ~sendfn:Message_queue.Master.send
+let send = send' ~sendfn:Message_queue.Master.send_exn
 
-let send_with_priority = send' ~sendfn:Message_queue.Master.send_with_priority
+let send_with_priority =
+  send' ~sendfn:Message_queue.Master.send_with_priority_exn
 
 module Ase_cache_with_length_table = struct
   type t =

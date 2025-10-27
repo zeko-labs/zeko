@@ -7,7 +7,11 @@ open Zeko_circuits.Zeko_util
 
 let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
   let rec go attempt =
-    match%bind f () with
+    match%bind
+      Monitor.try_with ~here:[%here] f
+      >>| Result.map_error ~f:Error.of_exn
+      >>| Or_error.join
+    with
     | Ok x ->
         return (Ok x)
     | Error _ when attempt < max_attempts ->

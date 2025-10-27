@@ -49,6 +49,21 @@ export ZEKO_CIRCUITS_CONFIG=test
 
 TMP_DIR=$(mktemp -d)
 
+wait_for_port() {
+  local port=$1
+  local pid=$2
+  while ! nc -z localhost $port; do
+    sleep 1
+
+    if ! kill -0 $pid 2>/dev/null; then
+      echo "Process for port $port failed to start"
+      exit 1
+    fi
+  done
+
+  echo "Port $port is now open"
+}
+
 docker run --rm --name pg-sequencer \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
@@ -59,6 +74,9 @@ docker run --rm --name pg-sequencer \
 docker run -d --name rabbitmq-sequencer \
   -p 5672:5672 \
   rabbitmq:latest
+
+wait_for_port 5433 $$
+wait_for_port 5672 $$
 
 $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet --block-period 9999999 &
 l1_pid=$!
@@ -88,21 +106,6 @@ done
 
 # Wait for ports to be open
 echo "Waiting for services to start..."
-
-wait_for_port() {
-  local port=$1
-  local pid=$2
-  while ! nc -z localhost $port; do
-    sleep 1
-
-    if ! kill -0 $pid 2>/dev/null; then
-      echo "Process for port $port failed to start"
-      exit 1
-    fi
-  done
-
-  echo "Port $port is now open"
-}
 
 wait_for_port 8080 $l1_pid
 wait_for_port 8555 $da1_pid
