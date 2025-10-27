@@ -3,6 +3,7 @@ compiler: ["ocaml-base-compiler.4.14.0"]
 roots: [
   "alcotest.1.1.0"
   "alcotest-async.1.1.0"
+  "amqp-client-async.2.2.2"
   "angstrom.0.15.0"
   "async_ssl.v0.14.0"
   "bignum.v0.14.0"
@@ -56,6 +57,8 @@ roots: [
 installed: [
   "alcotest.1.1.0"
   "alcotest-async.1.1.0"
+  "amqp-client.2.2.2"
+  "amqp-client-async.2.2.2"
   "angstrom.0.15.0"
   "asetmap.0.8.1"
   "astring.0.8.5"
