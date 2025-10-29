@@ -23,6 +23,7 @@ let
   extra-packages = with implicit-deps; {
     dune-rpc = "3.5.0";
     dyn = "3.5.0";
+    ezxmlm = "1.1.0"; # for amqp-client-async in opam.export
     fiber = "3.5.0";
     chrome-trace = "3.5.0";
     ocaml-lsp-server = "1.15.1-4.14";
@@ -35,6 +36,7 @@ let
     ppx_yojson_conv_lib = "v0.15.0";
     stdune = "3.5.0";
     xdg = dune;
+    xmlm = "1.4.0"; # for amqp-client-async in opam.export
   };
 
   implicit-deps-overlay = self: super:
