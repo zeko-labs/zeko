@@ -2343,11 +2343,59 @@ module Mutations = struct
           in
           don't_wait_for d ; return (Ok key) )
 
+    let cancel_deposit ~proof_cache_db =
+      io_field "cancelDeposit" ~doc:"Cancel a deposit"
+        ~typ:(non_null Types.Payload.proof_key)
+        ~args:
+          Arg.
+            [ arg "input"
+                ~typ:
+                  ( non_null
+                  @@ Types.Input.Provers.Finalize_cancelled_deposit.arg_typ
+                       ~proof_cache_db )
+            ]
+        ~resolve:(fun { ctx = sequencer; _ } () witness ->
+          let%bind.Deferred.Result { public_key
+                                   ; commit
+                                   ; before_commit
+                                   ; commit_ase =
+                                       commit_ase_source, commit_ase_elems
+                                   ; sync_ase = sync_ase_source, sync_ase_elems
+                                   ; check_accepted =
+                                       check_accepted_init, check_accepted_elems
+                                   ; check_accepted_ase =
+                                       ( check_accepted_ase_source
+                                       , check_accepted_ase_elems )
+                                   ; prev_next_cancelled_deposit
+                                   } =
+            return (Result.map_error witness ~f:Error.to_string_hum)
+          in
+          let key, d =
+            Bridge_prover.Finalize_cancelled_deposit.f
+              ~t:Zeko_sequencer.(sequencer.bridge_prover)
+              ~logger:Zeko_sequencer.(sequencer.logger)
+              { public_key
+              ; commit
+              ; before_commit
+              ; commit_ase_source
+              ; commit_ase_elems
+              ; sync_ase_source
+              ; sync_ase_elems
+              ; check_accepted_init
+              ; check_accepted_elems
+              ; check_accepted_ase_source
+              ; check_accepted_ase_elems
+              ; prev_next_cancelled_deposit
+              }
+          in
+          don't_wait_for d ; return (Ok key) )
+
     let commands ~proof_cache_db =
       [ deposit_request ~proof_cache_db
       ; withdrawal_request ~proof_cache_db
       ; finalize_deposit ~proof_cache_db
       ; finalize_withdrawal ~proof_cache_db
+      ; cancel_deposit ~proof_cache_db
       ]
   end
 
