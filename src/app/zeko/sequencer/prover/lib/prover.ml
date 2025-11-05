@@ -549,6 +549,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
 
 let run ?fake_proving_time ~logger ~mq_host () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
+  let%bind () = Compile_circuits.compile_all ~logger () in
   let handler input =
     Yojson.Safe.from_string input
     |> Input.of_yojson
@@ -569,6 +570,5 @@ let run ?fake_proving_time ~logger ~mq_host () =
     >>| Output.to_yojson >>| Yojson.Safe.to_string
   in
   let%bind _server = Message_queue.Worker.start mq_host handler in
-  [%log info] "Listening on message queue %s\n"
-    (Host_and_port.to_string mq_host) ;
+  [%log info] "Listening on message queue %s" (Host_and_port.to_string mq_host) ;
   Deferred.never ()

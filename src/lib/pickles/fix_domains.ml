@@ -86,8 +86,11 @@ struct
     let constraint_builder =
       Impl.constraint_system_manual ~input_typ:typ ~return_typ
     in
-    let%map.Promise res = constraint_builder.run_circuit main in
-    let constraint_system = constraint_builder.finish_computation res in
+    let%map.Promise constraint_system =
+      State_lock.with_lock ~f:(fun () ->
+          let%map.Promise res = constraint_builder.run_circuit main in
+          constraint_builder.finish_computation res )
+    in
     domains2 constraint_system
 end
 

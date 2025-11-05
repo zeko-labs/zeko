@@ -1,4 +1,3 @@
-module P = Printexc
 open Core_kernel
 open Snark_params.Tick
 open Checked.Let_syntax
@@ -676,18 +675,6 @@ let rec branches_to_choices :
                       rule :: f ~self )
                 } ) )
 
-let get_first_backtrace_entry b =
-  let open P in
-  match backtrace_slots b with
-  | None ->
-      "<invalid>"
-  | Some slots -> (
-      match Slot.location slots.(1) with
-      | None ->
-          "<invalid>"
-      | Some { filename; line_number; _ } ->
-          filename ^ ":" ^ Int.to_string line_number )
-
 let compile (type out_t out_var first_input branches n_available_branches)
     ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
     ~(branches :
@@ -699,8 +686,6 @@ let compile (type out_t out_var first_input branches n_available_branches)
        with type out_t = out_t
         and type out_var = out_var
         and type branches = (first_input, branches) cons_branch ) =
-  printf "compile_simple.real: %s at %s\n%!" name
-    (P.get_callstack 9999 |> get_first_backtrace_entry) ;
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
   let override_wrap_domain : Pickles_base.Proofs_verified.t option =
@@ -768,11 +753,6 @@ let compile (type out_t out_var first_input branches n_available_branches)
           ~max_proofs_verified:(module Pickles_types.Nat.N2)
           ~name:("compile_simple of " ^ name)
       in
-      (* FIXME: Don't do this. Make lazy compilation work. Fix Pickles bug. *)
-      Promise.block_on_async_exn (fun () ->
-          time_promise ("(compile_simple) compiled " ^ name) (fun () ->
-              Verification_key.of_compiled_promise tag )
-          |> Promise.map ~f:(fun _ -> ()) ) ;
       let provers = transform_provers provers in
       let r :
           (module Result

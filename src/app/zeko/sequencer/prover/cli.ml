@@ -15,7 +15,6 @@ let run_server =
        in
        let logger = Logger.create () in
        Stdout_log.setup log_json log_level ;
-       [%log info] "Compiling circuits" ;
        Zeko_prover.Prover.run
          ?fake_proving_time:(Option.map ~f:Time.Span.of_sec fake_proving_time)
          ~logger
