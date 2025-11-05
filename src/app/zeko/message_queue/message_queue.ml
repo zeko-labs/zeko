@@ -6,7 +6,7 @@ let jobs_queue = "sequencer.jobs"
 
 let with_uuid id = id ^ "." ^ (Uuid_unix.create () |> Uuid.to_string)
 
-let credentials =
+let get_credentials () =
   let user = Sys.getenv "RABBITMQ_USER" in
   let password = Sys.getenv "RABBITMQ_PASSWORD" in
   match (user, password) with
@@ -31,7 +31,7 @@ module Master = struct
       Amqp.Connection.connect
         ~id:(with_uuid "sequencer.connection")
         ~port:(Host_and_port.port host_and_port)
-        ?credentials
+        ?credentials:(get_credentials ())
         (Host_and_port.host host_and_port)
     in
     let%map client =
@@ -69,7 +69,7 @@ module Worker = struct
       Amqp.Connection.connect
         ~id:(with_uuid "worker.connection")
         ~port:(Host_and_port.port host_and_port)
-        ?credentials
+        ?credentials:(get_credentials ())
         (Host_and_port.host host_and_port)
     in
     let%bind channel =
