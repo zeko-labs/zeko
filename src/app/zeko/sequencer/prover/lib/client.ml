@@ -407,8 +407,7 @@ let verify_both_ases_commit t input =
       failwith "Unexpected response from prover"
 
 let verify_two_outer_ases_cancelled_deposit t input =
-  send_with_priority t
-    (Prover.Input.Verify_two_outer_ases_cancelled_deposit input)
+  send t (Prover.Input.Verify_two_outer_ases_cancelled_deposit input)
   >>| function
   | Prover.Output.Verify_two_outer_ases_cancelled_deposit snark ->
       snark
@@ -418,8 +417,7 @@ let verify_two_outer_ases_cancelled_deposit t input =
       failwith "Unexpected response from prover"
 
 let verify_check_accepted_and_ase_cancelled_deposit t input =
-  send_with_priority t
-    (Prover.Input.Verify_check_accepted_and_ase_cancelled_deposit input)
+  send t (Prover.Input.Verify_check_accepted_and_ase_cancelled_deposit input)
   >>| function
   | Prover.Output.Verify_check_accepted_and_ase_cancelled_deposit snark ->
       snark

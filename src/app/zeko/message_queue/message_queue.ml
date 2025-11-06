@@ -79,7 +79,10 @@ module Worker = struct
     in
     let%bind queue =
       Amqp.Queue.declare channel
-        ~arguments:[ Rpc.Server.queue_argument; Amqp.Queue.maximum_priority 5 ]
+        ~arguments:
+          [ Rpc.Server.queue_argument
+          ; ("x-max-priority", Amqp.Types.VLonglong 5)
+          ]
         jobs_queue
     in
     let%map server =
