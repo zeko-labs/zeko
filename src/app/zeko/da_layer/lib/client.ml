@@ -452,6 +452,10 @@ let get_diffs_chain ~logger ~config ?max_length ~source_ledger_hash
       Rpc.get_diffs_chain ~logger ~node_location ?max_length
         ~source:source_ledger_hash ~target:target_ledger_hash () )
 
+let diff_exists ~logger ~config ~ledger_hash () =
+  try_all_nodes ~config ~f:(fun ~node_location () ->
+      Rpc.has_diff ~logger ~node_location ~ledger_hash )
+
 (** Lazily fetch chunks of diffs, used to minimize memory usage *)
 let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
     ~target_ledger_hash () =

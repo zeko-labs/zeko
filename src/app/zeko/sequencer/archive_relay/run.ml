@@ -217,12 +217,20 @@ let sync (t : t) () =
         | Error e ->
             failwith e
       in
-      time ~logger "Synced" (sync_archive t ~hash:ledger_hash) )
+      if%bind
+        Da_layer.Client.diff_exists ~logger ~config:t.da_config ~ledger_hash ()
+        >>| Or_error.ok_exn
+      then time ~logger "Synced" (sync_archive t ~hash:ledger_hash)
+      else (
+        [%log warn] "Diff does not exist yet, skipping sync" ;
+        return (Ok ()) ) )
 
 let rec run (t : t) ~sync_period () =
   let logger = t.logger in
   let () =
-    match sync t () with
+    match
+      (try Ok (sync t ()) with e -> Error (Error.of_exn e)) |> Or_error.join
+    with
     | Ok () ->
         (* wait *)
         Thread_safe.block_on_async_exn (fun () ->
