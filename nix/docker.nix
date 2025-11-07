@@ -148,6 +148,28 @@ in {
     };
   };
 
+  zeko-archive = dockerTools.buildLayeredImage {
+    name = "zeko-archive";
+    tag = "latest";
+    inherit created;
+    contents = [
+      ocamlPackages_mina.devnet.zeko_archive_relay
+      coreutils
+      findutils
+      bashInteractive
+      procps
+      curl
+      jq
+    ];
+    config = {
+      Entrypoint = [ "/bin/zeko-archive" ];
+      Env = [
+        "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+        "ZEKO_SIGNATURE_KIND=testnet"
+      ];
+    };
+  };
+
   mina-image-slim = dockerTools.streamLayeredImage {
     name = "mina";
     inherit created;

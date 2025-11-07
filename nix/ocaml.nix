@@ -452,6 +452,7 @@ let
           cp src/app/zeko/sequencer/prover/cli_fake.exe $zeko/bin/zeko-prover-fake
           cp src/app/zeko/da_layer/cli.exe $zeko_da/bin/zeko-da
           cp src/app/zeko/sequencer/archive_relay/run.exe $zeko_archive_relay/bin/zeko-archive-relay
+          cp src/app/archive/archive.exe $zeko_archive_relay/bin/zeko-archive
           cp -R _doc/_html $out/share/doc/html
           # cp src/lib/mina_base/sample_keypairs.json $sample/share/mina
           popd
