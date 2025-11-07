@@ -3,7 +3,7 @@ name: Publish docker images
 on:
   push:
     tags:
-    - '*'
+      - "*"
   workflow_dispatch:
     inputs:
       docker_tag_prefix:
@@ -16,7 +16,7 @@ env:
 
 # This allows a subsequently queued workflow run to interrupt previous runs
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-4x
     strategy:
       matrix:
-        package: [zeko, zeko-da, zeko-archive-relay]
+        package: [zeko, zeko-da, zeko-archive-relay, zeko-archive]
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -65,7 +65,7 @@ jobs:
 
       - name: 🛠️ Build ${{ matrix.package }} OCI image
         run: nix build .?submodules=1#${{ matrix.package }}-image
-        
+
       - name: 🚚 Load and Push ${{ matrix.package }} docker image
         run: |
           IMAGE_TAR=$(readlink -f result)

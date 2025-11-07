@@ -148,7 +148,7 @@ in {
     };
   };
 
-  zeko-archive = dockerTools.buildLayeredImage {
+  zeko-archive-image = dockerTools.buildLayeredImage {
     name = "zeko-archive";
     tag = "latest";
     inherit created;
