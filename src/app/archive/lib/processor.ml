@@ -4308,6 +4308,12 @@ module Block = struct
          |sql} )
       (state_hash, height)
 
+  let mark_block_as_orphaned (module Conn : CONNECTION) ~state_hash =
+    Conn.exec
+      (Caqti_request.exec Caqti_type.string
+         {sql| UPDATE blocks SET chain_status='orphaned' WHERE state_hash = ? |sql} )
+      state_hash
+
   let find_common_ancestor_id_opt (module Conn : CONNECTION) ~a_id ~b_id =
     Conn.find_opt
       (Caqti_request.find_opt
@@ -4446,9 +4452,9 @@ module Block = struct
                    highest_canonical_block_id)" (fun () ->
                   Mina_caqti.deferred_result_list_fold orphaned_subchain
                     ~init:() ~f:(fun () block ->
-                      mark_as_orphaned
+                      mark_block_as_orphaned
                         (module Conn)
-                        ~state_hash:"never" ~height:block.height ) )
+                        ~state_hash:block.state_hash ) )
             in
             (* blocks between common ancestor and new block mark as canonical *)
             let%bind canonical_subchain =
@@ -4485,9 +4491,9 @@ module Block = struct
                 (fun () ->
                   Mina_caqti.deferred_result_list_fold orphaned_subchain
                     ~init:() ~f:(fun () block ->
-                      mark_as_orphaned
+                      mark_block_as_orphaned
                         (module Conn)
-                        ~state_hash:"never" ~height:block.height ) )
+                        ~state_hash:block.state_hash ) )
             in
             let%bind canonical_subchain =
               get_chain_from_root (module Conn) ~block_id
