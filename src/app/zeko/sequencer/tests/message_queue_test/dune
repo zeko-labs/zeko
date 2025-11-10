@@ -1,0 +1,12 @@
+(executable
+ (name cli)
+ (libraries
+  core_unix.command_unix
+  cli_lib
+  message_queue
+  core_kernel
+  async
+  is_compile_simple_real_fake)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina))
+ (modules cli))

@@ -1,6 +1,7 @@
 open Core_kernel
 open Async
 open Amqp_client_async
+open Spec.Basic
 
 let jobs_queue = "sequencer.jobs"
 
@@ -76,6 +77,11 @@ module Worker = struct
       Amqp.Connection.open_channel
         ~id:(with_uuid "worker.channel")
         Channel.no_confirm connection
+    in
+    let raw_ch = Channel.channel channel in
+    let%bind () =
+      Qos.request raw_ch
+        { Qos.prefetch_size = 0; prefetch_count = 1; global = false }
     in
     let%bind queue =
       Amqp.Queue.declare channel
