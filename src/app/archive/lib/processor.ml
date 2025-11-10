@@ -4308,6 +4308,209 @@ module Block = struct
          |sql} )
       (state_hash, height)
 
+  let mark_block_as_orphaned (module Conn : CONNECTION) ~state_hash =
+    Conn.exec
+      (Caqti_request.exec Caqti_type.string
+         {sql| UPDATE blocks SET chain_status='orphaned' WHERE state_hash = ? |sql} )
+      state_hash
+
+  let find_common_ancestor_id_opt (module Conn : CONNECTION) ~a_id ~b_id =
+    Conn.find_opt
+      (Caqti_request.find_opt
+         Caqti_type.(tup2 int int)
+         Caqti_type.int
+         {sql| WITH RECURSIVE climb AS (
+                  -- initial state: both blocks
+                  SELECT
+                      a.id        AS a_id,
+                      a.parent_id AS a_parent,
+                      a.height    AS a_h,
+                      b.id        AS b_id,
+                      b.parent_id AS b_parent,
+                      b.height    AS b_h
+                  FROM blocks a
+                  JOIN blocks b
+                   ON a.id = $1
+                  AND b.id = $2
+
+                  UNION ALL
+
+                  SELECT
+                      CASE
+                          WHEN c.a_h > c.b_h THEN pa.id
+                          WHEN c.b_h > c.a_h THEN c.a_id
+                          ELSE pa.id
+                      END AS a_id,
+                      CASE
+                          WHEN c.a_h > c.b_h THEN pa.parent_id
+                          WHEN c.b_h > c.a_h THEN c.a_parent
+                          ELSE pa.parent_id
+                      END AS a_parent,
+                      CASE
+                          WHEN c.a_h > c.b_h THEN pa.height
+                          WHEN c.b_h > c.a_h THEN c.a_h
+                          ELSE pa.height
+                      END AS a_h,
+
+                      CASE
+                          WHEN c.b_h > c.a_h THEN pb.id
+                          WHEN c.a_h > c.b_h THEN c.b_id
+                          ELSE pb.id
+                      END AS b_id,
+                      CASE
+                          WHEN c.b_h > c.a_h THEN pb.parent_id
+                          WHEN c.a_h > c.b_h THEN c.b_parent
+                          ELSE pb.parent_id
+                      END AS b_parent,
+                      CASE
+                          WHEN c.b_h > c.a_h THEN pb.height
+                          WHEN c.a_h > c.b_h THEN c.b_h
+                          ELSE pb.height
+                      END AS b_h
+                  FROM climb c
+                  JOIN blocks pa ON pa.id = c.a_parent
+                  JOIN blocks pb ON pb.id = c.b_parent
+                  WHERE c.a_id <> c.b_id
+              )
+              SELECT a_id AS lca_id
+              FROM climb
+              WHERE a_id = b_id
+              LIMIT 1;
+          |sql} )
+      (a_id, b_id)
+
+  let get_chain_from_root (module Conn : CONNECTION) ~block_id =
+    (* derive query from type `t` *)
+    let concat = String.concat ~sep:"," in
+    let columns_with_id = concat ("id" :: Fields.names) in
+    let b_columns_with_id =
+      concat (List.map ("id" :: Fields.names) ~f:(fun s -> "b." ^ s))
+    in
+    let columns = concat Fields.names in
+    Conn.collect_list
+      (Caqti_request.collect Caqti_type.int typ
+         (sprintf
+            {sql| WITH RECURSIVE chain AS (
+                  SELECT %s
+                  FROM blocks
+                  WHERE id = ?
+
+                  UNION ALL
+
+                  SELECT %s
+                  FROM blocks b
+                  JOIN chain c ON b.id = c.parent_id
+              )
+              SELECT %s
+              FROM chain
+              ORDER BY height ASC; |sql}
+            columns_with_id b_columns_with_id columns ) )
+      block_id
+
+  (* ZEKO NOTE: we mark as canonical chain the latest one *)
+  let zeko_update_chain_status (module Conn : CONNECTION) ~block_id =
+    let open Deferred.Result.Let_syntax in
+    let%bind block = load (module Conn) ~id:block_id in
+    match%bind get_highest_canonical_block_opt (module Conn) () with
+    | None ->
+        (* first block, mark as canonical *)
+        (* should not even be reachable since block 0 will be canonical automatically *)
+        let%bind () =
+          mark_as_canonical (module Conn) ~state_hash:block.state_hash
+        in
+        Deferred.Result.return ()
+    | Some (highest_canonical_block_id, _)
+      when Option.value block.parent_id ~default:(-1)
+           = highest_canonical_block_id ->
+        (* added new block, mark as canonical *)
+        let%bind () =
+          mark_as_canonical (module Conn) ~state_hash:block.state_hash
+        in
+        Deferred.Result.return ()
+    | Some (highest_canonical_block_id, _) -> (
+        (* need to find common ancestor *)
+        match%bind
+          find_common_ancestor_id_opt
+            (module Conn)
+            ~a_id:highest_canonical_block_id ~b_id:block_id
+        with
+        | Some common_ancestor_id ->
+            (* blocks between common ancestor and highest canonical block mark as orphaned *)
+            let%bind orphaned_subchain =
+              get_subchain
+                (module Conn)
+                ~start_block_id:common_ancestor_id
+                ~end_block_id:highest_canonical_block_id
+            in
+            let%bind () =
+              Metrics.time
+                ~label:
+                  "mark_as_orphaned (common_ancestor_id -> \
+                   highest_canonical_block_id)" (fun () ->
+                  Mina_caqti.deferred_result_list_fold orphaned_subchain
+                    ~init:() ~f:(fun () block ->
+                      mark_block_as_orphaned
+                        (module Conn)
+                        ~state_hash:block.state_hash ) )
+            in
+            (* blocks between common ancestor and new block mark as canonical *)
+            let%bind canonical_subchain =
+              get_subchain
+                (module Conn)
+                ~start_block_id:common_ancestor_id ~end_block_id:block_id
+            in
+            let%bind () =
+              Metrics.time
+                ~label:"mark_as_canonical (common_ancestor_id -> block_id)"
+                (fun () ->
+                  Mina_caqti.deferred_result_list_fold canonical_subchain
+                    ~init:() ~f:(fun () block ->
+                      let%bind () =
+                        mark_as_canonical
+                          (module Conn)
+                          ~state_hash:block.state_hash
+                      in
+                      mark_as_orphaned
+                        (module Conn)
+                        ~state_hash:block.state_hash ~height:block.height ) )
+            in
+            Deferred.Result.return ()
+        | None ->
+            (* completely new chain, mark whole old chain as orphaned *)
+            let%bind orphaned_subchain =
+              get_chain_from_root
+                (module Conn)
+                ~block_id:highest_canonical_block_id
+            in
+            let%bind () =
+              Metrics.time
+                ~label:"mark_as_orphaned (root -> highest_canonical_block_id)"
+                (fun () ->
+                  Mina_caqti.deferred_result_list_fold orphaned_subchain
+                    ~init:() ~f:(fun () block ->
+                      mark_block_as_orphaned
+                        (module Conn)
+                        ~state_hash:block.state_hash ) )
+            in
+            let%bind canonical_subchain =
+              get_chain_from_root (module Conn) ~block_id
+            in
+            let%bind () =
+              Metrics.time ~label:"mark_as_canonical (root -> block_id)"
+                (fun () ->
+                  Mina_caqti.deferred_result_list_fold canonical_subchain
+                    ~init:() ~f:(fun () block ->
+                      let%bind () =
+                        mark_as_canonical
+                          (module Conn)
+                          ~state_hash:block.state_hash
+                      in
+                      mark_as_orphaned
+                        (module Conn)
+                        ~state_hash:block.state_hash ~height:block.height ) )
+            in
+            Deferred.Result.return () )
+
   (* update chain_status for blocks now known to be canonical or orphaned *)
   let update_chain_status (module Conn : CONNECTION)
       ~(genesis_constants : Genesis_constants.t) ~block_id =
@@ -4477,7 +4680,7 @@ let retry ~f ~logger ~error_str retries =
   in
   go retries
 
-let add_block_aux ?(retries = 3) ~logger ~genesis_constants ~pool ~add_block
+let add_block_aux ?(retries = 3) ~logger ~genesis_constants:_ ~pool ~add_block
     ~hash ~delete_older_than ~accounts_accessed ~accounts_created ~tokens_used
     block =
   let state_hash = hash block in
@@ -4523,10 +4726,8 @@ let add_block_aux ?(retries = 3) ~logger ~genesis_constants ~pool ~add_block
           in
           (* update chain status for existing blocks *)
           let%bind () =
-            Metrics.time ~label:"update_chain_status" (fun () ->
-                Block.update_chain_status
-                  (module Conn)
-                  ~genesis_constants ~block_id )
+            Metrics.time ~label:"zeko_update_chain_status" (fun () ->
+                Block.zeko_update_chain_status (module Conn) ~block_id )
           in
           let%bind () =
             match delete_older_than with
