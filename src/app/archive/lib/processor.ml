@@ -4333,14 +4333,13 @@ module Block = struct
                    ON a.id = $1
                   AND b.id = $2
 
-                UNION ALL
+                  UNION ALL
 
-                  -- move up: deeper side climbs; if equal heights, both climb
                   SELECT
                       CASE
-                          WHEN c.a_h > c.b_h THEN pa.id        -- move A up
-                          WHEN c.b_h > c.a_h THEN c.a_id       -- keep A
-                          ELSE pa.id                           -- equal heights: move A up
+                          WHEN c.a_h > c.b_h THEN pa.id
+                          WHEN c.b_h > c.a_h THEN c.a_id
+                          ELSE pa.id
                       END AS a_id,
                       CASE
                           WHEN c.a_h > c.b_h THEN pa.parent_id
@@ -4354,9 +4353,9 @@ module Block = struct
                       END AS a_h,
 
                       CASE
-                          WHEN c.b_h > c.a_h THEN pb.id        -- move B up
-                          WHEN c.a_h > c.b_h THEN c.b_id       -- keep B
-                          ELSE pb.id                           -- equal heights: move B up
+                          WHEN c.b_h > c.a_h THEN pb.id
+                          WHEN c.a_h > c.b_h THEN c.b_id
+                          ELSE pb.id
                       END AS b_id,
                       CASE
                           WHEN c.b_h > c.a_h THEN pb.parent_id
@@ -4371,11 +4370,11 @@ module Block = struct
                   FROM climb c
                   JOIN blocks pa ON pa.id = c.a_parent
                   JOIN blocks pb ON pb.id = c.b_parent
-                  WHERE c.a_id <> c.b_id       -- stop recursing once they're equal
+                  WHERE c.a_id <> c.b_id
               )
               SELECT a_id AS lca_id
               FROM climb
-              WHERE a_id = b_id               -- the row(s) where they meet
+              WHERE a_id = b_id
               LIMIT 1;
           |sql} )
       (a_id, b_id)
@@ -4392,14 +4391,12 @@ module Block = struct
       (Caqti_request.collect Caqti_type.int typ
          (sprintf
             {sql| WITH RECURSIVE chain AS (
-                  -- start at the given node
                   SELECT %s
                   FROM blocks
                   WHERE id = ?
 
                   UNION ALL
 
-                  -- walk upward to the root
                   SELECT %s
                   FROM blocks b
                   JOIN chain c ON b.id = c.parent_id
