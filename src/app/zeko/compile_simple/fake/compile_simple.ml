@@ -253,9 +253,10 @@ let match_tags_prevs :
 let branches_to_provers name tag out_typ =
   let rec go :
       type branches available_branches.
-      (_, branches, available_branches) Branches.t -> (_, branches) provers =
-    function
-    | Branches.({ branch_name; tags; main } :: rest) ->
+         (_, branches, available_branches) Branches.t
+      -> (_, branches) provers lazy_t = function
+    | branch :: rest ->
+        let%map.Lazy { branch_name; tags; main } = branch in
         let prover input =
           printf "compile_simple.fake: proving %s.%s\n" name branch_name ;
           let recursion_valid, out =
@@ -279,17 +280,18 @@ let branches_to_provers name tag out_typ =
           let fake_proof = make_fake_proof tag out_typ out in
           (out, fake_proof)
         in
-        prover :: go rest
+        prover :: Lazy.force (go rest)
     | [] ->
-        []
+        lazy []
   in
   go
 
 let rec hash_branches :
     type branches available_branches.
-    (_, branches, available_branches) Branches.t -> field = function
-  | Branches.({ branch_name = _; tags = _; main } :: rest) ->
-      let rest_hash = hash_branches rest in
+    (_, branches, available_branches) Branches.t -> field lazy_t = function
+  | branch :: rest ->
+      let%bind.Lazy { branch_name = _; tags = _; main } = branch in
+      let%map.Lazy rest_hash = hash_branches rest in
       let main_wrapper input () =
         Run.run_checked Checked.(main input >>| fun _ -> ())
       in
@@ -309,7 +311,7 @@ let rec hash_branches :
         ~init:(Hash_prefix_create.salt "fake circuit hash")
         [| tags_hash; cs_hash; rest_hash |]
   | [] ->
-      Field.zero
+      lazy Field.zero
 
 let compile (type out_t out_var first_input branches n_available_branches)
     ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
@@ -328,7 +330,7 @@ let compile (type out_t out_var first_input branches n_available_branches)
   (* ZEKO NOTE: ZEKO FIXME: Add back! didn't work very likely because of snarky bug that should be fixed *)
   (* assert (Run.in_checked_computation () |> not) ; *)
   (* assert (Run.in_prover () |> not) ; *)
-  let circuit_hash = hash_branches branches in
+  let circuit_hash = Lazy.force (hash_branches branches) in
   printf "compile_simple.fake: hashed %s\n" name ;
   let tag = Tag { circuit_hash; typ = out_typ } in
   let r :
@@ -346,8 +348,6 @@ let compile (type out_t out_var first_input branches n_available_branches)
       type tag_var = out_var
 
       type tag_t = out_t
-
-      let tag = tag
 
       let provers = branches_to_provers name tag out_typ branches
 
@@ -373,6 +373,8 @@ let compile (type out_t out_var first_input branches n_available_branches)
         Checked.return (out, prev)
 
       let make_unchecked ?proof out : t = ignore proof ; out
+
+      let tag = lazy tag
     end )
   in
   r

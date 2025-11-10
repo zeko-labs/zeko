@@ -107,13 +107,13 @@ let update_outer_verification_keys =
            >>| Compile_simple.Verification_key.hash
          in
          let%bind outer_vk =
-           Outer_rules_inst.tag |> Compile_simple.Verification_key.of_tag
-           |> Promise.to_deferred
+           Lazy.force Outer_rules_inst.tag
+           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          and bridge_holder_vk =
-           Bridge_inst_mina.System_L1_enabled.tag
+           Lazy.force Bridge_inst_mina.System_L1_enabled.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          and helper_token_owner_vk =
-           Bridge_inst_mina.System_L1_token_owner.tag
+           Lazy.force Bridge_inst_mina.System_L1_token_owner.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          in
          let deploy_config =
@@ -268,10 +268,10 @@ let update_inner_verification_keys =
 
          (* Get compiled vks *)
          let%bind inner_vk =
-           Inner_rules_inst.tag |> Compile_simple.Verification_key.of_tag
-           |> Promise.to_deferred
+           Lazy.force Inner_rules_inst.tag
+           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          and bridge_holder_vk =
-           Bridge_inst_mina.System_L2.tag
+           Lazy.force Bridge_inst_mina.System_L2.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          in
          (* let deploy_config =

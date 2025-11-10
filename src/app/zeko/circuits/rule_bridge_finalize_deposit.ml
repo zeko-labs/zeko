@@ -231,9 +231,12 @@ struct
     Compile_simple.
       { prevs = Two_prevs (verify_check_accepted, verify_ase); out }
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "finalize deposit"
-    ; tags = Two_tags (Check_accepted.tag, Ase.With_length.tag)
-    ; main
-    }
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy
+      { branch_name = "finalize deposit"
+      ; tags =
+          Two_tags
+            (Lazy.force Check_accepted.tag, Lazy.force Ase.With_length.tag)
+      ; main
+      }
 end

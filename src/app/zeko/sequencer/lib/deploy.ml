@@ -46,11 +46,12 @@ module Z = struct
   module Inner = struct
     let initial_accounts () =
       let%bind inner_vk =
-        Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
+        Compile_simple.Verification_key.of_tag (Lazy.force Inner_rules_inst.tag)
         |> Promise.to_deferred
       in
       let%map holder_vk =
-        Compile_simple.Verification_key.of_tag Bridge_inst_mina.System_L2.tag
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_mina.System_L2.tag)
         |> Promise.to_deferred
       in
       let inner_account =
@@ -116,7 +117,7 @@ module Z = struct
     let unsafe_deploy ~pause_key ~ledger_hash ~sequencer ~da_key ~acc_set () =
       let open Zkapp_basic in
       let%bind outer_vk =
-        Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
+        Compile_simple.Verification_key.of_tag (Lazy.force Outer_rules_inst.tag)
         |> Promise.to_deferred
       in
       let outer_update =
@@ -159,7 +160,7 @@ module Z = struct
       in
       let%bind holder_vk =
         Compile_simple.Verification_key.of_tag
-          Bridge_inst_mina.System_L1_enabled.tag
+          (Lazy.force Bridge_inst_mina.System_L1_enabled.tag)
         |> Promise.to_deferred
       in
       let holder_update =
@@ -187,7 +188,7 @@ module Z = struct
       in
       let%map token_owner_vk =
         Compile_simple.Verification_key.of_tag
-          Bridge_inst_mina.System_L1_token_owner.tag
+          (Lazy.force Bridge_inst_mina.System_L1_token_owner.tag)
         |> Promise.to_deferred
       in
       let token_owner_update =
@@ -451,7 +452,7 @@ let update_permissions ~signature_kind ~(signer : Keypair.t)
   in
   let%bind temp_vk =
     let%map vk =
-      Compile_simple.Verification_key.of_tag Change_permissions.tag
+      Compile_simple.Verification_key.of_tag (Lazy.force Change_permissions.tag)
       |> Promise.to_deferred
     in
     Verification_key_wire.Stable.Latest.M.of_binable
@@ -483,7 +484,7 @@ let update_permissions ~signature_kind ~(signer : Keypair.t)
               ~signature_kind )
   in
   let%map f2 =
-    let [ prover ] = Change_permissions.provers in
+    let [ prover ] = Lazy.force Change_permissions.provers in
     let%map (_stmt, (body, _, calls)), proof =
       prover
         { public_key = Zeko_circuits_config.t.zeko_l1

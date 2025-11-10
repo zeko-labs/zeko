@@ -132,7 +132,7 @@ struct
     type ('out_var, 'branches, 'n_available_branches) t =
       | [] : ('out_var, nil_branch, all_branches_available) t
       | ( :: ) :
-          ('input, 'out_var, 'prevs) branch
+          ('input, 'out_var, 'prevs) branch lazy_t
           * ('out_var, 'branches, 'n_available_branches available_branch) t
           -> ( 'out_var
              , ('input, 'branches) cons_branch
@@ -155,9 +155,9 @@ struct
 
     type tag_t
 
-    val tag : tag_var tag
+    val tag : tag_var tag lazy_t
 
-    val provers : (out_t, branches) provers
+    val provers : (out_t, branches) provers lazy_t
 
     type t
 
@@ -171,5 +171,33 @@ struct
     val get : ?check:Boolean.var -> var -> (out_var * tag_var prev) Checked.t
 
     val make_unchecked : ?proof:proof -> out_t -> t
+  end
+
+  module Lazy_helper = struct
+    let split2 (provers : ('out_t, 'branches) provers lazy_t) =
+      let p1 = Lazy.map (fun [ p; _ ] -> p) provers in
+      let p2 = Lazy.map (fun [ _; p ] -> p) provers in
+      (p1, p2)
+
+    let split3 (provers : ('out_t, 'branches) provers lazy_t) =
+      let p1 = Lazy.map (fun [ p; _; _ ] -> p) provers in
+      let p2 = Lazy.map (fun [ _; p; _ ] -> p) provers in
+      let p3 = Lazy.map (fun [ _; _; p ] -> p) provers in
+      (p1, p2, p3)
+
+    let split4 (provers : ('out_t, 'branches) provers lazy_t) =
+      let p1 = Lazy.map (fun [ p; _; _; _ ] -> p) provers in
+      let p2 = Lazy.map (fun [ _; p; _; _ ] -> p) provers in
+      let p3 = Lazy.map (fun [ _; _; p; _ ] -> p) provers in
+      let p4 = Lazy.map (fun [ _; _; _; p ] -> p) provers in
+      (p1, p2, p3, p4)
+
+    let split5 (provers : ('out_t, 'branches) provers lazy_t) =
+      let p1 = Lazy.map (fun [ p; _; _; _; _ ] -> p) provers in
+      let p2 = Lazy.map (fun [ _; p; _; _; _ ] -> p) provers in
+      let p3 = Lazy.map (fun [ _; _; p; _; _ ] -> p) provers in
+      let p4 = Lazy.map (fun [ _; _; _; p; _ ] -> p) provers in
+      let p5 = Lazy.map (fun [ _; _; _; _; p ] -> p) provers in
+      (p1, p2, p3, p4, p5)
   end
 end

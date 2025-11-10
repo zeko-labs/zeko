@@ -89,11 +89,14 @@ struct
         ; out = (outer, outer_with_length)
         }
 
-    let rule : _ Compile_simple.branch =
-      { branch_name = "Verify_two_outer_ases"
-      ; tags = Two_tags (Ase.Without_length.tag, Ase.With_length.tag)
-      ; main
-      }
+    let rule : _ Compile_simple.branch lazy_t =
+      lazy
+        { branch_name = "Verify_two_outer_ases"
+        ; tags =
+            Two_tags
+              (Lazy.force Ase.Without_length.tag, Lazy.force Ase.With_length.tag)
+        ; main
+        }
 
     include
       ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
@@ -131,11 +134,14 @@ struct
         ; out = (check_accepted, ase)
         }
 
-    let rule : _ Compile_simple.branch =
-      { branch_name = "Verify_two_outer_ases"
-      ; tags = Two_tags (Check_accepted.tag, Ase.With_length.tag)
-      ; main
-      }
+    let rule : _ Compile_simple.branch lazy_t =
+      lazy
+        { branch_name = "Verify_two_outer_ases"
+        ; tags =
+            Two_tags
+              (Lazy.force Check_accepted.tag, Lazy.force Ase.With_length.tag)
+        ; main
+        }
 
     include
       ( val Compile_simple.compile ~name:"Verify_check_accepted_and_ase"
@@ -352,10 +358,13 @@ struct
           ; out
           } )
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "finalize cancelled deposit"
-    ; tags =
-        Two_tags (Verify_two_outer_ases.tag, Verify_check_accepted_and_ase.tag)
-    ; main
-    }
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy
+      { branch_name = "finalize cancelled deposit"
+      ; tags =
+          Two_tags
+            ( Lazy.force Verify_two_outer_ases.tag
+            , Lazy.force Verify_check_accepted_and_ase.tag )
+      ; main
+      }
 end

@@ -31,6 +31,6 @@ struct
     in
     Compile_simple.{ prevs = No_prevs; out }
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "zeko action witness"; tags = No_tags; main }
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy { branch_name = "zeko action witness"; tags = No_tags; main }
 end

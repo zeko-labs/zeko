@@ -71,9 +71,10 @@ struct
     let*| out = make_outputs ~chain:chain_l2 account_update [] in
     Compile_simple.{ prevs = One_prev verify_ase; out }
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "Rollup inner account step"
-    ; tags = One_tag Ase.With_length.tag
-    ; main
-    }
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy
+      { branch_name = "Rollup inner account step"
+      ; tags = One_tag (Lazy.force Ase.With_length.tag)
+      ; main
+      }
 end

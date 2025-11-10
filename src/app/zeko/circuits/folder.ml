@@ -119,7 +119,7 @@ struct
       Compile_simple.
         { out = ({ source = stmt_source; target } : Trans.var); prevs }
 
-    let rule : _ Compile_simple.branch = { branch_name; tags; main }
+    let rule : _ Compile_simple.branch lazy_t = lazy { branch_name; tags; main }
   end
 
   module Rule_leaf = Make_rule (struct
@@ -254,8 +254,8 @@ struct
           ; out = new_stmt
           }
 
-    let rule : _ Compile_simple.branch =
-      { branch_name = "Rule_merge"; tags = Two_tags_own; main }
+    let rule : _ Compile_simple.branch lazy_t =
+      lazy { branch_name = "Rule_merge"; tags = Two_tags_own; main }
   end
 
   type merge_input = Rule_merge.Witness.t =
@@ -279,8 +279,8 @@ struct
 
   let tag = System.tag
 
-  let Compile_simple.[ leaf; leaf_option; extend; extend_option; merge ] =
-    System.provers
+  let leaf, leaf_option, extend, extend_option, merge =
+    Compile_simple.Lazy_helper.split5 System.provers
 
   module Make (Inputs : sig
     val get_iterations : int
