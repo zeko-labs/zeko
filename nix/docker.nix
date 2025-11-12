@@ -1,7 +1,7 @@
 { lib, dockerTools, buildEnv, ocamlPackages_mina, runCommand, dumb-init
 , coreutils, findutils, bashInteractive, python3, libp2p_helper, procps
 , postgresql, curl, jq, stdenv, rsync, bash, gnutar, gzip, currentTime
-, flockenzeit, }:
+, flockenzeit, pkgs, }:
 let
   created = flockenzeit.lib.ISO-8601 currentTime;
 
@@ -136,6 +136,7 @@ in {
       procps
       curl
       jq
+      pkgs.cacert
     ];
     config = {
       Entrypoint = [ "/bin/zeko-archive-relay" ];
