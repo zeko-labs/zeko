@@ -31,11 +31,14 @@ module Verify_both_ases = struct
     Compile_simple.
       { prevs = Two_prevs (verify_outer, verify_inner); out = (outer, inner) }
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "Verify_both_ases"
-    ; tags = Two_tags (Ase.Without_length.tag, Ase.With_length.tag)
-    ; main
-    }
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy
+      { branch_name = "Verify_both_ases"
+      ; tags =
+          Two_tags
+            (Lazy.force Ase.Without_length.tag, Lazy.force Ase.With_length.tag)
+      ; main
+      }
 
   include
     ( val Compile_simple.compile ~name:"Verify_both_ases" ~branches:[ rule ]
@@ -408,9 +411,11 @@ struct
     in
     Compile_simple.{ prevs = Two_prevs (verify_txn_snark, verify_ases); out }
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "Rollup step"
-    ; tags = Two_tags (Txn_rules.tag, Verify_both_ases.tag)
-    ; main
-    }
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy
+      { branch_name = "Rollup step"
+      ; tags =
+          Two_tags (Lazy.force Txn_rules.tag, Lazy.force Verify_both_ases.tag)
+      ; main
+      }
 end

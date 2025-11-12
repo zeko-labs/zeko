@@ -577,10 +577,13 @@ struct
                          Impl.constraint_system_manual ~input_typ:Typ.unit
                            ~return_typ:typ
                        in
-                       let%map.Promise res =
-                         constraint_builder.run_circuit main
+                       let%map.Promise cs =
+                         State_lock.with_lock ~f:(fun () ->
+                             let%map.Promise res =
+                               constraint_builder.run_circuit main
+                             in
+                             constraint_builder.finish_computation res )
                        in
-                       let cs = constraint_builder.finish_computation res in
                        let cs_hash =
                          Md5.to_hex (R1CS_constraint_system.digest cs)
                        in

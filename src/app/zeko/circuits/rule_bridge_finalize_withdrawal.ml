@@ -262,9 +262,12 @@ struct
         Compile_simple.
           { prevs = Two_prevs (verify_commit_ase, verify_withdrawal_ase); out } )
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "finalize withdrawal"
-    ; tags = Two_tags (Ase.Without_length.tag, Ase.With_length.tag)
-    ; main
-    }
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy
+      { branch_name = "finalize withdrawal"
+      ; tags =
+          Two_tags
+            (Lazy.force Ase.Without_length.tag, Lazy.force Ase.With_length.tag)
+      ; main
+      }
 end

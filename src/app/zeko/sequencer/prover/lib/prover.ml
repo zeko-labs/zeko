@@ -33,18 +33,21 @@ module Make_folder (System : sig
 
   type trans = { source : Stmt.t; target : Stmt.t }
 
-  val leaf : Elem.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
+  val leaf :
+    (Elem.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t) lazy_t
 
   val leaf_option :
-    Elem.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t
+    (Elem.t list * Stmt.t -> (trans * Compile_simple.Proof.t) Promise.t) lazy_t
 
   val extend :
-       Elem.t list * (trans * Compile_simple.Proof.t)
-    -> (trans * Compile_simple.Proof.t) Promise.t
+    (   Elem.t list * (trans * Compile_simple.Proof.t)
+     -> (trans * Compile_simple.Proof.t) Promise.t )
+    lazy_t
 
   val extend_option :
-       Elem.t list * (trans * Compile_simple.Proof.t)
-    -> (trans * Compile_simple.Proof.t) Promise.t
+    (   Elem.t list * (trans * Compile_simple.Proof.t)
+     -> (trans * Compile_simple.Proof.t) Promise.t )
+    lazy_t
 
   (* type merge_input =
        { left : trans
@@ -64,6 +67,18 @@ module Make_folder (System : sig
   val extend_option_iterations : int
 end) =
 struct
+  module System = struct
+    include System
+
+    let leaf = Lazy.force leaf
+
+    let leaf_option = Lazy.force leaf_option
+
+    let extend = Lazy.force extend
+
+    let extend_option = Lazy.force extend_option
+  end
+
   type out_t = Compile_simple.Proof.t option * System.Stmt.t [@@deriving yojson]
 
   let fold
@@ -226,14 +241,14 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
   | Ping ->
       return Output.Pong
   | Txn_snark (Signed_command input) ->
-      let Compile_simple.[ prove; _; _; _; _ ] = Txn_rules.provers in
+      let Compile_simple.[ prove; _; _; _; _ ] = Lazy.force Txn_rules.provers in
       let%map stmt, proof =
         time ?fake_proving_time ~logger "Txn_rules.single_signed_command"
           (prove (Base_input.of_serializable input) |> Promise.to_deferred)
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Single_unproved input)) ->
-      let Compile_simple.[ _; prove; _; _; _ ] = Txn_rules.provers in
+      let Compile_simple.[ _; prove; _; _; _ ] = Lazy.force Txn_rules.provers in
       let%map stmt, proof =
         time ?fake_proving_time ~logger
           "Txn_rules.single_unproved_zkapp_command"
@@ -243,7 +258,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Double_unproved input)) ->
-      let Compile_simple.[ _; _; prove; _; _ ] = Txn_rules.provers in
+      let Compile_simple.[ _; _; prove; _; _ ] = Lazy.force Txn_rules.provers in
       let%map stmt, proof =
         time ?fake_proving_time ~logger
           "Txn_rules.double_unproved_zkapp_command"
@@ -253,7 +268,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Zkapp_command (Single_proved input)) ->
-      let Compile_simple.[ _; _; _; prove; _ ] = Txn_rules.provers in
+      let Compile_simple.[ _; _; _; prove; _ ] = Lazy.force Txn_rules.provers in
       let%map stmt, proof =
         time ?fake_proving_time ~logger "Txn_rules.single_proved_zkapp_command"
           ( prove
@@ -262,16 +277,16 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       in
       Output.Txn_snark (stmt, proof)
   | Txn_snark (Merge input) ->
-      let Compile_simple.[ _; _; _; _; prove ] = Txn_rules.provers in
+      let Compile_simple.[ _; _; _; _; prove ] = Lazy.force Txn_rules.provers in
       let%map stmt, proof =
         time ?fake_proving_time ~logger "Txn_rules.merge"
           (prove input |> Promise.to_deferred)
       in
       Output.Txn_snark (stmt, proof)
   | Inner_sync input ->
-      let Compile_simple.[ prove; _ ] = Inner_rules_inst.provers in
+      let Compile_simple.[ prove; _ ] = Lazy.force Inner_rules_inst.provers in
       let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
+        Compile_simple.Verification_key.of_tag (Lazy.force Inner_rules_inst.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -307,7 +322,9 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       in
       Output.(Folder (Check_accepted_mina snark))
   | Verify_both_ases_commit (outer, inner) ->
-      let Compile_simple.[ prove ] = Rule_commit.Verify_both_ases.provers in
+      let Compile_simple.[ prove ] =
+        Lazy.force Rule_commit.Verify_both_ases.provers
+      in
       let%map stmt, proof =
         time ?fake_proving_time ~logger "Rule_commit.verify_both_ases"
           ( prove
@@ -319,9 +336,10 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       Output.Verify_both_ases_commit (stmt, proof)
   | Verify_two_outer_ases_cancelled_deposit (outer, outer_with_length) ->
       let Compile_simple.[ prove ] =
-        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
-        .Verify_two_outer_ases
-        .provers
+        Lazy.force
+          Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+          .Verify_two_outer_ases
+          .provers
       in
       let%map stmt, proof =
         time ?fake_proving_time ~logger
@@ -337,9 +355,10 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
   | Verify_check_accepted_and_ase_cancelled_deposit
       (check_accepted, outer_with_length) ->
       let Compile_simple.[ prove ] =
-        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
-        .Verify_check_accepted_and_ase
-        .provers
+        Lazy.force
+          Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+          .Verify_check_accepted_and_ase
+          .provers
       in
       let%map stmt, proof =
         time ?fake_proving_time ~logger
@@ -354,9 +373,11 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
       in
       Output.Verify_check_accepted_and_ase_cancelled_deposit (stmt, proof)
   | Outer_commit input ->
-      let Compile_simple.[ prove; _; _ ] = Outer_rules_inst.provers in
+      let Compile_simple.[ prove; _; _ ] =
+        Lazy.force Outer_rules_inst.provers
+      in
       let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
+        Compile_simple.Verification_key.of_tag (Lazy.force Outer_rules_inst.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -373,9 +394,11 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
   | Bridge (Outer_action_witness input) ->
-      let Compile_simple.[ _; prove; _ ] = Outer_rules_inst.provers in
+      let Compile_simple.[ _; prove; _ ] =
+        Lazy.force Outer_rules_inst.provers
+      in
       let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag Outer_rules_inst.tag
+        Compile_simple.Verification_key.of_tag (Lazy.force Outer_rules_inst.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -394,9 +417,9 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
   | Bridge (Inner_action_witness input) ->
-      let Compile_simple.[ _; prove ] = Inner_rules_inst.provers in
+      let Compile_simple.[ _; prove ] = Lazy.force Inner_rules_inst.provers in
       let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag Inner_rules_inst.tag
+        Compile_simple.Verification_key.of_tag (Lazy.force Inner_rules_inst.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -415,9 +438,12 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
   | Bridge (Finalize_deposit input) ->
-      let Compile_simple.[ prove; _ ] = Bridge_inst_mina.System_L2.provers in
+      let Compile_simple.[ prove; _ ] =
+        Lazy.force Bridge_inst_mina.System_L2.provers
+      in
       let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag Bridge_inst_mina.System_L2.tag
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_mina.System_L2.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -435,18 +461,18 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         , proof )
   | Bridge (Finalize_cancelled_deposit input) ->
       let Compile_simple.[ prove; _; _ ] =
-        Bridge_inst_mina.System_L1_enabled.provers
+        Lazy.force Bridge_inst_mina.System_L1_enabled.provers
       in
       let%bind vk_hash =
         Compile_simple.Verification_key.of_tag
-          Bridge_inst_mina.System_L1_enabled.tag
+          (Lazy.force Bridge_inst_mina.System_L1_enabled.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
       in
       let%bind helper_token_owner_l1_vk_hash =
         Compile_simple.Verification_key.of_tag
-          Bridge_inst_mina.System_L1_token_owner.tag
+          (Lazy.force Bridge_inst_mina.System_L1_token_owner.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -466,9 +492,12 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
   | Bridge (Inner_receive input) ->
-      let Compile_simple.[ _; prove ] = Bridge_inst_mina.System_L2.provers in
+      let Compile_simple.[ _; prove ] =
+        Lazy.force Bridge_inst_mina.System_L2.provers
+      in
       let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag Bridge_inst_mina.System_L2.tag
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_mina.System_L2.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -486,24 +515,25 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         , proof )
   | Bridge (Finalize_withdrawal input) ->
       let Compile_simple.[ _; prove; _ ] =
-        Bridge_inst_mina.System_L1_enabled.provers
+        Lazy.force Bridge_inst_mina.System_L1_enabled.provers
       in
       let%bind vk_hash =
         Compile_simple.Verification_key.of_tag
-          Bridge_inst_mina.System_L1_enabled.tag
+          (Lazy.force Bridge_inst_mina.System_L1_enabled.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
       in
       let%bind helper_token_owner_l1_vk_hash =
         Compile_simple.Verification_key.of_tag
-          Bridge_inst_mina.System_L1_token_owner.tag
+          (Lazy.force Bridge_inst_mina.System_L1_token_owner.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
       in
       let%bind l2_holder_vk_hash =
-        Compile_simple.Verification_key.of_tag Bridge_inst_mina.System_L2.tag
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_mina.System_L2.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -525,11 +555,11 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         , proof )
   | Bridge (Outer_token_owner input) ->
       let Compile_simple.[ prove ] =
-        Bridge_inst_mina.System_L1_token_owner.provers
+        Lazy.force Bridge_inst_mina.System_L1_token_owner.provers
       in
       let%bind vk_hash =
         Compile_simple.Verification_key.of_tag
-          Bridge_inst_mina.System_L1_token_owner.tag
+          (Lazy.force Bridge_inst_mina.System_L1_token_owner.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -549,6 +579,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
 
 let run ?fake_proving_time ~logger ~mq_host () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
+  let%bind () = Compile_circuits.compile_all ~logger () in
   let handler input =
     Yojson.Safe.from_string input
     |> Input.of_yojson
@@ -569,6 +600,5 @@ let run ?fake_proving_time ~logger ~mq_host () =
     >>| Output.to_yojson >>| Yojson.Safe.to_string
   in
   let%bind _server = Message_queue.Worker.start mq_host handler in
-  [%log info] "Listening on message queue %s\n"
-    (Host_and_port.to_string mq_host) ;
+  [%log info] "Listening on message queue %s" (Host_and_port.to_string mq_host) ;
   Deferred.never ()

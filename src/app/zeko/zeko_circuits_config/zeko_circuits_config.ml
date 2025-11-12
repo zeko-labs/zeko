@@ -30,9 +30,7 @@ end
 
 let (t, deploy_config) : t * Deploy.t option =
   match Sys.getenv_opt "ZEKO_CIRCUITS_CONFIG" with
-  | None ->
-      failwith "ZEKO_CIRCUITS_CONFIG is not set"
-  | Some "test" ->
+  | Some "test" | None ->
       let keypair_of_b58_sk sk =
         let kp =
           Private_key.of_base58_check_exn sk |> Keypair.of_private_key_exn

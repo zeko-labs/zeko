@@ -101,6 +101,6 @@ struct
     let*| out = make_outputs ~chain:chain_l1 account_update [ (a, []) ] in
     Compile_simple.{ prevs = No_prevs; out }
 
-  let rule : _ Compile_simple.branch =
-    { branch_name = "outer token owner"; tags = No_tags; main }
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy { branch_name = "outer token owner"; tags = No_tags; main }
 end

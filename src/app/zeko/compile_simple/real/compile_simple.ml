@@ -1,4 +1,3 @@
-module P = Printexc
 open Core_kernel
 open Snark_params.Tick
 open Checked.Let_syntax
@@ -289,18 +288,21 @@ let rec branches_to_choices :
     type out_var out_t branches available_branches tag_branches.
        name:string
     -> (out_var, branches, available_branches) Branches.t
-    -> (out_var, out_t, branches, tag_branches) branches_to_choices_return =
+    -> (out_var, out_t, branches, tag_branches) branches_to_choices_return
+       lazy_t =
  fun ~name -> function
   | [] ->
       let open
         Pickles_types.Hlist.H4_6_with_length.T (Pickles.Inductive_rule.Promise) in
-      Choices
-        { branches_length = Z
-        ; rules = (fun ~self:_ -> [])
-        ; transform_provers = (fun [] -> [])
-        }
-  | { branch_name; tags; main } :: xs -> (
-      match branches_to_choices ~name xs with
+      lazy
+        (Choices
+           { branches_length = Z
+           ; rules = (fun ~self:_ -> [])
+           ; transform_provers = (fun [] -> [])
+           } )
+  | branch :: xs -> (
+      let%map.Lazy { branch_name; tags; main } = branch in
+      match branches_to_choices ~name xs |> Lazy.force with
       | Choices
           { branches_length
           ; rules = f
@@ -676,18 +678,6 @@ let rec branches_to_choices :
                       rule :: f ~self )
                 } ) )
 
-let get_first_backtrace_entry b =
-  let open P in
-  match backtrace_slots b with
-  | None ->
-      "<invalid>"
-  | Some slots -> (
-      match Slot.location slots.(1) with
-      | None ->
-          "<invalid>"
-      | Some { filename; line_number; _ } ->
-          filename ^ ":" ^ Int.to_string line_number )
-
 let compile (type out_t out_var first_input branches n_available_branches)
     ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
     ~(branches :
@@ -699,8 +689,6 @@ let compile (type out_t out_var first_input branches n_available_branches)
        with type out_t = out_t
         and type out_var = out_var
         and type branches = (first_input, branches) cons_branch ) =
-  printf "compile_simple.real: %s at %s\n%!" name
-    (P.get_callstack 9999 |> get_first_backtrace_entry) ;
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
   let override_wrap_domain : Pickles_base.Proofs_verified.t option =
@@ -717,125 +705,124 @@ let compile (type out_t out_var first_input branches n_available_branches)
   in
   let (Count_branches_result tag_branches) = count_branches branches in
   let (module N_branches) = branches_length_to_module tag_branches in
-  match branches_to_choices ~name branches with
-  | Choices { branches_length; rules; transform_provers } ->
-      (* pretty sure this shouldn't be needed, but dumb ocaml type checker *)
-      let T = branches_length_functional (tag_branches, branches_length) in
-      let choices :
-             self:(out_var, out_t, self_width, N_branches.n) Pickles.Tag.t
-          -> ( _
-             , _
-             , _
-             , _
-             , _
-             , unit
-             , unit
-             , out_var
-             , out_t
-             , unit
-             , unit )
-             Pickles_types.Hlist.H4_6_with_length.T
-               (Pickles.Inductive_rule.Promise)
-             .t =
-        rules
-      in
-      let dummy_proof =
-        lazy
-          Pickles_types.Nat.(
-            Pickles.Proof.dummy N2.n N2.n
-              ~domain_log2:
-                ( match override_wrap_domain with
-                | None ->
-                    14
-                    (* TODO: probably ok, maybe not?
-                       If not ok, need dependency on compilation to
-                       figure out override wrap domain. *)
-                | Some N0 ->
-                    13
-                | Some N1 ->
-                    14
-                | Some N2 ->
-                    15 ))
-      in
-      assert (Run.in_checked_computation () |> not) ;
-      assert (Run.in_prover () |> not) ;
-      let ( (tag : (_, _, _, N_branches.n) Pickles.Tag.t)
-          , _cache
-          , _proof_module
-          , provers ) =
-        Pickles.compile_promise () ?override_wrap_domain ~cache:Cache_dir.cache
-          ~public_input:(Output out_typ) ~auxiliary_typ:Typ.unit ~choices
-          ~max_proofs_verified:(module Pickles_types.Nat.N2)
-          ~name:("compile_simple of " ^ name)
-      in
-      (* FIXME: Don't do this. Make lazy compilation work. Fix Pickles bug. *)
-      Promise.block_on_async_exn (fun () ->
-          time_promise ("(compile_simple) compiled " ^ name) (fun () ->
-              Verification_key.of_compiled_promise tag )
-          |> Promise.map ~f:(fun _ -> ()) ) ;
-      let provers = transform_provers provers in
-      let r :
-          (module Result
-             with type out_t = out_t
-              and type out_var = out_var
-              and type branches = (first_input, branches) cons_branch ) =
-        ( module struct
-          type nonrec out_t = out_t
+  let dummy_proof =
+    lazy
+      Pickles_types.Nat.(
+        Pickles.Proof.dummy N2.n N2.n
+          ~domain_log2:
+            ( match override_wrap_domain with
+            | None ->
+                14
+                (* TODO: probably ok, maybe not?
+                   If not ok, need dependency on compilation to
+                   figure out override wrap domain. *)
+            | Some N0 ->
+                13
+            | Some N1 ->
+                14
+            | Some N2 ->
+                15 ))
+  in
+  let tag, provers =
+    let lazy_result =
+      match%map.Lazy branches_to_choices ~name branches with
+      | Choices { branches_length; rules; transform_provers } ->
+          let T = branches_length_functional (tag_branches, branches_length) in
+          (* pretty sure this shouldn't be needed, but dumb ocaml type checker *)
+          let choices :
+                 self:(out_var, out_t, self_width, N_branches.n) Pickles.Tag.t
+              -> ( _
+                 , _
+                 , _
+                 , _
+                 , _
+                 , unit
+                 , unit
+                 , out_var
+                 , out_t
+                 , unit
+                 , unit )
+                 Pickles_types.Hlist.H4_6_with_length.T
+                   (Pickles.Inductive_rule.Promise)
+                 .t =
+            rules
+          in
+          assert (Run.in_checked_computation () |> not) ;
+          assert (Run.in_prover () |> not) ;
+          let ( (tag : (_, _, _, N_branches.n) Pickles.Tag.t)
+              , _cache
+              , _proof_module
+              , provers ) =
+            Pickles.compile_promise () ?override_wrap_domain
+              ~cache:Cache_dir.cache ~public_input:(Output out_typ)
+              ~auxiliary_typ:Typ.unit ~choices
+              ~max_proofs_verified:(module Pickles_types.Nat.N2)
+              ~name:("compile_simple of " ^ name)
+          in
+          let provers = transform_provers provers in
+          (Tag tag, provers)
+    in
+    (Lazy.map lazy_result ~f:fst, Lazy.map lazy_result ~f:snd)
+  in
 
-          type nonrec out_var = out_var
+  let r :
+      (module Result
+         with type out_t = out_t
+          and type out_var = out_var
+          and type branches = (first_input, branches) cons_branch ) =
+    ( module struct
+      type nonrec out_t = out_t
 
-          type nonrec branches = (first_input, branches) cons_branch
+      type nonrec out_var = out_var
 
-          type tag_var = out_var
+      type nonrec branches = (first_input, branches) cons_branch
 
-          type tag_t = out_t
+      type tag_var = out_var
 
-          let tag = Tag tag
+      type tag_t = out_t
 
-          let provers = provers
+      let tag = tag
 
-          open struct
-            module Out = struct
-              type t = out_t
+      let provers = provers
 
-              type var = out_var
+      open struct
+        module Out = struct
+          type t = out_t
 
-              let typ = out_typ
-            end
+          type var = out_var
 
-            module Proof_V = struct
-              type t = self_width Pickles.Proof.t
+          let typ = out_typ
+        end
 
-              type var = t V.t
+        module Proof_V = struct
+          type t = self_width Pickles.Proof.t
 
-              let typ = V.typ
-            end
-          end
+          type var = t V.t
 
-          type t = { out : Out.t; proof : Proof_V.t } [@@deriving snarky]
+          let typ = V.typ
+        end
+      end
 
-          let get ?check { out; proof } =
-            let prev : _ prev =
-              { public_input = out
-              ; proof
-              ; proof_must_verify =
-                  (match check with Some b -> b | None -> Boolean.true_)
-              }
-            in
-            Checked.return (out, prev)
+      type t = { out : Out.t; proof : Proof_V.t } [@@deriving snarky]
 
-          let make_unchecked ?proof out : t =
-            { out
-            ; proof =
-                ( match proof with
-                | Some proof ->
-                    proof
-                | None ->
-                    force dummy_proof )
-            }
-        end )
-      in
-      r
+      let get ?check { out; proof } =
+        let prev : _ prev =
+          { public_input = out
+          ; proof
+          ; proof_must_verify =
+              (match check with Some b -> b | None -> Boolean.true_)
+          }
+        in
+        Checked.return (out, prev)
+
+      let make_unchecked ?proof out : t =
+        { out
+        ; proof =
+            (match proof with Some proof -> proof | None -> force dummy_proof)
+        }
+    end )
+  in
+  r
 
 let add_plonk_constraint ~label c =
   ( match !bad_fixme_feature_flags with
