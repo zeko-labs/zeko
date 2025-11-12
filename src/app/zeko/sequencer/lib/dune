@@ -10,6 +10,7 @@
   zeko_constants
   indexed_merkle_tree
   utils
+  gql_client
   ;; mina ;;
   mina_base
   mina_base.import

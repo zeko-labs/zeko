@@ -123,13 +123,8 @@ let () =
        String.split ~on:',' da_keys
        |> List.map ~f:Public_key.Compressed.of_base58_check_exn
      in
-     let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
-       Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
-     in
-     let archive_uri : Uri.t Cli_lib.Flag.Types.with_name =
-       Cli_lib.Flag.Types.
-         { value = Uri.of_string archive_uri; name = "archive-uri" }
-     in
+     let l1_uri = Uri.of_string l1_uri in
+     let archive_uri = Uri.of_string archive_uri in
      let mq_host = Host_and_port.of_string mq_host in
      let logger = Logger.create () in
      let postgres_uri = Uri.of_string postgres_uri in

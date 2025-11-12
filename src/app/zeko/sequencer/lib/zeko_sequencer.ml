@@ -19,8 +19,8 @@ module Sequencer = struct
       ; commitment_period_sec : float
       ; db_dir : string option
       ; signer : Keypair.t
-      ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
-      ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
+      ; l1_uri : Uri.t
+      ; archive_uri : Uri.t
       ; deposit_delay_blocks : int
       ; fee_modifier : float
       ; minimum_fee : float

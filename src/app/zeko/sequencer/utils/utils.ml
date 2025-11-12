@@ -20,7 +20,7 @@ let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
     | Error e ->
         return (Error e)
   in
-  go 0
+  go 1
 
 let time (d : 'a Deferred.t) =
   let start = Time.now () in

@@ -19,10 +19,7 @@ let logger =
   Cli_lib.Stdout_log.setup false Logger.Level.Spam ;
   Logger.create ()
 
-let gql_uri =
-  { Cli_lib.Flag.Types.value = Uri.of_string "http://localhost:8080/graphql"
-  ; name = "gql-uri"
-  }
+let gql_uri = Uri.of_string "http://localhost:8080/graphql"
 
 let da_config_with2 =
   Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555"; "127.0.0.1:8556" ]
