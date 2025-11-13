@@ -167,6 +167,10 @@ module type Database_intf = sig
   val close : t -> unit
 
   val num_entries : t -> int
+
+  val make_checkpoint : t -> directory_name:string -> unit
+
+  val create_checkpoint : t -> directory_name:string -> unit -> t
 end
 
 let lowest_key = Token_id.of_field Field.zero

@@ -370,8 +370,8 @@ module Sequencer_spec = struct
     }
 
   let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir
-      ?(commit_validity_period = Global_slot_span.of_int 10) ~logger
-      ~postgres_uri ~gql_uri ~da_config ~da_keys ~da_quorum ~mq_host
+      ?checkpoints_dir ?(commit_validity_period = Global_slot_span.of_int 10)
+      ~logger ~postgres_uri ~gql_uri ~da_config ~da_keys ~da_quorum ~mq_host
       ~slot_acceptance () =
     let _reset = run @@ fun () -> Gql_client.For_tests.reset_state gql_uri in
     let deploy_config =
@@ -511,7 +511,7 @@ module Sequencer_spec = struct
             ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:delay_deposit
             ~mq_host ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
-            ~l1_config ~commit_validity_period )
+            ~l1_config ~commit_validity_period ~checkpoints_dir )
     in
     Quickcheck.Generator.return
       { outer_kp

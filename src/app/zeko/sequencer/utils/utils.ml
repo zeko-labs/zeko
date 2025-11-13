@@ -453,3 +453,17 @@ let validate_zkapp_command (command : Zkapp_command.t) =
     else Error "Actions and events or not valid"
   in
   ()
+
+module type Db_intf = sig
+  type t
+
+  val create : ?directory_name:string -> depth:int -> unit -> t
+
+  val create_checkpoint : t -> directory_name:string -> unit -> t
+end
+
+let create_db_from_checkpoint (type t) (module Db : Db_intf with type t = t)
+    ~depth ~db_dir ~checkpoint_dir =
+  let checkpoint = Db.create ~directory_name:checkpoint_dir ~depth () in
+  (* we create checkpoint to copy the db *)
+  Db.create_checkpoint checkpoint ~directory_name:db_dir ()

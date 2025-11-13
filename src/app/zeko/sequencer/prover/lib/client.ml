@@ -32,8 +32,9 @@ let send' t ~sendfn (input : Prover.Input.t) : Prover.Output.t Deferred.t =
   with
   | Ok output ->
       output
-  | Error _ ->
-      failwith "Failed to send job to the message queue"
+  | Error err ->
+      failwithf "Failed to send job to the message queue: %s"
+        (Error.to_string_hum err) ()
 
 let send = send' ~sendfn:Message_queue.Master.send_exn
 

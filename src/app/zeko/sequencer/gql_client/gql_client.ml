@@ -72,7 +72,11 @@ let fetch_action_state uri pk =
   |> Field.of_string
 
 let fetch_actions uri ?from_action_state ?end_action_state pk :
-    (Field.t array list * int * [ `Before of Field.t ] * [ `After of Field.t ])
+    ( Field.t array list
+    * [ `Block_height of int ]
+    * [ `Distance_from_max_block_height of int ]
+    * [ `Before of Field.t ]
+    * [ `After of Field.t ] )
     list
     Deferred.t =
   let ok_exn = function
@@ -84,7 +88,8 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
   let module M = struct
     type action_data = { data : string list } [@@deriving yojson]
 
-    type block_info = { height : int } [@@deriving yojson]
+    type block_info = { height : int; distanceFromMaxBlockHeight : int }
+    [@@deriving yojson]
 
     type action_state = { actionStateOne : string; actionStateTwo : string }
     [@@deriving yojson]
@@ -120,6 +125,7 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
                 }
                 blockInfo {
                   height
+                  distanceFromMaxBlockHeight
                 }
               }
             } 
@@ -158,6 +164,9 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
          }
        ->
       let block_height = blockInfo.height in
+      let distance_from_max_block_height =
+        blockInfo.distanceFromMaxBlockHeight
+      in
       List.fold_map actionData ~init:(Field.of_string action_state_before)
         ~f:(fun action_state_before { data } ->
           let fields = [ List.map data ~f:Field.of_string |> List.to_array ] in
@@ -167,7 +176,8 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
           in
           ( action_state_after
           , ( fields
-            , block_height
+            , `Block_height block_height
+            , `Distance_from_max_block_height distance_from_max_block_height
             , `Before action_state_before
             , `After action_state_after ) ) )
       |> snd )

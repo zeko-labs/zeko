@@ -120,6 +120,15 @@ module Signature_table = struct
          {sql| INSERT INTO da_signature (target_ledger_hash, public_key, signature) VALUES (?, ?, ?) |sql} )
       t
 
+  let get_signature_opt (module Conn : CONNECTION) ledger_hash public_key =
+    Conn.find_opt
+      (Caqti_request.find_opt
+         Caqti_type.(tup2 string string)
+         typ
+         {sql| SELECT target_ledger_hash, public_key, signature FROM da_signature WHERE target_ledger_hash = ? AND public_key = ? |sql} )
+      ( Ledger_hash.to_decimal_string ledger_hash
+      , Public_key.Compressed.to_base58_check public_key )
+
   let get_signatures (module Conn : CONNECTION) ledger_hash =
     Conn.collect_list
       (Caqti_request.collect Caqti_type.string typ
@@ -382,13 +391,49 @@ let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
 let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
     ~target_ledger_hash =
   let logger = t.logger in
-  let%map last_ledger_hash =
+  let%bind last_ledger_hash =
     binary_search_last_ledger_hash t ~node_location ~target_ledger_hash
   in
   [%log info]
     !"Found last ledger hash: %{sexp: Ledger_hash.t option} for node %s"
     last_ledger_hash
     (Host_and_port.to_string node_location.value) ;
+  let%map () =
+    match last_ledger_hash with
+    | None ->
+        return ()
+    | Some last_ledger_hash ->
+        let%bind public_key =
+          Rpc.get_node_public_key ~logger:t.logger ~node_location ()
+          >>| Or_error.ok_exn
+        in
+        let%bind is_signature_present =
+          Pool.use
+            (fun c ->
+              Signature_table.get_signature_opt c target_ledger_hash public_key
+              )
+            t.db_pool
+          >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s"
+          >>| Option.is_some
+        in
+        if is_signature_present then return ()
+        else (
+          [%log info]
+            "Signature from node %s not present, fetching and inserting"
+            (Host_and_port.to_string node_location.value) ;
+          let%bind public_key, signature =
+            Rpc.get_signature ~logger:t.logger ~node_location
+              ~ledger_hash:last_ledger_hash
+            >>| Or_error.ok_exn
+            >>| fun x -> Option.value_exn ~message:"Signature not found" x
+          in
+          Pool.use
+            (fun c ->
+              Signature_table.insert c
+                { target_ledger_hash; public_key; signature } )
+            t.db_pool
+          >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s" )
+  in
   don't_wait_for
   @@ start_posting_diffs_from t ~node_location
        ~source_ledger_hash:last_ledger_hash ()
@@ -538,9 +583,11 @@ let distribute_diff ~logger ~config ~ledger_openings ~diff =
           [%log error] "Failed to post diff to da node: %s"
             (Error.to_string_hum e) )
 
-(** Distribute diff of initial accounts *)
-let distribute_genesis_diff ~logger ~config ~ledger =
-  let%bind account_ids =
+(** One diff can be too big, split it into multiple smaller ones
+    To have only one diff set [max_size] to [Int.max_value]
+*)
+let create_genesis_diffs ?(max_size = 50) ledger =
+  let%map account_ids =
     Ledger.to_list ledger >>| List.map ~f:Account.identifier
   in
   let changed_accounts =
@@ -549,18 +596,27 @@ let distribute_genesis_diff ~logger ~config ~ledger =
         let account = Ledger.get_at_index_exn ledger index in
         (index, account) )
   in
-  (* openings lead to empty accounts *)
-  let ledger_openings =
-    List.fold changed_accounts
-      ~init:(Sparse_ledger.of_ledger_subset_exn ledger account_ids)
-      ~f:(fun acc (index, _) -> Sparse_ledger.set_exn acc index Account.empty)
-  in
-  let diff =
-    Diff.create
-      ~source_ledger_hash:(Diff.empty_ledger_hash ~depth:(Ledger.depth ledger))
-      ~changed_accounts ~command_with_action_step_flags:None
-  in
-  distribute_diff ~logger ~config ~ledger_openings ~diff
+  Ledger.with_ephemeral_ledger ~depth:(Ledger.depth ledger) ~f:(fun ephemeral ->
+      let account_chunks = List.chunks_of changed_accounts ~length:max_size in
+      List.map account_chunks ~f:(fun chunk ->
+          let ledger_openings =
+            Sparse_ledger.of_ledger_subset_exn ephemeral
+              (List.map chunk ~f:snd |> List.map ~f:Account.identifier)
+          in
+          List.iter chunk ~f:(fun (index, account) ->
+              Ledger.set_at_index_exn ephemeral index account ) ;
+          let diff =
+            Diff.create
+              ~source_ledger_hash:(Sparse_ledger.merkle_root ledger_openings)
+              ~changed_accounts:chunk ~command_with_action_step_flags:None
+          in
+          (diff, ledger_openings) ) )
+
+(** Distribute diff of initial accounts *)
+let distribute_genesis_diff ~logger ~config ~ledger =
+  let%bind diffs = create_genesis_diffs ledger in
+  Deferred.List.iter ~how:`Sequential diffs ~f:(fun (diff, ledger_openings) ->
+      distribute_diff ~logger ~config ~ledger_openings ~diff )
 
 let get_openings ~diff ~ledger =
   let changed_accounts =
