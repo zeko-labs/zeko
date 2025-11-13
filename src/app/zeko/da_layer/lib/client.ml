@@ -410,8 +410,7 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
         let%bind is_signature_present =
           Pool.use
             (fun c ->
-              Signature_table.get_signature_opt c target_ledger_hash public_key
-              )
+              Signature_table.get_signature_opt c last_ledger_hash public_key )
             t.db_pool
           >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s"
           >>| Option.is_some
