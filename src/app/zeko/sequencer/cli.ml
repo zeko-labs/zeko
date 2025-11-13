@@ -69,9 +69,7 @@ let update_outer_verification_keys =
          let sender =
            Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
          in
-         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
-           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
-         in
+         let l1_uri = Uri.of_string l1_uri in
          let open Zeko_types in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
@@ -142,7 +140,7 @@ let update_outer_verification_keys =
          if only_check then return ()
          else
            let%bind nonce =
-             Sequencer_lib.Gql_client.infer_nonce l1_uri
+             Gql_client.infer_nonce l1_uri
                (Public_key.compress sender.public_key)
            in
            let to_update =
@@ -188,9 +186,7 @@ let update_inner_verification_keys =
          let sender =
            Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
          in
-         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
-           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
-         in
+         let l1_uri = Uri.of_string l1_uri in
          let open Zeko_types in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
@@ -347,7 +343,7 @@ let update_inner_verification_keys =
            in
            let%bind command =
              let%map nonce =
-               Sequencer_lib.Gql_client.infer_nonce l1_uri
+               Gql_client.infer_nonce l1_uri
                  (Public_key.compress sender.public_key)
              in
              let open Zeko_circuits.Rollup_state in
@@ -410,9 +406,7 @@ let update_da_key =
          let sender =
            Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
          in
-         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
-           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
-         in
+         let l1_uri = Uri.of_string l1_uri in
          let open Zeko_types in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
@@ -445,7 +439,7 @@ let update_da_key =
          else
            let%bind command =
              let%map nonce =
-               Sequencer_lib.Gql_client.infer_nonce l1_uri
+               Gql_client.infer_nonce l1_uri
                  (Public_key.compress sender.public_key)
              in
              let open Zeko_circuits.Rollup_state in
@@ -499,15 +493,12 @@ let update_permissions =
          let sender =
            Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
          in
-         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
-           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
-         in
+         let l1_uri = Uri.of_string l1_uri in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
 
          let%bind nonce =
-           Sequencer_lib.Gql_client.infer_nonce l1_uri
-             (Public_key.compress sender.public_key)
+           Gql_client.infer_nonce l1_uri (Public_key.compress sender.public_key)
          in
          let%bind command =
            Deploy.update_permissions
@@ -559,9 +550,7 @@ let set_pause =
          let sender =
            Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
          in
-         let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
-           Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
-         in
+         let l1_uri = Uri.of_string l1_uri in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
 
@@ -579,7 +568,7 @@ let set_pause =
 
          let%bind command =
            let%map nonce =
-             Sequencer_lib.Gql_client.infer_nonce l1_uri
+             Gql_client.infer_nonce l1_uri
                (Public_key.compress sender.public_key)
            in
            let open Zeko_circuits in

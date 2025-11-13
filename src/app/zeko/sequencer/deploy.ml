@@ -44,7 +44,7 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
 
   Thread_safe.block_on_async_exn (fun () ->
       let%bind nonce =
-        Sequencer_lib.Gql_client.infer_nonce l1_uri
+        Gql_client.infer_nonce l1_uri
           (Public_key.compress sender_keypair.public_key)
       in
       let%bind `Inner inner_account, `Holder holder_account =
@@ -229,7 +229,7 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
 
       print_endline "(* Deploy contract *)" ;
       match%bind
-        Sequencer_lib.Gql_client.send_zkapp l1_uri
+        Gql_client.send_zkapp l1_uri
           (Zkapp_command.read_all_proofs_from_disk command)
       with
       | Ok _ ->
@@ -301,8 +301,6 @@ let () =
         let account_creation_fee =
           Currency.Fee.of_mina_string_exn account_creation_fee
         in
-        let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
-          Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
-        in
+        let l1_uri = Uri.of_string l1_uri in
         run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
           ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee )

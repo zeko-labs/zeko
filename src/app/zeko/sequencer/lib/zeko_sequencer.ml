@@ -1,5 +1,4 @@
 open Core_kernel
-open Async
 open Async_kernel
 open Mina_base
 open Mina_ledger
@@ -17,10 +16,11 @@ module Sequencer = struct
     type t =
       { max_pool_size : int
       ; commitment_period_sec : float
-      ; db_dir : string option
+      ; db_dir : string
+      ; checkpoints_dir : string option
       ; signer : Keypair.t
-      ; l1_uri : Uri.t Cli_lib.Flag.Types.with_name
-      ; archive_uri : Uri.t Cli_lib.Flag.Types.with_name
+      ; l1_uri : Uri.t
+      ; archive_uri : Uri.t
       ; deposit_delay_blocks : int
       ; fee_modifier : float
       ; minimum_fee : float
@@ -539,7 +539,10 @@ module Sequencer = struct
     (* Find pointer for actions to be processed *)
     let processed_pointer, processed_new_actions =
       List.fold all_new_actions ~init:(old_synced_outer_action_state, [])
-        ~f:(fun (curr_state, curr_actions) (action, block_height, _, _) ->
+        ~f:(fun
+             (curr_state, curr_actions)
+             (action, `Block_height block_height, _, _, _)
+           ->
           if block_height + t.config.deposit_delay_blocks <= current_height then
             ( Zkapp_account.Actions_impl.(push_hash curr_state (hash action))
             , action :: curr_actions )
@@ -607,7 +610,7 @@ module Sequencer = struct
       in
       (List.length processed_witnesses, processed_pointer) )
 
-  (* Double Deferred.t is deliberate, the first is filled after update of ledger, the second is filled after commit *)
+  (** Double Deferred.t is deliberate, the first is filled after update of ledger, the second is filled after commit *)
   let commit t : Txn_snark.serializable option Deferred.t Deferred.t =
     let logger = t.logger in
     let%bind processed_witnesses, processed_actions_pointer =
@@ -639,6 +642,26 @@ module Sequencer = struct
                   L.(of_database t.ledger)
                   [ Zeko_constants.inner_account_id ]
               in
+              let () =
+                match t.config.checkpoints_dir with
+                | Some dir ->
+                    let open Core in
+                    let dir =
+                      dir
+                      ^/ ( Sparse_ledger.merkle_root target_ledger
+                         |> Ledger_hash.to_decimal_string )
+                    in
+                    if not (FileUtil.test Exists dir) then (
+                      Core.Unix.mkdir_p dir ;
+                      [%log info] "Making checkpoint for ledger and imt in %s"
+                        dir ;
+                      Ledger.Db.make_checkpoint t.ledger
+                        ~directory_name:(dir ^/ "ledger") ;
+                      Indexed_merkle_tree.Db.make_checkpoint t.imt
+                        ~directory_name:(dir ^/ "imt") )
+                | None ->
+                    ()
+              in
               Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
                 ~commit_witness:
                   { new_inner_ledger = target_ledger
@@ -655,30 +678,46 @@ module Sequencer = struct
             (within' ~monitor:Monitor.main (fun () ->
                  commit t >>= Deferred.ignore_m ) ) )
 
-  let bootstrap ~logger ({ config; _ } as t) da_config =
-    [%log info] "Bootstrapping" ;
+  let sync ~logger ({ config; _ } as t) da_config source =
+    [%log info] "Syncing" ;
     let%bind commited_ledger_hash =
-      match Sys.getenv "ZEKO_OVERRIDE_BOOTSTRAP_HASH" with
-      | None ->
-          Gql_client.infer_state config.l1_uri
-            ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
-            ~signer_pk:(Public_key.compress config.signer.public_key)
-          >>| Utils.value_of_zkapp_state
-                Zeko_circuits.Rollup_state.Outer_state.typ
-          >>| fun { ledger_hash; _ } -> ledger_hash
-      | Some hash ->
-          [%log info] "Using override hash: %s" hash ;
-          return (Ledger_hash.of_decimal_string hash)
+      Gql_client.infer_state config.l1_uri
+        ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+        ~signer_pk:(Public_key.compress config.signer.public_key)
+      >>| Utils.value_of_zkapp_state Zeko_circuits.Rollup_state.Outer_state.typ
+      >>| fun { ledger_hash; _ } -> ledger_hash
     in
     [%log info] "Fetched commited root: %s"
       Ledger_hash.(to_decimal_string commited_ledger_hash) ;
 
     [%log info] "Init root: %s" Ledger_hash.(to_decimal_string (get_root t)) ;
 
+    let%bind () =
+      match source with
+      | `Genesis ->
+          [%log info] "Syncing from genesis" ;
+          return ()
+      | `Specific ledger_hash ->
+          [%log info] "Syncing from specific ledger hash: %s"
+            (Ledger_hash.to_decimal_string ledger_hash) ;
+
+          [%log info] "Creating genesis diff" ;
+          let ledger = L.of_database t.ledger in
+          let%bind diffs = Da_layer.Client.create_genesis_diffs ledger in
+          let%bind () =
+            Deferred.List.iteri ~how:`Sequential diffs
+              ~f:(fun i (diff, ledger_openings) ->
+                Da_layer.Client.enqueue_diff t.da_client ~diff ~ledger_openings
+                  ~target_ledger_hash:(L.merkle_root ledger) ~genesis:(i = 0) )
+          in
+          [%log info] "Enqueued genesis diff" ;
+          return ()
+    in
+
     (* apply diffs from DA layer *)
     let%bind () =
       Da_layer.Client.map_diffs ~logger ~config:da_config
-        ~depth:constraint_constants.ledger_depth ~source_ledger_hash:`Genesis
+        ~depth:constraint_constants.ledger_depth ~source_ledger_hash:source
         ~target_ledger_hash:commited_ledger_hash
         ~f:(fun ~current_chunk ~current_diff ~chunks_length diff ->
           assert (
@@ -763,29 +802,126 @@ module Sequencer = struct
     State.Last_committed_ledger.set t.state ~data:sparse_ledger ;
     return ()
 
+  let create_ledger ~logger ~db_dir ~(checkpoints_dir : string option) ~zkapp_pk
+      ~l1_uri ~signer_pk ~archive_uri =
+    let ledger_dir = Filename.concat db_dir "ledger" in
+    let imt_dir = Filename.concat db_dir "imt" in
+    match (FileUtil.test Is_dir ledger_dir, FileUtil.test Is_dir imt_dir) with
+    | true, true ->
+        [%log info] "Ledger and IMT directories exist %s and %s" ledger_dir
+          imt_dir ;
+        return
+          ( `Synced
+          , ( L.Db.create ~directory_name:ledger_dir
+                ~depth:constraint_constants.ledger_depth ()
+            , Indexed_merkle_tree.Db.create ~directory_name:imt_dir
+                ~depth:constraint_constants.ledger_depth () ) )
+    | false, false -> (
+        [%log info] "No ledger and IMT directories exist, fetching commits" ;
+        let%bind commits =
+          Gql_client.fetch_actions archive_uri zkapp_pk
+          >>| List.filter_map ~f:(fun (fields, _, _, _, _) ->
+                  match fields with
+                  | [ action ] ->
+                      Some (Utils.actions_to_outer_action action)
+                  | _ ->
+                      None )
+          >>| List.filter_map ~f:(function
+                | C.Rollup_state.Outer_action.Commit commit ->
+                    Some commit.ledger
+                | Witness _ ->
+                    None )
+        in
+        let%map commited_ledger_hash =
+          Gql_client.infer_state l1_uri
+            ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+            ~signer_pk:(Public_key.compress signer_pk)
+          >>| Utils.value_of_zkapp_state
+                Zeko_circuits.Rollup_state.Outer_state.typ
+          >>| fun { ledger_hash; _ } -> ledger_hash
+        in
+        let commits_from_newest =
+          commits @ [ commited_ledger_hash ] |> List.rev
+        in
+        match
+          List.find commits_from_newest ~f:(fun ledger_hash ->
+              match checkpoints_dir with
+              | Some checkpoints_dir ->
+                  FileUtil.test Is_dir
+                    (Filename.concat checkpoints_dir
+                       (Ledger_hash.to_decimal_string ledger_hash) )
+              | None ->
+                  false )
+        with
+        | None ->
+            [%log info]
+              "No checkpoint found, creating new ledger and IMT %s and %s"
+              ledger_dir imt_dir ;
+            ( `Syncing_from `Genesis
+            , ( L.Db.create ~directory_name:ledger_dir
+                  ~depth:constraint_constants.ledger_depth ()
+              , Indexed_merkle_tree.Db.create ~directory_name:imt_dir
+                  ~depth:constraint_constants.ledger_depth () ) )
+        | Some latest_checkpoint ->
+            let checkpoint_dir =
+              Filename.concat
+                (Option.value_exn checkpoints_dir
+                   ~message:"checkpoints_dir should not be None, unreachable" )
+                (Ledger_hash.to_decimal_string latest_checkpoint)
+            in
+            let ledger_checkpoint_dir =
+              Filename.concat checkpoint_dir "ledger"
+            in
+            let imt_checkpoint_dir = Filename.concat checkpoint_dir "imt" in
+            [%log info]
+              "Checkpoint found for ledger hash %s, creating ledger and IMT \
+               from checkpoint %s and %s"
+              (Ledger_hash.to_decimal_string latest_checkpoint)
+              ledger_checkpoint_dir imt_checkpoint_dir ;
+            if
+              FileUtil.test Is_dir ledger_checkpoint_dir
+              && FileUtil.test Is_dir imt_checkpoint_dir
+            then
+              let () = Core.Unix.mkdir_p db_dir in
+              ( `Syncing_from (`Specific latest_checkpoint)
+              , ( Utils.create_db_from_checkpoint
+                    (module L.Db)
+                    ~depth:constraint_constants.ledger_depth ~db_dir:ledger_dir
+                    ~checkpoint_dir:ledger_checkpoint_dir
+                , Utils.create_db_from_checkpoint
+                    (module Indexed_merkle_tree.Db)
+                    ~depth:constraint_constants.ledger_depth ~db_dir:imt_dir
+                    ~checkpoint_dir:imt_checkpoint_dir ) )
+            else failwithf "Corrupted checkpoint %s" checkpoint_dir () )
+    | true, false | false, true ->
+        failwithf "Corrupted db %s and %s" ledger_dir imt_dir ()
+
   let create ~logger ~max_pool_size ~commitment_period_sec ~da_config ~da_keys
-      ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-      ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance
-      ~proof_cache_db ~l1_config ~commit_validity_period =
+      ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
+      ~(signer : Keypair.t) ~deposit_delay_blocks ~mq_host ~fee_modifier
+      ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
+      ~commit_validity_period =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
-    let ledger =
-      L.Db.create
-        ?directory_name:
-          (Option.map db_dir ~f:(fun db_dir -> Filename.concat db_dir "ledger"))
-        ~depth:constraint_constants.ledger_depth ()
+    let db_dir =
+      match db_dir with
+      | Some db_dir ->
+          db_dir
+      | None ->
+          let uuid = Uuid_unix.create () in
+          Filename.concat Cache_dir.autogen_path (Uuid.to_string uuid)
     in
-    let imt =
-      Indexed_merkle_tree.Db.create
-        ?directory_name:
-          (Option.map db_dir ~f:(fun db_dir -> Filename.concat db_dir "imt"))
-        ~depth:constraint_constants.ledger_depth ()
+    let%bind sync_check, (ledger, imt) =
+      create_ledger ~logger ~db_dir ~checkpoints_dir
+        ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1 ~l1_uri
+        ~signer_pk:signer.public_key ~archive_uri
     in
     let config =
       Config.
         { max_pool_size
         ; commitment_period_sec
         ; db_dir
+        ; checkpoints_dir
         ; l1_uri
         ; archive_uri
         ; signer
@@ -840,7 +976,11 @@ module Sequencer = struct
       }
     in
     let%bind () =
-      if is_empty t then bootstrap ~logger t da_config else return ()
+      match sync_check with
+      | `Syncing_from source ->
+          sync ~logger t da_config source
+      | `Synced ->
+          return ()
     in
     let%bind () =
       Committer.recommit_all ~logger ~proof_cache_db

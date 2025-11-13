@@ -133,7 +133,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   let%bind unprocessed_actions =
     Gql_client.fetch_actions archive_uri
       ~from_action_state:processed_actions_pointer zkapp_pk
-    >>| List.map ~f:(fun (fields, _, _, _) -> fields)
+    >>| List.map ~f:(fun (fields, _, _, _, _) -> fields)
     >>| List.map ~f:Zkapp_account.Actions_impl.hash
   in
   let unprocessed_actions_state =

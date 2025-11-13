@@ -92,13 +92,15 @@ da3_pid=$!
 
 # Launch provers
 if [ "$MODE" = "fake" ]; then
+  # For some reason prover can't connect immediately to message queue sometimes
+  sleep 5
   BIN="$SEQUENCER_BUILD_ROOT/prover/cli_fake.exe"
 else
   BIN="$SEQUENCER_BUILD_ROOT/prover/cli.exe"
 fi
 for ((i = 0; i < NUM_PROVERS; i++)); do
   PORT=$((9990 + i))
-  $BIN run-server --mq-host "localhost:5672" >/dev/null 2>&1 &
+  $BIN run-server --mq-host "localhost:5672" >/dev/null &
   PROVER_PID=$!
   PROVER_PIDS+=("$PROVER_PID")
   PROVERS+=("localhost:$PORT")

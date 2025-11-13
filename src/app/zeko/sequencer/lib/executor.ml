@@ -9,7 +9,7 @@ let ok_exn x =
   match x with Ok x -> x | Error e -> failwith e
 
 type t =
-  { l1_uri : Uri.t Cli_lib.Flag.Types.with_name
+  { l1_uri : Uri.t
   ; signer : Keypair.t
   ; q : unit Throttle.t
   ; mutable nonce : Account.Nonce.t option

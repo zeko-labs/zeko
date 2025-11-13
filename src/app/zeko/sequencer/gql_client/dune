@@ -1,0 +1,15 @@
+(library
+ (name gql_client)
+ (libraries
+  ;; zeko ;;
+  utils
+  ;; mina ;;
+  init
+  mina_base
+  snark_params
+  ;; opam ;;
+  core_kernel
+  async
+  yojson)
+ (preprocess
+  (pps ppx_jane ppx_mina)))

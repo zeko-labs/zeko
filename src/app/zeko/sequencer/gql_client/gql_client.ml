@@ -4,6 +4,18 @@ open Mina_base
 open Init
 module Field = Snark_params.Tick.Field
 
+let query_with_retry ?(max_attempts = 10) ?(delay = Time.Span.of_sec 5.) ~label
+    query_obj uri =
+  Utils.retry ~max_attempts ~delay
+    ~f:(fun () ->
+      Graphql_client.Client.query_json query_obj uri
+      >>| Result.map_error ~f:(function
+            | `Failed_request e ->
+                Error.createf !"Failed to %s: Failed_request %s" label e
+            | `Graphql_error e ->
+                Error.createf !"Failed to %s: Graphql_error %s" label e ) )
+    ()
+
 let fetch_nonce uri pk =
   let q =
     object
@@ -25,7 +37,9 @@ let fetch_nonce uri pk =
           ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch nonce" q uri >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(result |> member "account" |> member "nonce" |> to_string)
   |> Int.of_string |> Unsigned.UInt32.of_int
 
@@ -50,13 +64,19 @@ let fetch_action_state uri pk =
           ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch action state" q uri >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result |> member "account" |> member "actionState" |> index 0 |> to_string)
   |> Field.of_string
 
 let fetch_actions uri ?from_action_state ?end_action_state pk :
-    (Field.t array list * int * [ `Before of Field.t ] * [ `After of Field.t ])
+    ( Field.t array list
+    * [ `Block_height of int ]
+    * [ `Distance_from_max_block_height of int ]
+    * [ `Before of Field.t ]
+    * [ `After of Field.t ] )
     list
     Deferred.t =
   let ok_exn = function
@@ -68,7 +88,8 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
   let module M = struct
     type action_data = { data : string list } [@@deriving yojson]
 
-    type block_info = { height : int } [@@deriving yojson]
+    type block_info = { height : int; distanceFromMaxBlockHeight : int }
+    [@@deriving yojson]
 
     type action_state = { actionStateOne : string; actionStateTwo : string }
     [@@deriving yojson]
@@ -104,6 +125,7 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
                 }
                 blockInfo {
                   height
+                  distanceFromMaxBlockHeight
                 }
               }
             } 
@@ -129,7 +151,9 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
           ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch actions" q uri >>| Or_error.ok_exn
+  in
   let result = M.actions_of_yojson result |> ok_exn in
   List.map result.actions
     ~f:(fun
@@ -140,6 +164,9 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
          }
        ->
       let block_height = blockInfo.height in
+      let distance_from_max_block_height =
+        blockInfo.distanceFromMaxBlockHeight
+      in
       List.fold_map actionData ~init:(Field.of_string action_state_before)
         ~f:(fun action_state_before { data } ->
           let fields = [ List.map data ~f:Field.of_string |> List.to_array ] in
@@ -149,7 +176,8 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
           in
           ( action_state_after
           , ( fields
-            , block_height
+            , `Block_height block_height
+            , `Distance_from_max_block_height distance_from_max_block_height
             , `Before action_state_before
             , `After action_state_after ) ) )
       |> snd )
@@ -198,7 +226,9 @@ let fetch_events uri pk =
           ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch events" q uri >>| Or_error.ok_exn
+  in
   let result = M.events_of_yojson result |> ok_exn in
   List.map result.events ~f:(fun { eventData } ->
       List.map eventData ~f:(fun { data } -> List.map data ~f:Field.of_string) )
@@ -224,7 +254,10 @@ let fetch_pooled_zkapp_commands uri pk =
           ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch pooled zkapp commands" q uri
+    >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result
     |> member "pooledZkappCommands"
@@ -254,7 +287,10 @@ let fetch_pooled_signed_commands uri pk =
           ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch pooled signed commands" q uri
+    >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result
     |> member "pooledUserCommands"
@@ -311,7 +347,9 @@ let fetch_state uri aid =
           ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch state" q uri >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result |> member "account" |> member "zkappState" |> to_list
     |> List.map ~f:to_string
@@ -343,7 +381,9 @@ let fetch_vk uri aid =
           ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch verification key" q uri >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result |> member "account" |> member "verificationKey"
     |> member "verificationKey" |> to_string
@@ -374,8 +414,7 @@ let infer_state uri ~zkapp_pk ~signer_pk =
   in
   return future_state
 
-let send_zkapp ({ value = uri; _ } : Uri.t Cli_lib.Flag.Types.with_name) command
-    =
+let send_zkapp (uri : Uri.t) command =
   let q =
     object
       method query =
@@ -427,7 +466,9 @@ let fetch_block_height uri =
       method variables = `Assoc []
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch block height" q uri >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result |> member "bestChain" |> index 0 |> member "protocolState"
     |> member "consensusState" |> member "blockHeight" |> to_string)
@@ -449,7 +490,9 @@ let fetch_best_chain ?(max_length = 10) uri =
       method variables = `Assoc [ ("maxLength", `Int max_length) ]
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch best chain" q uri >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result |> member "bestChain"
     |> map (member "stateHash")
@@ -471,7 +514,9 @@ let fetch_genesis_timestamp uri =
       method variables = `Assoc []
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch genesis timestamp" q uri >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result |> member "genesisConstants" |> member "genesisTimestamp"
     |> to_string |> Genesis_constants.genesis_timestamp_of_string)
@@ -490,7 +535,9 @@ let fetch_fork_slot uri =
       method variables = `Assoc []
     end
   in
-  let%map result = Graphql_client.query_json_exn q uri in
+  let%map result =
+    query_with_retry ~label:"fetch fork slot" q uri >>| Or_error.ok_exn
+  in
   Yojson.Safe.Util.(
     result |> member "runtimeConfig" |> member "proof" |> member "fork"
     |> member "global_slot_since_genesis"
@@ -517,7 +564,10 @@ module For_tests = struct
             ]
       end
     in
-    let%map result = Graphql_client.query_json_exn q uri in
+    let%map result =
+      query_with_retry ~max_attempts:1 ~label:"create account" q uri
+      >>| Or_error.ok_exn
+    in
     Yojson.Safe.(to_string result)
 
   let create_new_block uri =
@@ -534,7 +584,10 @@ module For_tests = struct
         method variables = `Assoc []
       end
     in
-    let%map result = Graphql_client.query_json_exn q uri in
+    let%map result =
+      query_with_retry ~max_attempts:1 ~label:"create new block" q uri
+      >>| Or_error.ok_exn
+    in
     Yojson.Safe.(to_string result)
 
   let clear_pool uri =
@@ -551,7 +604,10 @@ module For_tests = struct
         method variables = `Assoc []
       end
     in
-    let%map result = Graphql_client.query_json_exn q uri in
+    let%map result =
+      query_with_retry ~max_attempts:1 ~label:"clear pool" q uri
+      >>| Or_error.ok_exn
+    in
     Yojson.Safe.(to_string result)
 
   let reset_state uri =
@@ -568,7 +624,9 @@ module For_tests = struct
         method variables = `Assoc []
       end
     in
-    let%map result = Graphql_client.query_json_exn q uri in
+    let%map result =
+      query_with_retry ~label:"reset state" q uri >>| Or_error.ok_exn
+    in
     Yojson.Safe.(to_string result)
 
   let shift_slots uri slots =
@@ -585,7 +643,10 @@ module For_tests = struct
         method variables = `Assoc [ ("slots", `Int slots) ]
       end
     in
-    let%map result = Graphql_client.query_json_exn q uri in
+    let%map result =
+      query_with_retry ~max_attempts:1 ~label:"shift slots" q uri
+      >>| Or_error.ok_exn
+    in
     Yojson.Safe.(to_string result)
 
   let get_zkapp_command_status uri hash =
@@ -611,7 +672,10 @@ module For_tests = struct
             ]
       end
     in
-    let%map result = Graphql_client.query_json_exn q uri in
+    let%map result =
+      query_with_retry ~max_attempts:1 ~label:"get zkapp command status" q uri
+      >>| Or_error.ok_exn
+    in
     Yojson.Safe.Util.(
       result |> member "zkappCommand" |> member "failureReason"
       |> to_option (fun json ->

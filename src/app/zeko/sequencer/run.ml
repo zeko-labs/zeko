@@ -9,9 +9,9 @@ module Graphql_cohttp_async =
 module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
-    ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-    ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance
-    ~commit_validity_period () =
+    ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
+    ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
+    ~slot_acceptance ~commit_validity_period () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
     let genesis_timestamp =
@@ -30,7 +30,8 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
         Sequencer.create ~logger ~max_pool_size ~da_config ~da_keys ~da_quorum
-          ~db_dir:(Some db_dir) ~postgres_uri ~l1_uri ~archive_uri
+          ~db_dir:(Some db_dir) ~checkpoints_dir:(Some checkpoints_dir)
+          ~postgres_uri ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~deposit_delay_blocks
           ~signer:
             Signature_lib.(
@@ -93,6 +94,10 @@ let () =
        flag "--db-dir"
          (optional_with_default "db" string)
          ~doc:"string Directory to store the Ledger database"
+     and checkpoints_dir =
+       flag "--checkpoints-dir"
+         (optional_with_default "checkpoints" string)
+         ~doc:"string Directory to store the ledger checkpoints"
      and postgres_uri =
        flag "--postgres-uri" (required string) ~doc:"string Postgres URI"
      and deposit_delay_blocks =
@@ -123,13 +128,8 @@ let () =
        String.split ~on:',' da_keys
        |> List.map ~f:Public_key.Compressed.of_base58_check_exn
      in
-     let l1_uri : Uri.t Cli_lib.Flag.Types.with_name =
-       Cli_lib.Flag.Types.{ value = Uri.of_string l1_uri; name = "l1-uri" }
-     in
-     let archive_uri : Uri.t Cli_lib.Flag.Types.with_name =
-       Cli_lib.Flag.Types.
-         { value = Uri.of_string archive_uri; name = "archive-uri" }
-     in
+     let l1_uri = Uri.of_string l1_uri in
+     let archive_uri = Uri.of_string archive_uri in
      let mq_host = Host_and_port.of_string mq_host in
      let logger = Logger.create () in
      let postgres_uri = Uri.of_string postgres_uri in
@@ -138,7 +138,7 @@ let () =
      in
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
-       ~da_quorum ~db_dir ~postgres_uri ~l1_uri ~archive_uri ~signer
-       ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
+       ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
+       ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
        ~slot_acceptance ~commit_validity_period )
   |> Command_unix.run

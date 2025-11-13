@@ -19,10 +19,7 @@ let logger =
   Cli_lib.Stdout_log.setup false Logger.Level.Spam ;
   Logger.create ()
 
-let gql_uri =
-  { Cli_lib.Flag.Types.value = Uri.of_string "http://localhost:8080/graphql"
-  ; name = "gql-uri"
-  }
+let gql_uri = Uri.of_string "http://localhost:8080/graphql"
 
 let da_config_with2 =
   Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555"; "127.0.0.1:8556" ]
@@ -213,9 +210,9 @@ let () =
             let%map new_sequencer =
               Sequencer.create ~logger ~max_pool_size:10
                 ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
-                ~da_quorum ~db_dir:None ~postgres_uri:postgres_uri2
-                ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-                ~deposit_delay_blocks:0 ~mq_host ~fee_modifier:1.0
+                ~da_quorum ~db_dir:None ~checkpoints_dir:None
+                ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
+                ~signer ~deposit_delay_blocks:0 ~mq_host ~fee_modifier:1.0
                 ~minimum_fee:0.01 ~slot_acceptance
                 ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
                 ~l1_config
@@ -316,30 +313,48 @@ let () =
         run (fun () ->
             Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir)
-              ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-              ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
-              ~minimum_fee:0.01 ~slot_acceptance
+              ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
+              ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:0 ~mq_host
+              ~da_keys ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10) )
       in
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
+      let ledger_hash =
+        run (fun () ->
+            let%bind commit_result = commit new_sequencer in
+            let%bind _txn_snark = commit_result in
+            let%bind () =
+              Executor.wait_to_finish new_sequencer.merger_ctx.executor
+            in
+            let%map { ledger_hash = committed_ledger_hash; _ } =
+              Gql_client.infer_state gql_uri
+                ~signer_pk:(Public_key.compress signer.public_key)
+                ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+              >>| Utils.value_of_zkapp_state
+                    Zeko_circuits.Rollup_state.Outer_state.typ
+            in
+            let target_ledger_hash = get_root new_sequencer in
+            [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
+            committed_ledger_hash )
+      in
+
+      print_endline "(* Check that all da nodes are synced *)" ;
       run (fun () ->
-          let%bind commit_result = commit new_sequencer in
-          let%bind _txn_snark = commit_result in
-          let%bind () =
-            Executor.wait_to_finish new_sequencer.merger_ctx.executor
+          let%bind _multisig =
+            Da_layer.Client.get_multisig
+              { new_sequencer.da_client with quorum = 3 }
+              ~ledger_hash
           in
-          let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
-              ~zkapp_pk:(Public_key.compress outer_kp.public_key)
-            >>| Utils.value_of_zkapp_state
-                  Zeko_circuits.Rollup_state.Outer_state.typ
+          let%map da_nodes_synced =
+            Deferred.List.map da_config_with3.nodes ~f:(fun node ->
+                Da_layer.Client.Rpc.has_diff ~logger ~node_location:node
+                  ~ledger_hash )
+            >>| Result.all >>| Or_error.ok_exn >>| List.for_all ~f:Fn.id
           in
-          let target_ledger_hash = get_root new_sequencer in
-          [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
+          [%test_eq: bool] da_nodes_synced true ) ;
 
       print_endline "(* Assert that no witnesses are left in merger *)" ;
       run (fun () ->
@@ -358,6 +373,107 @@ let () =
       print_endline "(* Drop database *)" ;
       run (fun () ->
           Relational_db.For_tests.drop_database ~port:5433 "sequencer" ) )
+
+let () =
+  print_endline "Started test 'create checkpoints and restart from checkpoint'" ;
+  let db_dir1 =
+    Filename.concat Cache_dir.autogen_path
+      (Uuid.to_string @@ Uuid_unix.create ())
+  in
+  let db_dir2 =
+    Filename.concat Cache_dir.autogen_path
+      (Uuid.to_string @@ Uuid_unix.create ())
+  in
+  let checkpoints_dir =
+    Filename.concat Cache_dir.autogen_path
+      (Uuid.to_string @@ Uuid_unix.create ())
+  in
+  let postgres_uri1 =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer1" )
+  in
+  let postgres_uri2 =
+    run (fun () ->
+        Relational_db.For_tests.create_database ~port:5433 "sequencer2" )
+  in
+  Quickcheck.test ~trials:1
+    (Sequencer_spec.gen ~logger ~db_dir:db_dir1 ~checkpoints_dir
+       ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:da_config_with2 ~da_keys
+       ~da_quorum ~mq_host ~slot_acceptance () )
+    ~f:(fun { outer_kp; signer; specs; sequencer; da_keys; l1_config; _ } ->
+      let commands =
+        List.mapi specs ~f:(fun i spec ->
+            if i % 2 = 0 then
+              User_command.Zkapp_command
+                (account_update_send ~chain:Zeko_circuits_config.Inputs.chain_l2
+                   spec )
+            else
+              Signed_command
+                (command_send ~chain:Zeko_circuits_config.Inputs.chain_l2 spec) )
+      in
+      run (fun () ->
+          Deferred.List.iter commands ~f:(fun command ->
+              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
+
+      print_endline "(* Commit *)" ;
+      let ledger_hash =
+        run (fun () ->
+            let%bind commit_result = commit !sequencer in
+            let%bind _txn_snark = commit_result in
+            let%bind () =
+              Executor.wait_to_finish !sequencer.merger_ctx.executor
+            in
+            let%map { ledger_hash = committed_ledger_hash; _ } =
+              Gql_client.infer_state gql_uri
+                ~signer_pk:(Public_key.compress signer.public_key)
+                ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+              >>| Utils.value_of_zkapp_state
+                    Zeko_circuits.Rollup_state.Outer_state.typ
+            in
+            let target_ledger_hash = get_root !sequencer in
+            [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
+            committed_ledger_hash )
+      in
+
+      let[@warning "-26"] sequencer = free_sequencer sequencer in
+
+      print_endline "(* Restart sequencer from checkpoint *)" ;
+      let new_sequencer =
+        run (fun () ->
+            Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
+              ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir2)
+              ~checkpoints_dir:(Some checkpoints_dir)
+              ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
+              ~signer ~deposit_delay_blocks:0 ~mq_host ~da_keys
+              ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+              ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
+              ~l1_config
+              ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10) )
+      in
+
+      print_endline "(* Check that all da nodes are synced *)" ;
+      run (fun () ->
+          let%bind _multisig =
+            Da_layer.Client.get_multisig
+              { new_sequencer.da_client with quorum = 3 }
+              ~ledger_hash
+          in
+          let%map da_nodes_synced =
+            Deferred.List.map da_config_with3.nodes ~f:(fun node ->
+                Da_layer.Client.Rpc.has_diff ~logger ~node_location:node
+                  ~ledger_hash )
+            >>| Result.all >>| Or_error.ok_exn >>| List.for_all ~f:Fn.id
+          in
+          [%test_eq: bool] da_nodes_synced true ) ;
+
+      Gc.full_major () ;
+      run (fun () -> Sequencer.shutdown new_sequencer) ;
+
+      print_endline "(* Drop database *)" ;
+      run (fun () ->
+          Relational_db.For_tests.drop_database ~port:5433 "sequencer1" ) ;
+      run (fun () ->
+          Relational_db.For_tests.drop_database ~port:5433 "sequencer2" ) )
 
 let () =
   print_endline "Started test 'restart sequencer and recommit'" ;
@@ -430,9 +546,9 @@ let () =
         run (fun () ->
             Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with2 ~da_quorum ~db_dir:(Some db_dir)
-              ~postgres_uri ~l1_uri:gql_uri ~archive_uri:gql_uri ~signer
-              ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
-              ~minimum_fee:0.01 ~slot_acceptance
+              ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
+              ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:0 ~mq_host
+              ~da_keys ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10) )
@@ -835,7 +951,7 @@ let () =
         let%bind actions =
           Gql_client.fetch_actions gql_uri
             (Public_key.compress outer_kp.public_key)
-          >>| List.map ~f:(fun (fields, _, before, after) ->
+          >>| List.map ~f:(fun (fields, _, _, before, after) ->
                   ( Utils.actions_to_outer_action (List.hd_exn fields)
                   , before
                   , after ) )
@@ -890,7 +1006,7 @@ let () =
               C.Rollup_state.Outer_action_state.(
                 With_length.state current_synced_outer_action_state |> raw)
             (Public_key.compress outer_kp.public_key)
-          >>| List.map ~f:(fun (fields, _, _, _) ->
+          >>| List.map ~f:(fun (fields, _, _, _, _) ->
                   Zkapp_account.Actions_impl.hash fields )
         in
         let ase : Ase.With_length.Stmt.t * Field.t list =
@@ -1055,7 +1171,7 @@ let () =
         let%bind actions =
           Gql_client.fetch_actions gql_uri
             (Public_key.compress outer_kp.public_key)
-          >>| List.map ~f:(fun (fields, _, before, after) ->
+          >>| List.map ~f:(fun (fields, _, _, before, after) ->
                   ( Utils.actions_to_outer_action (List.hd_exn fields)
                   , before
                   , after ) )
@@ -1437,7 +1553,7 @@ let () =
         let%bind l1_actions =
           Gql_client.fetch_actions gql_uri
             (Public_key.compress outer_kp.public_key)
-          >>| List.map ~f:(fun (fields, _, before, after) ->
+          >>| List.map ~f:(fun (fields, _, _, before, after) ->
                   ( Utils.actions_to_outer_action (List.hd_exn fields)
                   , before
                   , after ) )
