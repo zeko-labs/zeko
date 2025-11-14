@@ -706,9 +706,9 @@ module Sequencer = struct
           let%bind diffs = Da_layer.Client.create_genesis_diffs ledger in
           let%bind () =
             Deferred.List.iteri ~how:`Sequential diffs
-              ~f:(fun i (diff, ledger_openings) ->
+              ~f:(fun i (diff, ledger_openings, `Target target_ledger_hash) ->
                 Da_layer.Client.enqueue_diff t.da_client ~diff ~ledger_openings
-                  ~target_ledger_hash:(L.merkle_root ledger) ~genesis:(i = 0) )
+                  ~target_ledger_hash ~genesis:(i = 0) )
           in
           [%log info] "Enqueued genesis diff" ;
           return ()
