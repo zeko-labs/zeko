@@ -609,12 +609,13 @@ let create_genesis_diffs ?(max_size = 50) ledger =
               ~source_ledger_hash:(Sparse_ledger.merkle_root ledger_openings)
               ~changed_accounts:chunk ~command_with_action_step_flags:None
           in
-          (diff, ledger_openings) ) )
+          (diff, ledger_openings, `Target (Ledger.merkle_root ephemeral)) ) )
 
 (** Distribute diff of initial accounts *)
 let distribute_genesis_diff ~logger ~config ~ledger =
   let%bind diffs = create_genesis_diffs ledger in
-  Deferred.List.iter ~how:`Sequential diffs ~f:(fun (diff, ledger_openings) ->
+  Deferred.List.iter ~how:`Sequential diffs
+    ~f:(fun (diff, ledger_openings, `Target _) ->
       distribute_diff ~logger ~config ~ledger_openings ~diff )
 
 let get_openings ~diff ~ledger =
