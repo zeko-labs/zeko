@@ -344,49 +344,54 @@ let rec start_posting_diffs_from ?pushed_diff t
               ~source_ledger_hash:(Some target_ledger_hash) () )
 
 let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
-  let%bind target_id =
-    Pool.use
-      (fun c -> Diff_table.get_id_by_target c target_ledger_hash)
-      t.db_pool
-    >>| caqti_ok_exn ~msg:"Failed to get id from target ledger hash: %s"
-    >>| fun opt -> Option.value_exn ~message:"No diff found" opt
-  in
-  let rec go ~left ~right =
-    if left > right then return None
-    else
-      let mid = (left + right) / 2 in
-      let%bind mid_ledger_hash =
-        Pool.use (fun c -> Diff_table.get_target_by_id c mid) t.db_pool
-        >>| caqti_ok_exn ~msg:"Failed to find mid ledger hash: %s"
-        >>| fun opt ->
-        Option.value_exn ~message:"Mid target ledger hash not found" opt
-      in
-      let%bind mid_found =
-        Rpc.has_diff ~logger:t.logger ~node_location
-          ~ledger_hash:mid_ledger_hash
-        >>| Or_error.ok_exn
-      in
-      let%bind next_ledger_hash =
-        Pool.use (fun c -> Diff_table.get_target_by_id c (mid + 1)) t.db_pool
-        >>| caqti_ok_exn ~msg:"Failed to find next ledger hash: %s"
-      in
-      let%bind next_found =
-        match next_ledger_hash with
-        | Some next_ledger_hash ->
-            Rpc.has_diff ~logger:t.logger ~node_location
-              ~ledger_hash:next_ledger_hash
-            >>| Or_error.ok_exn
-        | None ->
-            return false
-      in
-      if mid_found && not next_found then return (Some mid_ledger_hash)
-      else if mid_found && mid = target_id then return (Some mid_ledger_hash)
-      else if next_found && mid + 1 = target_id then return next_ledger_hash
-      else if (not mid_found) && mid = 1 then return None
-      else if mid_found && next_found then go ~left:mid ~right
-      else go ~left ~right:mid
-  in
-  go ~left:1 ~right:target_id
+  if%bind
+    Rpc.has_diff ~logger:t.logger ~node_location ~ledger_hash:target_ledger_hash
+    >>| Or_error.ok_exn
+  then return (Some target_ledger_hash)
+  else
+    let%bind target_id =
+      Pool.use
+        (fun c -> Diff_table.get_id_by_target c target_ledger_hash)
+        t.db_pool
+      >>| caqti_ok_exn ~msg:"Failed to get id from target ledger hash: %s"
+      >>| fun opt -> Option.value_exn ~message:"No diff found" opt
+    in
+    let rec go ~left ~right =
+      if left > right then return None
+      else
+        let mid = (left + right) / 2 in
+        let%bind mid_ledger_hash =
+          Pool.use (fun c -> Diff_table.get_target_by_id c mid) t.db_pool
+          >>| caqti_ok_exn ~msg:"Failed to find mid ledger hash: %s"
+          >>| fun opt ->
+          Option.value_exn ~message:"Mid target ledger hash not found" opt
+        in
+        let%bind mid_found =
+          Rpc.has_diff ~logger:t.logger ~node_location
+            ~ledger_hash:mid_ledger_hash
+          >>| Or_error.ok_exn
+        in
+        let%bind next_ledger_hash =
+          Pool.use (fun c -> Diff_table.get_target_by_id c (mid + 1)) t.db_pool
+          >>| caqti_ok_exn ~msg:"Failed to find next ledger hash: %s"
+        in
+        let%bind next_found =
+          match next_ledger_hash with
+          | Some next_ledger_hash ->
+              Rpc.has_diff ~logger:t.logger ~node_location
+                ~ledger_hash:next_ledger_hash
+              >>| Or_error.ok_exn
+          | None ->
+              return false
+        in
+        if mid_found && not next_found then return (Some mid_ledger_hash)
+        else if mid_found && mid = target_id then return (Some mid_ledger_hash)
+        else if next_found && mid + 1 = target_id then return next_ledger_hash
+        else if (not mid_found) && mid = 1 then return None
+        else if mid_found && next_found then go ~left:mid ~right
+        else go ~left ~right:mid
+    in
+    go ~left:1 ~right:target_id
 
 let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
     ~target_ledger_hash =
