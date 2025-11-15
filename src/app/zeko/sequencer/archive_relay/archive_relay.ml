@@ -173,7 +173,7 @@ let prune_checkpoints t =
   |> List.rev
   |> List.filter ~f:(fun timestamp ->
          let diff =
-           Time.diff (Timestamp.of_string timestamp |> Timestamp.to_time) now
+           Time.diff now (Timestamp.of_string timestamp |> Timestamp.to_time)
          in
          Time.Span.(diff < max_checkpoint_age) )
   |> List.tl

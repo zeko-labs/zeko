@@ -506,7 +506,7 @@ let diff_exists ~logger ~config ~ledger_hash () =
       Rpc.has_diff ~logger ~node_location ~ledger_hash )
 
 (** Lazily fetch chunks of diffs, used to minimize memory usage *)
-let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
+let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
     ~target_ledger_hash () =
   let source_ledger_hash =
     match source_ledger_hash with

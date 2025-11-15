@@ -13,9 +13,7 @@
   cohttp
   cohttp-async
   websocket-async
-  async_kernel
-  gql_client
-  is_compile_simple_real_real)
+  async_kernel)
  (preprocess
   (pps ppx_jane ppx_mina))
  (modules cli archive_relay))
