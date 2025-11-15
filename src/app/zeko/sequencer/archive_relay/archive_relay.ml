@@ -3,7 +3,6 @@ open Core_kernel
 open Mina_base
 open Mina_lib
 open Mina_ledger
-open Cli_lib
 
 let constraint_constants = Zeko_constants.constraint_constants
 
@@ -42,6 +41,29 @@ let time ~logger label (d : 'a Deferred.t) =
   [%log info] "%s: %s" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
+module Timestamp : sig
+  type t
+
+  val to_time : t -> Time.t
+
+  val of_time : Time.t -> t
+
+  val to_string : t -> string
+
+  val of_string : string -> t
+end = struct
+  type t = int
+
+  let to_time t = Int.to_float t |> Time.Span.of_ms |> Time.of_span_since_epoch
+
+  let of_time time =
+    Time.to_span_since_epoch time |> Time.Span.to_ms |> Int.of_float
+
+  let to_string t = Int.to_string t
+
+  let of_string t = Int.of_string t
+end
+
 module Protocol_state = struct
   include Kvdb_base.Make_singleton (struct
     type t = Mina_state.Protocol_state.value [@@deriving yojson]
@@ -59,49 +81,118 @@ end
 
 type t =
   { logger : Logger.t
-  ; archive_uri : Host_and_port.t Cli_lib.Flag.Types.with_name
+  ; db_dir : string
+  ; archive_uri : Host_and_port.t
   ; zeko_uri : Uri.t
   ; da_config : Da_layer.Client.Config.t
-  ; mutable db : Ledger.Db.t
+  ; mutable ledger : Ledger.Db.t
   ; proof_cache_db : Proof_cache_tag.cache_db
   ; chain : Mina_signature_kind.t
+  ; max_checkpoint_age : Time.Span.t
+  ; checkpoint_periodicity : int
+  ; interval_size : int
   }
 
-let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache ~chain =
-  let db =
-    Ledger.Db.create ~directory_name:ledger_cache
-      ~depth:constraint_constants.ledger_depth ()
+let checkpoints_dir db_dir = Filename.concat db_dir "checkpoints"
+
+let ledger_dir db_dir = Filename.concat db_dir "ledger"
+
+let make_checkpoint t ~timestamp =
+  let rec backup_checkpoint ?(n = 1) path =
+    let new_path = path ^ "." ^ Int.to_string n in
+    if FileUtil.test Is_dir new_path then backup_checkpoint ~n:(n + 1) path
+    else FileUtil.mv path new_path
   in
+  let { logger; db_dir; ledger; _ } = t in
+  [%log info] "Making checkpoint at timestamp: %s"
+    (Timestamp.to_string timestamp) ;
+  let checkpoint_path =
+    Filename.concat (checkpoints_dir db_dir) (Timestamp.to_string timestamp)
+  in
+  if FileUtil.test Is_dir checkpoint_path then backup_checkpoint checkpoint_path ;
+  Ledger.Db.make_checkpoint ledger ~directory_name:checkpoint_path
+
+let load_newest_checkpoint ~logger ~db_dir =
+  rmrf (ledger_dir db_dir) ;
+  match
+    Sys.readdir (checkpoints_dir db_dir)
+    |> Array.to_list
+    |> List.sort ~compare:String.compare
+    |> List.rev |> List.hd
+  with
+  | None ->
+      [%log info] "No checkpoints found" ;
+      Ledger.Db.create ~directory_name:(ledger_dir db_dir)
+        ~depth:constraint_constants.ledger_depth ()
+  | Some checkpoint_name ->
+      [%log info] "Loading checkpoint: %s" checkpoint_name ;
+      let checkpoint_path =
+        Filename.concat (checkpoints_dir db_dir) checkpoint_name
+      in
+      let checkpoint_db =
+        Ledger.Db.create ~directory_name:checkpoint_path
+          ~depth:constraint_constants.ledger_depth ()
+      in
+      [%log info] "Loaded checkpoint with ledger hash: %s"
+        (Ledger.Db.merkle_root checkpoint_db |> Ledger_hash.to_decimal_string) ;
+      Ledger.Db.create_checkpoint checkpoint_db
+        ~directory_name:(ledger_dir db_dir) ()
+
+let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~db_dir ~chain
+    ~max_checkpoint_age ~checkpoint_periodicity ~interval_size =
+  Core.Unix.mkdir_p db_dir ;
+  Core.Unix.mkdir_p (checkpoints_dir db_dir) ;
   { logger
+  ; db_dir
   ; archive_uri
   ; zeko_uri
   ; da_config = Da_layer.Client.Config.of_string_list da_nodes
-  ; db
+  ; ledger = load_newest_checkpoint ~logger ~db_dir
   ; proof_cache_db = Proof_cache_tag.create_identity_db ()
   ; chain
+  ; max_checkpoint_age
+  ; checkpoint_periodicity
+  ; interval_size
   }
 
-let reset_ledger_cache t () =
-  let directory_name =
-    Option.value_exn ~message:"No ledger_cache directory"
-    @@ Ledger.Db.get_directory t.db
-  in
-  Ledger.Db.close t.db ;
-
-  Sys.readdir directory_name
+let reset_ledger t () =
+  let { logger; db_dir; ledger; _ } = t in
+  Ledger.Db.close ledger ;
+  Sys.readdir (ledger_dir db_dir)
   |> Array.iter ~f:(fun file_name ->
-         rmrf (Filename.concat directory_name file_name) ) ;
-  t.db <-
-    Ledger.Db.create ~directory_name ~depth:constraint_constants.ledger_depth ()
+         rmrf (Filename.concat (ledger_dir db_dir) file_name) ) ;
+  t.ledger <- load_newest_checkpoint ~logger ~db_dir
+
+(** Prune checkpoints older than [max_checkpoint_age], but leave at least one that is older than [max_checkpoint_age] *)
+let prune_checkpoints t =
+  let { logger; db_dir; max_checkpoint_age; _ } = t in
+  let now = Time.now () in
+  Sys.readdir (checkpoints_dir db_dir)
+  |> Array.to_list
+  |> List.sort ~compare:String.compare
+  |> List.rev
+  |> List.filter ~f:(fun timestamp ->
+         let diff =
+           Time.diff now (Timestamp.of_string timestamp |> Timestamp.to_time)
+         in
+         Time.Span.(diff >= max_checkpoint_age) )
+  |> List.tl
+  |> function
+  | None | Some [] ->
+      [%log info] "No checkpoints to prune"
+  | Some checkpoints ->
+      List.iter checkpoints ~f:(fun checkpoint ->
+          [%log info] "Pruning checkpoint: %s" checkpoint ;
+          rmrf (Filename.concat (checkpoints_dir db_dir) checkpoint) )
 
 let sync_archive (t : t) ~hash =
   let logger = t.logger in
-  Da_layer.Client.map_diffs ~logger ~config:t.da_config
-    ~depth:constraint_constants.ledger_depth
-    ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.db))
-    ~target_ledger_hash:hash
+  Da_layer.Client.map_diffs ~interval_size:t.interval_size ~logger
+    ~config:t.da_config ~depth:constraint_constants.ledger_depth
+    ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.ledger))
+    ~target_ledger_hash:hash ()
     ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
-      let ledger = Ledger.of_database t.db in
+      let ledger = Ledger.of_database t.ledger in
       let changed_accounts =
         Da_layer.Diff.Stable.Latest.changed_accounts diff
       in
@@ -124,8 +215,8 @@ let sync_archive (t : t) ~hash =
             User_command.write_all_proofs_to_disk ~signature_kind:t.chain
               ~proof_cache_db:t.proof_cache_db command
           in
-          let kvdb = Ledger.Db.zeko_kvdb t.db in
-          let new_protocol_state, diff =
+          let kvdb = Ledger.Db.zeko_kvdb t.ledger in
+          let new_protocol_state, transition_frontier =
             Archive_lib.Diff.Builder.zeko_transaction_added
               ~constraint_constants ~accounts_created
               ~new_state_hash:(Ledger.merkle_root ledger)
@@ -139,16 +230,28 @@ let sync_archive (t : t) ~hash =
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
           Protocol_state.set kvdb ~data:new_protocol_state ;
+
+          let height =
+            Mina_state.Protocol_state.consensus_state new_protocol_state
+            |> Consensus.Proof_of_stake.Exported.Consensus_state
+               .blockchain_length |> Unsigned.UInt32.to_int
+          in
+          if height % t.checkpoint_periodicity = 0 then (
+            [%log info] "Progress: %.0f%%, height: %s"
+              (Float.of_int current_chunk /. Float.of_int chunks_length *. 100.0)
+              (Int.to_string_hum height) ;
+            make_checkpoint t
+              ~timestamp:
+                ( Da_layer.Diff.Stable.Latest.timestamp diff
+                |> Block_time.to_time_exn |> Timestamp.of_time ) ;
+            prune_checkpoints t ) ;
+
           match%bind
-            Archive_client.dispatch ~logger t.archive_uri
-              (Archive_lib.Diff.Transition_frontier diff)
+            Archive_client.dispatch ~logger
+              { value = t.archive_uri; name = "archive-uri" }
+              (Archive_lib.Diff.Transition_frontier transition_frontier)
           with
           | Ok () ->
-              [%log info]
-                "Synced diff to archive with hash: %s, progress %.0f%%"
-                (Ledger_hash.to_decimal_string @@ Ledger.merkle_root ledger)
-                ( Float.of_int current_chunk /. Float.of_int chunks_length
-                *. 100.0 ) ;
               return ()
           | Error e ->
               raise (Error.to_exn e) ) )
@@ -217,6 +320,9 @@ let sync (t : t) () =
         | Error e ->
             failwith e
       in
+      [%log info] "Syncing to ledger hash %s from %s"
+        (Ledger_hash.to_decimal_string ledger_hash)
+        (Ledger.Db.merkle_root t.ledger |> Ledger_hash.to_decimal_string) ;
       if%bind
         Da_layer.Client.diff_exists ~logger ~config:t.da_config ~ledger_hash ()
         >>| Or_error.ok_exn
@@ -226,7 +332,7 @@ let sync (t : t) () =
         return (Ok ()) ) )
 
 let rec run (t : t) ~sync_period () =
-  let logger = t.logger in
+  let { logger; _ } = t in
   let () =
     match
       (try Ok (sync t ()) with e -> Error (Error.of_exn e)) |> Or_error.join
@@ -238,54 +344,8 @@ let rec run (t : t) ~sync_period () =
     | Error e ->
         (* ledger_hash_invalidated *)
         [%log error] "Error syncing: %s" (Error.to_string_hum e) ;
-        [%log warn] "Invalidating ledger cache" ;
-        reset_ledger_cache t ()
+        [%log warn] "Invalidating ledger" ;
+        reset_ledger t ()
   in
   (* go again *)
   run t ~sync_period ()
-
-let () =
-  Command_unix.run
-  @@ Command.basic ~summary:"Run archive adapter for zeko"
-       (let%map_open.Command log_json = Flag.Log.json
-        and log_level = Flag.Log.level
-        and zeko_uri =
-          flag "--zeko-uri" (required string) ~doc:"Zeko sequencer graphql uri"
-        and da_nodes = flag "--da-node" (listed string) ~doc:"DA node uri"
-        and archive_host =
-          flag "--archive-host" (required string) ~doc:"Archive node host"
-        and archive_port =
-          flag "--archive-port" (required int) ~doc:"Archive node port"
-        and sync_period =
-          flag "--sync-period"
-            (optional_with_default 30. float)
-            ~doc:"Sync period"
-        and ledger_cache =
-          flag "--ledger-cache"
-            (optional_with_default "ledger_cache" string)
-            ~doc:"Ledger cache"
-        and network_id =
-          flag "--network-id" (required string) ~doc:"Network id"
-        in
-        let logger = Logger.create () in
-        Stdout_log.setup log_json log_level ;
-        let zeko_uri = Uri.of_string zeko_uri in
-        let archive_uri =
-          Cli_lib.Flag.Types.
-            { value = Host_and_port.create ~host:archive_host ~port:archive_port
-            ; name = "archive-uri"
-            }
-        in
-        let chain =
-          match network_id with
-          | "testnet" ->
-              Mina_signature_kind.Testnet
-          | "mainnet" ->
-              Mina_signature_kind.Mainnet
-          | _ ->
-              Mina_signature_kind.Other_network network_id
-        in
-        let t =
-          create ~logger ~archive_uri ~zeko_uri ~da_nodes ~ledger_cache ~chain
-        in
-        run t ~sync_period )

@@ -716,9 +716,11 @@ module Sequencer = struct
 
     (* apply diffs from DA layer *)
     let%bind () =
-      Da_layer.Client.map_diffs ~logger ~config:da_config
-        ~depth:constraint_constants.ledger_depth ~source_ledger_hash:source
-        ~target_ledger_hash:commited_ledger_hash
+      Da_layer.Client.map_diffs
+        ?interval_size:
+          (Sys.getenv_opt "ZEKO_INTERVAL_SIZE" |> Option.map ~f:Int.of_string)
+        ~logger ~config:da_config ~depth:constraint_constants.ledger_depth
+        ~source_ledger_hash:source ~target_ledger_hash:commited_ledger_hash ()
         ~f:(fun ~current_chunk ~current_diff ~chunks_length diff ->
           assert (
             Ledger_hash.equal

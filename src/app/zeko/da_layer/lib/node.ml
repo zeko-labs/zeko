@@ -24,7 +24,7 @@ let sync t ~node_location ~ledger_hash =
   in
   Client.map_diffs ~logger ~depth:constraint_constants.ledger_depth
     ~config:(Client.Config.of_node_locations [ node_location ])
-    ~source_ledger_hash:`Genesis ~target_ledger_hash:ledger_hash
+    ~source_ledger_hash:`Genesis ~target_ledger_hash:ledger_hash ()
     ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
       let progress = Float.of_int current_chunk /. Float.of_int chunks_length in
       printf "Progress: %.2f%%\n%!" (progress *. 100.0) ;

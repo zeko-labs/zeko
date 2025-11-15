@@ -1,7 +1,8 @@
 (executable
- (name run)
+ (name cli)
  (libraries
   zeko_constants
+  fileutils
   da_layer
   mina_transaction
   mina_lib
@@ -15,4 +16,4 @@
   async_kernel)
  (preprocess
   (pps ppx_jane ppx_mina))
- (modules run))
+ (modules cli archive_relay))
