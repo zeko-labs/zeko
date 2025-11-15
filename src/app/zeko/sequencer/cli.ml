@@ -211,7 +211,7 @@ let update_inner_verification_keys =
            Da_layer.Client.map_diffs ~logger ~config:da_config
              ~depth:Zeko_constants.constraint_constants.ledger_depth
              ~source_ledger_hash:`Genesis
-             ~target_ledger_hash:commited_ledger_hash
+             ~target_ledger_hash:commited_ledger_hash ()
              ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
                assert (
                  Ledger_hash.equal

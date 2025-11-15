@@ -2,6 +2,7 @@
  (name cli)
  (libraries
   zeko_constants
+  fileutils
   da_layer
   mina_transaction
   mina_lib
@@ -12,7 +13,9 @@
   cohttp
   cohttp-async
   websocket-async
-  async_kernel)
+  async_kernel
+  gql_client
+  is_compile_simple_real_real)
  (preprocess
   (pps ppx_jane ppx_mina))
  (modules cli archive_relay))

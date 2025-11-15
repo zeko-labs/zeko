@@ -515,6 +515,7 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
     | `Specific h ->
         h
   in
+  let counter = ref 1 in
   (* Get ledger hashes intervals of size [n] *)
   let rec get_intervals ~target_ledger_hash =
     let%bind.Deferred.Result chain =
@@ -522,6 +523,8 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
         ~source_ledger_hash:(`Specific source_ledger_hash) ~target_ledger_hash
         ()
     in
+    [%log info] "Fetched %s ledger hashes" (Int.to_string_hum (!counter * n)) ;
+    incr counter ;
     match chain with
     | [] ->
         return (Ok [])
@@ -538,7 +541,8 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
         return (Ok (interval :: next_intervals))
   in
   let%bind.Deferred.Result intervals =
-    [%log info] "Fetching intervals from da layer" ;
+    [%log info] "Fetching intervals from da layer of size %s"
+      (Int.to_string_hum n) ;
     get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
   in
   return
@@ -549,11 +553,11 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 100) ~source_ledger_hash
                  ~source_ledger_hash:(`Specific source)
                  ~target_ledger_hash:target () ) ) )
 
-let map_diffs ~logger ~depth ~config ~source_ledger_hash ~target_ledger_hash ~f
-    =
+let map_diffs ?interval_size ~logger ~depth ~config ~source_ledger_hash
+    ~target_ledger_hash ~f () =
   let%bind.Deferred.Result lazy_chunks =
-    get_lazy_diffs_chunks ~logger ~depth ~config ~source_ledger_hash
-      ~target_ledger_hash ()
+    get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
+      ~source_ledger_hash ~target_ledger_hash ()
   in
   let l = List.length lazy_chunks in
   Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->

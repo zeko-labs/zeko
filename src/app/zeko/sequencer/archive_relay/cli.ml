@@ -17,22 +17,33 @@ let () =
           flag "--sync-period"
             (optional_with_default 30. float)
             ~doc:"Sync period"
-        and ledger_cache =
-          flag "--ledger-cache"
-            (optional_with_default "ledger_cache" string)
+        and db_dir =
+          flag "--db-dir"
+            (optional_with_default "archive-relay-db" string)
             ~doc:"Ledger cache"
-        and network_id =
-          flag "--network-id" (required string) ~doc:"Network id"
+        and network_id = flag "--network-id" (required string) ~doc:"Network id"
+        and max_checkpoint_age =
+          flag "--max-checkpoint-age"
+            (optional_with_default 24. float)
+            ~doc:"Max checkpoint age in hours"
+        and checkpoint_periodicity =
+          flag "--checkpoint-periodicity"
+            (optional_with_default 100 int)
+            ~doc:"Checkpoint periodicity in number of transactions"
+        and interval_size =
+          flag "--interval-size"
+            (optional_with_default 100 int)
+            ~doc:
+              "Interval size in number of transactions, decrease in case of \
+               timeouts"
         in
         let logger = Logger.create () in
         Stdout_log.setup log_json log_level ;
         let zeko_uri = Uri.of_string zeko_uri in
         let archive_uri =
-          Cli_lib.Flag.Types.
-            { value = Host_and_port.create ~host:archive_host ~port:archive_port
-            ; name = "archive-uri"
-            }
+          Host_and_port.create ~host:archive_host ~port:archive_port
         in
+        let max_checkpoint_age = Time.Span.of_hr max_checkpoint_age in
         let chain =
           match network_id with
           | "testnet" ->
@@ -43,7 +54,7 @@ let () =
               Mina_signature_kind.Other_network network_id
         in
         let t =
-          Archive_relay.create ~logger ~archive_uri ~zeko_uri ~da_nodes
-            ~ledger_cache ~chain
+          Archive_relay.create ~logger ~archive_uri ~zeko_uri ~da_nodes ~db_dir
+            ~chain ~max_checkpoint_age ~checkpoint_periodicity ~interval_size
         in
         Archive_relay.run t ~sync_period )
