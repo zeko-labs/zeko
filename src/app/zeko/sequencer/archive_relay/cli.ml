@@ -32,7 +32,7 @@ let () =
             ~doc:"Checkpoint periodicity in number of transactions"
         and interval_size =
           flag "--interval-size"
-            (optional_with_default 100 int)
+            (optional_with_default 10_000 int)
             ~doc:
               "Interval size in number of transactions, decrease in case of \
                timeouts"

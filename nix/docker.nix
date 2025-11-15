@@ -140,12 +140,12 @@ in {
     ];
     config = {
       Entrypoint = [ "/bin/zeko-archive-relay" ];
-      Cmd = [ "--ledger-cache" "/ledger-cache" ];
+      Cmd = [ "--db-dir" "/archive-relay-db" ];
       Env = [
         "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
         "ZEKO_SIGNATURE_KIND=testnet"
       ];
-      Volumes = { "/ledger-cache" = { }; };
+      Volumes = { "/archive-relay-db" = { }; };
     };
   };
 
