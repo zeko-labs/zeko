@@ -178,7 +178,7 @@ let prune_checkpoints t =
          Time.Span.(diff >= max_checkpoint_age) )
   |> List.tl
   |> function
-  | None ->
+  | None | Some [] ->
       [%log info] "No checkpoints to prune"
   | Some checkpoints ->
       List.iter checkpoints ~f:(fun checkpoint ->
