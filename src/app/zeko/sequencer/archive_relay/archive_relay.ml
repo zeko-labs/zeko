@@ -175,7 +175,7 @@ let prune_checkpoints t =
          let diff =
            Time.diff now (Timestamp.of_string timestamp |> Timestamp.to_time)
          in
-         Time.Span.(diff < max_checkpoint_age) )
+         Time.Span.(diff >= max_checkpoint_age) )
   |> List.tl
   |> function
   | None ->
