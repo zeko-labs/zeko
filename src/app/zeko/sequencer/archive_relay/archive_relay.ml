@@ -113,7 +113,7 @@ let make_checkpoint t ~timestamp =
   Ledger.Db.make_checkpoint ledger ~directory_name:checkpoint_path
 
 let load_newest_checkpoint ~logger ~db_dir =
-  rmrf (ledger_dir db_dir) ;
+  if FileUtil.test Is_dir (ledger_dir db_dir) then rmrf (ledger_dir db_dir) ;
   match
     Sys.readdir (checkpoints_dir db_dir)
     |> Array.to_list
