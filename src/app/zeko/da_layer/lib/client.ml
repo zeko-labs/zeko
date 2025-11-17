@@ -515,7 +515,15 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
     | `Specific h ->
         h
   in
-  let counter = ref 1 in
+  let%bind source_exists =
+    diff_exists ~logger ~config ~ledger_hash:source_ledger_hash ()
+    >>| Or_error.ok_exn
+  in
+  if not source_exists then
+    failwithf "Source ledger hash %s does not exist"
+      (Ledger_hash.to_decimal_string source_ledger_hash)
+      () ;
+  let counter = ref 0 in
   (* Get ledger hashes intervals of size [n] *)
   let rec get_intervals ~target_ledger_hash =
     let%bind.Deferred.Result chain =
@@ -523,8 +531,8 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
         ~source_ledger_hash:(`Specific source_ledger_hash) ~target_ledger_hash
         ()
     in
-    [%log info] "Fetched %s ledger hashes" (Int.to_string_hum (!counter * n)) ;
-    incr counter ;
+    counter := !counter + List.length chain ;
+    [%log info] "Fetched %s ledger hashes" (Int.to_string_hum !counter) ;
     match chain with
     | [] ->
         return (Ok [])
