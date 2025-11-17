@@ -204,7 +204,7 @@ let reset_ledger t () =
   t.ledger <- ledger ;
   t.latest_checkpoint_timestamp <- latest_checkpoint_timestamp
 
-(** Prune checkpoints older than [max_checkpoint_age], but leave at least 5 that are older than [max_checkpoint_age] *)
+(** Prune checkpoints older than [max_checkpoint_age], but leave at least [checkpoint_retention_count] that are older than [max_checkpoint_age] *)
 let prune_checkpoints t =
   let { logger
       ; db_dir
