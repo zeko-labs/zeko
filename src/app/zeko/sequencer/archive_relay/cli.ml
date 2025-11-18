@@ -22,17 +22,21 @@ let () =
             (optional_with_default "archive-relay-db" string)
             ~doc:"Ledger cache"
         and network_id = flag "--network-id" (required string) ~doc:"Network id"
-        and max_checkpoint_age =
-          flag "--max-checkpoint-age"
+        and checkpoint_retention_age =
+          flag "--checkpoint-retention-age"
             (optional_with_default 24. float)
             ~doc:"Max checkpoint age in hours"
+        and checkpoint_retention_count =
+          flag "--checkpoint-retention-count"
+            (optional_with_default 5 int)
+            ~doc:"Max checkpoint retention count"
         and checkpoint_periodicity =
           flag "--checkpoint-periodicity"
             (optional_with_default 100 int)
             ~doc:"Checkpoint periodicity in number of transactions"
         and interval_size =
           flag "--interval-size"
-            (optional_with_default 10_000 int)
+            (optional_with_default 1_000 int)
             ~doc:
               "Interval size in number of transactions, decrease in case of \
                timeouts"
@@ -43,7 +47,9 @@ let () =
         let archive_uri =
           Host_and_port.create ~host:archive_host ~port:archive_port
         in
-        let max_checkpoint_age = Time.Span.of_hr max_checkpoint_age in
+        let checkpoint_retention_age =
+          Time.Span.of_hr checkpoint_retention_age
+        in
         let chain =
           match network_id with
           | "testnet" ->
@@ -55,6 +61,7 @@ let () =
         in
         let t =
           Archive_relay.create ~logger ~archive_uri ~zeko_uri ~da_nodes ~db_dir
-            ~chain ~max_checkpoint_age ~checkpoint_periodicity ~interval_size
+            ~chain ~checkpoint_retention_age ~checkpoint_retention_count
+            ~checkpoint_periodicity ~interval_size
         in
         Archive_relay.run t ~sync_period )
