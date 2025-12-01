@@ -267,10 +267,9 @@ let sync_archive (t : t) ~hash =
       in
       List.iter changed_accounts ~f:(fun (index, account) ->
           Ledger.set_at_index_exn ledger index account ) ;
-      Ledger.commit ledger ;
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
-          return ()
+          Ledger.commit ledger ; return ()
       | Some (command, _) -> (
           let command =
             User_command.write_all_proofs_to_disk ~signature_kind:t.chain
@@ -290,8 +289,6 @@ let sync_archive (t : t) ~hash =
               ~dummy_fee_payer:Zeko_constants.inner_public_key
               ~timestamp:(Da_layer.Diff.Stable.Latest.timestamp diff)
           in
-          Protocol_state.set kvdb ~data:new_protocol_state ;
-
           let height =
             Mina_state.Protocol_state.consensus_state new_protocol_state
             |> Consensus.Proof_of_stake.Exported.Consensus_state
@@ -328,6 +325,8 @@ let sync_archive (t : t) ~hash =
               (Archive_lib.Diff.Transition_frontier transition_frontier)
           with
           | Ok () ->
+              Ledger.commit ledger ;
+              Protocol_state.set kvdb ~data:new_protocol_state ;
               return ()
           | Error e ->
               raise (Error.to_exn e) ) )
