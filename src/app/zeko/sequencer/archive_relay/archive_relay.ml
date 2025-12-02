@@ -41,7 +41,7 @@ let time ~logger label (d : 'a Deferred.t) =
   [%log info] "%s: %s" label (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
-module Timestamp : sig
+module Checkpoint_label : sig
   type t
 
   val to_time : t -> Time.t
@@ -51,17 +51,47 @@ module Timestamp : sig
   val to_string : t -> string
 
   val of_string : string -> t
-end = struct
-  type t = int
 
-  let to_time t = Int.to_float t |> Time.Span.of_ms |> Time.of_span_since_epoch
+  val add_version : t -> t
+
+  val compare : t -> t -> int
+
+  val timestamp : t -> int
+end = struct
+  type t = { timestamp : int; version : int }
+
+  let to_time { timestamp; _ } =
+    Int.to_float timestamp |> Time.Span.of_ms |> Time.of_span_since_epoch
 
   let of_time time =
-    Time.to_span_since_epoch time |> Time.Span.to_ms |> Int.of_float
+    { timestamp =
+        Time.to_span_since_epoch time |> Time.Span.to_ms |> Int.of_float
+    ; version = 0
+    }
 
-  let to_string t = Int.to_string t
+  let to_string { timestamp; version } =
+    if version > 0 then sprintf "%d.%d" timestamp version
+    else Int.to_string timestamp
 
-  let of_string t = Int.of_string t
+  let of_string s =
+    match String.split_on_chars s ~on:[ '.' ] |> List.map ~f:Int.of_string with
+    | [ timestamp; version ] ->
+        { timestamp; version }
+    | [ timestamp ] ->
+        { timestamp; version = 0 }
+    | _ ->
+        failwithf "Invalid timestamp: %s" s ()
+
+  let add_version a = { a with version = a.version + 1 }
+
+  let compare a b =
+    match Int.compare a.timestamp b.timestamp with
+    | 0 ->
+        Int.compare a.version b.version
+    | x ->
+        x
+
+  let timestamp { timestamp; _ } = timestamp
 end
 
 module Protocol_state = struct
@@ -86,7 +116,7 @@ type t =
   ; zeko_uri : Uri.t
   ; da_config : Da_layer.Client.Config.t
   ; mutable ledger : Ledger.Db.t
-  ; mutable latest_checkpoint_timestamp : Timestamp.t option
+  ; mutable latest_checkpoint : Checkpoint_label.t option
   ; proof_cache_db : Proof_cache_tag.cache_db
   ; chain : Mina_signature_kind.t
   ; checkpoint_retention_age : Time.Span.t
@@ -99,20 +129,21 @@ let checkpoints_dir db_dir = Filename.concat db_dir "checkpoints"
 
 let ledger_dir db_dir = Filename.concat db_dir "ledger"
 
-let make_checkpoint t ~timestamp =
-  let rec backup_checkpoint ?(n = 1) path =
-    let new_path = path ^ "." ^ Int.to_string n in
-    if FileUtil.test Is_dir new_path then backup_checkpoint ~n:(n + 1) path
-    else FileUtil.mv path new_path
-  in
+let make_checkpoint t ~label =
   let { logger; db_dir; ledger; _ } = t in
-  [%log info] "Making checkpoint at timestamp: %s with ledger hash: %s"
-    (Timestamp.to_string timestamp)
-    (Ledger.Db.merkle_root ledger |> Ledger_hash.to_decimal_string) ;
-  let checkpoint_path =
-    Filename.concat (checkpoints_dir db_dir) (Timestamp.to_string timestamp)
+  let rec generate_checkpoint label =
+    let path =
+      Filename.concat (checkpoints_dir db_dir)
+        (Checkpoint_label.to_string label)
+    in
+    if FileUtil.test Is_dir path then
+      generate_checkpoint (Checkpoint_label.add_version label)
+    else (label, path)
   in
-  if FileUtil.test Is_dir checkpoint_path then backup_checkpoint checkpoint_path ;
+  let label, checkpoint_path = generate_checkpoint label in
+  [%log info] "Making checkpoint at label: %s with ledger hash: %s"
+    (Checkpoint_label.to_string label)
+    (Ledger.Db.merkle_root ledger |> Ledger_hash.to_decimal_string) ;
   Ledger.Db.make_checkpoint ledger ~directory_name:checkpoint_path
 
 let load_newest_checkpoint ~logger ~db_dir =
@@ -120,7 +151,8 @@ let load_newest_checkpoint ~logger ~db_dir =
   match
     Sys.readdir (checkpoints_dir db_dir)
     |> Array.to_list
-    |> List.sort ~compare:String.compare
+    |> List.map ~f:Checkpoint_label.of_string
+    |> List.sort ~compare:Checkpoint_label.compare
     |> List.rev |> List.hd
   with
   | None ->
@@ -128,10 +160,11 @@ let load_newest_checkpoint ~logger ~db_dir =
       ( Ledger.Db.create ~directory_name:(ledger_dir db_dir)
           ~depth:constraint_constants.ledger_depth ()
       , None )
-  | Some checkpoint_name ->
-      [%log info] "Loading checkpoint: %s" checkpoint_name ;
+  | Some label ->
+      [%log info] "Loading checkpoint: %s" (Checkpoint_label.to_string label) ;
       let checkpoint_path =
-        Filename.concat (checkpoints_dir db_dir) checkpoint_name
+        Filename.concat (checkpoints_dir db_dir)
+          (Checkpoint_label.to_string label)
       in
       let checkpoint_db =
         Ledger.Db.create ~directory_name:checkpoint_path
@@ -144,23 +177,21 @@ let load_newest_checkpoint ~logger ~db_dir =
           ~directory_name:(ledger_dir db_dir) ()
       in
       Ledger.Db.close checkpoint_db ;
-      (new_db, Some (Timestamp.of_string checkpoint_name))
+      (new_db, Some label)
 
 let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~db_dir ~chain
     ~checkpoint_retention_age ~checkpoint_retention_count
     ~checkpoint_periodicity ~interval_size =
   Core.Unix.mkdir_p db_dir ;
   Core.Unix.mkdir_p (checkpoints_dir db_dir) ;
-  let ledger, latest_checkpoint_timestamp =
-    load_newest_checkpoint ~logger ~db_dir
-  in
+  let ledger, latest_checkpoint = load_newest_checkpoint ~logger ~db_dir in
   { logger
   ; db_dir
   ; archive_uri
   ; zeko_uri
   ; da_config = Da_layer.Client.Config.of_string_list da_nodes
   ; ledger
-  ; latest_checkpoint_timestamp
+  ; latest_checkpoint
   ; proof_cache_db = Proof_cache_tag.create_identity_db ()
   ; chain
   ; checkpoint_retention_age
@@ -170,7 +201,7 @@ let create ~logger ~archive_uri ~zeko_uri ~da_nodes ~db_dir ~chain
   }
 
 (** Prune checkpoint if it's not the only one *)
-let prune_checkpoint t checkpoint =
+let prune_checkpoint t label =
   let { logger; db_dir; _ } = t in
   Sys.readdir (checkpoints_dir db_dir)
   |> Array.to_list
@@ -182,8 +213,10 @@ let prune_checkpoint t checkpoint =
   | [ checkpoint ] ->
       [%log info] "Keeping only checkpoint: %s" checkpoint
   | _ ->
-      [%log info] "Pruning checkpoint: %s" checkpoint ;
-      rmrf (Filename.concat (checkpoints_dir db_dir) checkpoint)
+      [%log info] "Pruning checkpoint: %s" (Checkpoint_label.to_string label) ;
+      rmrf
+        (Filename.concat (checkpoints_dir db_dir)
+           (Checkpoint_label.to_string label) )
 
 let reset_ledger t () =
   let { logger; db_dir; ledger; _ } = t in
@@ -192,17 +225,15 @@ let reset_ledger t () =
   |> Array.iter ~f:(fun file_name ->
          rmrf (Filename.concat (ledger_dir db_dir) file_name) ) ;
   let () =
-    match t.latest_checkpoint_timestamp with
-    | Some timestamp ->
-        prune_checkpoint t (Timestamp.to_string timestamp)
+    match t.latest_checkpoint with
+    | Some label ->
+        prune_checkpoint t label
     | None ->
         [%log info] "No checkpoint to prune"
   in
-  let ledger, latest_checkpoint_timestamp =
-    load_newest_checkpoint ~logger ~db_dir
-  in
+  let ledger, latest_checkpoint = load_newest_checkpoint ~logger ~db_dir in
   t.ledger <- ledger ;
-  t.latest_checkpoint_timestamp <- latest_checkpoint_timestamp
+  t.latest_checkpoint <- latest_checkpoint
 
 (** Prune checkpoints older than [max_checkpoint_age], but leave at least [checkpoint_retention_count] that are older than [max_checkpoint_age] *)
 let prune_checkpoints t =
@@ -217,12 +248,11 @@ let prune_checkpoints t =
   let now = Time.now () in
   Sys.readdir (checkpoints_dir db_dir)
   |> Array.to_list
-  |> List.sort ~compare:String.compare
+  |> List.map ~f:Checkpoint_label.of_string
+  |> List.sort ~compare:Checkpoint_label.compare
   |> List.rev
-  |> List.filter ~f:(fun timestamp ->
-         let diff =
-           Time.diff now (Timestamp.of_string timestamp |> Timestamp.to_time)
-         in
+  |> List.filter ~f:(fun label ->
+         let diff = Time.diff now (Checkpoint_label.to_time label) in
          Time.Span.(diff >= checkpoint_retention_age) )
   |> fun l ->
   List.drop l checkpoint_retention_count
@@ -231,8 +261,11 @@ let prune_checkpoints t =
       [%log info] "No checkpoints to prune"
   | checkpoints ->
       List.iter checkpoints ~f:(fun checkpoint ->
-          [%log info] "Pruning checkpoint: %s" checkpoint ;
-          rmrf (Filename.concat (checkpoints_dir db_dir) checkpoint) )
+          [%log info] "Pruning checkpoint: %s"
+            (Checkpoint_label.to_string checkpoint) ;
+          rmrf
+            (Filename.concat (checkpoints_dir db_dir)
+               (Checkpoint_label.to_string checkpoint) ) )
 
 let sync_archive (t : t) ~hash =
   let logger = t.logger in
@@ -312,9 +345,9 @@ let sync_archive (t : t) ~hash =
               (* Sanity check *)
               assert ledger_hash_exists ;
               make_checkpoint t
-                ~timestamp:
+                ~label:
                   ( Da_layer.Diff.Stable.Latest.timestamp diff
-                  |> Block_time.to_time_exn |> Timestamp.of_time ) ;
+                  |> Block_time.to_time_exn |> Checkpoint_label.of_time ) ;
               prune_checkpoints t )
             else return ()
           in
