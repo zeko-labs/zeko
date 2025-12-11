@@ -49,19 +49,22 @@ module Master = struct
       ~finally:(fun () -> return (t.counter <- t.counter - 1))
       (fun () ->
         match%map
-          Rpc.Client.call
-            ~ttl:(60 * 60 * 1_000)
-            t.client Exchange.default ~routing_key:jobs_queue ~headers:[]
-            (Message.make ~priority payload)
+          Monitor.try_with ~here:[%here] ~rest:`Raise (fun () ->
+              Rpc.Client.call
+                ~ttl:(60 * 60 * 1_000)
+                t.client Exchange.default ~routing_key:jobs_queue ~headers:[]
+                (Message.make ~priority payload) )
         with
-        | Some (_h, s) ->
+        | Ok (Some (_h, s)) ->
             Ok s
-        | None ->
-            Error (Error.of_string "Error sending job to the message queue") )
+        | Ok None ->
+            Error (Error.of_string "Error sending job to the message queue")
+        | Error exn ->
+            Error (Error.of_exn exn) )
 
-  let send_exn = send' ~priority:0
+  let send = send' ~priority:0
 
-  let send_with_priority_exn = send' ~priority:1
+  let send_with_priority = send' ~priority:1
 end
 
 module Worker = struct

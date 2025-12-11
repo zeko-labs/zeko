@@ -939,6 +939,7 @@ module Sequencer = struct
     let%bind da_client =
       Da_layer.Client.create ~logger ~config:da_config ~quorum:da_quorum
         ~da_keys ~db_pool
+      >>| Or_error.ok_exn
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in

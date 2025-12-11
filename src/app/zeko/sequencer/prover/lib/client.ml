@@ -36,10 +36,9 @@ let send' t ~sendfn (input : Prover.Input.t) : Prover.Output.t Deferred.t =
       failwithf "Failed to send job to the message queue: %s"
         (Error.to_string_hum err) ()
 
-let send = send' ~sendfn:Message_queue.Master.send_exn
+let send = send' ~sendfn:Message_queue.Master.send
 
-let send_with_priority =
-  send' ~sendfn:Message_queue.Master.send_with_priority_exn
+let send_with_priority = send' ~sendfn:Message_queue.Master.send_with_priority
 
 module Ase_cache_with_length_table = struct
   type t =
