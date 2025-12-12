@@ -114,6 +114,17 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
       | x :: _ ->
           x
     in
+    (* Sanity check *)
+    let%bind () =
+      if Field.equal from (Ase.With_length.Stmt.state inner_ase_source) then
+        return ()
+      else
+        Deferred.return
+          (Error
+             (Error.of_string
+                "old_inner_acc.action_state and \
+                 outer_acc.committed_inner_action_state do not match" ) )
+    in
     let to_ =
       match (Option.value_exn new_inner_acc.zkapp).action_state with
       | x :: _ ->
@@ -161,7 +172,6 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
             (fst txn_snark).slot_range.upper slot_range.upper
       }
     in
-
     let%map (body, _, calls), proof =
       Zeko_prover.Client.outer_commit provers ~txn_snark ~public_key:zkapp_pk
         ~inner_ase_source ~new_inner_actions ~old_inner_acc ~old_inner_acc_path
