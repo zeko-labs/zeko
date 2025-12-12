@@ -132,8 +132,8 @@ let () =
 
       print_endline "(* First commit *)" ;
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -141,6 +141,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -160,8 +161,8 @@ let () =
 
       print_endline "(* Second commit *)" ;
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -170,6 +171,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -184,8 +186,8 @@ let () =
       print_endline "(* Third commit *)" ;
       let final_ledger_hash =
         run (fun () ->
-            let%bind commit_result = commit !sequencer in
-            let%bind _txn_snark = commit_result in
+            let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+            let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
@@ -194,6 +196,7 @@ let () =
               Gql_client.infer_state gql_uri
                 ~signer_pk:(Public_key.compress signer.public_key)
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+              >>| Or_error.ok_exn
               >>| Utils.value_of_zkapp_state
                     Zeko_circuits.Rollup_state.Outer_state.typ
             in
@@ -325,8 +328,8 @@ let () =
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
       let ledger_hash =
         run (fun () ->
-            let%bind commit_result = commit new_sequencer in
-            let%bind _txn_snark = commit_result in
+            let%bind commit_result = commit new_sequencer >>| Or_error.ok_exn in
+            let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish new_sequencer.merger_ctx.executor
             in
@@ -334,6 +337,7 @@ let () =
               Gql_client.infer_state gql_uri
                 ~signer_pk:(Public_key.compress signer.public_key)
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+              >>| Or_error.ok_exn
               >>| Utils.value_of_zkapp_state
                     Zeko_circuits.Rollup_state.Outer_state.typ
             in
@@ -419,8 +423,8 @@ let () =
       print_endline "(* Commit *)" ;
       let ledger_hash =
         run (fun () ->
-            let%bind commit_result = commit !sequencer in
-            let%bind _txn_snark = commit_result in
+            let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+            let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
@@ -428,6 +432,7 @@ let () =
               Gql_client.infer_state gql_uri
                 ~signer_pk:(Public_key.compress signer.public_key)
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+              >>| Or_error.ok_exn
               >>| Utils.value_of_zkapp_state
                     Zeko_circuits.Rollup_state.Outer_state.typ
             in
@@ -511,8 +516,8 @@ let () =
 
       print_endline "(* First commit *)" ;
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           Executor.wait_to_finish !sequencer.merger_ctx.executor ) ;
 
       print_endline "(* Apply second batch *)" ;
@@ -523,8 +528,8 @@ let () =
       print_endline "(* Second commit *)" ;
       let final_ledger_hash =
         run (fun () ->
-            let%bind commit_result = commit !sequencer in
-            let%bind _txn_snark = commit_result in
+            let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+            let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
@@ -533,6 +538,7 @@ let () =
               Gql_client.infer_state gql_uri
                 ~signer_pk:(Public_key.compress signer.public_key)
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+              >>| Or_error.ok_exn
               >>| Utils.value_of_zkapp_state
                     Zeko_circuits.Rollup_state.Outer_state.typ
             in
@@ -562,6 +568,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -704,8 +711,8 @@ let () =
           return () ) ;
 
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -714,6 +721,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -758,6 +766,7 @@ let () =
         let%bind nonce =
           Gql_client.fetch_nonce gql_uri
             (Signature_lib.Public_key.compress signer.public_key)
+          >>| Or_error.ok_exn
         in
         let fee_payer =
           Account_update.Fee_payer.
@@ -855,8 +864,8 @@ let () =
 
       print_endline "(* Commit 1-3 deposits *)" ;
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -865,6 +874,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -903,8 +913,8 @@ let () =
 
       print_endline "(* Commit 4-6 deposits *)" ;
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -913,6 +923,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -921,8 +932,8 @@ let () =
 
       print_endline "(* Sync the latest commit *)" ;
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -931,6 +942,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -952,6 +964,7 @@ let () =
         let%bind actions =
           Gql_client.fetch_actions gql_uri
             (Public_key.compress outer_kp.public_key)
+          >>| Or_error.ok_exn
           >>| List.map ~f:(fun (fields, _, _, before, after) ->
                   ( Utils.actions_to_outer_action (List.hd_exn fields)
                   , before
@@ -1007,6 +1020,7 @@ let () =
               C.Rollup_state.Outer_action_state.(
                 With_length.state current_synced_outer_action_state |> raw)
             (Public_key.compress outer_kp.public_key)
+          >>| Or_error.ok_exn
           >>| List.map ~f:(fun (fields, _, _, _, _) ->
                   Zkapp_account.Actions_impl.hash fields )
         in
@@ -1137,8 +1151,8 @@ let () =
       run (fun () ->
           let%bind _shifted = Gql_client.For_tests.shift_slots gql_uri 15 in
           Utils.Slot.For_tests.add_to_global_slot := 15 ;
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -1147,6 +1161,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -1157,6 +1172,7 @@ let () =
         let%bind nonce =
           Gql_client.fetch_nonce gql_uri
             (Signature_lib.Public_key.compress signer.public_key)
+          >>| Or_error.ok_exn
         in
         let fee_payer =
           Account_update.Fee_payer.
@@ -1172,6 +1188,7 @@ let () =
         let%bind actions =
           Gql_client.fetch_actions gql_uri
             (Public_key.compress outer_kp.public_key)
+          >>| Or_error.ok_exn
           >>| List.map ~f:(fun (fields, _, _, before, after) ->
                   ( Utils.actions_to_outer_action (List.hd_exn fields)
                   , before
@@ -1257,26 +1274,21 @@ let () =
                    |> Zkapp_account.Actions_impl.hash ) )
         in
         let%bind prev_next_cancelled_deposit =
+          let helper_aid =
+            Account_id.create
+              (Public_key.compress signer.public_key)
+              (Account_id.derive_token_id
+                 ~owner:
+                   (Account_id.of_public_key
+                      (Public_key.decompress_exn
+                         Zeko_circuits_config.Inputs.helper_token_owner_l1 ) ) )
+          in
           match%map
-            try_with (fun () ->
-                let%map (next_cancelled_deposit :: _next_withdrawal :: _) =
-                  let helper_aid =
-                    Account_id.create
-                      (Public_key.compress signer.public_key)
-                      (Account_id.derive_token_id
-                         ~owner:
-                           (Account_id.of_public_key
-                              (Public_key.decompress_exn
-                                 Zeko_circuits_config.Inputs
-                                 .helper_token_owner_l1 ) ) )
-                  in
-                  Gql_client.fetch_state gql_uri helper_aid
-                in
-                UInt32.of_string (Field.to_string next_cancelled_deposit) )
+            Gql_client.fetch_state_opt gql_uri helper_aid >>| Or_error.ok_exn
           with
-          | Ok x ->
-              Some x
-          | Error _ ->
+          | Some (next_cancelled_deposit :: _next_withdrawal :: _) ->
+              Some (UInt32.of_string (Field.to_string next_cancelled_deposit))
+          | None ->
               None
         in
         let%map transfer_forest =
@@ -1465,8 +1477,8 @@ let () =
 
       print_endline "(* Commit 1-3 withdrawals *)" ;
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -1475,6 +1487,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -1519,8 +1532,8 @@ let () =
 
       print_endline "(* Commit 4-6 withdrawals *)" ;
       run (fun () ->
-          let%bind commit_result = commit !sequencer in
-          let%bind _txn_snark = commit_result in
+          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
@@ -1529,6 +1542,7 @@ let () =
             Gql_client.infer_state gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
@@ -1539,6 +1553,7 @@ let () =
         let%bind nonce =
           Gql_client.fetch_nonce gql_uri
             (Signature_lib.Public_key.compress signer.public_key)
+          >>| Or_error.ok_exn
         in
         let fee_payer =
           Account_update.Fee_payer.
@@ -1554,6 +1569,7 @@ let () =
         let%bind l1_actions =
           Gql_client.fetch_actions gql_uri
             (Public_key.compress outer_kp.public_key)
+          >>| Or_error.ok_exn
           >>| List.map ~f:(fun (fields, _, _, before, after) ->
                   ( Utils.actions_to_outer_action (List.hd_exn fields)
                   , before
@@ -1633,26 +1649,21 @@ let () =
             , elems ) )
         in
         let%bind prev_next_withdrawal =
+          let helper_aid =
+            Account_id.create
+              (Public_key.compress signer.public_key)
+              (Account_id.derive_token_id
+                 ~owner:
+                   (Account_id.of_public_key
+                      (Public_key.decompress_exn
+                         Zeko_circuits_config.Inputs.helper_token_owner_l1 ) ) )
+          in
           match%map
-            try_with (fun () ->
-                let%map (_next_cancelled_deposit :: next_withdrawal :: _) =
-                  let helper_aid =
-                    Account_id.create
-                      (Public_key.compress signer.public_key)
-                      (Account_id.derive_token_id
-                         ~owner:
-                           (Account_id.of_public_key
-                              (Public_key.decompress_exn
-                                 Zeko_circuits_config.Inputs
-                                 .helper_token_owner_l1 ) ) )
-                  in
-                  Gql_client.fetch_state gql_uri helper_aid
-                in
-                UInt32.of_string (Field.to_string next_withdrawal) )
+            Gql_client.fetch_state_opt gql_uri helper_aid >>| Or_error.ok_exn
           with
-          | Ok x ->
-              Some x
-          | Error _ ->
+          | Some (_next_cancelled_deposit :: next_withdrawal :: _) ->
+              Some (UInt32.of_string (Field.to_string next_withdrawal))
+          | None ->
               None
         in
         let%map transfer_forest =

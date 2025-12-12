@@ -470,6 +470,7 @@ module Sequencer_spec = struct
         ) ;
         let%bind nonce =
           Gql_client.infer_nonce gql_uri (Public_key.compress signer.public_key)
+          >>| Or_error.ok_exn
         in
         let%bind command =
           let da_key =
@@ -495,7 +496,9 @@ module Sequencer_spec = struct
 
     let l1_config : Utils.Slot.l1_config =
       let genesis_timestamp =
-        run @@ fun () -> Gql_client.fetch_genesis_timestamp gql_uri
+        run
+        @@ fun () ->
+        Gql_client.fetch_genesis_timestamp gql_uri >>| Or_error.ok_exn
       in
       { fork_timestamp = genesis_timestamp
       ; fork_slot = Mina_numbers.Global_slot_since_genesis.zero

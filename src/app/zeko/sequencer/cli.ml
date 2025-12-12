@@ -88,20 +88,20 @@ let update_outer_verification_keys =
            Gql_client.fetch_vk l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
-           >>| Compile_simple.Verification_key.of_pickles
+           >>| Or_error.ok_exn >>| Compile_simple.Verification_key.of_pickles
            >>| Compile_simple.Verification_key.hash
          and fetched_bridge_holder_vk =
            Gql_client.fetch_vk l1_uri
              ( Account_id.of_public_key @@ Public_key.decompress_exn
              @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
-           >>| Compile_simple.Verification_key.of_pickles
+           >>| Or_error.ok_exn >>| Compile_simple.Verification_key.of_pickles
            >>| Compile_simple.Verification_key.hash
          and fetched_helper_token_owner_vk =
            Gql_client.fetch_vk l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn
                   Zeko_circuits_config.t.helper_token_owner_l1 )
-           >>| Compile_simple.Verification_key.of_pickles
+           >>| Or_error.ok_exn >>| Compile_simple.Verification_key.of_pickles
            >>| Compile_simple.Verification_key.hash
          in
          let%bind outer_vk =
@@ -142,6 +142,7 @@ let update_outer_verification_keys =
            let%bind nonce =
              Gql_client.infer_nonce l1_uri
                (Public_key.compress sender.public_key)
+             >>| Or_error.ok_exn
            in
            let to_update =
              List.filter_map
@@ -196,6 +197,7 @@ let update_inner_verification_keys =
            Gql_client.infer_state l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
+           >>| Or_error.ok_exn
            >>| Utils.value_of_zkapp_state
                  Zeko_circuits.Rollup_state.Outer_state.typ
            >>| fun { ledger_hash; _ } -> ledger_hash
@@ -345,6 +347,7 @@ let update_inner_verification_keys =
              let%map nonce =
                Gql_client.infer_nonce l1_uri
                  (Public_key.compress sender.public_key)
+               >>| Or_error.ok_exn
              in
              let open Zeko_circuits.Rollup_state in
              Deploy.update_outer_state
@@ -416,6 +419,7 @@ let update_da_key =
            Gql_client.infer_state l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
+           >>| Or_error.ok_exn
            >>| Utils.value_of_zkapp_state
                  Zeko_circuits.Rollup_state.Outer_state.typ
            >>| fun { da_key; _ } -> da_key
@@ -441,6 +445,7 @@ let update_da_key =
              let%map nonce =
                Gql_client.infer_nonce l1_uri
                  (Public_key.compress sender.public_key)
+               >>| Or_error.ok_exn
              in
              let open Zeko_circuits.Rollup_state in
              Deploy.update_outer_state
@@ -499,6 +504,7 @@ let update_permissions =
 
          let%bind nonce =
            Gql_client.infer_nonce l1_uri (Public_key.compress sender.public_key)
+           >>| Or_error.ok_exn
          in
          let%bind command =
            Deploy.update_permissions
@@ -559,6 +565,7 @@ let set_pause =
            Gql_client.infer_state l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
+           >>| Or_error.ok_exn
            >>| Utils.value_of_zkapp_state
                  Zeko_circuits.Rollup_state.Outer_state.typ
            >>| fun { paused; _ } -> paused
@@ -570,6 +577,7 @@ let set_pause =
            let%map nonce =
              Gql_client.infer_nonce l1_uri
                (Public_key.compress sender.public_key)
+             >>| Or_error.ok_exn
            in
            let open Zeko_circuits in
            Deploy.update_outer_state

@@ -16,12 +16,12 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
   let l1_config : Utils.Slot.l1_config =
     let genesis_timestamp =
       Thread_safe.block_on_async_exn (fun () ->
-          Gql_client.fetch_genesis_timestamp l1_uri )
+          Gql_client.fetch_genesis_timestamp l1_uri >>| Or_error.ok_exn )
     in
     { fork_timestamp = genesis_timestamp
     ; fork_slot =
         Thread_safe.block_on_async_exn (fun () ->
-            Gql_client.fetch_fork_slot l1_uri )
+            Gql_client.fetch_fork_slot l1_uri >>| Or_error.ok_exn )
     }
   in
   [%log info] "Current slot: %d"

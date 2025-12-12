@@ -21,6 +21,9 @@ let caqti_ok_exn ?msg r =
   | Error e, None ->
       failwith (Caqti_error.show e)
 
+let caqti_to_err =
+  Result.map_error ~f:(fun e -> Error.of_string (Caqti_error.show e))
+
 module Db = struct
   type pool = (connection, Caqti_error.t) Pool.t
 

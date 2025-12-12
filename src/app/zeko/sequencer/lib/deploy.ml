@@ -449,6 +449,7 @@ let update_permissions ~signature_kind ~(signer : Keypair.t)
     Gql_client.fetch_vk gql_uri
       ( Account_id.of_public_key
       @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
+    >>| Or_error.ok_exn
   in
   let%bind temp_vk =
     let%map vk =

@@ -279,7 +279,7 @@ let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
     (prover :
          t
       -> 'source * elem list
-      -> (Compile_simple.Proof.t option * stmt) Deferred.t ) =
+      -> (Compile_simple.Proof.t option * stmt, Error.t) Deferred.Result.t ) =
   let elems_to_prove, excess =
     let i = ref 0 in
     let l = List.length elems in
@@ -290,19 +290,22 @@ let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
   in
   match elems_to_prove with
   | [] ->
-      return (None, source, excess)
-  | elems_to_prove ->
+      return (Ok (None, source, excess))
+  | elems_to_prove -> (
       let%bind input = map_to_cached_source ~source ~elems:elems_to_prove in
-      let%bind proof, target = prover t input in
-      let%bind () =
-        match proof with
-        | Some proof ->
-            cache_ase_proof t ~source ~target ~proof
-              ~extension_length:(List.length elems_to_prove)
-        | None ->
-            return ()
-      in
-      return (proof, target, excess)
+      match%bind prover t input with
+      | Error err ->
+          return (Error err)
+      | Ok (proof, target) ->
+          let%bind () =
+            match proof with
+            | Some proof ->
+                cache_ase_proof t ~source ~target ~proof
+                  ~extension_length:(List.length elems_to_prove)
+            | None ->
+                return ()
+          in
+          return (Ok (proof, target, excess)) )
 
 let folder =
   folder'
@@ -341,9 +344,9 @@ let transaction_snark t input =
   send t (Prover.Input.Txn_snark input)
   >>| function
   | Prover.Output.Txn_snark snark ->
-      snark
+      Ok snark
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -351,9 +354,9 @@ let ase_with_length ~sendfn t input =
   sendfn t (Prover.Input.Folder (Ase_with_length input))
   >>| function
   | Prover.Output.Folder (Ase_with_length ase) ->
-      ase
+      Ok ase
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -361,9 +364,9 @@ let ase_without_length ~sendfn t input =
   sendfn t (Prover.Input.Folder (Ase_without_length input))
   >>| function
   | Prover.Output.Folder (Ase_without_length ase) ->
-      ase
+      Ok ase
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -371,15 +374,15 @@ let check_accepted_mina t input =
   send t (Prover.Input.Folder (Check_accepted_mina input))
   >>| function
   | Prover.Output.Folder (Check_accepted_mina check_accepted) ->
-      check_accepted
+      Ok check_accepted
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
 let inner_sync t ~public_key ~ase_source ~ase_elms =
-  let%bind ase =
-    let%map proof, target, excess =
+  let%bind.Deferred.Result ase =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
         ~max_excess:Zeko_constants.Max_excess_actions.Inner_sync.outer
         (ase_with_length ~sendfn:send_with_priority)
@@ -390,9 +393,9 @@ let inner_sync t ~public_key ~ase_source ~ase_elms =
   send_with_priority t (Prover.Input.Inner_sync { public_key; ase })
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
-      (parent_with_calls, proof)
+      Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -400,9 +403,9 @@ let verify_both_ases_commit t input =
   send_with_priority t (Prover.Input.Verify_both_ases_commit input)
   >>| function
   | Prover.Output.Verify_both_ases_commit snark ->
-      snark
+      Ok snark
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -410,9 +413,9 @@ let verify_two_outer_ases_cancelled_deposit t input =
   send t (Prover.Input.Verify_two_outer_ases_cancelled_deposit input)
   >>| function
   | Prover.Output.Verify_two_outer_ases_cancelled_deposit snark ->
-      snark
+      Ok snark
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -420,9 +423,9 @@ let verify_check_accepted_and_ase_cancelled_deposit t input =
   send t (Prover.Input.Verify_check_accepted_and_ase_cancelled_deposit input)
   >>| function
   | Prover.Output.Verify_check_accepted_and_ase_cancelled_deposit snark ->
-      snark
+      Ok snark
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -430,8 +433,8 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
     ~unprocessed_actions ~(old_inner_acc : Account.t) ~old_inner_acc_path
     ~(new_inner_acc : Account.t) ~new_inner_acc_path ~da_multisig ~slot_range =
   (* Counting length of inner action state *)
-  let%bind inner_ase =
-    let%map proof, target, excess =
+  let%bind.Deferred.Result inner_ase =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_with_length t ~source:inner_ase_source
         ~elems:new_inner_actions
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.inner
@@ -441,7 +444,7 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
       { proof; proof_target = target; init = inner_ase_source; excess }
   in
   (* Delay ASE *)
-  let%bind outer_ase =
+  let%bind.Deferred.Result outer_ase =
     let ({ outer_action_state } : Rollup_state.Inner_state.t) =
       Rollup_state.Inner_state.value_of_app_state
         (Option.value_exn new_inner_acc.zkapp).app_state
@@ -449,7 +452,7 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
     let action_state =
       Rollup_state.Outer_action_state.With_length.raw outer_action_state
     in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_without_length t ~source:action_state
         ~elems:unprocessed_actions
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.outer
@@ -458,7 +461,7 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
     Outer_commit.Ase_outer_inst.
       { proof; proof_target = target; init = action_state; excess }
   in
-  let%bind verify_both_ases =
+  let%bind.Deferred.Result verify_both_ases =
     verify_both_ases_commit t (outer_ase, inner_ase)
   in
   send_with_priority t
@@ -475,9 +478,9 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
        } )
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
-      (parent_with_calls, proof)
+      Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      failwith err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -487,7 +490,7 @@ let outer_action_witness t witness =
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      Error err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -497,7 +500,7 @@ let inner_action_witness t witness =
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      Error err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -507,9 +510,9 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
        Bridge.Check_accepted_mina.Init.t
        * Field.t
        * Bridge.Check_accepted_mina.Elem.t list ) ~prev_next_deposit =
-  let%bind ase =
+  let%bind.Deferred.Result ase =
     let ase_source, ase_elms = ase in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_deposit.outer
         (ase_with_length ~sendfn:send)
@@ -517,7 +520,7 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
     Bridge.Finalize_deposit.Ase_inst.
       { proof; proof_target = target; init = ase_source; excess }
   in
-  let%bind check_accepted =
+  let%bind.Deferred.Result check_accepted =
     let init, deposit_hash, elems = check_accepted in
     let source : Bridge.Check_accepted_mina.Stmt.t =
       { params = init.params
@@ -532,7 +535,7 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
       ; is_accepted = false
       }
     in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       check_accepted_folder t ~source ~elems
         ~max_excess:
           Zeko_constants.Max_excess_actions.Finalize_deposit.check_accepted
@@ -556,7 +559,7 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      Error err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -570,9 +573,9 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
        * Bridge.Check_accepted_mina.Elem.t list )
     ~(check_accepted_ase : Ase.With_length.Stmt.t * Field.t list)
     ~prev_next_cancelled_deposit =
-  let%bind commit_ase =
+  let%bind.Deferred.Result commit_ase =
     let ase_source, ase_elms = commit_ase in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_without_length t ~source:ase_source ~elems:ase_elms
         ~max_excess:
           Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit.outer
@@ -581,9 +584,9 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
     Bridge.Finalize_cancelled_deposit.Ase_outer_inst.
       { proof; proof_target = target; init = ase_source; excess }
   in
-  let%bind sync_ase =
+  let%bind.Deferred.Result sync_ase =
     let ase_source, ase_elms = sync_ase in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
         ~max_excess:
           Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit
@@ -593,10 +596,10 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
     Bridge.Finalize_cancelled_deposit.Ase_outer_with_length_inst.
       { proof; proof_target = target; init = ase_source; excess }
   in
-  let%bind verify_two_outer_ases =
+  let%bind.Deferred.Result verify_two_outer_ases =
     verify_two_outer_ases_cancelled_deposit t (commit_ase, sync_ase)
   in
-  let%bind check_accepted =
+  let%bind.Deferred.Result check_accepted =
     let init, deposit_hash, elems = check_accepted in
     let source : Bridge.Check_accepted_mina.Stmt.t =
       { params = init.params
@@ -611,7 +614,7 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
       ; is_accepted = false
       }
     in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       check_accepted_folder t ~source ~elems
         ~max_excess:
           Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit
@@ -620,9 +623,9 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
     ( { proof; proof_source = source; proof_target = target; init; excess }
       : Bridge.Check_accepted_mina.serializable )
   in
-  let%bind check_accepted_ase =
+  let%bind.Deferred.Result check_accepted_ase =
     let ase_source, ase_elms = check_accepted_ase in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
         ~max_excess:
           Zeko_constants.Max_excess_actions.Finalize_cancelled_deposit.outer
@@ -631,7 +634,7 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
     Bridge.Finalize_cancelled_deposit.Ase_outer_with_length_inst.
       { proof; proof_target = target; init = ase_source; excess }
   in
-  let%bind verify_check_accepted_and_ase =
+  let%bind.Deferred.Result verify_check_accepted_and_ase =
     verify_check_accepted_and_ase_cancelled_deposit t
       (check_accepted, check_accepted_ase)
   in
@@ -652,7 +655,7 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      Error err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -662,16 +665,16 @@ let inner_receive t witness =
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      Error err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
 let finalize_withdrawal t ~public_key ~may_use_token ~outer_authorization_kind
     ~commit ~before_commit ~commit_ase ~before_withdrawal ~withdrawal_ase
     ~prev_next_withdrawal ~withdrawal_params =
-  let%bind commit_ase =
+  let%bind.Deferred.Result commit_ase =
     let source, elems = commit_ase in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_without_length t ~source ~elems
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_withdrawal.outer
         (ase_without_length ~sendfn:send)
@@ -679,9 +682,9 @@ let finalize_withdrawal t ~public_key ~may_use_token ~outer_authorization_kind
     Bridge.Finalize_withdrawal.Ase_outer_inst.
       { proof; proof_target = target; init = source; excess }
   in
-  let%bind withdrawal_ase =
+  let%bind.Deferred.Result withdrawal_ase =
     let source, elems = withdrawal_ase in
-    let%map proof, target, excess =
+    let%map.Deferred.Result proof, target, excess =
       ase_cached_folder_with_length t ~source ~elems
         ~max_excess:Zeko_constants.Max_excess_actions.Finalize_withdrawal.inner
         (ase_with_length ~sendfn:send)
@@ -708,7 +711,7 @@ let finalize_withdrawal t ~public_key ~may_use_token ~outer_authorization_kind
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      Error err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
 
@@ -718,6 +721,6 @@ let outer_token_owner t witness =
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)
   | Prover.Output.Error err ->
-      Error err
+      Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"

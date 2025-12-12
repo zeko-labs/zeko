@@ -4,10 +4,6 @@ open Mina_base
 open Mina_transaction
 open Signature_lib
 
-let ok_exn x =
-  let open Ppx_deriving_yojson_runtime.Result in
-  match x with Ok x -> x | Error e -> failwith e
-
 type t =
   { l1_uri : Uri.t
   ; signer : Keypair.t
@@ -37,45 +33,63 @@ let increment_nonce t = t.nonce <- Option.map t.nonce ~f:Account.Nonce.(add one)
 
 let process_command ~logger t (command : Zkapp_command.t) =
   let rec retry attempt () =
-    let%bind nonce =
-      match t.nonce with
-      | Some nonce ->
-          return nonce
-      | None ->
-          Gql_client.infer_nonce t.l1_uri
-            (Public_key.compress t.signer.public_key)
-    in
-    let command =
-      { command with
-        fee_payer =
-          { command.fee_payer with
-            body = { command.fee_payer.body with nonce }
-          }
-      }
-    in
-    let command =
-      Zkapp_command.read_all_proofs_from_disk
-      @@ Utils.sign_zkapp_command ~signature_kind:t.signature_kind command
-           [ t.signer ]
-    in
     let err_to_string = function
-      | `Failed_request err ->
+      | `Nonce_inference_error err ->
+          "Nonce_inference_error: " ^ Error.to_string_hum err
+      | `Send_zkapp_error (`Failed_request err) ->
           "Failed_request: " ^ err
-      | `Graphql_error err ->
+      | `Send_zkapp_error (`Graphql_error err) ->
           "Graphql_error: " ^ err
     in
-    match%bind Gql_client.send_zkapp t.l1_uri command with
-    | Ok _ ->
+    match%bind
+      let%bind.Deferred.Result nonce =
+        match t.nonce with
+        | Some nonce ->
+            return (Ok nonce)
+        | None ->
+            Gql_client.infer_nonce t.l1_uri
+              (Public_key.compress t.signer.public_key)
+            >>| Result.map_error ~f:(fun err -> `Nonce_inference_error err)
+      in
+      let command =
+        { command with
+          fee_payer =
+            { command.fee_payer with
+              body = { command.fee_payer.body with nonce }
+            }
+        }
+      in
+      let command =
+        Zkapp_command.read_all_proofs_from_disk
+        @@ Utils.sign_zkapp_command ~signature_kind:t.signature_kind command
+             [ t.signer ]
+      in
+      let%map.Deferred.Result _result =
+        Gql_client.send_zkapp t.l1_uri command
+        >>| Result.map_error ~f:(fun err -> `Send_zkapp_error err)
+      in
+      command
+    with
+    | Ok command ->
         [%log info] "Sent zkapp command: %s"
           Transaction_hash.(
             to_base58_check @@ hash_command (Zkapp_command command)) ;
-        return @@ increment_nonce t
+        increment_nonce t ;
+        return (Ok ())
     | Error err when attempt >= t.max_attempts ->
-        failwithf "Failed to send zkapp command: %s" (err_to_string err) ()
+        return
+          (Error
+             (Error.of_string
+                (sprintf "Failed to send zkapp command: %s" (err_to_string err)) )
+          )
     | Error err ->
         if
           String.is_substring
-            (match err with `Graphql_error s -> s | _ -> "")
+            ( match err with
+            | `Send_zkapp_error (`Graphql_error s) ->
+                s
+            | _ ->
+                "" )
             ~substring:"Account_nonce_precondition_unsatisfied"
         then refresh_nonce t ;
 
@@ -88,6 +102,10 @@ let process_command ~logger t (command : Zkapp_command.t) =
   retry 0 ()
 
 let send_zkapp_command ~logger t command =
-  Throttle.enqueue t.q (fun () -> process_command ~logger t command)
+  Throttle.enqueue t.q (fun () ->
+      Monitor.try_with ~here:[%here] (fun () ->
+          process_command ~logger t command )
+      >>| Result.map_error ~f:Error.of_exn
+      >>| Or_error.join )
 
 let wait_to_finish t = Throttle.capacity_available t.q

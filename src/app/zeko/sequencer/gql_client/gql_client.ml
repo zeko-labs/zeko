@@ -5,7 +5,7 @@ open Init
 module Field = Snark_params.Tick.Field
 
 let query_with_retry ?(max_attempts = 10) ?(delay = Time.Span.of_sec 5.) ~label
-    query_obj uri =
+    query_obj uri ~f =
   Utils.retry ~max_attempts ~delay
     ~f:(fun () ->
       Graphql_client.Client.query_json query_obj uri
@@ -13,7 +13,8 @@ let query_with_retry ?(max_attempts = 10) ?(delay = Time.Span.of_sec 5.) ~label
             | `Failed_request e ->
                 Error.createf !"Failed to %s: Failed_request %s" label e
             | `Graphql_error e ->
-                Error.createf !"Failed to %s: Graphql_error %s" label e ) )
+                Error.createf !"Failed to %s: Graphql_error %s" label e )
+      >>| Or_error.map ~f )
     ()
 
 let fetch_nonce uri pk =
@@ -37,11 +38,10 @@ let fetch_nonce uri pk =
           ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch nonce" q uri >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(result |> member "account" |> member "nonce" |> to_string)
-  |> Int.of_string |> Unsigned.UInt32.of_int
+  query_with_retry ~label:"fetch nonce" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "account" |> member "nonce" |> to_string)
+      |> Int.of_string |> Unsigned.UInt32.of_int )
 
 let fetch_action_state uri pk =
   let q =
@@ -64,12 +64,11 @@ let fetch_action_state uri pk =
           ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch action state" q uri >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(
-    result |> member "account" |> member "actionState" |> index 0 |> to_string)
-  |> Field.of_string
+  query_with_retry ~label:"fetch action state" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "account" |> member "actionState" |> index 0
+        |> to_string)
+      |> Field.of_string )
 
 let fetch_actions uri ?from_action_state ?end_action_state pk :
     ( Field.t array list
@@ -78,6 +77,7 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
     * [ `Before of Field.t ]
     * [ `After of Field.t ] )
     list
+    Or_error.t
     Deferred.t =
   let ok_exn = function
     | Ppx_deriving_yojson_runtime.Result.Ok x ->
@@ -151,44 +151,44 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
           ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch actions" q uri >>| Or_error.ok_exn
-  in
-  let result = M.actions_of_yojson result |> ok_exn in
-  List.map result.actions
-    ~f:(fun
-         { actionData
-         ; blockInfo
-         ; actionState =
-             { actionStateOne = _; actionStateTwo = action_state_before }
-         }
-       ->
-      let block_height = blockInfo.height in
-      let distance_from_max_block_height =
-        blockInfo.distanceFromMaxBlockHeight
-      in
-      List.fold_map actionData ~init:(Field.of_string action_state_before)
-        ~f:(fun action_state_before { data } ->
-          let fields = [ List.map data ~f:Field.of_string |> List.to_array ] in
-          let action_state_after =
-            Zkapp_account.Actions_impl.(
-              push_hash action_state_before (hash fields))
+  query_with_retry ~label:"fetch actions" q uri ~f:(fun result ->
+      let result = M.actions_of_yojson result |> ok_exn in
+      List.map result.actions
+        ~f:(fun
+             { actionData
+             ; blockInfo
+             ; actionState =
+                 { actionStateOne = _; actionStateTwo = action_state_before }
+             }
+           ->
+          let block_height = blockInfo.height in
+          let distance_from_max_block_height =
+            blockInfo.distanceFromMaxBlockHeight
           in
-          ( action_state_after
-          , ( fields
-            , `Block_height block_height
-            , `Distance_from_max_block_height distance_from_max_block_height
-            , `Before action_state_before
-            , `After action_state_after ) ) )
-      |> snd )
-  |> ( if
-       (* Drop the first action if it's not the initial state *)
-       Stdlib.(
-         from_action_state = Some Zkapp_account.Actions.empty_state_element
-         || from_action_state = None)
-     then Fn.id
-     else function [] -> [] | _ :: tail -> tail )
-  |> List.join
+          List.fold_map actionData ~init:(Field.of_string action_state_before)
+            ~f:(fun action_state_before { data } ->
+              let fields =
+                [ List.map data ~f:Field.of_string |> List.to_array ]
+              in
+              let action_state_after =
+                Zkapp_account.Actions_impl.(
+                  push_hash action_state_before (hash fields))
+              in
+              ( action_state_after
+              , ( fields
+                , `Block_height block_height
+                , `Distance_from_max_block_height distance_from_max_block_height
+                , `Before action_state_before
+                , `After action_state_after ) ) )
+          |> snd )
+      |> ( if
+           (* Drop the first action if it's not the initial state *)
+           Stdlib.(
+             from_action_state = Some Zkapp_account.Actions.empty_state_element
+             || from_action_state = None)
+         then Fn.id
+         else function [] -> [] | _ :: tail -> tail )
+      |> List.join )
 
 let fetch_events uri pk =
   let ok_exn = function
@@ -226,12 +226,11 @@ let fetch_events uri pk =
           ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch events" q uri >>| Or_error.ok_exn
-  in
-  let result = M.events_of_yojson result |> ok_exn in
-  List.map result.events ~f:(fun { eventData } ->
-      List.map eventData ~f:(fun { data } -> List.map data ~f:Field.of_string) )
+  query_with_retry ~label:"fetch events" q uri ~f:(fun result ->
+      let result = M.events_of_yojson result |> ok_exn in
+      List.map result.events ~f:(fun { eventData } ->
+          List.map eventData ~f:(fun { data } ->
+              List.map data ~f:Field.of_string ) ) )
 
 let fetch_pooled_zkapp_commands uri pk =
   let q =
@@ -254,17 +253,14 @@ let fetch_pooled_zkapp_commands uri pk =
           ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch pooled zkapp commands" q uri
-    >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(
-    result
-    |> member "pooledZkappCommands"
-    |> to_list
-    |> List.map ~f:(member "id")
-    |> List.map ~f:to_string
-    |> List.map ~f:(Fn.compose ok_exn Zkapp_command.of_base64))
+  query_with_retry ~label:"fetch pooled zkapp commands" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result
+        |> member "pooledZkappCommands"
+        |> to_list
+        |> List.map ~f:(member "id")
+        |> List.map ~f:to_string
+        |> List.map ~f:(Fn.compose ok_exn Zkapp_command.of_base64)) )
 
 let fetch_pooled_signed_commands uri pk =
   let q =
@@ -287,21 +283,19 @@ let fetch_pooled_signed_commands uri pk =
           ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch pooled signed commands" q uri
-    >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(
-    result
-    |> member "pooledUserCommands"
-    |> to_list
-    |> List.map ~f:(member "id")
-    |> List.map ~f:to_string
-    |> List.map ~f:(Fn.compose ok_exn Signed_command.of_base64))
+  query_with_retry ~label:"fetch pooled signed commands" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result
+        |> member "pooledUserCommands"
+        |> to_list
+        |> List.map ~f:(member "id")
+        |> List.map ~f:to_string
+        |> List.map ~f:(Fn.compose ok_exn Signed_command.of_base64)) )
 
 (* Infers nonce based on pooled commands *)
 let infer_nonce uri pk =
-  let%bind pooled_zkapp_commands = fetch_pooled_zkapp_commands uri pk
+  let%bind.Deferred.Result pooled_zkapp_commands =
+    fetch_pooled_zkapp_commands uri pk
   and pooled_signed_commands = fetch_pooled_signed_commands uri pk in
   let max_pooled_nonce =
     let max_zkapp_commands_nonce =
@@ -321,7 +315,7 @@ let infer_nonce uri pk =
     in
     Unsigned.UInt32.(max max_zkapp_commands_nonce max_signed_commands_nonce)
   in
-  let%map committed_nonce = fetch_nonce uri pk in
+  let%map.Deferred.Result committed_nonce = fetch_nonce uri pk in
   Unsigned.UInt32.max max_pooled_nonce committed_nonce
 
 let fetch_state uri aid =
@@ -347,14 +341,43 @@ let fetch_state uri aid =
           ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch state" q uri >>| Or_error.ok_exn
+  query_with_retry ~label:"fetch state" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "account" |> member "zkappState" |> to_list
+        |> List.map ~f:to_string
+        |> List.map ~f:Field.of_string
+        |> Zkapp_state.V.of_list_exn) )
+
+let fetch_state_opt uri aid =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!, $tokenId: TokenId!) {
+              account(publicKey: $pk, token: $tokenId){
+                zkappState
+              }
+            }
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String
+                ( Account_id.public_key aid
+                |> Signature_lib.Public_key.Compressed.to_base58_check ) )
+          ; ("tokenId", `String (Account_id.token_id aid |> Token_id.to_string))
+          ]
+    end
   in
-  Yojson.Safe.Util.(
-    result |> member "account" |> member "zkappState" |> to_list
-    |> List.map ~f:to_string
-    |> List.map ~f:Field.of_string
-    |> Zkapp_state.V.of_list_exn)
+  query_with_retry ~label:"fetch state" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "account"
+        |> to_option (fun json ->
+               member "zkappState" json |> to_list |> List.map ~f:to_string
+               |> List.map ~f:Field.of_string
+               |> Zkapp_state.V.of_list_exn )) )
 
 let fetch_vk uri aid =
   let q =
@@ -381,16 +404,14 @@ let fetch_vk uri aid =
           ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch verification key" q uri >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(
-    result |> member "account" |> member "verificationKey"
-    |> member "verificationKey" |> to_string
-    |> Side_loaded_verification_key.of_base64 |> Or_error.ok_exn)
+  query_with_retry ~label:"fetch verification key" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "account" |> member "verificationKey"
+        |> member "verificationKey" |> to_string
+        |> Side_loaded_verification_key.of_base64 |> Or_error.ok_exn) )
 
 let infer_state uri ~zkapp_pk ~signer_pk =
-  let%bind committed_state =
+  let%map.Deferred.Result committed_state =
     fetch_state uri
       ( Account_id.of_public_key
       @@ Signature_lib.Public_key.decompress_exn zkapp_pk )
@@ -400,19 +421,16 @@ let infer_state uri ~zkapp_pk ~signer_pk =
         Zkapp_command.(
           Account.Nonce.compare (applicable_at_nonce a) (applicable_at_nonce b)) )
   in
-  let future_state =
-    List.fold_until pooled_zkapp_commands ~init:committed_state
-      ~f:(fun acc command ->
-        match Utils.update_state zkapp_pk command acc with
-        | `Precondition_failed ->
-            Stop acc
-        | `Skipped ->
-            Continue acc
-        | `Updated new_state ->
-            Continue new_state )
-      ~finish:Fn.id
-  in
-  return future_state
+  List.fold_until pooled_zkapp_commands ~init:committed_state
+    ~f:(fun acc command ->
+      match Utils.update_state zkapp_pk command acc with
+      | `Precondition_failed ->
+          Stop acc
+      | `Skipped ->
+          Continue acc
+      | `Updated new_state ->
+          Continue new_state )
+    ~finish:Fn.id
 
 let send_zkapp (uri : Uri.t) command =
   let q =
@@ -466,13 +484,11 @@ let fetch_block_height uri =
       method variables = `Assoc []
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch block height" q uri >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(
-    result |> member "bestChain" |> index 0 |> member "protocolState"
-    |> member "consensusState" |> member "blockHeight" |> to_string)
-  |> Int.of_string
+  query_with_retry ~label:"fetch block height" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "bestChain" |> index 0 |> member "protocolState"
+        |> member "consensusState" |> member "blockHeight" |> to_string)
+      |> Int.of_string )
 
 let fetch_best_chain ?(max_length = 10) uri =
   let q =
@@ -490,13 +506,11 @@ let fetch_best_chain ?(max_length = 10) uri =
       method variables = `Assoc [ ("maxLength", `Int max_length) ]
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch best chain" q uri >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(
-    result |> member "bestChain"
-    |> map (member "stateHash")
-    |> to_list |> List.map ~f:to_string)
+  query_with_retry ~label:"fetch best chain" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "bestChain"
+        |> map (member "stateHash")
+        |> to_list |> List.map ~f:to_string) )
 
 let fetch_genesis_timestamp uri =
   let q =
@@ -514,12 +528,10 @@ let fetch_genesis_timestamp uri =
       method variables = `Assoc []
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch genesis timestamp" q uri >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(
-    result |> member "genesisConstants" |> member "genesisTimestamp"
-    |> to_string |> Genesis_constants.genesis_timestamp_of_string)
+  query_with_retry ~label:"fetch genesis timestamp" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "genesisConstants" |> member "genesisTimestamp"
+        |> to_string |> Genesis_constants.genesis_timestamp_of_string) )
 
 let fetch_fork_slot uri =
   let q =
@@ -535,14 +547,12 @@ let fetch_fork_slot uri =
       method variables = `Assoc []
     end
   in
-  let%map result =
-    query_with_retry ~label:"fetch fork slot" q uri >>| Or_error.ok_exn
-  in
-  Yojson.Safe.Util.(
-    result |> member "runtimeConfig" |> member "proof" |> member "fork"
-    |> member "global_slot_since_genesis"
-    |> to_int)
-  |> Mina_numbers.Global_slot_since_genesis.of_int
+  query_with_retry ~label:"fetch fork slot" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "runtimeConfig" |> member "proof" |> member "fork"
+        |> member "global_slot_since_genesis"
+        |> to_int)
+      |> Mina_numbers.Global_slot_since_genesis.of_int )
 
 module For_tests = struct
   let create_account uri pk =
@@ -565,7 +575,7 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"create account" q uri
+      query_with_retry ~max_attempts:1 ~label:"create account" q uri ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
@@ -585,7 +595,7 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"create new block" q uri
+      query_with_retry ~max_attempts:1 ~label:"create new block" q uri ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
@@ -605,7 +615,7 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"clear pool" q uri
+      query_with_retry ~max_attempts:1 ~label:"clear pool" q uri ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
@@ -625,7 +635,7 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~label:"reset state" q uri >>| Or_error.ok_exn
+      query_with_retry ~label:"reset state" q uri ~f:Fn.id >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
 
@@ -644,7 +654,7 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"shift slots" q uri
+      query_with_retry ~max_attempts:1 ~label:"shift slots" q uri ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
@@ -674,6 +684,7 @@ module For_tests = struct
     in
     let%map result =
       query_with_retry ~max_attempts:1 ~label:"get zkapp command status" q uri
+        ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.Util.(
