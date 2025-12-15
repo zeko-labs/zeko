@@ -86,20 +86,41 @@ module Sequencer = struct
 
       let process ({ provers; _ } : Context.t) ((left, left_proof) : t)
           ((right, right_proof) : t) =
-        Zeko_prover.Client.transaction_snark provers
-          (Merge { left; left_proof; right; right_proof })
+        match%map
+          Utils.retry
+            ~f:(fun () ->
+              Zeko_prover.Client.transaction_snark provers
+                (Merge { left; left_proof; right; right_proof }) )
+            ()
+        with
+        | Ok snark ->
+            snark
+        | Error err ->
+            Monitor.send_exn Monitor.main (Error.to_exn err) ;
+            Error.raise err
     end
 
     module Base = struct
       type t = Txn_snark_witness.t [@@deriving yojson]
 
       let process (ctx : Context.t) witness =
-        match witness with
-        | Txn_snark_witness.Zkapp_command segment ->
-            Zeko_prover.Client.transaction_snark ctx.provers
-              (Zkapp_command segment)
-        | Signed_command w ->
-            Zeko_prover.Client.transaction_snark ctx.provers (Signed_command w)
+        match%map
+          Utils.retry
+            ~f:(fun () ->
+              match witness with
+              | Txn_snark_witness.Zkapp_command segment ->
+                  Zeko_prover.Client.transaction_snark ctx.provers
+                    (Zkapp_command segment)
+              | Signed_command w ->
+                  Zeko_prover.Client.transaction_snark ctx.provers
+                    (Signed_command w) )
+            ()
+        with
+        | Ok snark ->
+            snark
+        | Error err ->
+            Monitor.send_exn Monitor.main (Error.to_exn err) ;
+            Error.raise err
     end
 
     module Commit = struct
@@ -125,45 +146,62 @@ module Sequencer = struct
            } :
             Context.t ) { new_inner_ledger; processed_actions_pointer }
           txn_snark =
-        let%bind da_multisig =
-          Da_layer.Client.get_multisig da_client
-            ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
-          >>| fun (quorum, multisig) ->
-          Multisig.Witness.make ~signatures:multisig ~quorum
-        in
+        match%map
+          Utils.retry
+            ~f:(fun () ->
+              let open Deferred.Result.Let_syntax in
+              let%bind da_multisig =
+                Da_layer.Client.get_multisig da_client
+                  ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
+                |> Deferred.map ~f:(fun (quorum, multisig) ->
+                       Multisig.Witness.make ~signatures:multisig ~quorum )
+                |> Deferred.map ~f:Result.return
+              in
 
-        let old_inner_ledger =
-          State.Last_committed_ledger.get sequencer_state
-          |> Option.value_exn ~message:"No previous committed ledger"
-        in
-        let commit_witness : Committer.Commit_witness.t =
-          { old_inner_ledger
-          ; new_inner_ledger
-          ; processed_actions_pointer
-          ; da_multisig
-          ; txn_snark
-          }
-        in
-        let%bind command =
-          Committer.prove_commit ~logger ~proof_cache_db ~provers ~executor
-            ~archive ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
-            ~archive_uri:config.archive_uri ~l1_config:config.l1_config
-            ~commit_validity_period:config.commit_validity_period commit_witness
-        in
-        let%bind () = Executor.send_zkapp_command ~logger executor command in
-        State.Last_committed_ledger.set sequencer_state ~data:new_inner_ledger ;
-        return (fun () ->
-            let open Relational_db in
-            Pool.use
-              (fun conn ->
-                Committer.Commit_table.insert conn
-                  { source_ledger_hash =
-                      Sparse_ledger.merkle_root old_inner_ledger
-                  ; target_ledger_hash =
-                      Sparse_ledger.merkle_root new_inner_ledger
-                  ; witness = commit_witness
-                  } )
-              db_pool )
+              let old_inner_ledger =
+                State.Last_committed_ledger.get sequencer_state
+                |> Option.value_exn ~message:"No previous committed ledger"
+              in
+              let commit_witness : Committer.Commit_witness.t =
+                { old_inner_ledger
+                ; new_inner_ledger
+                ; processed_actions_pointer
+                ; da_multisig
+                ; txn_snark
+                }
+              in
+              let%bind command =
+                Committer.prove_commit ~logger ~proof_cache_db ~provers
+                  ~executor ~archive
+                  ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+                  ~archive_uri:config.archive_uri ~l1_config:config.l1_config
+                  ~commit_validity_period:config.commit_validity_period
+                  commit_witness
+              in
+              let%bind () =
+                Executor.send_zkapp_command ~logger executor command
+              in
+              State.Last_committed_ledger.set sequencer_state
+                ~data:new_inner_ledger ;
+              return (fun () ->
+                  let open Relational_db in
+                  Pool.use
+                    (fun conn ->
+                      Committer.Commit_table.insert conn
+                        { source_ledger_hash =
+                            Sparse_ledger.merkle_root old_inner_ledger
+                        ; target_ledger_hash =
+                            Sparse_ledger.merkle_root new_inner_ledger
+                        ; witness = commit_witness
+                        } )
+                    db_pool ) )
+            ()
+        with
+        | Ok result ->
+            result
+        | Error err ->
+            Monitor.send_exn Monitor.main (Error.to_exn err) ;
+            Error.raise err
     end
 
     module M = struct
@@ -524,6 +562,7 @@ module Sequencer = struct
     Utils.get_synced_outer_action_state_exn (L.of_database t.ledger)
 
   let update_inner_account t =
+    let open Deferred.Result.Let_syntax in
     let logger = t.logger in
     let old_synced_outer_action_state, old_deposits_length =
       let s = current_synced_outer_action_state t in
@@ -598,7 +637,6 @@ module Sequencer = struct
       let%map () =
         (* Skip validity check because dummy fee payer triggers invalid public key error *)
         apply_user_command t ~skip_validity_check:true (Zkapp_command command)
-        >>| Or_error.ok_exn
       in
       let processed_witnesses =
         List.filter_map processed_new_actions ~f:(function
@@ -611,20 +649,22 @@ module Sequencer = struct
       (List.length processed_witnesses, processed_pointer) )
 
   (** Double Deferred.t is deliberate, the first is filled after update of ledger, the second is filled after commit *)
-  let commit t : Txn_snark.serializable option Deferred.t Deferred.t =
+  let commit t :
+      Txn_snark.serializable option Deferred.Or_error.t Deferred.Or_error.t =
     let logger = t.logger in
-    let%bind processed_witnesses, processed_actions_pointer =
+    let open Deferred.Result.Let_syntax in
+    let%map processed_witnesses, processed_actions_pointer =
       update_inner_account t
     in
     Throttle.enqueue t.apply_q (fun () ->
-        match%map apply_fee_transfer t with
+        match%bind.Deferred apply_fee_transfer t with
         | `Skip ->
             [%log info]
               "Skipping commit because there's not enough accumulated fee to \
                create recipient account" ;
             return None
         | `Error e ->
-            Error.raise e
+            Deferred.return (Error e)
         | `No_fee | `Ok ->
             let tree_leaves =
               Merger.M.current_tree t.merger
@@ -662,21 +702,31 @@ module Sequencer = struct
                 | None ->
                     ()
               in
-              Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
-                ~commit_witness:
-                  { new_inner_ledger = target_ledger
-                  ; processed_actions_pointer
-                  }
-              >>| Option.some )
+              let%bind.Deferred result =
+                Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
+                  ~commit_witness:
+                    { new_inner_ledger = target_ledger
+                    ; processed_actions_pointer
+                    }
+              in
+              return (Some result) )
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then ()
     else
+      let logger = t.logger in
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
       every ~start:(after period) ~stop:(Ivar.read t.closed) period (fun () ->
           don't_wait_for
             (within' ~monitor:Monitor.main (fun () ->
-                 commit t >>= Deferred.ignore_m ) ) )
+                 let%bind ledger_applied = commit t >>| Or_error.ok_exn in
+                 match%map ledger_applied >>| Or_error.ok_exn with
+                 | Some (stmt, _) ->
+                     [%log info] "Committed: %s -> %s"
+                       (Ledger_hash.to_decimal_string stmt.source_ledger)
+                       (Ledger_hash.to_decimal_string stmt.target_ledger)
+                 | None ->
+                     [%log info] "Skipped commit" ) ) )
 
   let sync ~logger ({ config; _ } as t) da_config source =
     [%log info] "Syncing" ;
@@ -684,6 +734,7 @@ module Sequencer = struct
       Gql_client.infer_state config.l1_uri
         ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~signer_pk:(Public_key.compress config.signer.public_key)
+      >>| Or_error.ok_exn
       >>| Utils.value_of_zkapp_state Zeko_circuits.Rollup_state.Outer_state.typ
       >>| fun { ledger_hash; _ } -> ledger_hash
     in
@@ -822,6 +873,7 @@ module Sequencer = struct
         [%log info] "No ledger and IMT directories exist, fetching commits" ;
         let%bind commits =
           Gql_client.fetch_actions archive_uri zkapp_pk
+          >>| Or_error.ok_exn
           >>| List.filter_map ~f:(fun (fields, _, _, _, _) ->
                   match fields with
                   | [ action ] ->
@@ -838,6 +890,7 @@ module Sequencer = struct
           Gql_client.infer_state l1_uri
             ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
             ~signer_pk:(Public_key.compress signer_pk)
+          >>| Or_error.ok_exn
           >>| Utils.value_of_zkapp_state
                 Zeko_circuits.Rollup_state.Outer_state.typ
           >>| fun { ledger_hash; _ } -> ledger_hash
@@ -939,6 +992,7 @@ module Sequencer = struct
     let%bind da_client =
       Da_layer.Client.create ~logger ~config:da_config ~quorum:da_quorum
         ~da_keys ~db_pool
+      >>| Or_error.ok_exn
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in
@@ -989,6 +1043,7 @@ module Sequencer = struct
         ~provers:t.bridge_prover.provers ~executor:t.merger_ctx.executor
         ~archive ~db_pool ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
+      >>| Or_error.ok_exn
     in
     let%bind () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)

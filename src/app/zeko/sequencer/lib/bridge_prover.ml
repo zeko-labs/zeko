@@ -127,7 +127,7 @@ module Deposit_request = struct
                     }
                 with
                 | Error e ->
-                    failwith e
+                    Error.raise e
                 | Ok ((body, _, calls), proof) ->
                     Utils.attach_proof_to_forest
                       ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
@@ -168,7 +168,7 @@ module Withdrawal_request = struct
                       }
                   with
                   | Error e ->
-                      failwith e
+                      Error.raise e
                   | Ok ((body, _, calls), proof) ->
                       Utils.attach_proof_to_forest
                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
@@ -188,7 +188,7 @@ module Withdrawal_request = struct
                     }
                 with
                 | Error e ->
-                    failwith e
+                    Error.raise e
                 | Ok ((body, _, calls), proof) ->
                     Utils.attach_proof_to_forest
                       ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
@@ -284,7 +284,7 @@ module Finalize_deposit = struct
                     ~prev_next_deposit
                 with
                 | Error e ->
-                    failwith e
+                    Error.raise e
                 | Ok ((body, _, calls), proof) ->
                     Utils.attach_proof_to_forest
                       ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
@@ -418,7 +418,7 @@ module Finalize_cancelled_deposit = struct
                       ~prev_next_cancelled_deposit
                   with
                   | Error e ->
-                      failwith e
+                      Error.raise e
                   | Ok x ->
                       x
                 in
@@ -463,7 +463,7 @@ module Finalize_cancelled_deposit = struct
                       }
                   with
                   | Error e ->
-                      failwith e
+                      Error.raise e
                   | Ok ((body, _, calls), proof) ->
                       Utils.attach_proof_to_forest
                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
@@ -585,7 +585,7 @@ module Finalize_withdrawal = struct
                          .to_serializable withdrawal_params )
                   with
                   | Error e ->
-                      failwith e
+                      Error.raise e
                   | Ok x ->
                       x
                 in
@@ -630,7 +630,7 @@ module Finalize_withdrawal = struct
                       }
                   with
                   | Error e ->
-                      failwith e
+                      Error.raise e
                   | Ok ((body, _, calls), proof) ->
                       Utils.attach_proof_to_forest
                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1

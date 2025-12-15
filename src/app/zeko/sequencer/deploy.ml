@@ -46,6 +46,7 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
       let%bind nonce =
         Gql_client.infer_nonce l1_uri
           (Public_key.compress sender_keypair.public_key)
+        >>| Or_error.ok_exn
       in
       let%bind `Inner inner_account, `Holder holder_account =
         Sequencer_lib.Deploy.Z.Inner.initial_accounts ()

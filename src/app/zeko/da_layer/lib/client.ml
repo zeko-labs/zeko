@@ -6,6 +6,20 @@ open Signature_lib
 open Relational_db
 module Field = Snark_params.Tick.Field
 
+let rec keep_retrying ~logger ?(delay = Time_ns.Span.of_sec 5.) ~f () =
+  match%bind
+    Monitor.try_with ~here:[%here] f
+    >>| Result.map_error ~f:Error.of_exn
+    >>| Or_error.join
+  with
+  | Ok x ->
+      return x
+  | Error err ->
+      [%log error] "Failed to execute function, retrying... %s"
+        (Error.to_string_hum err) ;
+      let%bind () = after delay in
+      keep_retrying ~logger ~delay ~f ()
+
 module Diff_table = struct
   type t =
     { diff : Diff.Stable.V1.t
@@ -221,10 +235,7 @@ module Rpc = struct
 end
 
 module Config = struct
-  type t =
-    { nodes : Host_and_port.t Cli_lib.Flag.Types.with_name list
-          (** Mutable in case we want to throw out some node *)
-    }
+  type t = { nodes : Host_and_port.t Cli_lib.Flag.Types.with_name list }
   [@@deriving fields]
 
   let of_string_list uris =
@@ -239,10 +250,10 @@ module Config = struct
   let of_node_locations nodes = { nodes }
 
   let fetch_public_keys ~logger t =
-    let%map fetched_da_keys =
+    let%map.Deferred.Result fetched_da_keys =
       Deferred.List.map ~how:`Parallel t.nodes ~f:(fun node_location ->
           Rpc.get_node_public_key ~logger ~node_location () )
-      >>| Result.all >>| Or_error.ok_exn
+      >>| Result.all
     in
     List.sort fetched_da_keys ~compare:Public_key.Compressed.compare
 end
@@ -259,7 +270,9 @@ type t =
   }
 
 let create ~logger ~(config : Config.t) ~quorum ~da_keys ~db_pool =
-  let%map fetched_da_keys = Config.fetch_public_keys ~logger config in
+  let%map.Deferred.Result fetched_da_keys =
+    Config.fetch_public_keys ~logger config
+  in
   let sorted_da_keys =
     List.sort da_keys ~compare:Public_key.Compressed.compare
   in
@@ -325,7 +338,7 @@ let rec start_posting_diffs_from ?pushed_diff t
         | Error err ->
             [%log error] "Failed to post diff to da node: %s"
               (Error.to_string_hum err) ;
-            Error.raise err
+            start_posting_diffs_from t ~node_location ~source_ledger_hash ()
         | Ok (public_key, signature) ->
             [%log info]
               !"Posted diff to da node %s with hash: %{sexp: Ledger_hash.t}"
@@ -344,43 +357,45 @@ let rec start_posting_diffs_from ?pushed_diff t
               ~source_ledger_hash:(Some target_ledger_hash) () )
 
 let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
-  if%bind
+  let return = Deferred.Result.return in
+  if%bind.Deferred.Result
     Rpc.has_diff ~logger:t.logger ~node_location ~ledger_hash:target_ledger_hash
-    >>| Or_error.ok_exn
   then return (Some target_ledger_hash)
   else
-    let%bind target_id =
+    let%bind.Deferred.Result target_id =
       Pool.use
         (fun c -> Diff_table.get_id_by_target c target_ledger_hash)
         t.db_pool
       >>| caqti_ok_exn ~msg:"Failed to get id from target ledger hash: %s"
-      >>| fun opt -> Option.value_exn ~message:"No diff found" opt
+      >>| (fun opt -> Option.value_exn ~message:"No diff found" opt)
+      >>| Result.return
     in
     let rec go ~left ~right =
       if left > right then return None
       else
         let mid = (left + right) / 2 in
-        let%bind mid_ledger_hash =
+        let%bind.Deferred.Result mid_ledger_hash =
           Pool.use (fun c -> Diff_table.get_target_by_id c mid) t.db_pool
           >>| caqti_ok_exn ~msg:"Failed to find mid ledger hash: %s"
-          >>| fun opt ->
-          Option.value_exn ~message:"Mid target ledger hash not found" opt
+          >>| (fun opt ->
+                Option.value_exn ~message:"Mid target ledger hash not found" opt
+                )
+          >>| Result.return
         in
-        let%bind mid_found =
+        let%bind.Deferred.Result mid_found =
           Rpc.has_diff ~logger:t.logger ~node_location
             ~ledger_hash:mid_ledger_hash
-          >>| Or_error.ok_exn
         in
-        let%bind next_ledger_hash =
+        let%bind.Deferred.Result next_ledger_hash =
           Pool.use (fun c -> Diff_table.get_target_by_id c (mid + 1)) t.db_pool
           >>| caqti_ok_exn ~msg:"Failed to find next ledger hash: %s"
+          >>| Result.return
         in
-        let%bind next_found =
+        let%bind.Deferred.Result next_found =
           match next_ledger_hash with
           | Some next_ledger_hash ->
               Rpc.has_diff ~logger:t.logger ~node_location
                 ~ledger_hash:next_ledger_hash
-              >>| Or_error.ok_exn
           | None ->
               return false
         in
@@ -397,7 +412,10 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
     ~target_ledger_hash =
   let logger = t.logger in
   let%bind last_ledger_hash =
-    binary_search_last_ledger_hash t ~node_location ~target_ledger_hash
+    keep_retrying ~logger
+      ~f:(fun () ->
+        binary_search_last_ledger_hash t ~node_location ~target_ledger_hash )
+      ()
   in
   [%log info]
     !"Found last ledger hash: %{sexp: Ledger_hash.t option} for node %s"
@@ -408,9 +426,12 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
     | None ->
         return ()
     | Some last_ledger_hash ->
+        (* In case we've started from checkpoint, we need to refetch the signature *)
         let%bind public_key =
-          Rpc.get_node_public_key ~logger:t.logger ~node_location ()
-          >>| Or_error.ok_exn
+          keep_retrying ~logger:t.logger
+            ~f:(fun () ->
+              Rpc.get_node_public_key ~logger:t.logger ~node_location () )
+            ()
         in
         let%bind is_signature_present =
           Pool.use
@@ -439,8 +460,9 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
           >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s" )
   in
   don't_wait_for
-  @@ start_posting_diffs_from t ~node_location
-       ~source_ledger_hash:last_ledger_hash ()
+    (within' ~monitor:Monitor.main (fun () ->
+         start_posting_diffs_from t ~node_location
+           ~source_ledger_hash:last_ledger_hash () ) )
 
 let start_client t ~target_ledger_hash =
   Deferred.List.iter ~how:`Parallel t.config.nodes ~f:(fun node_location ->

@@ -76,6 +76,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
      ; txn_snark
      } :
       Commit_witness.t ) =
+  let open Deferred.Result.Let_syntax in
   let get_inner_acc ledger =
     let inner_acc =
       Sparse_ledger.get_exn ledger Zeko_constants.inner_account_index
@@ -107,12 +108,22 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
         }
       : Ase.With_length.Stmt.t )
   in
-  (* TODO: check if it needs to be reversed *)
-  let new_inner_actions =
+  let%bind new_inner_actions =
     let from =
       match (Option.value_exn old_inner_acc.zkapp).action_state with
       | x :: _ ->
           x
+    in
+    (* Sanity check *)
+    let%bind () =
+      if Field.equal from (Ase.With_length.Stmt.state inner_ase_source) then
+        return ()
+      else
+        Deferred.return
+          (Error
+             (Error.of_string
+                "old_inner_acc.action_state and \
+                 outer_acc.committed_inner_action_state do not match" ) )
     in
     let to_ =
       match (Option.value_exn new_inner_acc.zkapp).action_state with
@@ -122,13 +133,14 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     Archive.get_actions archive Zeko_constants.inner_account_id
       ~from:(Some from) ~to_:(Some to_)
     |> Result.map_error ~f:Error.of_string
-    |> Or_error.ok_exn
-    (* Drop the first action if it's not the initial state *)
-    |> ( if Stdlib.(from = Zkapp_account.Actions.empty_state_element) then
-         Option.some
-       else List.tl )
-    |> Option.value ~default:[]
-    |> List.map ~f:(fun x -> Zkapp_account.Actions_impl.hash x.actions)
+    |> Result.map ~f:(fun actions ->
+           actions
+           |> ( if Stdlib.(from = Zkapp_account.Actions.empty_state_element) then
+                Option.some
+              else List.tl )
+           |> Option.value ~default:[]
+           |> List.map ~f:(fun x -> Zkapp_account.Actions_impl.hash x.actions) )
+    |> Deferred.return
   in
   let%bind unprocessed_actions =
     Gql_client.fetch_actions archive_uri
@@ -160,7 +172,6 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
             (fst txn_snark).slot_range.upper slot_range.upper
       }
     in
-
     let%map (body, _, calls), proof =
       Zeko_prover.Client.outer_commit provers ~txn_snark ~public_key:zkapp_pk
         ~inner_ase_source ~new_inner_actions ~old_inner_acc ~old_inner_acc_path
@@ -192,15 +203,18 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
 let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
     ~(executor : Executor.t) ~archive ~zkapp_pk ~archive_uri ~l1_config
     ~commit_validity_period =
+  let open Deferred.Result.Let_syntax in
   let%bind { ledger_hash; _ } =
     Gql_client.infer_state executor.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress executor.signer.public_key)
     >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
   in
-  let rec recommit_next ~conn current_state =
+  let rec recommit_next current_state =
     match%bind
-      Commit_table.get_by_source conn current_state
-      >>| caqti_ok_exn ~msg:"Failed to get commit by source: %s"
+      Pool.use
+        (fun conn -> Commit_table.get_by_source conn current_state)
+        db_pool
+      |> Deferred.map ~f:caqti_to_err
     with
     | None ->
         return ()
@@ -223,9 +237,6 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
             ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period witness
         in
         let%bind () = Executor.send_zkapp_command ~logger executor command in
-        recommit_next ~conn target_ledger_hash
+        recommit_next target_ledger_hash
   in
-  Pool.use
-    (fun conn -> recommit_next ~conn ledger_hash >>| Result.return)
-    db_pool
-  >>| caqti_ok_exn ~msg:"Failed to recommit all: %s"
+  recommit_next ledger_hash

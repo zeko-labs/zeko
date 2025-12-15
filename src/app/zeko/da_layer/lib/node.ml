@@ -83,7 +83,7 @@ let get_ledger_hashes_chain t
   go max_length target >>| List.rev
 
 let implementations t =
-  Rpc.Implementations.create_exn ~on_unknown_rpc:`Raise
+  Rpc.Implementations.create_exn ~on_unknown_rpc:`Close_connection
     ~implementations:
       [ (* Post_diff *)
         Rpc.Rpc.implement Rpc_def.Post_diff.V1.t

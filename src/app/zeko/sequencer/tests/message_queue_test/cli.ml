@@ -42,7 +42,7 @@ let send_messages ~logger master =
   |> List.map ~f:(fun id ->
          [%log info] "Sending message %d" id ;
          send_message
-           (if id < 5 then Master.send_exn else Master.send_with_priority_exn)
+           (if id < 5 then Master.send else Master.send_with_priority)
            ~logger master (Int.to_string id) )
 
 let run_client =
