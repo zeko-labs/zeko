@@ -73,23 +73,48 @@ let
         cmd = [ "/bin/dumb-init" "/entrypoint.sh" ];
       };
     };
+  mkBaseEnv = pkgs:
+    pkgs.buildEnv {
+      name = "common-docker-env";
+
+      paths = [
+        pkgs.cacert
+        pkgs.openssl
+        pkgs.tzdata
+        pkgs.glibcLocales
+        pkgs.coreutils
+        pkgs.findutils
+        pkgs.procps
+        pkgs.dockerTools.shadowSetup
+        pkgs.shadow
+
+        pkgs.curl
+        pkgs.jq
+        pkgs.gnutar
+        pkgs.gzip
+        pkgs.lz4
+      ];
+
+      pathsToLink = [ "/bin" "/etc" "share" ];
+    };
 in {
   zeko-image = dockerTools.buildLayeredImage {
     name = "zeko";
     tag = "latest";
     inherit created;
-    contents = [
-      ocamlPackages_mina.devnet.zeko
-      coreutils
-      findutils
-      bashInteractive
-      procps
-      curl
-      jq
-    ];
+    contents =
+      [ ocamlPackages_mina.devnet.zeko bashInteractive (mkBaseEnv pkgs) ];
+
     config = {
       Entrypoint = [ "/bin/zeko-run" ];
-      Env = [ "ZEKO_SIGNATURE_KIND=testnet" ];
+      Env = [
+        "TZ=UTC"
+        "TZDIR=${pkgs.tzdata}/share/zoneinfo"
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+
+        "ZEKO_SIGNATURE_KIND=testnet"
+        "ZEKO_PROGRESS_STYLE=percent"
+      ];
       Cmd = [ "-p" "1925" ];
       WorkingDir = "/root";
     };
@@ -98,15 +123,8 @@ in {
     name = "zeko-da";
     tag = "latest";
     inherit created;
-    contents = [
-      ocamlPackages_mina.devnet.zeko_da
-      coreutils
-      findutils
-      bashInteractive
-      procps
-      curl
-      jq
-    ];
+    contents =
+      [ ocamlPackages_mina.devnet.zeko_da bashInteractive (mkBaseEnv pkgs) ];
     config = {
       Entrypoint = [ "/bin/zeko-da" ];
       Env = [ "ZEKO_SIGNATURE_KIND=testnet" ];
@@ -130,13 +148,8 @@ in {
     inherit created;
     contents = [
       ocamlPackages_mina.devnet.zeko_archive_relay
-      coreutils
-      findutils
       bashInteractive
-      procps
-      curl
-      jq
-      pkgs.cacert
+      (mkBaseEnv pkgs)
     ];
     config = {
       Entrypoint = [ "/bin/zeko-archive-relay" ];
@@ -155,12 +168,8 @@ in {
     inherit created;
     contents = [
       ocamlPackages_mina.devnet.zeko_archive_relay
-      coreutils
-      findutils
       bashInteractive
-      procps
-      curl
-      jq
+      (mkBaseEnv pkgs)
     ];
     config = {
       Entrypoint = [ "/bin/zeko-archive" ];
