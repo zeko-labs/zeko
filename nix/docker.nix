@@ -78,6 +78,7 @@ let
       name = "common-docker-env";
 
       paths = [
+        bashInteractive
         pkgs.cacert
         pkgs.openssl
         pkgs.tzdata
@@ -87,6 +88,7 @@ let
         pkgs.procps
         pkgs.dockerTools.shadowSetup
         pkgs.shadow
+        pkgs.which
 
         pkgs.curl
         pkgs.jq
@@ -95,15 +97,14 @@ let
         pkgs.lz4
       ];
 
-      pathsToLink = [ "/bin" "/etc" "share" ];
+      pathsToLink = [ "/bin" "/etc" "/share" ];
     };
 in {
   zeko-image = dockerTools.buildLayeredImage {
     name = "zeko";
     tag = "latest";
     inherit created;
-    contents =
-      [ ocamlPackages_mina.devnet.zeko bashInteractive (mkBaseEnv pkgs) ];
+    contents = [ ocamlPackages_mina.devnet.zeko (mkBaseEnv pkgs) ];
 
     config = {
       Entrypoint = [ "/bin/zeko-run" ];
@@ -123,11 +124,16 @@ in {
     name = "zeko-da";
     tag = "latest";
     inherit created;
-    contents =
-      [ ocamlPackages_mina.devnet.zeko_da bashInteractive (mkBaseEnv pkgs) ];
+    contents = [ ocamlPackages_mina.devnet.zeko_da (mkBaseEnv pkgs) ];
     config = {
       Entrypoint = [ "/bin/zeko-da" ];
-      Env = [ "ZEKO_SIGNATURE_KIND=testnet" ];
+      Env = [
+        "TZ=UTC"
+        "TZDIR=${pkgs.tzdata}/share/zoneinfo"
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+
+        "ZEKO_SIGNATURE_KIND=testnet"
+      ];
       Cmd = [
         "run-node"
         "--port"
@@ -146,16 +152,16 @@ in {
     name = "zeko-archive-relay";
     tag = "latest";
     inherit created;
-    contents = [
-      ocamlPackages_mina.devnet.zeko_archive_relay
-      bashInteractive
-      (mkBaseEnv pkgs)
-    ];
+    contents =
+      [ ocamlPackages_mina.devnet.zeko_archive_relay (mkBaseEnv pkgs) ];
     config = {
       Entrypoint = [ "/bin/zeko-archive-relay" ];
       Cmd = [ "--db-dir" "/archive-relay-db" ];
       Env = [
+        "TZ=UTC"
+        "TZDIR=${pkgs.tzdata}/share/zoneinfo"
         "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+
         "ZEKO_SIGNATURE_KIND=testnet"
       ];
       Volumes = { "/archive-relay-db" = { }; };
@@ -166,15 +172,15 @@ in {
     name = "zeko-archive";
     tag = "latest";
     inherit created;
-    contents = [
-      ocamlPackages_mina.devnet.zeko_archive_relay
-      bashInteractive
-      (mkBaseEnv pkgs)
-    ];
+    contents =
+      [ ocamlPackages_mina.devnet.zeko_archive_relay (mkBaseEnv pkgs) ];
     config = {
       Entrypoint = [ "/bin/zeko-archive" ];
       Env = [
+        "TZ=UTC"
+        "TZDIR=${pkgs.tzdata}/share/zoneinfo"
         "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+
         "ZEKO_SIGNATURE_KIND=testnet"
       ];
     };
