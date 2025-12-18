@@ -716,17 +716,22 @@ module Sequencer = struct
     else
       let logger = t.logger in
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
-      every ~start:(after period) ~stop:(Ivar.read t.closed) period (fun () ->
-          don't_wait_for
-            (within' ~monitor:Monitor.main (fun () ->
-                 let%bind ledger_applied = commit t >>| Or_error.ok_exn in
-                 match%map ledger_applied >>| Or_error.ok_exn with
-                 | Some (stmt, _) ->
-                     [%log info] "Committed: %s -> %s"
-                       (Ledger_hash.to_decimal_string stmt.source_ledger)
-                       (Ledger_hash.to_decimal_string stmt.target_ledger)
-                 | None ->
-                     [%log info] "Skipped commit" ) ) )
+      let rec go () =
+        let after = after period in
+        let%bind ledger_applied = commit t >>| Or_error.ok_exn in
+        let%bind () =
+          match%map ledger_applied >>| Or_error.ok_exn with
+          | Some (stmt, _) ->
+              [%log info] "Committed: %s -> %s"
+                (Ledger_hash.to_decimal_string stmt.source_ledger)
+                (Ledger_hash.to_decimal_string stmt.target_ledger)
+          | None ->
+              [%log info] "Skipped commit"
+        in
+        let%bind () = Deferred.any [ after; Ivar.read t.closed ] in
+        if Ivar.is_full t.closed then return () else go ()
+      in
+      don't_wait_for (within' ~monitor:Monitor.main (fun () -> go ()))
 
   let sync ~logger ({ config; _ } as t) da_config source =
     [%log info] "Syncing" ;
