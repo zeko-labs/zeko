@@ -569,12 +569,14 @@ module Sequencer = struct
       C.Rollup_state.Outer_action_state.With_length.(raw s, length s)
     in
     let%bind all_new_actions =
-      Gql_client.fetch_actions t.config.archive_uri
+      Gql_client.fetch_actions ~logger t.config.archive_uri
         ~from_action_state:old_synced_outer_action_state
         Zeko_circuits_config.Inputs.zeko_l1
     in
     [%log info] "All new actions: %d" (List.length all_new_actions) ;
-    let%bind current_height = Gql_client.fetch_block_height t.config.l1_uri in
+    let%bind current_height =
+      Gql_client.fetch_block_height ~logger t.config.l1_uri
+    in
     (* Find pointer for actions to be processed *)
     let processed_pointer, processed_new_actions =
       List.fold all_new_actions ~init:(old_synced_outer_action_state, [])
@@ -736,7 +738,7 @@ module Sequencer = struct
   let sync ~logger ({ config; _ } as t) da_config source =
     [%log info] "Syncing" ;
     let%bind commited_ledger_hash =
-      Gql_client.infer_state config.l1_uri
+      Gql_client.infer_state ~logger config.l1_uri
         ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~signer_pk:(Public_key.compress config.signer.public_key)
       >>| Or_error.ok_exn
@@ -877,7 +879,7 @@ module Sequencer = struct
     | false, false -> (
         [%log info] "No ledger and IMT directories exist, fetching commits" ;
         let%bind commits =
-          Gql_client.fetch_actions archive_uri zkapp_pk
+          Gql_client.fetch_actions ~logger archive_uri zkapp_pk
           >>| Or_error.ok_exn
           >>| List.filter_map ~f:(fun (fields, _, _, _, _) ->
                   match fields with
@@ -892,7 +894,7 @@ module Sequencer = struct
                     None )
         in
         let%map commited_ledger_hash =
-          Gql_client.infer_state l1_uri
+          Gql_client.infer_state ~logger l1_uri
             ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
             ~signer_pk:(Public_key.compress signer_pk)
           >>| Or_error.ok_exn

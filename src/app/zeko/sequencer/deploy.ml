@@ -44,7 +44,7 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
 
   Thread_safe.block_on_async_exn (fun () ->
       let%bind nonce =
-        Gql_client.infer_nonce l1_uri
+        Gql_client.infer_nonce ~logger l1_uri
           (Public_key.compress sender_keypair.public_key)
         >>| Or_error.ok_exn
       in

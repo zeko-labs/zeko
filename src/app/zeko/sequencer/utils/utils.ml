@@ -5,7 +5,7 @@ open Snark_params.Tick
 open Async
 open Zeko_circuits.Zeko_util
 
-let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
+let retry ?logger ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
   let rec go attempt =
     match%bind
       Monitor.try_with ~here:[%here] f
@@ -14,7 +14,15 @@ let retry ?(max_attempts = 5) ?(delay = Time.Span.of_sec 1.) ~f () =
     with
     | Ok x ->
         return (Ok x)
-    | Error _ when attempt < max_attempts ->
+    | Error e when attempt < max_attempts ->
+        let () =
+          match logger with
+          | None ->
+              ()
+          | Some logger ->
+              [%log warn] "Failed to execute function, retrying..."
+                ~metadata:[ ("error", `String (Error.to_string_hum e)) ]
+        in
         let%bind () = after delay in
         go (attempt + 1)
     | Error e ->

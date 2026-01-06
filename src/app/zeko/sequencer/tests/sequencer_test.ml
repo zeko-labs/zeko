@@ -138,7 +138,7 @@ let () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
           let%bind { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -166,9 +166,11 @@ let () =
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -191,9 +193,11 @@ let () =
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
-            let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+            let%bind _created =
+              Gql_client.For_tests.create_new_block ~logger gql_uri
+            in
             let%bind { ledger_hash = committed_ledger_hash; _ } =
-              Gql_client.infer_state gql_uri
+              Gql_client.infer_state ~logger gql_uri
                 ~signer_pk:(Public_key.compress signer.public_key)
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
@@ -334,7 +338,7 @@ let () =
               Executor.wait_to_finish new_sequencer.merger_ctx.executor
             in
             let%map { ledger_hash = committed_ledger_hash; _ } =
-              Gql_client.infer_state gql_uri
+              Gql_client.infer_state ~logger gql_uri
                 ~signer_pk:(Public_key.compress signer.public_key)
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
@@ -429,7 +433,7 @@ let () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
             let%map { ledger_hash = committed_ledger_hash; _ } =
-              Gql_client.infer_state gql_uri
+              Gql_client.infer_state ~logger gql_uri
                 ~signer_pk:(Public_key.compress signer.public_key)
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
@@ -533,9 +537,11 @@ let () =
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
-            let%bind _cleared = Gql_client.For_tests.clear_pool gql_uri in
+            let%bind _cleared =
+              Gql_client.For_tests.clear_pool ~logger gql_uri
+            in
             let%map { ledger_hash = committed_ledger_hash; _ } =
-              Gql_client.infer_state gql_uri
+              Gql_client.infer_state ~logger gql_uri
                 ~signer_pk:(Public_key.compress signer.public_key)
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
@@ -563,9 +569,11 @@ let () =
 
       print_endline "(* Check that after restart it recommited *)" ;
       run (fun () ->
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -716,9 +724,11 @@ let () =
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -757,14 +767,14 @@ let () =
       run (fun () ->
           Deferred.List.iter l1_accounts ~f:(fun keypair ->
               let%bind _res =
-                Gql_client.For_tests.create_account gql_uri
+                Gql_client.For_tests.create_account ~logger gql_uri
                   (Signature_lib.Public_key.compress keypair.public_key)
               in
               return () ) ) ;
 
       let submit_deposit ~fee (signer : Keypair.t) deposit_params =
         let%bind nonce =
-          Gql_client.fetch_nonce gql_uri
+          Gql_client.fetch_nonce ~logger gql_uri
             (Signature_lib.Public_key.compress signer.public_key)
           >>| Or_error.ok_exn
         in
@@ -854,7 +864,9 @@ let () =
               submit_deposit ~fee:4 account3 deposit3
               >>= Gql_client.send_zkapp gql_uri
             in
-            let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+            let%bind _created =
+              Gql_client.For_tests.create_new_block ~logger gql_uri
+            in
             return
               [ (account1, deposit1)
               ; (account2, deposit2)
@@ -869,9 +881,11 @@ let () =
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -902,7 +916,7 @@ let () =
                 >>= Gql_client.send_zkapp gql_uri
               in
               let%bind _created =
-                Gql_client.For_tests.create_new_block gql_uri
+                Gql_client.For_tests.create_new_block ~logger gql_uri
               in
               return
                 [ (account1, deposit4)
@@ -918,9 +932,11 @@ let () =
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -937,9 +953,11 @@ let () =
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -962,7 +980,7 @@ let () =
             }
         in
         let%bind actions =
-          Gql_client.fetch_actions gql_uri
+          Gql_client.fetch_actions ~logger gql_uri
             (Public_key.compress outer_kp.public_key)
           >>| Or_error.ok_exn
           >>| List.map ~f:(fun (fields, _, _, before, after) ->
@@ -1014,7 +1032,7 @@ let () =
           Sequencer.current_synced_outer_action_state !sequencer
         in
         let%bind ase_actions =
-          Gql_client.fetch_actions gql_uri
+          Gql_client.fetch_actions ~logger gql_uri
             ~from_action_state:after_nearest_commit_action_state
             ~end_action_state:
               C.Rollup_state.Outer_action_state.(
@@ -1136,7 +1154,9 @@ let () =
               submit_deposit ~fee:1 account3 deposit9
               >>= Gql_client.send_zkapp gql_uri
             in
-            let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+            let%bind _created =
+              Gql_client.For_tests.create_new_block ~logger gql_uri
+            in
             return
               [ (account1, deposit7)
               ; (account2, deposit8)
@@ -1149,16 +1169,20 @@ let () =
       (* shift has to be more than timeout but less than commit validity period for canceled deposit *)
       print_endline "(* Commit 7-9 deposits after timeout *)" ;
       run (fun () ->
-          let%bind _shifted = Gql_client.For_tests.shift_slots gql_uri 15 in
+          let%bind _shifted =
+            Gql_client.For_tests.shift_slots ~logger gql_uri 15
+          in
           Utils.Slot.For_tests.add_to_global_slot := 15 ;
           let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
           let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -1170,7 +1194,7 @@ let () =
 
       let cancel_deposit ~fee (signer : Keypair.t) deposit_params =
         let%bind nonce =
-          Gql_client.fetch_nonce gql_uri
+          Gql_client.fetch_nonce ~logger gql_uri
             (Signature_lib.Public_key.compress signer.public_key)
           >>| Or_error.ok_exn
         in
@@ -1186,7 +1210,7 @@ let () =
             }
         in
         let%bind actions =
-          Gql_client.fetch_actions gql_uri
+          Gql_client.fetch_actions ~logger gql_uri
             (Public_key.compress outer_kp.public_key)
           >>| Or_error.ok_exn
           >>| List.map ~f:(fun (fields, _, _, before, after) ->
@@ -1284,7 +1308,8 @@ let () =
                          Zeko_circuits_config.Inputs.helper_token_owner_l1 ) ) )
           in
           match%map
-            Gql_client.fetch_state_opt gql_uri helper_aid >>| Or_error.ok_exn
+            Gql_client.fetch_state_opt ~logger gql_uri helper_aid
+            >>| Or_error.ok_exn
           with
           | Some (next_cancelled_deposit :: _next_withdrawal :: _) ->
               Some (UInt32.of_string (Field.to_string next_cancelled_deposit))
@@ -1368,10 +1393,10 @@ let () =
                 in
                 let%bind _ = Gql_client.send_zkapp gql_uri command in
                 let%bind _created =
-                  Gql_client.For_tests.create_new_block gql_uri
+                  Gql_client.For_tests.create_new_block ~logger gql_uri
                 in
                 let%map status =
-                  Gql_client.For_tests.get_zkapp_command_status gql_uri
+                  Gql_client.For_tests.get_zkapp_command_status ~logger gql_uri
                     (Mina_transaction.Transaction_hash.hash_command
                        (Zkapp_command command) )
                 in
@@ -1482,9 +1507,11 @@ let () =
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -1521,7 +1548,7 @@ let () =
                 >>| [%test_eq: unit Or_error.t] (Ok ())
               in
               let%bind _created =
-                Gql_client.For_tests.create_new_block gql_uri
+                Gql_client.For_tests.create_new_block ~logger gql_uri
               in
               return
                 [ (account1, withdrawal4)
@@ -1537,9 +1564,11 @@ let () =
           let%bind () =
             Executor.wait_to_finish !sequencer.merger_ctx.executor
           in
-          let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+          let%bind _created =
+            Gql_client.For_tests.create_new_block ~logger gql_uri
+          in
           let%map { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state gql_uri
+            Gql_client.infer_state ~logger gql_uri
               ~signer_pk:(Public_key.compress signer.public_key)
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
@@ -1551,7 +1580,7 @@ let () =
 
       let finalize_withdrawal ~fee (signer : Keypair.t) withdrawal_params =
         let%bind nonce =
-          Gql_client.fetch_nonce gql_uri
+          Gql_client.fetch_nonce ~logger gql_uri
             (Signature_lib.Public_key.compress signer.public_key)
           >>| Or_error.ok_exn
         in
@@ -1567,7 +1596,7 @@ let () =
             }
         in
         let%bind l1_actions =
-          Gql_client.fetch_actions gql_uri
+          Gql_client.fetch_actions ~logger gql_uri
             (Public_key.compress outer_kp.public_key)
           >>| Or_error.ok_exn
           >>| List.map ~f:(fun (fields, _, _, before, after) ->
@@ -1659,7 +1688,8 @@ let () =
                          Zeko_circuits_config.Inputs.helper_token_owner_l1 ) ) )
           in
           match%map
-            Gql_client.fetch_state_opt gql_uri helper_aid >>| Or_error.ok_exn
+            Gql_client.fetch_state_opt ~logger gql_uri helper_aid
+            >>| Or_error.ok_exn
           with
           | Some (_next_cancelled_deposit :: next_withdrawal :: _) ->
               Some (UInt32.of_string (Field.to_string next_withdrawal))
@@ -1732,7 +1762,9 @@ let () =
 
       print_endline "(* Finalize all withdrawals *)" ;
       run (fun () ->
-          let%bind _shifted = Gql_client.For_tests.shift_slots gql_uri 200 in
+          let%bind _shifted =
+            Gql_client.For_tests.shift_slots ~logger gql_uri 200
+          in
           let%bind () =
             Deferred.List.iteri withdrawals
               ~f:(fun i (signer, withdrawal_params) ->
@@ -1742,10 +1774,10 @@ let () =
                 in
                 let%bind _ = Gql_client.send_zkapp gql_uri command in
                 let%bind _created =
-                  Gql_client.For_tests.create_new_block gql_uri
+                  Gql_client.For_tests.create_new_block ~logger gql_uri
                 in
                 let%map status =
-                  Gql_client.For_tests.get_zkapp_command_status gql_uri
+                  Gql_client.For_tests.get_zkapp_command_status ~logger gql_uri
                     (Mina_transaction.Transaction_hash.hash_command
                        (Zkapp_command command) )
                 in

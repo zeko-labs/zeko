@@ -85,19 +85,19 @@ let update_outer_verification_keys =
          in
 
          let%bind fetched_outer_vk =
-           Gql_client.fetch_vk l1_uri
+           Gql_client.fetch_vk ~logger l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
            >>| Or_error.ok_exn >>| Compile_simple.Verification_key.of_pickles
            >>| Compile_simple.Verification_key.hash
          and fetched_bridge_holder_vk =
-           Gql_client.fetch_vk l1_uri
+           Gql_client.fetch_vk ~logger l1_uri
              ( Account_id.of_public_key @@ Public_key.decompress_exn
              @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
            >>| Or_error.ok_exn >>| Compile_simple.Verification_key.of_pickles
            >>| Compile_simple.Verification_key.hash
          and fetched_helper_token_owner_vk =
-           Gql_client.fetch_vk l1_uri
+           Gql_client.fetch_vk ~logger l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn
                   Zeko_circuits_config.t.helper_token_owner_l1 )
@@ -140,7 +140,7 @@ let update_outer_verification_keys =
          if only_check then return ()
          else
            let%bind nonce =
-             Gql_client.infer_nonce l1_uri
+             Gql_client.infer_nonce ~logger l1_uri
                (Public_key.compress sender.public_key)
              >>| Or_error.ok_exn
            in
@@ -194,7 +194,7 @@ let update_inner_verification_keys =
 
          (* Fetch current state *)
          let%bind commited_ledger_hash =
-           Gql_client.infer_state l1_uri
+           Gql_client.infer_state ~logger l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
@@ -345,7 +345,7 @@ let update_inner_verification_keys =
            in
            let%bind command =
              let%map nonce =
-               Gql_client.infer_nonce l1_uri
+               Gql_client.infer_nonce ~logger l1_uri
                  (Public_key.compress sender.public_key)
                >>| Or_error.ok_exn
              in
@@ -416,7 +416,7 @@ let update_da_key =
 
          (* Fetch current da key *)
          let%bind current_da_key =
-           Gql_client.infer_state l1_uri
+           Gql_client.infer_state ~logger l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
@@ -443,7 +443,7 @@ let update_da_key =
          else
            let%bind command =
              let%map nonce =
-               Gql_client.infer_nonce l1_uri
+               Gql_client.infer_nonce ~logger l1_uri
                  (Public_key.compress sender.public_key)
                >>| Or_error.ok_exn
              in
@@ -503,11 +503,12 @@ let update_permissions =
          Stdout_log.setup log_json log_level ;
 
          let%bind nonce =
-           Gql_client.infer_nonce l1_uri (Public_key.compress sender.public_key)
+           Gql_client.infer_nonce ~logger l1_uri
+             (Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
          in
          let%bind command =
-           Deploy.update_permissions
+           Deploy.update_permissions ~logger
              ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
              ~fee:(Currency.Fee.of_mina_string_exn "0.1")
              ~nonce ~gql_uri:l1_uri
@@ -562,7 +563,7 @@ let set_pause =
 
          (* Fetch current state *)
          let%bind current_paused =
-           Gql_client.infer_state l1_uri
+           Gql_client.infer_state ~logger l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
@@ -575,7 +576,7 @@ let set_pause =
 
          let%bind command =
            let%map nonce =
-             Gql_client.infer_nonce l1_uri
+             Gql_client.infer_nonce ~logger l1_uri
                (Public_key.compress sender.public_key)
              >>| Or_error.ok_exn
            in
