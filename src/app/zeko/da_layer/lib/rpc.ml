@@ -57,19 +57,6 @@ module Has_diff = struct
   end
 end
 
-(* val get_all_keys : unit -> Ledger_hash.t list *)
-module Get_all_keys = struct
-  module V1 = struct
-    module Response = struct
-      type t = Ledger_hash.Stable.V1.t list [@@deriving bin_io_unversioned]
-    end
-
-    let t : (unit, Response.t) Rpc.Rpc.t =
-      Rpc.Rpc.create ~name:"Get_all_keys" ~version:1 ~bin_query:Unit.bin_t
-        ~bin_response:Response.bin_t
-  end
-end
-
 (* val get_diff_source : Ledger_hash.t -> Ledger_hash.t *)
 module Get_diff_source = struct
   module V1 = struct

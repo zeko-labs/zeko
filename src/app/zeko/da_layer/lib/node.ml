@@ -110,9 +110,6 @@ let implementations t =
       ; (* Has_diff *)
         Rpc.Rpc.implement Rpc_def.Has_diff.V1.t (fun () query ->
             Db.Async.has_diff t.db ~ledger_hash:query )
-      ; (* Get_all_keys *)
-        Rpc.Rpc.implement Rpc_def.Get_all_keys.V1.t (fun () () ->
-            Db.Async.get_index t.db )
       ; (* Get_diff_source *)
         Rpc.Rpc.implement Rpc_def.Get_diff_source.V1.t (fun () query ->
             Db.Async.get_diff t.db ~ledger_hash:query

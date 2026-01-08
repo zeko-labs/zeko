@@ -206,9 +206,6 @@ module Rpc = struct
             (Ok (Option.map result ~f:(fun x -> Diff.Stable.V1.to_latest x)))
         else return (Error e)
 
-  let get_all_keys ~logger ~node_location () =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.V1.t ()
-
   let get_diff_source ~logger ~node_location ~ledger_hash =
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.V1.t
       ledger_hash
