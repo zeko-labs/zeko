@@ -61,7 +61,12 @@ jobs:
 
       - name: ❄️ Install Nix
         if: steps.checktag.outputs.tag == 'not found'
-        uses: cachix/install-nix-action@v27
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            allow-import-from-derivation = true
+            extra-substituters = https://storage.googleapis.com/mina-nix-cache
+            extra-trusted-public-keys = nix-cache.minaprotocol.org:fdcuDzmnM0Kbf7yU4yywBuUEJWClySc1WIF6t6Mm8h4= nix-cache.minaprotocol.org:D3B1W+V7ND1Fmfii8EhbAbF1JXoe2Ct4N34OKChwk2c= mina-nix-cache-1:djtioLfv2oxuK2lqPUgmZbf8bY8sK/BnYZCU2iU5Q10=
 
       - name: 🛠️ Build ${{ matrix.package }} OCI image
         run: nix build .?submodules=1#${{ matrix.package }}-image
