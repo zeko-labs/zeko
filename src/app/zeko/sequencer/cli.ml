@@ -208,6 +208,10 @@ let update_inner_verification_keys =
            Ledger.create_ephemeral
              ~depth:Zeko_constants.constraint_constants.ledger_depth ()
          in
+         let imt =
+           Indexed_merkle_tree.Db.create
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+         in
          let da_config = Da_layer.Client.Config.of_string_list [ da_node ] in
          let%bind () =
            Da_layer.Client.map_diffs ~logger ~config:da_config
@@ -229,6 +233,14 @@ let update_inner_verification_keys =
                in
                List.iter changed_accounts ~f:(fun (index, account) ->
                    Ledger.set_at_index_exn ledger index account ) ;
+               (* Add to Indexed Merkle Tree *)
+               List.iter changed_accounts ~f:(fun (_, account) ->
+                   let aid = Account.identifier account in
+                   let _w =
+                     Indexed_merkle_tree.Db.get_or_create_entry_exn imt
+                       (Account_id.derive_token_id ~owner:aid)
+                   in
+                   () ) ;
                return () )
            >>| Or_error.ok_exn >>| ignore
          in
@@ -339,9 +351,24 @@ let update_inner_verification_keys =
              Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:diff
                ~command_with_action_step_flags:None
            in
+           let new_accounts_keys =
+             List.filter (Da_layer.Diff.changed_accounts diff)
+               ~f:(fun (index, _) ->
+                 Account.equal
+                   (Sparse_ledger.get_exn ledger_openings index)
+                   Account.empty )
+             |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+             |> List.map ~f:(fun (_, account) ->
+                    Account_id.derive_token_id
+                      ~owner:(Account.identifier account) )
+           in
            let%bind () =
              Da_layer.Client.distribute_diff ~logger ~config:da_config
-               ~ledger_openings ~diff
+               ~ledger_openings
+               ~acc_set_openings:
+                 (Indexed_merkle_tree.Sparse.of_db_subset ~db:imt
+                    ~keys:new_accounts_keys )
+               ~diff
            in
            let%bind command =
              let%map nonce =

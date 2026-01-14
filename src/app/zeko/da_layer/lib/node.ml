@@ -1,6 +1,5 @@
 open Core_kernel
 open Mina_base
-open Mina_ledger
 open Signature_lib
 module Rpc_def = Rpc
 open Async
@@ -15,41 +14,13 @@ type t =
   ; proof_cache_db : Proof_cache_tag.cache_db
   }
 
-let sync t ~node_location ~ledger_hash =
-  let logger = t.logger in
-  [%log info] "Syncing" ;
-  [%log info] "Fetching intervals" ;
-  let ledger =
-    Ledger.create_ephemeral ~depth:constraint_constants.ledger_depth ()
-  in
-  Client.map_diffs ~logger ~depth:constraint_constants.ledger_depth
-    ~config:(Client.Config.of_node_locations [ node_location ])
-    ~source_ledger_hash:`Genesis ~target_ledger_hash:ledger_hash ()
-    ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
-      let progress = Float.of_int current_chunk /. Float.of_int chunks_length in
-      printf "Progress: %.2f%%\n%!" (progress *. 100.0) ;
-      let diff = Diff.drop_time diff in
-      let ledger_openings = Client.get_openings ~diff ~ledger in
-      match
-        Core.post_diff ~logger ~proof_cache_db:t.proof_cache_db ~kvdb:t.db
-          ~network_id:t.chain ~signer:t.signer ~ledger_openings ~diff
-      with
-      | Ok _signature ->
-          return (Ok ())
-      | Error e ->
-          let logger = t.logger in
-          [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;
-          return (Error e) )
-  >>| Result.map ~f:(fun asd -> Result.all_unit asd)
-  >>| Result.join
-
 let get_signature t ~ledger_hash =
-  let%bind.Option _diff = Db.get_diff t.db ~ledger_hash in
+  let%bind.Option diff = Db.get_diff t.db ~ledger_hash in
   let message =
     Random_oracle.Input.Chunked.field
     @@ Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
-         [| ledger_hash |]
+         [| ledger_hash; diff.acc_set |]
   in
   Some
     (Schnorr.Chunked.sign ~signature_kind:t.chain t.signer.private_key message)
@@ -75,7 +46,7 @@ let get_ledger_hashes_chain t
         >>| fun diff ->
         Option.value_exn ~here:[%here]
           ~message:"Get_ledger_hashes_chain: diff not found" diff
-        |> Diff.Stable.V2.source_ledger_hash
+        |> Diff.Stable.V3.source_ledger_hash
       in
       let%map next = go (n - 1) source in
       current :: next
@@ -87,11 +58,11 @@ let implementations t =
     ~implementations:
       [ (* Post_diff *)
         Rpc.Rpc.implement Rpc_def.Post_diff.V1.t
-          (fun () { ledger_openings; diff } ->
+          (fun () { ledger_openings; acc_set_openings; diff } ->
             match
               Core.post_diff ~logger:t.logger ~proof_cache_db:t.proof_cache_db
                 ~kvdb:t.db ~network_id:t.chain ~signer:t.signer ~ledger_openings
-                ~diff
+                ~acc_set_openings ~diff
             with
             | Ok signature ->
                 let pk = Public_key.compress t.signer.public_key in
@@ -105,7 +76,7 @@ let implementations t =
             let%map v2_diff = Db.Async.get_diff t.db ~ledger_hash:query in
             let v1_diff = Option.map v2_diff ~f:Diff.drop_time in
             v1_diff )
-      ; Rpc.Rpc.implement Rpc_def.Get_diff.V2.t (fun () query ->
+      ; Rpc.Rpc.implement Rpc_def.Get_diff.V3.t (fun () query ->
             Db.Async.get_diff t.db ~ledger_hash:query )
       ; (* Has_diff *)
         Rpc.Rpc.implement Rpc_def.Has_diff.V1.t (fun () query ->
@@ -146,8 +117,7 @@ let implementations t =
                 Option.value_exn ~here:[%here] ~message:"Diff not found" diff ) )
       ]
 
-let create_server ~chain ~sync_arg ~port ~logger ~db_dir ~signer_sk
-    ~no_migrations () =
+let create_server ~chain ~port ~logger ~db_dir ~signer_sk ~no_migrations () =
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
   in
@@ -167,18 +137,6 @@ let create_server ~chain ~sync_arg ~port ~logger ~db_dir ~signer_sk
     Db.set_migration t.db ~migration:Migrations.latest_migration ;
 
   if not no_migrations then Migrations.run_migrations ~logger t.db ;
-
-  let%bind () =
-    match sync_arg with
-    | None ->
-        return ()
-    | Some (node_location, ledger_hash) -> (
-        match%bind sync t ~node_location ~ledger_hash with
-        | Ok () ->
-            return ()
-        | Error e ->
-            failwith (Error.to_string_hum e) )
-  in
 
   let implementations = implementations t in
   Tcp.Server.create

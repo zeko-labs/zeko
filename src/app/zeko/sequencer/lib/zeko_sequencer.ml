@@ -483,9 +483,23 @@ module Sequencer = struct
                          Zkapp_command.all_account_updates_list command
                          |> List.map ~f:(fun _ -> true) ) )
           in
+          let new_accounts_keys =
+            List.filter changed_accounts ~f:(fun (index, _) ->
+                Account.equal
+                  (Sparse_ledger.get_exn source_ledger index)
+                  Account.empty )
+            |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+            |> List.map ~f:(fun (_, account) ->
+                   Account_id.derive_token_id
+                     ~owner:(Account.identifier account) )
+          in
           let%bind () =
             Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-              ~ledger_openings:source_ledger ~diff
+              ~ledger_openings:source_ledger
+              ~acc_set_openings:
+                (Indexed_merkle_tree.Sparse.of_db_subset ~db:t.imt
+                   ~keys:new_accounts_keys )
+              ~diff
               ~target_ledger_hash:(L.Db.merkle_root t.ledger)
           in
 
@@ -545,9 +559,23 @@ module Sequencer = struct
                 ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
                 ~changed_accounts ~command_with_action_step_flags:None
             in
+            let new_accounts_keys =
+              List.filter changed_accounts ~f:(fun (index, _) ->
+                  Account.equal
+                    (Sparse_ledger.get_exn source_ledger index)
+                    Account.empty )
+              |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+              |> List.map ~f:(fun (_, account) ->
+                     Account_id.derive_token_id
+                       ~owner:(Account.identifier account) )
+            in
             let%bind () =
               Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-                ~ledger_openings:source_ledger ~diff
+                ~ledger_openings:source_ledger
+                ~acc_set_openings:
+                  (Indexed_merkle_tree.Sparse.of_db_subset ~db:t.imt
+                     ~keys:new_accounts_keys )
+                ~diff
                 ~target_ledger_hash:(L.Db.merkle_root t.ledger)
             in
             match%map
@@ -764,9 +792,15 @@ module Sequencer = struct
           let%bind diffs = Da_layer.Client.create_genesis_diffs ledger in
           let%bind () =
             Deferred.List.iteri ~how:`Sequential diffs
-              ~f:(fun i (diff, ledger_openings, `Target target_ledger_hash) ->
+              ~f:(fun
+                   i
+                   ( diff
+                   , ledger_openings
+                   , acc_set_openings
+                   , `Target target_ledger_hash )
+                 ->
                 Da_layer.Client.enqueue_diff t.da_client ~diff ~ledger_openings
-                  ~target_ledger_hash ~genesis:(i = 0) )
+                  ~acc_set_openings ~target_ledger_hash ~genesis:(i = 0) )
           in
           [%log info] "Enqueued genesis diff" ;
           return ()
@@ -793,7 +827,7 @@ module Sequencer = struct
           (* Apply accounts diff *)
           let mask = L.of_database t.ledger in
           let ledger_openings =
-            Da_layer.Client.get_openings
+            Da_layer.Client.get_ledger_openings
               ~diff:(Da_layer.Diff.drop_time diff)
               ~ledger:mask
           in
@@ -814,11 +848,17 @@ module Sequencer = struct
               in
               () ) ;
 
+          let acc_set_openings =
+            Da_layer.Client.get_acc_set_openings
+              ~diff:(Da_layer.Diff.drop_time diff)
+              ~ledger_openings ~imt:t.imt
+          in
+
           (* Store diff to DA client *)
           let%bind () =
             Da_layer.Client.enqueue_diff t.da_client
               ~diff:(Da_layer.Diff.drop_time diff)
-              ~ledger_openings
+              ~ledger_openings ~acc_set_openings
               ~target_ledger_hash:(L.Db.merkle_root t.ledger)
               ~genesis:(current_chunk = 0 && current_diff = 0)
           in

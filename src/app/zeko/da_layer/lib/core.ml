@@ -9,10 +9,11 @@ open Signature_lib
     4. Set each account in [diff.diff] to the [ledger_openings] and call the resulting ledger hash [target_ledger_hash].
     5. Sign [target_ledger_hash].
     6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
-    7. Attach timestamp.
-    8. Store the diff under the [target_ledger_hash]. *)
+    7. Check that new accounts in ledger openings are in same order as in acc set openings.
+    8. Attach timestamp and acc set root.
+    9. Store the diff under the [target_ledger_hash]. *)
 let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
-    ~ledger_openings ~diff =
+    ~ledger_openings ~acc_set_openings ~diff =
   (* 1 *)
   let%bind.Result () =
     match
@@ -86,7 +87,9 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
     Random_oracle.Input.Chunked.field
     @@ Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
-         [| target_ledger_hash |]
+         [| target_ledger_hash
+          ; Indexed_merkle_tree.Sparse.merkle_root acc_set_openings
+         |]
   in
   let signature =
     Schnorr.Chunked.sign ~signature_kind:network_id signer.private_key message
@@ -191,10 +194,54 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
   in
 
   (* 7 *)
-  (* V2 was added time *)
-  let diff : Diff.Stable.V2.t = Diff.add_time ~logger diff in
+  let%bind.Result () =
+    try
+      let new_accounts =
+        List.filter (Diff.changed_accounts diff) ~f:(fun (index, _) ->
+            Account.equal
+              (Sparse_ledger.get_exn ledger_openings index)
+              Account.empty )
+        |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+      in
+      let acc_set_entries =
+        List.map new_accounts ~f:(fun (_, account) ->
+            let key =
+              Account_id.derive_token_id ~owner:(Account.identifier account)
+            in
+            let acc_set_index =
+              Indexed_merkle_tree.Sparse.find_index_exn acc_set_openings
+                (Indexed_merkle_tree.Account_id.with_empty_key key)
+            in
+            let entry =
+              Indexed_merkle_tree.Sparse.get_exn acc_set_openings acc_set_index
+            in
+            (acc_set_index, entry.value) )
+        |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+        |> List.map ~f:(fun (_, value) -> value)
+      in
+      let ledger_entries =
+        List.map new_accounts ~f:(fun (_, account) ->
+            Account_id.derive_token_id ~owner:(Account.identifier account) )
+      in
+      if List.equal Token_id.equal acc_set_entries acc_set_entries then Ok ()
+      else
+        Error
+          (Error.create
+             "New accounts in ledger openings are not in same order as in acc \
+              set openings"
+             (ledger_entries, acc_set_entries)
+             [%sexp_of: Token_id.t list * Token_id.t list] )
+    with e -> Error (Error.of_exn e)
+  in
 
   (* 8 *)
+  (* V2 was added time *)
+  let diff : Diff.Stable.V3.t =
+    Diff.add_time_and_acc_set ~logger diff
+      ~acc_set:(Indexed_merkle_tree.Sparse.merkle_root acc_set_openings)
+  in
+
+  (* 9 *)
   (* We don't care if the diff already existed *)
   let () =
     match Db.add_diff kvdb ~ledger_hash:target_ledger_hash ~diff with

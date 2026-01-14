@@ -148,9 +148,13 @@ module type Database_intf = sig
   type witness =
     [ `X of Token_id.t ]
     * [ `X_path of Path.t ]
+    * [ `Y_prev_hash of Field.t ]
+    * [ `Y_prev_path of Path.t ]
     * [ `Y of Token_id.t ]
     * [ `Y_path of Path.t ]
     * [ `Z of Token_id.t ]
+
+  val depth : t -> int
 
   val merkle_root : t -> Hash.t
 
@@ -171,6 +175,10 @@ module type Database_intf = sig
   val make_checkpoint : t -> directory_name:string -> unit
 
   val create_checkpoint : t -> directory_name:string -> unit -> t
+
+  val get_entry_by_tid : t -> Token_id.t -> Entry.t option
+
+  val get_path_by_tid : t -> Token_id.t -> Path.t option
 end
 
 let lowest_key = Token_id.of_field Field.zero
@@ -194,6 +202,8 @@ module Db : Database_intf = struct
   type witness =
     [ `X of Token_id.t ]
     * [ `X_path of Path.t ]
+    * [ `Y_prev_hash of Field.t ]
+    * [ `Y_prev_path of Path.t ]
     * [ `Y of Token_id.t ]
     * [ `Y_path of Path.t ]
     * [ `Z of Token_id.t ]
@@ -309,12 +319,24 @@ module Db : Database_intf = struct
                ~error:(Db_error.Malformed_database "Could not find new entry")
           |> Db_error.ok_exn
         in
+        let y_prev_location =
+          Location_at_depth.prev new_location
+          |> Option.value_exn ~message:"Can't get prev Y for first entry"
+        in
+        let y_prev =
+          get t y_prev_location
+          |> Result.of_option
+               ~error:(Db_error.Malformed_database "Could not find Y prev entry")
+          |> Db_error.ok_exn
+        in
         assert (
           Token_id.(lower_entry.value < new_entry.value)
           && Token_id.(new_entry.value < new_entry.value_next) ) ;
         ( `Existed
         , ( `X lower_entry.value
           , `X_path x_path
+          , `Y_prev_hash (Entry.data_hash y_prev)
+          , `Y_prev_path (merkle_path t y_prev_location)
           , `Y new_entry.value
           , `Y_path (merkle_path t new_location)
           , `Z new_entry.value_next ) )
@@ -330,12 +352,25 @@ module Db : Database_intf = struct
         | Ok (`Added, new_location) ->
             let lower_entry = { lower_entry with value_next = tid } in
             set t lower_entry_location lower_entry ;
+            let y_prev_location =
+              Location_at_depth.prev new_location
+              |> Option.value_exn ~message:"Can't get prev Y for first entry"
+            in
+            let y_prev =
+              get t y_prev_location
+              |> Result.of_option
+                   ~error:
+                     (Db_error.Malformed_database "Could not find Y prev entry")
+              |> Db_error.ok_exn
+            in
             assert (
               Token_id.(lower_entry.value < new_entry.value)
               && Token_id.(new_entry.value < new_entry.value_next) ) ;
             ( `Added
             , ( `X lower_entry.value
               , `X_path x_path
+              , `Y_prev_hash (Entry.data_hash y_prev)
+              , `Y_prev_path (merkle_path t y_prev_location)
               , `Y new_entry.value
               , `Y_path (merkle_path t new_location)
               , `Z new_entry.value_next ) ) )
@@ -349,4 +384,62 @@ module Db : Database_intf = struct
       , List.map tids ~f:(fun tid ->
             let _added, witness = get_or_create_entry_exn t tid in
             witness ) )
+
+  let get_entry_by_tid t tid =
+    let%bind.Option location =
+      match Account_location.get t (Account_id.with_empty_key tid) with
+      | Ok location ->
+          Some location
+      | Error Db_error.Account_location_not_found ->
+          None
+      | Error e ->
+          Db_error.raise e
+    in
+    get t location
+
+  let get_path_by_tid t tid =
+    let%map.Option location =
+      match Account_location.get t (Account_id.with_empty_key tid) with
+      | Ok location ->
+          Some location
+      | Error Db_error.Account_location_not_found ->
+          None
+      | Error e ->
+          Db_error.raise e
+    in
+    merkle_path t location
+end
+
+module Sparse = struct
+  [%%versioned
+  module Stable = struct
+    [@@@no_toplevel_latest_type]
+
+    module V1 = struct
+      type t =
+        ( Ledger_hash.Stable.V1.t
+        , Account_id.Stable.V2.t
+        , Entry.Stable.V2.t )
+        Sparse_ledger_lib.Sparse_ledger.T.Stable.V2.t
+      [@@deriving yojson, sexp]
+
+      let to_latest = Fn.id
+    end
+  end]
+
+  include Sparse_ledger_lib.Sparse_ledger.Make (Hash) (Account_id) (Entry)
+
+  let of_db_subset ~db ~keys =
+    let sparse = of_hash ~depth:(Db.depth db) (Db.merkle_root db) in
+    List.fold keys ~init:sparse ~f:(fun sparse key ->
+        let aid = Account_id.with_empty_key key in
+        let entry =
+          Db.get_entry_by_tid db key
+          |> Option.value_exn ~message:"Could not find entry"
+        in
+        let path =
+          Db.get_path_by_tid db key
+          |> Option.value_exn ~message:"Could not find path"
+        in
+        add_path sparse path aid entry )
 end

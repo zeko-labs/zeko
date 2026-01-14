@@ -16,12 +16,6 @@ let run_node =
          flag "--port"
            (optional_with_default 8080 int)
            ~doc:"int Port to listen on"
-       and node_to_sync =
-         flag "--da-node-to-sync" (optional string)
-           ~doc:"string Nodes to sync with"
-       and hash_to_sync =
-         flag "--hash-to-sync" (optional string)
-           ~doc:"string Hash to sync with in decimal string form"
        and testing_mode =
          flag "--random-sk" no_arg
            ~doc:"Run in testing mode, the signer key will be generated randomly"
@@ -45,20 +39,6 @@ let run_node =
          in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
-         let sync_arg =
-           match (node_to_sync, hash_to_sync) with
-           | Some node_to_sync, Some hash_to_sync ->
-               Some
-                 ( Cli_lib.Flag.Types.
-                     { value = Core_kernel.Host_and_port.of_string node_to_sync
-                     ; name = "node-to-sync"
-                     }
-                 , Mina_base.Ledger_hash.of_decimal_string hash_to_sync )
-           | None, None ->
-               None
-           | _ ->
-               failwith "Both node-to-sync and hash-to-sync must be provided"
-         in
          let chain =
            match network_id with
            | "mainnet" ->
@@ -70,7 +50,7 @@ let run_node =
          in
          let%bind () =
            Deferred.ignore_m
-           @@ Da_layer.Node.create_server ~chain ~sync_arg ~logger ~port ~db_dir
+           @@ Da_layer.Node.create_server ~chain ~logger ~port ~db_dir
                 ~signer_sk:signer ~no_migrations ()
          in
          [%log info] "Server started on port %d" port ;

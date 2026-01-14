@@ -10,7 +10,10 @@ module Post_diff = struct
     module Query = struct
       (* Use Diff.V1 without timestamp, the node determines the timestamp itself *)
       type t =
-        { ledger_openings : Sparse_ledger.Stable.V2.t; diff : Diff.Stable.V1.t }
+        { ledger_openings : Sparse_ledger.Stable.V2.t
+        ; diff : Diff.Stable.V1.t
+        ; acc_set_openings : Indexed_merkle_tree.Sparse.Stable.V1.t
+        }
       [@@deriving bin_io_unversioned]
     end
 
@@ -44,6 +47,16 @@ module Get_diff = struct
 
     let t : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Get_diff" ~version:2
+        ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
+  end
+
+  module V3 = struct
+    module Response = struct
+      type t = Diff.Stable.V3.t option [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_diff" ~version:3
         ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
   end
 end
@@ -132,7 +145,7 @@ module Get_diffs_chain = struct
     end
 
     module Response = struct
-      type t = Diff.Stable.V2.t list [@@deriving bin_io_unversioned]
+      type t = Diff.Stable.V3.t list [@@deriving bin_io_unversioned]
     end
 
     let t : (Query.t, Response.t) Rpc.Rpc.t =

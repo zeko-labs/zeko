@@ -51,6 +51,8 @@ end) : sig
        check:Boolean.var
     -> x:Key.var
     -> path_x:Path.var
+    -> y_prev_hash:F.var
+    -> path_y_prev:Path.var
     -> y:Key.var
     -> path_y:Path.var
     -> z:Key.var

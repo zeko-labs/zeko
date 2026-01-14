@@ -405,6 +405,14 @@ let var_equal : ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t =
   in
   Boolean.Expr.all bools
 
+let assert_not_equal :
+    label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t =
+ fun ~label typ x y ->
+  let* is_equal = var_equal typ x y in
+  let is_not_equal = Boolean.Expr.not is_equal in
+  let@ () = with_label label in
+  Boolean.Expr.assert_ is_not_equal
+
 module Checked32 = struct
   include Mina_numbers.Nat.Make32 ()
 

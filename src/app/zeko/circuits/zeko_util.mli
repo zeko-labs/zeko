@@ -184,6 +184,9 @@ val assert_equal_safer :
 
 val var_equal : ('var, 't) Typ.t -> 'var -> 'var -> Boolean.Expr.t Checked.t
 
+val assert_not_equal :
+  label:string -> ('var, 't) Typ.t -> 'var -> 'var -> unit Checked.t
+
 module Checked32 : sig
   include module type of Mina_numbers.Nat.Make32 ()
 
