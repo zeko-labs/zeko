@@ -223,7 +223,7 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
         List.map new_accounts ~f:(fun (_, account) ->
             Account_id.derive_token_id ~owner:(Account.identifier account) )
       in
-      if List.equal Token_id.equal acc_set_entries acc_set_entries then Ok ()
+      if List.equal Token_id.equal acc_set_entries ledger_entries then Ok ()
       else
         Error
           (Error.create
