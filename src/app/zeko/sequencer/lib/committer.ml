@@ -96,7 +96,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
   let%bind inner_ase_source =
     let%map { inner_action_state = committed_inner_action_state; _ } =
-      Gql_client.infer_state
+      Gql_client.infer_state ~logger
         Executor.(executor.l1_uri)
         ~zkapp_pk
         ~signer_pk:(Public_key.compress executor.signer.public_key)
@@ -143,7 +143,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     |> Deferred.return
   in
   let%bind unprocessed_actions =
-    Gql_client.fetch_actions archive_uri
+    Gql_client.fetch_actions ~logger archive_uri
       ~from_action_state:processed_actions_pointer zkapp_pk
     >>| List.map ~f:(fun (fields, _, _, _, _) -> fields)
     >>| List.map ~f:Zkapp_account.Actions_impl.hash
@@ -205,7 +205,7 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
     ~commit_validity_period =
   let open Deferred.Result.Let_syntax in
   let%bind { ledger_hash; _ } =
-    Gql_client.infer_state executor.l1_uri ~zkapp_pk
+    Gql_client.infer_state ~logger executor.l1_uri ~zkapp_pk
       ~signer_pk:(Public_key.compress executor.signer.public_key)
     >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
   in

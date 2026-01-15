@@ -145,6 +145,12 @@ let migrations : Db.Migration.t list =
             ()
         in
         return () )
+  ; Db.Migration.make 5 "add_acc_set_column_to_da_diff"
+      (fun (module Conn : CONNECTION) ->
+        Conn.exec
+          (Caqti_request.exec Caqti_type.unit
+             {sql| ALTER TABLE da_diff ADD COLUMN acc_set_openings BYTEA NOT NULL |sql} )
+          () )
   ]
 
 let create_and_migrate ~postgres_uri ~logger =

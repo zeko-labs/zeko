@@ -1,7 +1,6 @@
 open Core_kernel
 open Snark_params.Tick
 open Zeko_util
-open Checked.Let_syntax
 
 module Make (Inputs : sig
   module Key : SnarkType
@@ -28,28 +27,68 @@ struct
     type t = { hash_other : F.t; is_right : Boolean.t } [@@deriving snarky]
   end
 
-  module Path =
-    SnarkList
-      (PathStep)
-      (struct
-        let length = height
-      end)
+  module Path = struct
+    include
+      SnarkList
+        (PathStep)
+        (struct
+          let length = height
+        end)
+  end
 
   let hash_entry =
     var_to_hash ~init:Zeko_constants.indexed_merkle_tree_salt Entry.typ
 
-  let empty_path =
-    List.init height ~f:Fn.id
-    |> List.fold_map ~init:Field.zero ~f:(fun acc _ ->
-           let next =
-             Random_oracle.hash
-               ~init:
-                 (Hash_prefix_create.salt
-                    Zeko_constants.indexed_merkle_tree_merge_salt )
-               [| acc; acc |]
-           in
-           (next, constant Field.typ acc) )
-    |> snd
+  (** Two leaves are adjacent if and only if:
+      1. Their lowest common ancestor is as deep as possible
+      2. One leaf is the rightmost leaf of the left subtree
+      3. The other is the leftmost leaf of the right subtree
+    *)
+  let are_paths_neighbors ~(l : Path.var) ~(r : Path.var) =
+    let* _in_prefix, seen_div, valid =
+      foldl
+        (List.zip_exn l r |> List.rev)
+        ~init:(Boolean.true_, Boolean.false_, Boolean.true_)
+        ~f:(fun (in_prefix, seen_div, valid)
+                ( { PathStep.is_right = l_is_right; _ }
+                , { PathStep.is_right = r_is_right; _ } ) ->
+          let* same = Boolean.equal l_is_right r_is_right in
+
+          (* diverge happens exactly when we were in prefix and now differ *)
+          let* diverge_now = Boolean.(in_prefix && not same) in
+
+          (* At the divergence bit we require l=0 and r=1 *)
+          let* div_ok =
+            Boolean.Expr.(((not !l_is_right) && !r_is_right && !valid) |> eval)
+          in
+
+          (* After divergence we require l=1 and r=0 at every step *)
+          let* tail_ok =
+            Boolean.Expr.((!l_is_right && (not !r_is_right) && !valid) |> eval)
+          in
+
+          (* Update validity:
+             - before divergence: no constraint
+             - at divergence: enforce div_ok
+             - after divergence: enforce tail_ok
+          *)
+          let* if_diverged_then_tail_ok =
+            (* if already diverged earlier, enforce tail constraint *)
+            let* enforce_tail = Boolean.(seen_div && not diverge_now) in
+            if_ enforce_tail ~typ:Boolean.typ ~then_:tail_ok ~else_:valid
+          in
+          let* valid =
+            if_ diverge_now ~typ:Boolean.typ ~then_:div_ok
+              ~else_:if_diverged_then_tail_ok
+          in
+
+          (* Update flags *)
+          let* seen_div = Boolean.(seen_div || diverge_now) in
+          let*| in_prefix = Boolean.(in_prefix && same) in
+          (in_prefix, seen_div, valid) )
+    in
+    (* Must have diverged at least once, otherwise same leaf *)
+    Boolean.(valid && seen_div)
 
   (* TODO: consider different salt per level. *)
   (* NB: The first element in the list is the neighbor of init, and the next element
@@ -69,7 +108,7 @@ struct
     let* init = hash_entry entry in
     implied_root_raw init path
 
-  let add_key_var ~check ~x ~path_x ~y ~path_y ~z () =
+  let add_key_var ~check ~x ~path_x ~y_prev_hash ~path_y_prev ~y ~path_y ~z () =
     let* () =
       with_label __LOC__ (fun () -> assert_x_less_than_y_less_than_z ~x ~y ~z)
     in
@@ -86,18 +125,17 @@ struct
     in
     let* root_new = implied_root { key = y; next_key = z } path_y in
     let* root = if_ check ~typ:F.typ ~then_:root ~else_:root_new in
-    (* Check that no empty indices have been skipped. *)
-    let* is_y_most_left =
-      foldl (List.zip_exn path_y empty_path) ~init:Boolean.true_
-        ~f:(fun acc (PathStep.{ hash_other; is_right }, empty_hash) ->
-          let* is_valid_left =
-            Field.Checked.equal empty_hash hash_other >>= Boolean.( &&& ) acc
-          in
-          if_ is_right ~typ:Boolean.typ ~then_:acc ~else_:is_valid_left )
-    in
+    (* Check that the leaf before y is not empty *)
     let* () =
-      if_ check ~typ:Boolean.typ ~then_:is_y_most_left ~else_:Boolean.true_
-      >>= Boolean.Assert.is_true
+      assert_not_equal ~label:__LOC__ Field.typ y_prev_hash
+        Field.(constant typ zero)
+    in
+    let* root_new' = implied_root_raw y_prev_hash path_y_prev in
+    let* () = assert_equal ~label:__LOC__ F.typ root_new root_new' in
+    (* Check that the path to leaf before y is really before y *)
+    let* are_neighbors = are_paths_neighbors ~l:path_y_prev ~r:path_y in
+    let* () =
+      assert_equal ~label:__LOC__ Boolean.typ are_neighbors Boolean.true_
     in
     Checked.return (`Before_adding_y root, `After_adding_y root_new)
 

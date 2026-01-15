@@ -44,14 +44,14 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
 
   Thread_safe.block_on_async_exn (fun () ->
       let%bind nonce =
-        Gql_client.infer_nonce l1_uri
+        Gql_client.infer_nonce ~logger l1_uri
           (Public_key.compress sender_keypair.public_key)
         >>| Or_error.ok_exn
       in
       let%bind `Inner inner_account, `Holder holder_account =
         Sequencer_lib.Deploy.Z.Inner.initial_accounts ()
       in
-      let old_ledger_witness, new_ledger, imt_hash =
+      let old_ledger_witness, new_ledger, imt_hash, imt =
         let ledger =
           L.create_ephemeral ~depth:constraint_constants.ledger_depth ()
         in
@@ -85,15 +85,15 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
                     (Account.create faucet_aid Currency.Balance.max_int) ;
                   [ Account_id.derive_token_id ~owner:faucet_aid ] )
             in
+            printf "Creating imt\n%!" ;
+            let imt, _witnesses =
+              Indexed_merkle_tree.Db.create_of_entries_exn
+                ~depth:constraint_constants.ledger_depth tids
+            in
             let imt_hash =
-              printf "Creating imt\n%!" ;
-              let imt, _witnesses =
-                Indexed_merkle_tree.Db.create_of_entries_exn
-                  ~depth:constraint_constants.ledger_depth tids
-              in
               Account_set.of_fields [| Indexed_merkle_tree.Db.merkle_root imt |]
             in
-            (None, ledger, imt_hash)
+            (None, ledger, imt_hash, imt)
         | Some ledger_input_json ->
             print_endline "(* Load ledger from json file *)" ;
             Yojson.Safe.from_file ledger_input_json
@@ -143,25 +143,25 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
               (Ledger_hash.to_decimal_string @@ L.merkle_root ledger) ;
 
             print_endline "(* Construct IMT *)" ;
+            printf "Creating imt\n%!" ;
+            let tids =
+              L.to_list_sequential ledger
+              |> List.map ~f:Account.identifier
+              |> List.map ~f:(fun aid -> Account_id.derive_token_id ~owner:aid)
+            in
+            let imt, _witnesses =
+              Indexed_merkle_tree.Db.create_of_entries_exn
+                ~depth:constraint_constants.ledger_depth tids
+            in
             let imt_hash =
-              printf "Creating imt\n%!" ;
-              let tids =
-                L.to_list_sequential ledger
-                |> List.map ~f:Account.identifier
-                |> List.map ~f:(fun aid ->
-                       Account_id.derive_token_id ~owner:aid )
-              in
-              let imt, _witnesses =
-                Indexed_merkle_tree.Db.create_of_entries_exn
-                  ~depth:constraint_constants.ledger_depth tids
-              in
               let imt_hash = Indexed_merkle_tree.Db.merkle_root imt in
               printf "IMT hash: %s\n%!" (Ledger_hash.to_decimal_string imt_hash) ;
               Account_set.of_fields [| imt_hash |]
             in
             ( Some (old_ledger_hash, old_ledger_openings, accounts_diff)
             , ledger
-            , imt_hash )
+            , imt_hash
+            , imt )
       in
       let%bind command =
         Sequencer_lib.Deploy.deploy_command_exn
@@ -217,8 +217,22 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
                 (Sparse_ledger.merkle_root old_ledger_openings)
               ~changed_accounts ~command_with_action_step_flags:None
           in
+          let new_accounts_keys =
+            List.filter changed_accounts ~f:(fun (index, _) ->
+                Account.equal
+                  (Sparse_ledger.get_exn old_ledger_openings index)
+                  Account.empty )
+            |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+            |> List.map ~f:(fun (_, account) ->
+                   Account_id.derive_token_id
+                     ~owner:(Account.identifier account) )
+          in
           Da_layer.Client.distribute_diff ~logger ~config:da_config
-            ~ledger_openings:old_ledger_openings ~diff
+            ~ledger_openings:old_ledger_openings
+            ~acc_set_openings:
+              (Indexed_merkle_tree.Sparse.of_db_subset ~db:imt
+                 ~keys:new_accounts_keys )
+            ~diff
         else
           let () =
             print_endline

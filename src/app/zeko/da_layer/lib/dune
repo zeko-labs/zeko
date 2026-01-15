@@ -5,6 +5,7 @@
   kvdb_base
   zeko_constants
   relational_db
+  indexed_merkle_tree
   ;; mina ;;
   mina_base
   mina_caqti

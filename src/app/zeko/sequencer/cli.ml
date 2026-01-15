@@ -85,19 +85,19 @@ let update_outer_verification_keys =
          in
 
          let%bind fetched_outer_vk =
-           Gql_client.fetch_vk l1_uri
+           Gql_client.fetch_vk ~logger l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
            >>| Or_error.ok_exn >>| Compile_simple.Verification_key.of_pickles
            >>| Compile_simple.Verification_key.hash
          and fetched_bridge_holder_vk =
-           Gql_client.fetch_vk l1_uri
+           Gql_client.fetch_vk ~logger l1_uri
              ( Account_id.of_public_key @@ Public_key.decompress_exn
              @@ List.hd_exn Zeko_circuits_config.t.holder_accounts_l1 )
            >>| Or_error.ok_exn >>| Compile_simple.Verification_key.of_pickles
            >>| Compile_simple.Verification_key.hash
          and fetched_helper_token_owner_vk =
-           Gql_client.fetch_vk l1_uri
+           Gql_client.fetch_vk ~logger l1_uri
              ( Account_id.of_public_key
              @@ Public_key.decompress_exn
                   Zeko_circuits_config.t.helper_token_owner_l1 )
@@ -140,7 +140,7 @@ let update_outer_verification_keys =
          if only_check then return ()
          else
            let%bind nonce =
-             Gql_client.infer_nonce l1_uri
+             Gql_client.infer_nonce ~logger l1_uri
                (Public_key.compress sender.public_key)
              >>| Or_error.ok_exn
            in
@@ -194,7 +194,7 @@ let update_inner_verification_keys =
 
          (* Fetch current state *)
          let%bind commited_ledger_hash =
-           Gql_client.infer_state l1_uri
+           Gql_client.infer_state ~logger l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
@@ -206,6 +206,10 @@ let update_inner_verification_keys =
          (* Sync ledger *)
          let ledger =
            Ledger.create_ephemeral
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+         in
+         let imt =
+           Indexed_merkle_tree.Db.create
              ~depth:Zeko_constants.constraint_constants.ledger_depth ()
          in
          let da_config = Da_layer.Client.Config.of_string_list [ da_node ] in
@@ -229,6 +233,14 @@ let update_inner_verification_keys =
                in
                List.iter changed_accounts ~f:(fun (index, account) ->
                    Ledger.set_at_index_exn ledger index account ) ;
+               (* Add to Indexed Merkle Tree *)
+               List.iter changed_accounts ~f:(fun (_, account) ->
+                   let aid = Account.identifier account in
+                   let _w =
+                     Indexed_merkle_tree.Db.get_or_create_entry_exn imt
+                       (Account_id.derive_token_id ~owner:aid)
+                   in
+                   () ) ;
                return () )
            >>| Or_error.ok_exn >>| ignore
          in
@@ -339,13 +351,28 @@ let update_inner_verification_keys =
              Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:diff
                ~command_with_action_step_flags:None
            in
+           let new_accounts_keys =
+             List.filter (Da_layer.Diff.changed_accounts diff)
+               ~f:(fun (index, _) ->
+                 Account.equal
+                   (Sparse_ledger.get_exn ledger_openings index)
+                   Account.empty )
+             |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+             |> List.map ~f:(fun (_, account) ->
+                    Account_id.derive_token_id
+                      ~owner:(Account.identifier account) )
+           in
            let%bind () =
              Da_layer.Client.distribute_diff ~logger ~config:da_config
-               ~ledger_openings ~diff
+               ~ledger_openings
+               ~acc_set_openings:
+                 (Indexed_merkle_tree.Sparse.of_db_subset ~db:imt
+                    ~keys:new_accounts_keys )
+               ~diff
            in
            let%bind command =
              let%map nonce =
-               Gql_client.infer_nonce l1_uri
+               Gql_client.infer_nonce ~logger l1_uri
                  (Public_key.compress sender.public_key)
                >>| Or_error.ok_exn
              in
@@ -416,7 +443,7 @@ let update_da_key =
 
          (* Fetch current da key *)
          let%bind current_da_key =
-           Gql_client.infer_state l1_uri
+           Gql_client.infer_state ~logger l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
@@ -443,7 +470,7 @@ let update_da_key =
          else
            let%bind command =
              let%map nonce =
-               Gql_client.infer_nonce l1_uri
+               Gql_client.infer_nonce ~logger l1_uri
                  (Public_key.compress sender.public_key)
                >>| Or_error.ok_exn
              in
@@ -503,11 +530,12 @@ let update_permissions =
          Stdout_log.setup log_json log_level ;
 
          let%bind nonce =
-           Gql_client.infer_nonce l1_uri (Public_key.compress sender.public_key)
+           Gql_client.infer_nonce ~logger l1_uri
+             (Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
          in
          let%bind command =
-           Deploy.update_permissions
+           Deploy.update_permissions ~logger
              ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
              ~fee:(Currency.Fee.of_mina_string_exn "0.1")
              ~nonce ~gql_uri:l1_uri
@@ -562,7 +590,7 @@ let set_pause =
 
          (* Fetch current state *)
          let%bind current_paused =
-           Gql_client.infer_state l1_uri
+           Gql_client.infer_state ~logger l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
@@ -575,7 +603,7 @@ let set_pause =
 
          let%bind command =
            let%map nonce =
-             Gql_client.infer_nonce l1_uri
+             Gql_client.infer_nonce ~logger l1_uri
                (Public_key.compress sender.public_key)
              >>| Or_error.ok_exn
            in

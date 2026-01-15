@@ -1,12 +1,27 @@
 open Core_kernel
 open Mina_base
 open Mina_ledger
+open Snark_params.Tick
 
 [%%versioned
 module Stable = struct
   [@@@with_top_version_tag]
 
   [@@@no_toplevel_latest_type]
+
+  module V3 = struct
+    type t =
+      { source_ledger_hash : Ledger_hash.Stable.V1.t
+      ; changed_accounts : (int * Account.Stable.V2.t) list
+      ; command_with_action_step_flags :
+          (User_command.Stable.V2.t * bool list) option
+      ; timestamp : Block_time.Stable.V1.t
+      ; acc_set : (Field.t[@version_asserted])
+      }
+    [@@deriving yojson, fields, sexp_of, compare]
+
+    let to_latest = Fn.id
+  end
 
   module V2 = struct
     type t =
@@ -18,7 +33,13 @@ module Stable = struct
       }
     [@@deriving yojson, fields, sexp_of, compare]
 
-    let to_latest = Fn.id
+    let to_latest t =
+      { V3.source_ledger_hash = t.source_ledger_hash
+      ; changed_accounts = t.changed_accounts
+      ; command_with_action_step_flags = t.command_with_action_step_flags
+      ; timestamp = t.timestamp
+      ; acc_set = Field.zero
+      }
   end
 
   module V1 = struct
@@ -30,11 +51,13 @@ module Stable = struct
       }
     [@@deriving yojson, fields, sexp]
 
-    let to_latest ?(timestamp = Block_time.zero) (t : t) =
-      { V2.source_ledger_hash = t.source_ledger_hash
+    let to_latest ?(timestamp = Block_time.zero) ?(acc_set = Field.zero) (t : t)
+        =
+      { V3.source_ledger_hash = t.source_ledger_hash
       ; changed_accounts = t.changed_accounts
       ; command_with_action_step_flags = t.command_with_action_step_flags
       ; timestamp
+      ; acc_set
       }
   end
 end]
@@ -62,13 +85,13 @@ let command_with_action_step_flags
     { Stable.V1.command_with_action_step_flags; _ } =
   command_with_action_step_flags
 
-let add_time ~logger t =
+let add_time_and_acc_set ~logger t ~acc_set =
   Stable.V1.to_latest
     ~timestamp:(Block_time.now (Block_time.Controller.basic ~logger))
-    t
+    ~acc_set t
 
 let drop_time
-    { Stable.V2.source_ledger_hash
+    { Stable.V3.source_ledger_hash
     ; changed_accounts
     ; command_with_action_step_flags
     ; _
@@ -100,6 +123,6 @@ let%test_unit "diff versioning" =
   let v1_serialized =
     Binable.to_bigstring (module Stable.V1.With_top_version_tag) v1
   in
-  let v2 = of_bigstring v1_serialized |> Or_error.ok_exn in
+  let v3 = of_bigstring v1_serialized |> Or_error.ok_exn in
 
-  [%test_eq: Stable.V2.t] (Stable.V1.to_latest v1) (Stable.V2.to_latest v2)
+  [%test_eq: Stable.V3.t] (Stable.V1.to_latest v1) (Stable.V3.to_latest v3)

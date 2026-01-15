@@ -24,17 +24,24 @@ module Diff_table = struct
   type t =
     { diff : Diff.Stable.V1.t
     ; ledger_openings : Sparse_ledger.t
+    ; acc_set_openings : Indexed_merkle_tree.Sparse.t
     ; genesis : bool
     ; target_ledger_hash : Ledger_hash.t
     }
   [@@deriving hlist, fields, sexp]
 
-  let make ~diff ~ledger_openings ~target_ledger_hash ~genesis =
-    { diff; ledger_openings; target_ledger_hash; genesis }
+  let make ~diff ~ledger_openings ~acc_set_openings ~target_ledger_hash ~genesis
+      =
+    { diff; ledger_openings; acc_set_openings; target_ledger_hash; genesis }
 
   let typ =
     Mina_caqti.Type_spec.custom_type
-      ~to_hlist:(fun { diff; ledger_openings; target_ledger_hash; genesis } ->
+      ~to_hlist:(fun { diff
+                     ; ledger_openings
+                     ; acc_set_openings
+                     ; target_ledger_hash
+                     ; genesis
+                     } ->
         H_list.
           [ Ledger_hash.to_decimal_string target_ledger_hash
           ; ( if genesis then None
@@ -44,12 +51,15 @@ module Diff_table = struct
               diff
             |> Bigstring.to_string
           ; Sparse_ledger.to_yojson ledger_openings |> Yojson.Safe.to_string
+          ; Indexed_merkle_tree.Sparse.to_yojson acc_set_openings
+            |> Yojson.Safe.to_string
           ] )
       ~of_hlist:(fun H_list.
                        [ target_ledger_hash
                        ; source_ledger_hash
                        ; diff
                        ; ledger_openings
+                       ; acc_set_openings
                        ] ->
         let ok_exn = function
           | Ppx_deriving_yojson_runtime.Result.Ok x ->
@@ -64,16 +74,20 @@ module Diff_table = struct
         ; ledger_openings =
             Sparse_ledger.of_yojson (Yojson.Safe.from_string ledger_openings)
             |> ok_exn
+        ; acc_set_openings =
+            Indexed_merkle_tree.Sparse.of_yojson
+              (Yojson.Safe.from_string acc_set_openings)
+            |> ok_exn
         ; genesis = Option.is_none source_ledger_hash
         ; target_ledger_hash = Ledger_hash.of_decimal_string target_ledger_hash
         } )
-      Caqti_type.[ string; option string; octets; octets ]
+      Caqti_type.[ string; option string; octets; octets; octets ]
 
   let insert (module Conn : CONNECTION) t =
     Conn.exec
       (Caqti_request.exec typ
-         {sql| INSERT INTO da_diff (target_ledger_hash, source_ledger_hash, diff, ledger_openings)
-                VALUES (?, ?, ?, ?) |sql} )
+         {sql| INSERT INTO da_diff (target_ledger_hash, source_ledger_hash, diff, ledger_openings, acc_set_openings)
+                VALUES (?, ?, ?, ?, ?) |sql} )
       t
 
   let get_diff_by_source (module Conn : CONNECTION) ledger_hash =
@@ -81,12 +95,12 @@ module Diff_table = struct
     | Some ledger_hash ->
         Conn.find_opt
           (Caqti_request.find_opt Caqti_type.string typ
-             {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings FROM da_diff WHERE source_ledger_hash = ? |sql} )
+             {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings, acc_set_openings FROM da_diff WHERE source_ledger_hash = ? |sql} )
           (Ledger_hash.to_decimal_string ledger_hash)
     | None ->
         Conn.find_opt
           (Caqti_request.find_opt Caqti_type.unit typ
-             {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings FROM da_diff WHERE source_ledger_hash IS NULL |sql} )
+             {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings, acc_set_openings FROM da_diff WHERE source_ledger_hash IS NULL |sql} )
           ()
 
   let get_id_by_target (module Conn : CONNECTION) ledger_hash =
@@ -180,34 +194,86 @@ module Rpc = struct
     in
     go max_tries []
 
-  let post_diff ~logger ~node_location ~ledger_openings ~diff =
+  module Versioned_rpc_same_query = struct
+    type ('q, 'latest) t =
+      | V : ('q, 'r) Async.Rpc.Rpc.t * ('r -> 'latest) -> ('q, 'latest) t
+  end
+
+  let rec dispatch_with_fallback_same_query ?(max_tries = 5) ?(timeout = 5.)
+      ~logger (node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      data ~(versions : ('q, 'latest) Versioned_rpc_same_query.t list) :
+      ('latest, Error.t) Result.t Deferred.t =
+    match versions with
+    | [] ->
+        return (Error (Error.of_string "No versions to try"))
+    | Versioned_rpc_same_query.V (rpc, to_latest) :: versions -> (
+        match%bind
+          dispatch ~max_tries ~timeout ~logger node_location rpc data
+        with
+        | Ok result ->
+            return (Ok (to_latest result))
+        | Error e ->
+            let version_unimplemented =
+              Error.to_string_mach e
+              |> String.is_substring
+                   ~substring:
+                     (sprintf "Unimplemented_rpc %s (Version %d)"
+                        (Async.Rpc.Rpc.name rpc)
+                        (Async.Rpc.Rpc.version rpc) )
+            in
+            if version_unimplemented then
+              dispatch_with_fallback_same_query ~max_tries ~timeout ~logger
+                node_location data ~versions
+            else return (Error e) )
+
+  module Versioned_rpc_same_response = struct
+    type ('r, 'latest) t =
+      | V : ('q, 'r) Async.Rpc.Rpc.t * ('latest -> 'q) -> ('r, 'latest) t
+  end
+
+  let rec dispatch_with_fallback_same_response ?(max_tries = 5) ?(timeout = 5.)
+      ~logger (node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      data ~(versions : ('r, 'latest) Versioned_rpc_same_response.t list) :
+      ('r, Error.t) Result.t Deferred.t =
+    match versions with
+    | [] ->
+        return (Error (Error.of_string "No versions to try"))
+    | V (rpc, from_latest) :: versions -> (
+        match%bind
+          dispatch ~max_tries ~timeout ~logger node_location rpc
+            (from_latest data)
+        with
+        | Ok result ->
+            return (Ok result)
+        | Error e ->
+            let version_unimplemented =
+              Error.to_string_mach e
+              |> String.is_substring
+                   ~substring:
+                     (sprintf "Unimplemented_rpc %s (Version %d)"
+                        (Async.Rpc.Rpc.name rpc)
+                        (Async.Rpc.Rpc.version rpc) )
+            in
+            if version_unimplemented then
+              dispatch_with_fallback_same_response ~max_tries ~timeout ~logger
+                node_location data ~versions
+            else return (Error e) )
+
+  let post_diff ~logger ~node_location ~ledger_openings ~acc_set_openings ~diff
+      =
     dispatch ~max_tries:5 ~logger node_location Rpc.Post_diff.V1.t
-      { ledger_openings; diff }
+      { ledger_openings; diff; acc_set_openings }
 
   let get_diff ~logger ~node_location ~ledger_hash =
-    match%bind
-      dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V2.t ledger_hash
-    with
-    | Ok diff ->
-        return (Ok diff)
-    | Error e ->
-        let v2_unimplemented =
-          Error.to_string_mach e
-          |> String.is_substring
-               ~substring:"Unimplemented_rpc Get_diff (Version 2)"
-        in
-        if v2_unimplemented then
-          (* Fallback to older version *)
-          let%bind.Deferred.Result result =
-            dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V1.t
-              ledger_hash
-          in
-          return
-            (Ok (Option.map result ~f:(fun x -> Diff.Stable.V1.to_latest x)))
-        else return (Error e)
-
-  let get_all_keys ~logger ~node_location () =
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_all_keys.V1.t ()
+    dispatch_with_fallback_same_query ~max_tries:1 ~logger node_location
+      ledger_hash
+      ~versions:
+        [ Versioned_rpc_same_query.V (Rpc.Get_diff.V3.t, Fn.id)
+        ; Versioned_rpc_same_query.V
+            (Rpc.Get_diff.V2.t, Option.map ~f:Diff.Stable.V2.to_latest)
+        ; Versioned_rpc_same_query.V
+            (Rpc.Get_diff.V1.t, Option.map ~f:Diff.Stable.V1.to_latest)
+        ]
 
   let get_diff_source ~logger ~node_location ~ledger_hash =
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.V1.t
@@ -295,12 +361,18 @@ let create ~logger ~(config : Config.t) ~quorum ~da_keys ~db_pool =
 
 let stop t = Ivar.fill t.stop ()
 
-let enqueue_diff t ~target_ledger_hash ~ledger_openings ~diff ~genesis =
+let enqueue_diff t ~target_ledger_hash ~ledger_openings ~acc_set_openings ~diff
+    ~genesis =
   let%map () =
     Pool.use
       (fun conn ->
         Diff_table.insert conn
-          { diff; ledger_openings; target_ledger_hash; genesis } )
+          { diff
+          ; ledger_openings
+          ; acc_set_openings
+          ; target_ledger_hash
+          ; genesis
+          } )
       t.db_pool
     >>| caqti_ok_exn ~msg:"Failed to insert diff into db: %s"
   in
@@ -331,9 +403,11 @@ let rec start_posting_diffs_from ?pushed_diff t
         start_posting_diffs_from
           ~pushed_diff:(Condition.wait t.pushed_diff)
           t ~node_location ~source_ledger_hash ()
-    | Some { diff; ledger_openings; target_ledger_hash; _ } -> (
+    | Some { diff; ledger_openings; acc_set_openings; target_ledger_hash; _ }
+      -> (
         match%bind
-          Rpc.post_diff ~logger:t.logger ~node_location ~ledger_openings ~diff
+          Rpc.post_diff ~logger:t.logger ~node_location ~ledger_openings
+            ~acc_set_openings ~diff
         with
         | Error err ->
             [%log error] "Failed to post diff to da node: %s"
@@ -600,12 +674,13 @@ let get_diff ~logger ~config ~ledger_hash =
       | Error e ->
           return (Error e) )
 
-let distribute_diff ~logger ~config ~ledger_openings ~diff =
+let distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff =
   Deferred.List.iter ~how:`Parallel
     Config.(config.nodes)
     ~f:(fun n ->
       match%map
-        Rpc.post_diff ~logger ~node_location:n ~ledger_openings ~diff
+        Rpc.post_diff ~logger ~node_location:n ~ledger_openings
+          ~acc_set_openings ~diff
       with
       | Ok _ ->
           ()
@@ -626,6 +701,7 @@ let create_genesis_diffs ?(max_size = 50) ledger =
         let account = Ledger.get_at_index_exn ledger index in
         (index, account) )
   in
+  let acc_set = Indexed_merkle_tree.Db.create ~depth:(Ledger.depth ledger) () in
   Ledger.with_ephemeral_ledger ~depth:(Ledger.depth ledger) ~f:(fun ephemeral ->
       let account_chunks = List.chunks_of changed_accounts ~length:max_size in
       List.map account_chunks ~f:(fun chunk ->
@@ -640,16 +716,33 @@ let create_genesis_diffs ?(max_size = 50) ledger =
               ~source_ledger_hash:(Sparse_ledger.merkle_root ledger_openings)
               ~changed_accounts:chunk ~command_with_action_step_flags:None
           in
-          (diff, ledger_openings, `Target (Ledger.merkle_root ephemeral)) ) )
+          List.iter chunk ~f:(fun (_, account) ->
+              ( Indexed_merkle_tree.Db.get_or_create_entry_exn acc_set
+                  (Account_id.derive_token_id
+                     ~owner:(Account.identifier account) )
+                : [ `Added | `Existed ] * Indexed_merkle_tree.Db.witness )
+              |> ignore ) ;
+          let acc_set_openings =
+            Indexed_merkle_tree.Sparse.of_db_subset ~db:acc_set
+              ~keys:
+                ( List.map chunk ~f:snd
+                |> List.map ~f:(fun acc ->
+                       Account_id.derive_token_id
+                         ~owner:(Account.identifier acc) ) )
+          in
+          ( diff
+          , ledger_openings
+          , acc_set_openings
+          , `Target (Ledger.merkle_root ephemeral) ) ) )
 
 (** Distribute diff of initial accounts *)
 let distribute_genesis_diff ~logger ~config ~ledger =
   let%bind diffs = create_genesis_diffs ledger in
   Deferred.List.iter ~how:`Sequential diffs
-    ~f:(fun (diff, ledger_openings, `Target _) ->
-      distribute_diff ~logger ~config ~ledger_openings ~diff )
+    ~f:(fun (diff, ledger_openings, acc_set_openings, `Target _) ->
+      distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff )
 
-let get_openings ~diff ~ledger =
+let get_ledger_openings ~diff ~ledger =
   let changed_accounts =
     Diff.changed_accounts diff
     |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
@@ -657,10 +750,23 @@ let get_openings ~diff ~ledger =
   let account_ids =
     List.map changed_accounts ~f:snd |> List.map ~f:Account.identifier
   in
-  let openings = Sparse_ledger.of_ledger_subset_exn ledger account_ids in
-  List.iter changed_accounts ~f:(fun (index, account) ->
-      Ledger.set_at_index_exn ledger index account ) ;
-  openings
+  let ledger_openings = Sparse_ledger.of_ledger_subset_exn ledger account_ids in
+  ledger_openings
 
-let attach_openings ~diffs ~ledger =
-  List.map diffs ~f:(fun diff -> (diff, get_openings ~diff ~ledger))
+let attach_ledger_openings ~diffs ~ledger =
+  List.map diffs ~f:(fun diff -> (diff, get_ledger_openings ~diff ~ledger))
+
+let get_acc_set_openings ~diff ~ledger_openings ~imt =
+  let new_accounts_keys =
+    List.filter (Diff.changed_accounts diff) ~f:(fun (index, _) ->
+        Account.equal
+          (Sparse_ledger.get_exn ledger_openings index)
+          Account.empty )
+    |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+    |> List.map ~f:(fun (_, account) ->
+           Account_id.derive_token_id ~owner:(Account.identifier account) )
+  in
+  let acc_set_openings =
+    Indexed_merkle_tree.Sparse.of_db_subset ~db:imt ~keys:new_accounts_keys
+  in
+  acc_set_openings

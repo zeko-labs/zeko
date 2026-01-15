@@ -47,7 +47,7 @@ let process_command ~logger t (command : Zkapp_command.t) =
         | Some nonce ->
             return (Ok nonce)
         | None ->
-            Gql_client.infer_nonce t.l1_uri
+            Gql_client.infer_nonce ~logger t.l1_uri
               (Public_key.compress t.signer.public_key)
             >>| Result.map_error ~f:(fun err -> `Nonce_inference_error err)
       in

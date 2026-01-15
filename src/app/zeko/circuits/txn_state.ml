@@ -80,6 +80,8 @@ let constraint_constants : Genesis_constants.Constraint_constants.t =
 type update_acc_set_witness =
   { get_account_set_x : unit -> Token_id.t
   ; get_account_set_z : unit -> Token_id.t
+  ; get_account_set_y_prev_hash : unit -> Field.t
+  ; get_account_set_y_prev_path : unit -> Account_set.Path.t
   ; get_account_set_x_path : unit -> Account_set.Path.t
   ; get_account_set_y_path : unit -> Account_set.Path.t
   }
@@ -100,6 +102,14 @@ let update_acc_set accounts init ~witness =
         exists Account_set.Path.typ
           ~compute:(witness >>| fun x -> x.get_account_set_x_path ())
       in
+      let* y_prev_hash =
+        exists Field.typ
+          ~compute:(witness >>| fun x -> x.get_account_set_y_prev_hash ())
+      in
+      let* path_y_prev =
+        exists Account_set.Path.typ
+          ~compute:(witness >>| fun x -> x.get_account_set_y_prev_path ())
+      in
       let* path_y =
         exists Account_set.Path.typ
           ~compute:(witness >>| fun x -> x.get_account_set_y_path ())
@@ -110,8 +120,8 @@ let update_acc_set accounts init ~witness =
       in
       let* y = derive_token_id ~owner:account_id in
       let* `Before_adding_y set', `After_adding_y new_set =
-        Account_set.add_key_var ~x ~path_x ~y ~path_y ~z
-          ~check:is_empty_and_writeable ()
+        Account_set.add_key_var ~x ~path_x ~y_prev_hash ~path_y_prev ~y ~path_y
+          ~z ~check:is_empty_and_writeable ()
       in
       let*| () = assert_equal ~label:__LOC__ Account_set.typ set set' in
       new_set )

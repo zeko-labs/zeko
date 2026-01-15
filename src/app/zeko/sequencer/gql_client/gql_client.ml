@@ -4,9 +4,9 @@ open Mina_base
 open Init
 module Field = Snark_params.Tick.Field
 
-let query_with_retry ?(max_attempts = 10) ?(delay = Time.Span.of_sec 5.) ~label
-    query_obj uri ~f =
-  Utils.retry ~max_attempts ~delay
+let query_with_retry ~logger ?(max_attempts = 10) ?(delay = Time.Span.of_sec 5.)
+    ~label query_obj uri ~f =
+  Utils.retry ~logger ~max_attempts ~delay
     ~f:(fun () ->
       Graphql_client.Client.query_json query_obj uri
       >>| Result.map_error ~f:(function
@@ -70,7 +70,7 @@ let fetch_action_state uri pk =
         |> to_string)
       |> Field.of_string )
 
-let fetch_actions uri ?from_action_state ?end_action_state pk :
+let fetch_actions ~logger uri ?from_action_state ?end_action_state pk :
     ( Field.t array list
     * [ `Block_height of int ]
     * [ `Distance_from_max_block_height of int ]
@@ -151,7 +151,7 @@ let fetch_actions uri ?from_action_state ?end_action_state pk :
           ]
     end
   in
-  query_with_retry ~label:"fetch actions" q uri ~f:(fun result ->
+  query_with_retry ~logger ~label:"fetch actions" q uri ~f:(fun result ->
       let result = M.actions_of_yojson result |> ok_exn in
       List.map result.actions
         ~f:(fun
@@ -293,10 +293,10 @@ let fetch_pooled_signed_commands uri pk =
         |> List.map ~f:(Fn.compose ok_exn Signed_command.of_base64)) )
 
 (* Infers nonce based on pooled commands *)
-let infer_nonce uri pk =
+let infer_nonce ~logger uri pk =
   let%bind.Deferred.Result pooled_zkapp_commands =
-    fetch_pooled_zkapp_commands uri pk
-  and pooled_signed_commands = fetch_pooled_signed_commands uri pk in
+    fetch_pooled_zkapp_commands ~logger uri pk
+  and pooled_signed_commands = fetch_pooled_signed_commands ~logger uri pk in
   let max_pooled_nonce =
     let max_zkapp_commands_nonce =
       List.map pooled_zkapp_commands ~f:(fun command ->
@@ -315,7 +315,7 @@ let infer_nonce uri pk =
     in
     Unsigned.UInt32.(max max_zkapp_commands_nonce max_signed_commands_nonce)
   in
-  let%map.Deferred.Result committed_nonce = fetch_nonce uri pk in
+  let%map.Deferred.Result committed_nonce = fetch_nonce ~logger uri pk in
   Unsigned.UInt32.max max_pooled_nonce committed_nonce
 
 let fetch_state uri aid =
@@ -410,12 +410,14 @@ let fetch_vk uri aid =
         |> member "verificationKey" |> to_string
         |> Side_loaded_verification_key.of_base64 |> Or_error.ok_exn) )
 
-let infer_state uri ~zkapp_pk ~signer_pk =
+let infer_state ~logger uri ~zkapp_pk ~signer_pk =
   let%map.Deferred.Result committed_state =
-    fetch_state uri
+    fetch_state ~logger uri
       ( Account_id.of_public_key
       @@ Signature_lib.Public_key.decompress_exn zkapp_pk )
-  and pooled_zkapp_commands = fetch_pooled_zkapp_commands uri signer_pk in
+  and pooled_zkapp_commands =
+    fetch_pooled_zkapp_commands ~logger uri signer_pk
+  in
   let pooled_zkapp_commands =
     List.sort pooled_zkapp_commands ~compare:(fun a b ->
         Zkapp_command.(
@@ -555,7 +557,7 @@ let fetch_fork_slot uri =
       |> Mina_numbers.Global_slot_since_genesis.of_int )
 
 module For_tests = struct
-  let create_account uri pk =
+  let create_account ~logger uri pk =
     let q =
       object
         method query =
@@ -575,12 +577,13 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"create account" q uri ~f:Fn.id
+      query_with_retry ~logger ~max_attempts:1 ~label:"create account" q uri
+        ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
 
-  let create_new_block uri =
+  let create_new_block ~logger uri =
     let q =
       object
         method query =
@@ -595,12 +598,13 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"create new block" q uri ~f:Fn.id
+      query_with_retry ~logger ~max_attempts:1 ~label:"create new block" q uri
+        ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
 
-  let clear_pool uri =
+  let clear_pool ~logger uri =
     let q =
       object
         method query =
@@ -615,12 +619,13 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"clear pool" q uri ~f:Fn.id
+      query_with_retry ~logger ~max_attempts:1 ~label:"clear pool" q uri
+        ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
 
-  let reset_state uri =
+  let reset_state ~logger uri =
     let q =
       object
         method query =
@@ -635,11 +640,12 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~label:"reset state" q uri ~f:Fn.id >>| Or_error.ok_exn
+      query_with_retry ~logger ~label:"reset state" q uri ~f:Fn.id
+      >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
 
-  let shift_slots uri slots =
+  let shift_slots ~logger uri slots =
     let q =
       object
         method query =
@@ -654,12 +660,13 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"shift slots" q uri ~f:Fn.id
+      query_with_retry ~logger ~max_attempts:1 ~label:"shift slots" q uri
+        ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.(to_string result)
 
-  let get_zkapp_command_status uri hash =
+  let get_zkapp_command_status ~logger uri hash =
     let q =
       object
         method query =
@@ -683,8 +690,8 @@ module For_tests = struct
       end
     in
     let%map result =
-      query_with_retry ~max_attempts:1 ~label:"get zkapp command status" q uri
-        ~f:Fn.id
+      query_with_retry ~logger ~max_attempts:1 ~label:"get zkapp command status"
+        q uri ~f:Fn.id
       >>| Or_error.ok_exn
     in
     Yojson.Safe.Util.(

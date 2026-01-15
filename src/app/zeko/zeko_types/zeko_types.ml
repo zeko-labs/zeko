@@ -107,12 +107,15 @@ module Acc_set_witness = struct
   type serializable =
     { x : Token_id.t list
     ; z : Token_id.t list
+    ; y_prev_hash : Field.t list
+    ; y_prev_path : Path.t list
     ; x_path : Path.t list
     ; y_path : Path.t list
     }
   [@@deriving yojson]
 
-  let of_serializable ({ x; z; x_path; y_path } : serializable) : t =
+  let of_serializable
+      ({ x; z; y_prev_hash; y_prev_path; x_path; y_path } : serializable) : t =
     let list_to_fun l =
       let l = ref l in
       fun () ->
@@ -125,16 +128,27 @@ module Acc_set_witness = struct
     in
     { get_account_set_x = list_to_fun x
     ; get_account_set_z = list_to_fun z
+    ; get_account_set_y_prev_hash = list_to_fun y_prev_hash
+    ; get_account_set_y_prev_path = list_to_fun y_prev_path
     ; get_account_set_x_path = list_to_fun x_path
     ; get_account_set_y_path = list_to_fun y_path
     }
 
-  let empty = { x = []; x_path = []; y_path = []; z = [] }
+  let empty =
+    { x = []
+    ; x_path = []
+    ; y_prev_hash = []
+    ; y_prev_path = []
+    ; y_path = []
+    ; z = []
+    }
 
   let add t
-      ((x, x_path, _, y_path, z) :
+      ((x, x_path, y_prev_hash, y_prev_path, _, y_path, z) :
         [ `X of Token_id.t ]
         * [ `X_path of Ledger.Path.t ]
+        * [ `Y_prev_hash of Field.t ]
+        * [ `Y_prev_path of Ledger.Path.t ]
         * [ `Y of Token_id.t ]
         * [ `Y_path of [ `Left of Field.t | `Right of Field.t ] list ]
         * [ `Z of Token_id.t ] ) =
@@ -148,10 +162,14 @@ module Acc_set_witness = struct
     in
     let x = match x with `X x -> x in
     let x_path = match x_path with `X_path path -> path in
+    let y_prev_hash = match y_prev_hash with `Y_prev_hash hash -> hash in
+    let y_prev_path = match y_prev_path with `Y_prev_path path -> path in
     let y_path = match y_path with `Y_path path -> path in
     let z = match z with `Z z -> z in
     { x = t.x @ [ x ]
     ; x_path = t.x_path @ [ mina_path_to_zeko_path x_path ]
+    ; y_prev_hash = t.y_prev_hash @ [ y_prev_hash ]
+    ; y_prev_path = t.y_prev_path @ [ mina_path_to_zeko_path y_prev_path ]
     ; y_path = t.y_path @ [ mina_path_to_zeko_path y_path ]
     ; z = t.z @ [ z ]
     }
@@ -159,6 +177,8 @@ module Acc_set_witness = struct
   let join t1 t2 =
     { x = t1.x @ t2.x
     ; x_path = t1.x_path @ t2.x_path
+    ; y_prev_hash = t1.y_prev_hash @ t2.y_prev_hash
+    ; y_prev_path = t1.y_prev_path @ t2.y_prev_path
     ; y_path = t1.y_path @ t2.y_path
     ; z = t1.z @ t2.z
     }

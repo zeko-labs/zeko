@@ -441,12 +441,12 @@ let update_outer_state ~signature_kind ~(signer : Keypair.t)
 module Change_permissions =
   Zeko_circuits.Rule_change_permissions.Make (Zeko_circuits_config.Inputs) ()
 
-let update_permissions ~signature_kind ~(signer : Keypair.t)
+let update_permissions ~logger ~signature_kind ~(signer : Keypair.t)
     ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~gql_uri
     ~(permissions : Permissions.t) =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let%bind old_vk =
-    Gql_client.fetch_vk gql_uri
+    Gql_client.fetch_vk ~logger gql_uri
       ( Account_id.of_public_key
       @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
     >>| Or_error.ok_exn

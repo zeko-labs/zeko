@@ -1,10 +1,10 @@
-/src/app/zeko/* @L-as
-/src/app/zeko/circuits/ @L-as
-/src/app/zeko/circuits_as_prover/ @L-as
-/src/app/zeko/compile_simple/ @L-as
-/src/app/zeko/tests/ @L-as
-/src/app/zeko/v/ @L-as
+/src/app/zeko/* @MartinOndejka
+/src/app/zeko/circuits/ @MartinOndejka
+/src/app/zeko/circuits_as_prover/ @MartinOndejka
+/src/app/zeko/compile_simple/ @MartinOndejka
+/src/app/zeko/tests/ @MartinOndejka
+/src/app/zeko/v/ @MartinOndejka
 /src/app/zeko/da_layer/ @MartinOndejka
-/src/app/zeko/da_layer/core.ml @L-as
+/src/app/zeko/da_layer/core.ml @MartinOndejka
 /src/app/zeko/sequencer/ @MartinOndejka
 /src/app/lib/ @L-as @MartinOndejka

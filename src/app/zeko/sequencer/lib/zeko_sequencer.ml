@@ -483,9 +483,23 @@ module Sequencer = struct
                          Zkapp_command.all_account_updates_list command
                          |> List.map ~f:(fun _ -> true) ) )
           in
+          let new_accounts_keys =
+            List.filter changed_accounts ~f:(fun (index, _) ->
+                Account.equal
+                  (Sparse_ledger.get_exn source_ledger index)
+                  Account.empty )
+            |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+            |> List.map ~f:(fun (_, account) ->
+                   Account_id.derive_token_id
+                     ~owner:(Account.identifier account) )
+          in
           let%bind () =
             Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-              ~ledger_openings:source_ledger ~diff
+              ~ledger_openings:source_ledger
+              ~acc_set_openings:
+                (Indexed_merkle_tree.Sparse.of_db_subset ~db:t.imt
+                   ~keys:new_accounts_keys )
+              ~diff
               ~target_ledger_hash:(L.Db.merkle_root t.ledger)
           in
 
@@ -545,9 +559,23 @@ module Sequencer = struct
                 ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
                 ~changed_accounts ~command_with_action_step_flags:None
             in
+            let new_accounts_keys =
+              List.filter changed_accounts ~f:(fun (index, _) ->
+                  Account.equal
+                    (Sparse_ledger.get_exn source_ledger index)
+                    Account.empty )
+              |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+              |> List.map ~f:(fun (_, account) ->
+                     Account_id.derive_token_id
+                       ~owner:(Account.identifier account) )
+            in
             let%bind () =
               Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-                ~ledger_openings:source_ledger ~diff
+                ~ledger_openings:source_ledger
+                ~acc_set_openings:
+                  (Indexed_merkle_tree.Sparse.of_db_subset ~db:t.imt
+                     ~keys:new_accounts_keys )
+                ~diff
                 ~target_ledger_hash:(L.Db.merkle_root t.ledger)
             in
             match%map
@@ -569,12 +597,14 @@ module Sequencer = struct
       C.Rollup_state.Outer_action_state.With_length.(raw s, length s)
     in
     let%bind all_new_actions =
-      Gql_client.fetch_actions t.config.archive_uri
+      Gql_client.fetch_actions ~logger t.config.archive_uri
         ~from_action_state:old_synced_outer_action_state
         Zeko_circuits_config.Inputs.zeko_l1
     in
     [%log info] "All new actions: %d" (List.length all_new_actions) ;
-    let%bind current_height = Gql_client.fetch_block_height t.config.l1_uri in
+    let%bind current_height =
+      Gql_client.fetch_block_height ~logger t.config.l1_uri
+    in
     (* Find pointer for actions to be processed *)
     let processed_pointer, processed_new_actions =
       List.fold all_new_actions ~init:(old_synced_outer_action_state, [])
@@ -736,7 +766,7 @@ module Sequencer = struct
   let sync ~logger ({ config; _ } as t) da_config source =
     [%log info] "Syncing" ;
     let%bind commited_ledger_hash =
-      Gql_client.infer_state config.l1_uri
+      Gql_client.infer_state ~logger config.l1_uri
         ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~signer_pk:(Public_key.compress config.signer.public_key)
       >>| Or_error.ok_exn
@@ -762,9 +792,15 @@ module Sequencer = struct
           let%bind diffs = Da_layer.Client.create_genesis_diffs ledger in
           let%bind () =
             Deferred.List.iteri ~how:`Sequential diffs
-              ~f:(fun i (diff, ledger_openings, `Target target_ledger_hash) ->
+              ~f:(fun
+                   i
+                   ( diff
+                   , ledger_openings
+                   , acc_set_openings
+                   , `Target target_ledger_hash )
+                 ->
                 Da_layer.Client.enqueue_diff t.da_client ~diff ~ledger_openings
-                  ~target_ledger_hash ~genesis:(i = 0) )
+                  ~acc_set_openings ~target_ledger_hash ~genesis:(i = 0) )
           in
           [%log info] "Enqueued genesis diff" ;
           return ()
@@ -791,7 +827,7 @@ module Sequencer = struct
           (* Apply accounts diff *)
           let mask = L.of_database t.ledger in
           let ledger_openings =
-            Da_layer.Client.get_openings
+            Da_layer.Client.get_ledger_openings
               ~diff:(Da_layer.Diff.drop_time diff)
               ~ledger:mask
           in
@@ -812,11 +848,17 @@ module Sequencer = struct
               in
               () ) ;
 
+          let acc_set_openings =
+            Da_layer.Client.get_acc_set_openings
+              ~diff:(Da_layer.Diff.drop_time diff)
+              ~ledger_openings ~imt:t.imt
+          in
+
           (* Store diff to DA client *)
           let%bind () =
             Da_layer.Client.enqueue_diff t.da_client
               ~diff:(Da_layer.Diff.drop_time diff)
-              ~ledger_openings
+              ~ledger_openings ~acc_set_openings
               ~target_ledger_hash:(L.Db.merkle_root t.ledger)
               ~genesis:(current_chunk = 0 && current_diff = 0)
           in
@@ -877,7 +919,7 @@ module Sequencer = struct
     | false, false -> (
         [%log info] "No ledger and IMT directories exist, fetching commits" ;
         let%bind commits =
-          Gql_client.fetch_actions archive_uri zkapp_pk
+          Gql_client.fetch_actions ~logger archive_uri zkapp_pk
           >>| Or_error.ok_exn
           >>| List.filter_map ~f:(fun (fields, _, _, _, _) ->
                   match fields with
@@ -892,7 +934,7 @@ module Sequencer = struct
                     None )
         in
         let%map commited_ledger_hash =
-          Gql_client.infer_state l1_uri
+          Gql_client.infer_state ~logger l1_uri
             ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
             ~signer_pk:(Public_key.compress signer_pk)
           >>| Or_error.ok_exn

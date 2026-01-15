@@ -373,7 +373,9 @@ module Sequencer_spec = struct
       ?checkpoints_dir ?(commit_validity_period = Global_slot_span.of_int 10)
       ~logger ~postgres_uri ~gql_uri ~da_config ~da_keys ~da_quorum ~mq_host
       ~slot_acceptance () =
-    let _reset = run @@ fun () -> Gql_client.For_tests.reset_state gql_uri in
+    let _reset =
+      run @@ fun () -> Gql_client.For_tests.reset_state ~logger gql_uri
+    in
     let deploy_config =
       Option.value_exn ~message:"ZEKO_DEPLOY_CONFIG is not set"
         Zeko_circuits_config.deploy_config
@@ -394,7 +396,7 @@ module Sequencer_spec = struct
     let signer = create_even_signer () in
     run (fun () ->
         let%bind _res =
-          Gql_client.For_tests.create_account gql_uri
+          Gql_client.For_tests.create_account ~logger gql_uri
             (Public_key.compress signer.public_key)
         in
         return () ) ;
@@ -469,7 +471,8 @@ module Sequencer_spec = struct
              Compressed.to_base58_check @@ compress token_holder_kp.public_key)
         ) ;
         let%bind nonce =
-          Gql_client.infer_nonce gql_uri (Public_key.compress signer.public_key)
+          Gql_client.infer_nonce ~logger gql_uri
+            (Public_key.compress signer.public_key)
           >>| Or_error.ok_exn
         in
         let%bind command =
@@ -491,14 +494,16 @@ module Sequencer_spec = struct
           Gql_client.send_zkapp gql_uri
             (Zkapp_command.read_all_proofs_from_disk command)
         in
-        let%bind _created = Gql_client.For_tests.create_new_block gql_uri in
+        let%bind _created =
+          Gql_client.For_tests.create_new_block ~logger gql_uri
+        in
         return () ) ;
 
     let l1_config : Utils.Slot.l1_config =
       let genesis_timestamp =
         run
         @@ fun () ->
-        Gql_client.fetch_genesis_timestamp gql_uri >>| Or_error.ok_exn
+        Gql_client.fetch_genesis_timestamp ~logger gql_uri >>| Or_error.ok_exn
       in
       { fork_timestamp = genesis_timestamp
       ; fork_slot = Mina_numbers.Global_slot_since_genesis.zero
