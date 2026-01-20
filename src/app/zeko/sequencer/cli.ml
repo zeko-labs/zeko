@@ -65,10 +65,6 @@ let update_outer_verification_keys =
            ~doc:"bool Only check if the verification keys are up to date"
        in
        fun () ->
-         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
-         let sender =
-           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
-         in
          let l1_uri = Uri.of_string l1_uri in
          let open Zeko_types in
          let logger = Logger.create () in
@@ -139,6 +135,10 @@ let update_outer_verification_keys =
 
          if only_check then return ()
          else
+           let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+           let sender =
+             Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+           in
            let%bind nonce =
              Gql_client.infer_nonce ~logger l1_uri
                (Public_key.compress sender.public_key)
