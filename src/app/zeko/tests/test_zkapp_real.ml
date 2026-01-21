@@ -39,7 +39,7 @@ let old_inner_acc =
 
 let Compile_simple.
       [ _signed_command; _zkapp_single; zkapp_double; _zkapp_proved; _merge ] =
-  Txn_rules.provers
+  Lazy.force Txn_rules.provers
 
 let constraint_constants : Genesis_constants.Constraint_constants.t =
   { sub_windows_per_window = 1

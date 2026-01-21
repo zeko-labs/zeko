@@ -29,7 +29,7 @@ open struct
       let trans0, proof0 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.leaf
+        (Lazy.force Ase.With_length.leaf)
           ( [ Field.one ]
           , { action_state = Field.of_string "6"
             ; length = Unsigned.UInt32.of_string "42"
@@ -38,12 +38,13 @@ open struct
       let trans1, proof1 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.leaf_option ([ Field.of_string "2" ], trans0.target)
+        (Lazy.force Ase.With_length.leaf_option)
+          ([ Field.of_string "2" ], trans0.target)
 
       let trans2, proof2 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.merge
+        (Lazy.force Ase.With_length.merge)
           { left = trans0
           ; left_proof = proof0
           ; right = trans1
@@ -53,12 +54,13 @@ open struct
       let trans3, proof3 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.extend ([ Field.of_string "99" ], (trans2, proof2))
+        (Lazy.force Ase.With_length.extend)
+          ([ Field.of_string "99" ], (trans2, proof2))
 
       let trans4, proof4 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.extend_option
+        (Lazy.force Ase.With_length.extend_option)
           ([ Field.of_string "99" ], (trans3, proof3))
     end in
     (trans4, proof4)
@@ -67,17 +69,19 @@ open struct
     let open struct
       let trans0, proof0 =
         Promise.block_on_async_exn
-        @@ fun () -> Ase.Without_length.leaf ([ Field.one ], Field.of_string "6")
+        @@ fun () ->
+        (Lazy.force Ase.Without_length.leaf) ([ Field.one ], Field.of_string "6")
 
       let trans1, proof1 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.Without_length.leaf_option ([ Field.of_string "2" ], trans0.target)
+        (Lazy.force Ase.Without_length.leaf_option)
+          ([ Field.of_string "2" ], trans0.target)
 
       let trans2, proof2 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.Without_length.merge
+        (Lazy.force Ase.Without_length.merge)
           { left = trans0
           ; left_proof = proof0
           ; right = trans1
@@ -87,12 +91,13 @@ open struct
       let trans3, proof3 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.Without_length.extend ([ Field.of_string "99" ], (trans2, proof2))
+        (Lazy.force Ase.Without_length.extend)
+          ([ Field.of_string "99" ], (trans2, proof2))
 
       let trans4, proof4 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.Without_length.extend_option
+        (Lazy.force Ase.Without_length.extend_option)
           ([ Field.of_string "99" ], (trans3, proof3))
     end in
     (trans4, proof4)
@@ -118,7 +123,7 @@ open struct
 
   let _inner_stmt, _inner_proof =
     let open struct
-      let Compile_simple.[ sync; action ] = Inner_rules_inst.provers
+      let Compile_simple.[ sync; action ] = Lazy.force Inner_rules_inst.provers
 
       let ase_with_length : Rule_inner_sync.Ase_inst.t =
         Rule_inner_sync.Ase_inst.make ~proof_source:ase_with_length.source
@@ -162,12 +167,17 @@ open struct
         let inner_public_key = inner_public_key
 
         let chain_l1 = Mina_signature_kind.Testnet
+
+        let max_sequencer_inactivity = 128
+
+        let emergency_da_public_key = point_of_string "223344"
       end)
       ()
 
   let _txn_stmt, _txn_proof =
     let open struct
-      let Compile_simple.[ commit; action; _pause ] = Outer_rules_inst.provers
+      let Compile_simple.[ commit; _emergency_commit; action; _pause ] =
+        Lazy.force Outer_rules_inst.provers
 
       (*
     let pause_witness : Rule_pause.Witness.t =
@@ -196,7 +206,8 @@ open struct
       let _stmt, _proof =
         Promise.block_on_async_exn @@ fun () -> action action_witness
 
-      let Compile_simple.[ prove_both ] = Rule_commit.Verify_both_ases.provers
+      let Compile_simple.[ prove_both ] =
+        Lazy.force Rule_commit.Verify_both_ases.provers
 
       let ase_outer =
         let default = Mina_base.Zkapp_account.Actions.empty_state_element in
@@ -250,7 +261,7 @@ open struct
             ; _zkapp_proved
             ; merge
             ] =
-        Txn_rules.provers
+        Lazy.force Txn_rules.provers
 
       let constraint_constants : Genesis_constants.Constraint_constants.t =
         { sub_windows_per_window = 1
@@ -789,18 +800,23 @@ open struct
         Signature_lib.Schnorr.Chunked.sign ~signature_kind da_kp.private_key
           (Random_oracle.Input.Chunked.field payload)
 
-      let da_key =
-        da_kp.public_key |> Public_key.compress
-        |> fun p : Zeko_util.Even_PC.t ->
-        { public_key = p.Public_key.Compressed.Poly.x }
-
       let () = assert (Int.(List.length old_inner_acc_path = 35))
 
       let () = assert (Int.(List.length new_inner_acc_path = 35))
 
-      let witness : Outer_rules_inst.Rule_commit_inst.Witness.t =
-        { txn_snark = Txn_rules.make_unchecked ~proof stmt
-        ; public_key = point_of_string "29421"
+      let da_multisig : Multisig.Witness.t =
+        { signatures =
+            [ { Multisig.Maybe_signature.public_key =
+                  Public_key.compress da_kp.public_key
+              ; signature = da_signature
+              ; is_some = true
+              }
+            ]
+        ; quorum = Field.of_int 1
+        }
+
+      let base_witness : Outer_rules_inst.Rule_commit_inst.Base_witness.t =
+        { public_key = point_of_string "29421"
         ; vk_hash = Snark_params.Tick.Field.zero
         ; slot_range =
             { lower = Mina_numbers.Global_slot_since_genesis.zero
@@ -810,8 +826,12 @@ open struct
         ; new_inner_acc = old_inner_acc
         ; old_inner_acc_path = convert_path old_inner_acc_path
         ; new_inner_acc_path
-        ; da_signature
-        ; da_key
+        ; da_multisig
+        }
+
+      let witness : Outer_rules_inst.Rule_commit_inst.Witness.t =
+        { txn_snark = Txn_rules.make_unchecked ~proof stmt
+        ; base_witness
         ; verify_both_ases
         }
 
@@ -906,6 +926,8 @@ open struct
 
     let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
 
+    let max_sequencer_inactivity = 128
+
     let holder_account_l1_permissions_enabled : Mina_base.Permissions.t =
       { edit_state = Proof
       ; access = None
@@ -948,17 +970,19 @@ open struct
   module Inner_rules = Inner_rules.Make (Inputs) ()
 
   let Compile_simple.[ cancel_deposit; finalize_withdrawal; _ ] =
-    Bridge.System_L1_enabled.provers
+    Lazy.force Bridge.System_L1_enabled.provers
 
   let Compile_simple.[ finalize_deposit; inner_receive ] =
-    Bridge.System_L2.provers
+    Lazy.force Bridge.System_L2.provers
 
   let Compile_simple.[ outer_token_owner ] =
-    Bridge.System_L1_token_owner.provers
+    Lazy.force Bridge.System_L1_token_owner.provers
 
-  let Compile_simple.[ _; outer_action_witness; _ ] = Outer_rules.provers
+  let Compile_simple.[ _; _; outer_action_witness; _ ] =
+    Lazy.force Outer_rules.provers
 
-  let Compile_simple.[ _; inner_action_witness ] = Inner_rules.provers
+  let Compile_simple.[ _; inner_action_witness ] =
+    Lazy.force Inner_rules.provers
 
   module Deposit = struct
     let recipient = Keypair.create ()
@@ -1012,7 +1036,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Outer_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Outer_rules.tag) )
               |> Compile_simple.Verification_key.hash
           ; witness = deposit_witness
           }
@@ -1091,7 +1116,7 @@ open struct
         let Bridge.Check_accepted.{ source; target }, proof =
           Promise.block_on_async_exn
           @@ fun () ->
-          Bridge.Check_accepted.leaf_option
+          (Lazy.force Bridge.Check_accepted.leaf_option)
             ( [ Commit commit_witness ]
             , { params = deposit_params
               ; action_state =
@@ -1128,7 +1153,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Bridge.System_L2.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Bridge.System_L2.tag) )
               |> Compile_simple.Verification_key.hash
           ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
           ; inner_authorization_kind = Rule_bridge_finalize_deposit.A.None_given
@@ -1279,7 +1305,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Outer_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Outer_rules.tag) )
               |> Compile_simple.Verification_key.hash
           ; witness = deposit_witness
           }
@@ -1380,8 +1407,9 @@ open struct
             action_state [ commit_action ]
         in
         let [ prover ] =
-          Bridge.Rule_bridge_finalize_cancelled_deposit.Verify_two_outer_ases
-          .provers
+          Lazy.force
+            Bridge.Rule_bridge_finalize_cancelled_deposit.Verify_two_outer_ases
+            .provers
         in
         let stmt, proof =
           Promise.block_on_async_exn @@ fun () -> prover (commit_ase, sync_ase)
@@ -1394,7 +1422,7 @@ open struct
           let Bridge.Check_accepted.{ source; target }, proof =
             Promise.block_on_async_exn
             @@ fun () ->
-            Bridge.Check_accepted.leaf_option
+            (Lazy.force Bridge.Check_accepted.leaf_option)
               ( [ Commit commit_witness ]
               , { params = deposit_params
                 ; action_state =
@@ -1439,9 +1467,10 @@ open struct
             action_state []
         in
         let [ prover ] =
-          Bridge.Rule_bridge_finalize_cancelled_deposit
-          .Verify_check_accepted_and_ase
-          .provers
+          Lazy.force
+            Bridge.Rule_bridge_finalize_cancelled_deposit
+            .Verify_check_accepted_and_ase
+            .provers
         in
         let stmt, proof =
           Promise.block_on_async_exn
@@ -1463,7 +1492,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_enabled.tag )
+                (Lazy.force Bridge.System_L1_enabled.tag) )
               |> Compile_simple.Verification_key.hash
           ; may_use_token =
               Bridge.Rule_bridge_finalize_cancelled_deposit.May_use_token.No
@@ -1480,7 +1509,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_token_owner.tag )
+                (Lazy.force Bridge.System_L1_token_owner.tag) )
               |> Compile_simple.Verification_key.hash
           }
       in
@@ -1573,7 +1602,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_token_owner.tag )
+                (Lazy.force Bridge.System_L1_token_owner.tag) )
               |> Compile_simple.Verification_key.hash
           ; a = helper_account.body
           }
@@ -1610,7 +1639,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Inner_rules.tag) )
               |> Compile_simple.Verification_key.hash
           ; amount
           }
@@ -1644,7 +1674,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Inner_rules.tag) )
               |> Compile_simple.Verification_key.hash
           ; witness = withdrawal_witness
           }
@@ -1725,7 +1756,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_enabled.tag )
+                (Lazy.force Bridge.System_L1_enabled.tag) )
               |> Compile_simple.Verification_key.hash
           ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
           ; outer_authorization_kind =
@@ -1741,12 +1772,13 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_token_owner.tag )
+                (Lazy.force Bridge.System_L1_token_owner.tag) )
               |> Compile_simple.Verification_key.hash
           ; l2_holder_vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Inner_rules.tag) )
               |> Compile_simple.Verification_key.hash
           }
       in
@@ -1843,7 +1875,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_token_owner.tag )
+                (Lazy.force Bridge.System_L1_token_owner.tag) )
               |> Compile_simple.Verification_key.hash
           ; a = helper_account.body
           }

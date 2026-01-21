@@ -26,6 +26,8 @@ module Inputs = struct
 
   let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
 
+  let max_sequencer_inactivity = 128
+
   let holder_account_l1_permissions_enabled : Mina_base.Permissions.t =
     { edit_state = Proof
     ; access = None
@@ -73,22 +75,80 @@ module Inner_rules_inst = Zeko_circuits.Inner_rules.Make (Inputs) ()
 
 module Outer_rules_inst = Zeko_circuits.Outer_rules.Make (Inputs) ()
 
-let _tag = Inner_rules_inst.tag
+let tag = Lazy.force Inner_rules_inst.tag
 
-let _tag = Outer_rules_inst.tag
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "Inner rules vk: %s\n"
+
+let tag = Lazy.force Outer_rules_inst.tag
+
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "Outer rules vk: %s\n"
+
+module Emergency_da_inst = Zeko_circuits.Emergency_da_rules.Make (Inputs) ()
+
+let tag = Lazy.force Emergency_da_inst.tag
+
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "Emergency da vk: %s\n"
 
 module B_mina = Zeko_circuits.Bridge_rules.Make_mina (Inputs) ()
 
-let _tag = B_mina.System_L1_enabled.tag
+let tag = Lazy.force B_mina.System_L1_enabled.tag
 
-let _tag = B_mina.System_L1_disabled.tag
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "System L1 enabled vk: %s\n"
 
-let _tag = B_mina.System_L2.tag
+let tag = Lazy.force B_mina.System_L1_disabled.tag
+
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "System L1 disabled vk: %s\n"
+
+let tag = Lazy.force B_mina.System_L2.tag
+
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "System L2 vk: %s\n"
 
 module B_custom = Zeko_circuits.Bridge_rules.Make_custom (Inputs) ()
 
-let _tag = B_custom.System_L1_enabled.tag
+let tag = Lazy.force B_custom.System_L1_enabled.tag
 
-let _tag = B_custom.System_L1_disabled.tag
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "System L1 enabled vk: %s\n"
 
-let _tag = B_custom.System_L2.tag
+let tag = Lazy.force B_custom.System_L1_disabled.tag
+
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "System L1 disabled vk: %s\n"
+
+let tag = Lazy.force B_custom.System_L2.tag
+
+let () =
+  Promise.block_on_async_exn (fun () ->
+      Compile_simple.Verification_key.of_tag tag )
+  |> Compile_simple.Verification_key.hash |> Snark_params.Tick.Field.to_string
+  |> Core.printf "System L2 vk: %s\n"
