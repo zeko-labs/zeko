@@ -33,7 +33,6 @@ module Witness = struct
     ; old_account : Account.t
     ; new_account : Account.t
     ; ledger_path : Ledger_path.Path.t
-    ; ledger_index : Checked32.t
     }
   [@@deriving snarky]
 end
@@ -46,6 +45,16 @@ let implied_root (account : Account.var) (path : Ledger_path.Path.var) =
       let* right = Field.Checked.if_ is_right ~then_:acc ~else_:hash_other in
       make_checked @@ fun () -> Ledger_hash.merge_var ~height left right )
 
+let index_of_path (path : Ledger_path.Path.var) : Checked32.var Checked.t =
+  Checked.List.foldi path ~init:Checked32.Checked.zero
+    ~f:(fun height acc Ledger_path.Step.{ is_right; _ } ->
+      let* add =
+        if_ is_right ~typ:Checked32.typ
+          ~then_:(Checked32.Checked.constant (Checked32.of_int (1 lsl height)))
+          ~else_:Checked32.Checked.zero
+      in
+      Checked32.Checked.add acc add )
+
 module Make (Inputs : sig
   val chain_l1 : Mina_signature_kind.t
 end) =
@@ -53,21 +62,15 @@ struct
   open Inputs
 
   let%snarkydef_ main (w : Witness.t V.t) =
-    let* Witness.
-           { public_key
-           ; vk_hash
-           ; old_account
-           ; new_account
-           ; ledger_path
-           ; ledger_index
-           } =
+    let* Witness.{ public_key; vk_hash; old_account; new_account; ledger_path }
+        =
       exists Witness.typ ~compute:(V.get w)
     in
     let* source_root = implied_root old_account ledger_path in
     let* target_root = implied_root new_account ledger_path in
     let source_ledger_hash = Ledger_hash.var_of_hash_packed source_root in
     let target_ledger_hash = Ledger_hash.var_of_hash_packed target_root in
-    (* TODO: derive ledger_index from ledger_path instead of trusting witness input. *)
+    let* ledger_index = index_of_path ledger_path in
     let* actions =
       var_to_actions Action.typ
         Action.

@@ -1013,7 +1013,6 @@ open struct
         ; old_account = fee_payer_acc_source
         ; new_account = fee_payer_acc_after_first
         ; ledger_path = to_emergency_path fee_payer_path_0
-        ; ledger_index = Zeko_util.Checked32.of_int fee_payer_index
         }
 
       let emergency_da_witness_2 : Rule_emergency_da.Witness.t =
@@ -1022,7 +1021,6 @@ open struct
         ; old_account = old_inner_acc
         ; new_account = old_inner_acc
         ; ledger_path = to_emergency_path inner_path_1
-        ; ledger_index = Zeko_util.Checked32.of_int inner_index
         }
 
       let emergency_da_witness_3 : Rule_emergency_da.Witness.t =
@@ -1031,7 +1029,6 @@ open struct
         ; old_account = fee_payer_acc_after_first
         ; new_account = fee_payer_acc_after_third
         ; ledger_path = to_emergency_path fee_payer_path_2
-        ; ledger_index = Zeko_util.Checked32.of_int fee_payer_index
         }
 
       let emergency_da_witness_4 : Rule_emergency_da.Witness.t =
@@ -1040,7 +1037,6 @@ open struct
         ; old_account = Mina_base.Account.empty
         ; new_account = new_account_created
         ; ledger_path = to_emergency_path new_path_3
-        ; ledger_index = Zeko_util.Checked32.of_int new_index
         }
 
       let emergency_da_out_1, _emergency_da_proof_1 =
