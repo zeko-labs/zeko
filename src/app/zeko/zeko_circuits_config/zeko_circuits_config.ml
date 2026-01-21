@@ -15,6 +15,7 @@ type t =
   ; holder_accounts_l1 : Public_key.Compressed.t list
   ; helper_token_owner_l1 : Public_key.Compressed.t
   ; zeko_l1 : Public_key.Compressed.t
+  ; emergency_da_public_key : Public_key.Compressed.t
   ; withdrawal_delay : Global_slot_span.t
   }
 [@@deriving yojson]
@@ -24,6 +25,7 @@ module Deploy = struct
     { holder_accounts_l1 : Private_key.t list
     ; helper_token_owner_l1 : Private_key.t
     ; zeko_l1 : Private_key.t
+    ; emergency_da : Private_key.t
     }
   [@@deriving yojson]
 end
@@ -52,18 +54,23 @@ let (t, deploy_config) : t * Deploy.t option =
       let zeko_l1 =
         keypair_of_b58_sk "EKEFFD7uJayycrse8A2ixBR2Wu7cA5GnGS5ydcYNyzhvr1EPPvj8"
       in
+      let emergency_da =
+        keypair_of_b58_sk "EKE9VtD6g4AgoscJdxBbFak6yfBgnQDHTpyj23CfNFT5BxL51Zin"
+      in
       ( { chain_l1 = Testnet
         ; chain_l2 = Testnet
         ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
         ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
         ; helper_token_owner_l1 = fst helper_token_owner_l1
         ; zeko_l1 = fst zeko_l1
+        ; emergency_da_public_key = fst emergency_da
         ; withdrawal_delay = Global_slot_span.of_int 5
         }
       , Some
           { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
           ; helper_token_owner_l1 = snd helper_token_owner_l1
           ; zeko_l1 = snd zeko_l1
+          ; emergency_da = snd emergency_da
           } )
   | Some path -> (
       match Yojson.Safe.from_file path |> of_yojson with
@@ -101,6 +108,8 @@ module Inputs = struct
   let zeko_l1 = t.zeko_l1
 
   let zeko_l2 = Zeko_constants.inner_public_key
+
+  let emergency_da_public_key = t.emergency_da_public_key
 
   let withdrawal_delay = t.withdrawal_delay
 

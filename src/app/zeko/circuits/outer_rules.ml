@@ -6,6 +6,8 @@ module Make (Inputs : sig
   val chain_l1 : Mina_signature_kind.t
 
   val max_sequencer_inactivity : int
+
+  val emergency_da_public_key : Signature_lib.Public_key.Compressed.t
 end)
 () =
 struct

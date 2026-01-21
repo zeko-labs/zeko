@@ -774,8 +774,7 @@ module Outer_commit = struct
          } :
           serializable ) ~vk_hash : t =
       { base_witness =
-          { txn_snark = Txn_snark.of_serializable txn_snark
-          ; public_key
+          { public_key
           ; vk_hash
           ; old_inner_acc
           ; old_inner_acc_path
@@ -784,6 +783,7 @@ module Outer_commit = struct
           ; da_multisig
           ; slot_range
           }
+      ; txn_snark = Txn_snark.of_serializable txn_snark
       ; verify_both_ases = Verify_both_ases.of_serializable verify_both_ases
       }
   end

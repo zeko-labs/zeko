@@ -902,6 +902,8 @@ open struct
 
     let zeko_l2 = inner_public_key
 
+    let emergency_da_public_key = point_of_string "44444"
+
     let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
 
     let holder_account_l1_permissions_enabled : Mina_base.Permissions.t =

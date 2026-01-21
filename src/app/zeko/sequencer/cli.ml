@@ -32,6 +32,7 @@ let generate_circuits_config =
            let holder_accounts_l1 = [ generate_keypair () ] in
            let helper_token_owner_l1 = generate_keypair () in
            let zeko_l1 = generate_keypair () in
+           let emergency_da = generate_keypair () in
            let t : Zeko_circuits_config.t =
              { chain_l1 = Testnet
              ; chain_l2 = Testnet
@@ -39,6 +40,7 @@ let generate_circuits_config =
              ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
              ; helper_token_owner_l1 = fst helper_token_owner_l1
              ; zeko_l1 = fst zeko_l1
+             ; emergency_da_public_key = fst emergency_da
              ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
              }
            in
@@ -46,6 +48,7 @@ let generate_circuits_config =
              { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
              ; helper_token_owner_l1 = snd helper_token_owner_l1
              ; zeko_l1 = snd zeko_l1
+             ; emergency_da = snd emergency_da
              }
            in
            Core.printf "circuits config: %s\n%!"
