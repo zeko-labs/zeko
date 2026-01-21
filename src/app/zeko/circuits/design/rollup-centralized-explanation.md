@@ -139,10 +139,6 @@ within the max_sequencer_inactivity window. With a sufficiently
 large window (e.g., on the order of a month), this obligation is
 trivial for a healthy sequencer.
 
-In effect, the emergency commit seals the gap with a bounded slot
-range, restores liveness, and lets subsequent sequencers resume
-committing under the usual rules.
-
 ## ZEKO token
 
 The ZEKO token will use the
