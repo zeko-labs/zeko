@@ -44,7 +44,7 @@ let implied_root (account : Account.var) (path : Ledger_path.Path.var) =
     ~f:(fun height acc Ledger_path.Step.{ hash_other; is_right } ->
       let* left = Field.Checked.if_ is_right ~then_:hash_other ~else_:acc in
       let* right = Field.Checked.if_ is_right ~then_:acc ~else_:hash_other in
-      Checked.return (Ledger_hash.merge_var ~height left right) )
+      make_checked @@ fun () -> Ledger_hash.merge_var ~height left right )
 
 module Make (Inputs : sig
   val chain_l1 : Mina_signature_kind.t
