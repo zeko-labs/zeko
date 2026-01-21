@@ -25,6 +25,10 @@ struct
           Boolean.true_ (* added here too to be extra sure *)
       }
     in
+    let* status_flags_update =
+      Outer_state.Status_flags.of_bools_var ~paused:Boolean.true_
+        ~emergency:Boolean.false_
+    in
     let account_update =
       { default_account_update with
         public_key
@@ -34,7 +38,7 @@ struct
             app_state =
               Outer_state.fine
                 { pause_key = None
-                ; paused = Some Boolean.true_
+                ; status_flags = Some status_flags_update
                 ; ledger_hash = None
                 ; inner_action_state = { length = None; state = None }
                 ; sequencer = None
@@ -50,7 +54,7 @@ struct
                 state =
                   Outer_state.fine
                     { pause_key = Some pause_key
-                    ; paused = None
+                    ; status_flags = None
                     ; ledger_hash = None
                     ; inner_action_state = { length = None; state = None }
                     ; sequencer = None

@@ -833,7 +833,9 @@ let create_deploy_inner ~(zeko_kp : Keypair.t) () =
         ; sequencer
         ; da_key
         ; acc_set = failwith "FIXME"
-        ; paused = false
+        ; status_flags =
+            Zeko_circuits.Rollup_state.Outer_state.Status_flags.of_bools
+              ~paused:false ~emergency:false
         }
         : Zeko_circuits.Rollup_state.Outer_state.t )
     in

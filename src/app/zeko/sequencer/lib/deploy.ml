@@ -128,7 +128,9 @@ module Z = struct
                 (fun f -> Set_or_keep.Set f)
                 Set_or_keep.Keep typ
                 ( { pause_key
-                  ; paused = false
+                  ; status_flags =
+                      Rollup_state.Outer_state.Status_flags.of_bools
+                        ~paused:false ~emergency:false
                   ; ledger_hash
                   ; inner_action_state =
                       Rollup_state.Inner_action_state.With_length.empty

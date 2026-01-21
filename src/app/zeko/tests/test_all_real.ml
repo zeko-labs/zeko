@@ -846,6 +846,7 @@ open struct
         ; old_inner_acc_path = convert_path old_inner_acc_path
         ; new_inner_acc_path
         ; da_multisig
+        ; emergency_mode = false
         }
 
       let witness : Outer_rules_inst.Rule_commit_inst.Witness.t =

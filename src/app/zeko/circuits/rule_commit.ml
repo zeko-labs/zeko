@@ -160,6 +160,7 @@ struct
       ; new_inner_acc_path : Path.t
       ; da_multisig : Multisig.Witness.t
       ; slot_range : Slot_range.t
+      ; emergency_mode : Zeko_util.Boolean.t
       }
     [@@deriving snarky]
   end
@@ -210,9 +211,14 @@ struct
          ; new_inner_acc_path
          ; da_multisig
          ; slot_range
+         ; emergency_mode
          }
           : Base_witness.var ) =
       w
+    in
+    let* status_flags_precondition =
+      Outer_state.Status_flags.of_bools_var ~paused:Boolean.false_
+        ~emergency:emergency_mode
     in
     with_label __LOC__
     @@ fun () ->
@@ -404,6 +410,16 @@ struct
       new_inner_action_state
     in
 
+    let* status_flags_update =
+      match da_mode with
+      | Multisig ->
+          Outer_state.Status_flags.of_bools_var ~paused:Boolean.false_
+            ~emergency:Boolean.false_
+      | Emergency _ ->
+          Outer_state.Status_flags.of_bools_var ~paused:Boolean.false_
+            ~emergency:Boolean.true_
+    in
+
     (* Finalize update  *)
     let update =
       { default_account_update.update with
@@ -428,7 +444,7 @@ struct
                    to many other zkapps.
                 *)
             ; sequencer = None (* We don't update the sequencer. *)
-            ; paused = None (* We don't pause the rollup. *)
+            ; status_flags = Some status_flags_update
             ; pause_key = None (* We don't update the pause key. *)
             ; da_key = None
             ; acc_set = Some target_acc_set
@@ -462,7 +478,8 @@ struct
                     (* We must be the sequencer. *)
                     ( if check_sequencer_precondition then Some sequencer
                     else None )
-                ; paused = Some Boolean.false_ (* We must not be paused. *)
+                ; status_flags =
+                    Some status_flags_precondition (* We must not be paused. *)
                 ; pause_key =
                     None (* We don't care about who can pause the rollup. *)
                 ; da_key = da_key_opt
@@ -613,12 +630,19 @@ struct
                       Slot.Checked.diff base_witness.slot_range.lower
                         last_commit.slot_range.upper
                     in
-                    Mina_numbers.Global_slot_span.Checked.(
-                      diff
-                      >= constant
-                           (Global_slot_span
-                              (Unsigned.UInt32.of_int max_sequencer_inactivity)
-                           )) )
+                    let* inactivity_ok =
+                      Mina_numbers.Global_slot_span.Checked.(
+                        diff
+                        >= constant
+                             (Global_slot_span
+                                (Unsigned.UInt32.of_int max_sequencer_inactivity)
+                             ))
+                    in
+                    let* ok =
+                      if_ base_witness.emergency_mode ~typ:Boolean.typ
+                        ~then_:Boolean.true_ ~else_:inactivity_ok
+                    in
+                    Checked.return ok )
               in
 
               let Count_commits.Definition.Stmt.

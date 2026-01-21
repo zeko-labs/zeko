@@ -94,19 +94,26 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   in
   let old_inner_acc, old_inner_acc_path = get_inner_acc old_inner_ledger in
   let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
-  let%bind inner_ase_source =
-    let%map { inner_action_state = committed_inner_action_state; _ } =
+  let%bind inner_ase_source, emergency_mode =
+    let%map { inner_action_state = committed_inner_action_state
+            ; status_flags
+            ; _
+            } =
       Gql_client.infer_state ~logger
         Executor.(executor.l1_uri)
         ~zkapp_pk
         ~signer_pk:(Public_key.compress executor.signer.public_key)
       >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
     in
-    ( Rollup_state.Inner_action_state.With_length.
-        { action_state = raw committed_inner_action_state
-        ; length = length committed_inner_action_state
-        }
-      : Ase.With_length.Stmt.t )
+    let emergency_mode =
+      Rollup_state.Outer_state.Status_flags.emergency status_flags
+    in
+    ( ( Rollup_state.Inner_action_state.With_length.
+          { action_state = raw committed_inner_action_state
+          ; length = length committed_inner_action_state
+          }
+        : Ase.With_length.Stmt.t )
+    , emergency_mode )
   in
   let%bind new_inner_actions =
     let from =
@@ -176,7 +183,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
       Zeko_prover.Client.outer_commit provers ~txn_snark ~public_key:zkapp_pk
         ~inner_ase_source ~new_inner_actions ~old_inner_acc ~old_inner_acc_path
         ~new_inner_acc ~new_inner_acc_path ~unprocessed_actions ~da_multisig
-        ~slot_range
+        ~slot_range ~emergency_mode
     in
     (* see #286 *)
     Utils.attach_proof_to_forest ~signature_kind:executor.signature_kind

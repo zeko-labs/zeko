@@ -431,7 +431,8 @@ let verify_check_accepted_and_ase_cancelled_deposit t input =
 
 let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
     ~unprocessed_actions ~(old_inner_acc : Account.t) ~old_inner_acc_path
-    ~(new_inner_acc : Account.t) ~new_inner_acc_path ~da_multisig ~slot_range =
+    ~(new_inner_acc : Account.t) ~new_inner_acc_path ~da_multisig ~slot_range
+    ~emergency_mode =
   (* Counting length of inner action state *)
   let%bind.Deferred.Result inner_ase =
     let%map.Deferred.Result proof, target, excess =
@@ -468,6 +469,7 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
     (Prover.Input.Outer_commit
        { txn_snark
        ; public_key
+       ; emergency_mode
        ; verify_both_ases
        ; old_inner_acc
        ; old_inner_acc_path

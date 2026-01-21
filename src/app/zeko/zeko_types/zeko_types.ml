@@ -751,6 +751,7 @@ module Outer_commit = struct
     type serializable =
       { txn_snark : Txn_snark.serializable
       ; public_key : Public_key.Compressed.t
+      ; emergency_mode : bool
       ; old_inner_acc : Account.t
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t
@@ -764,6 +765,7 @@ module Outer_commit = struct
     let of_serializable
         ({ txn_snark
          ; public_key
+         ; emergency_mode
          ; verify_both_ases
          ; old_inner_acc
          ; old_inner_acc_path
@@ -776,6 +778,7 @@ module Outer_commit = struct
       { base_witness =
           { public_key
           ; vk_hash
+          ; emergency_mode
           ; old_inner_acc
           ; old_inner_acc_path
           ; new_inner_acc
