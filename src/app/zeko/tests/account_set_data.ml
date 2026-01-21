@@ -564,6 +564,8 @@ end) : sig
   type r =
     { path : [ `Left of field | `Right of field ] list
     ; before_path : [ `Left of field | `Right of field ] list
+    ; y_prev_hash : field
+    ; y_prev_path : [ `Left of field | `Right of field ] list
     ; before : T.t
     ; after : T.t
     ; hash : field
@@ -580,6 +582,8 @@ end = struct
   type r =
     { path : [ `Left of field | `Right of field ] list
     ; before_path : [ `Left of field | `Right of field ] list
+    ; y_prev_hash : field
+    ; y_prev_path : [ `Left of field | `Right of field ] list
     ; before : T.t
     ; after : T.t
     ; hash : field
@@ -621,7 +625,11 @@ end = struct
     let path = path_simple (get_idx entry entries') new_tree in
     let before_path = path_simple (get_idx before entries) old_tree in
     let hash = hash_simple new_tree in
-    (entries', { path; before_path; before; after; hash })
+    let y_prev_idx = Int64.(get_idx entry entries' - one) in
+    let y_prev_hash = List.nth_exn new_tree (Int64.to_int_exn y_prev_idx) in
+    let y_prev_path = path_simple y_prev_idx new_tree in
+    ( entries'
+    , { path; before_path; y_prev_hash; y_prev_path; before; after; hash } )
 
   let to_string_hum entries =
     let tree = calculate_tree (S.of_list entries) entries in

@@ -468,10 +468,10 @@ open struct
         let (Typ typ) = Account_set.typ in
         typ.value_of_fields ([| x |], typ.constraint_system_auxiliary ())
 
-      (* let of_account_set x =
-         let (Typ typ) = Account_set.typ in
-         let fields, _aux = typ.value_to_fields x in
-         match fields with [| f |] -> f | _ -> failwith __LOC__ *)
+      let account_set_to_field x =
+        let (Typ typ) = Account_set.typ in
+        let fields, _aux = typ.value_to_fields x in
+        match fields with [| f |] -> f | _ -> failwith __LOC__
 
       let derive pk =
         Mina_base.Account_id.create pk Mina_base.Token_id.default
@@ -527,6 +527,11 @@ open struct
         { Txn_state.get_account_set_x =
             list_to_fun [ first.S.before; second.S.before ]
         ; get_account_set_z = list_to_fun [ first.after; second.after ]
+        ; get_account_set_y_prev_hash =
+            list_to_fun [ first.S.y_prev_hash; second.S.y_prev_hash ]
+        ; get_account_set_y_prev_path =
+            List.map ~f:convert_path [ first.y_prev_path; second.y_prev_path ]
+            |> list_to_fun
         ; get_account_set_x_path =
             List.map ~f:convert_path [ first.before_path; second.before_path ]
             |> list_to_fun
@@ -806,10 +811,9 @@ open struct
 
       let da_signature =
         let input =
-          let open Random_oracle.Input.Chunked in
-          (* append *)
-          stmt.target_ledger |> field
-          (* (stmt.target_acc_set |> of_account_set |> field) *)
+          Random_oracle.Input.Chunked.(
+            append (field stmt.target_ledger)
+              (field (account_set_to_field stmt.target_acc_set)))
         in
         let payload =
           Random_oracle.hash
