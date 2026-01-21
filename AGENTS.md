@@ -34,6 +34,7 @@
 - Action states are typed fields with optional length tracking (`rollup_state.ml`); inner app state stores the outer action state+length, outer app state stores the ledger hash, inner action state+length, sequencer key, pause key, DA multisig commitment, and account-set root.
 - Outer actions are either `Commit` (rollup step summary) or `Witness` (arbitrary action payload); inner actions are `Witness` only (`rollup_state.ml`).
 - `rule_commit.ml` verifies the transaction SNARK, DA multisig signatures over the target ledger hash, slot-range bounds, and action-state-extension proofs; it updates outer app state, emits a `Commit` action, and requires a sequencer signature as a child update.
+- `rule_commit.ml` has an emergency branch that verifies `Verify_emergency_folders` (Verify_both_ases + Count_commits), enforces a `max_sequencer_inactivity` gap, and allows commit without the sequencer precondition if no commits occurred since the last one.
 - `rule_action_witness.ml` posts a `Witness` action on L1 and forbids actions while paused; `rule_pause.ml` lets the pause key sign an update that sets `paused = true`.
 - `rule_inner_sync.ml` advances the inner account’s stored outer action state using an A.S.E. proof; `rule_inner_action_witness.ml` posts inner `Witness` actions.
 - `txn_rules.ml` builds the rollup transaction SNARK with branches for signed commands, zkapp commands (proved/unproved), and merge; the statement type is `Txn_state.Zeko_stmt`.
@@ -69,6 +70,7 @@
 - Zkapp action payloads are limited to ~100 field elements; large data should be compressed into hashes or split across transactions (emergency DA uses a single account per tx).
 - Action payload encoding is done via `zeko_util.var_to_actions`, which pushes a struct’s field elements into actions as data-as-hash.
 - Action-state extension proofs (A.S.E.) are built with `ase.ml` + `folder.ml`; these are the canonical way to prove action-state progression with bounded iterations.
+- Emergency commits rely on a counted-commit fold: `Count_commits` produces `{source_action_state; target_action_state; n_commits}` and the emergency rule requires `n_commits = 0` and that counting starts right after the last commit action.
 - Valid-while ranges are inclusive in Mina; commit rules enforce max window size and subset checks against transaction snark slot ranges.
 
 ## Mina zkApp model (transaction logic)
