@@ -64,3 +64,24 @@
 - `update_inner_account` (in `zeko_sequencer.ml`) syncs L1 actions into the L2 inner account using an inner-sync proof, then applies a dummy-fee zkapp command locally to advance action state before committing.
 - `prover/lib/prover.ml` is the prover worker: it handles txn-snark branches (signed/zkapp/merge), folder/A.S.E. proofs, inner sync, and outer commit proofs; `prover/lib/client.ml` sends jobs via a message queue and caches A.S.E. proofs in Postgres.
 - `executor.ml` is the L1 sender: it signs zkapp commands, infers/refreshes nonce, retries on transient failures, and serializes submissions to avoid nonce races.
+
+## Circuits (engineering knowhow)
+- Zkapp action payloads are limited to ~100 field elements; large data should be compressed into hashes or split across transactions (emergency DA uses a single account per tx).
+- Action payload encoding is done via `zeko_util.var_to_actions`, which pushes a struct’s field elements into actions as data-as-hash.
+- Action-state extension proofs (A.S.E.) are built with `ase.ml` + `folder.ml`; these are the canonical way to prove action-state progression with bounded iterations.
+- Valid-while ranges are inclusive in Mina; commit rules enforce max window size and subset checks against transaction snark slot ranges.
+
+## Mina zkApp model (transaction logic)
+- zkApp transactions are a call forest of account updates; execution walks the forest with a call stack, deriving `caller_id` based on `may_use_token` and parent relationships.
+- Each account update checks: account/ledger inclusion, account preconditions, protocol-state preconditions, valid-while range, and authorization (proof or signature) against the transaction commitment.
+- Transaction commitments are computed from the account-update call forest; `use_full_commitment` switches between transaction and full commitments for authorization and replay protection.
+- Permissions gate every field update (balance, app state, action state, permissions, delegate, nonce, voting-for, zkapp URI, verification key); updates are applied only when the corresponding permission controller authorizes.
+- Action state update logic pushes events into action slots and may shift slots; in Zeko this shift can be forced by the sequencer (no time-based shifting).
+- Receipt chain hashes are updated for account updates authorized by proof/signature, using the full transaction commitment and the account-update index.
+- Account creation fees are handled inside zkapp logic; they may be deducted from balance or from fee excess depending on flags.
+- Failed zkapp updates are disallowed on Zeko: local_state.success must hold for the last account update; failed transactions are rejected rather than partially applied.
+
+## Transaction SNARK structure
+- Transaction snarks support base proofs for signed commands and zkapp command segments, plus merge proofs that combine two proofs into one.
+- Zkapp command segments are categorized by authorization pattern: `Opt_signed`, `Opt_signed_opt_signed`, or `Proved`; proved segments require a side-loaded verification key.
+- The zkapp snark uses implied merkle roots from account+path to validate ledger inclusion and ensures consistent commitments across segments.
