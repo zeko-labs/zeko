@@ -28,6 +28,7 @@
    h_list.ppx))
  (modules
   bridge_rules
+  emergency_da_folder
   emergency_da_rules
   rule_emergency_da
   rule_bridge_enable
