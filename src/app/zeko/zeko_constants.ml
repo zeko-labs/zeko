@@ -128,7 +128,15 @@ module Folder_iterations = struct
 
   module Count_commits : FOLDER_ITERATIONS = Check_accepted
 
-  module Emergency_da : FOLDER_ITERATIONS = Check_accepted
+  module Emergency_da : FOLDER_ITERATIONS = struct
+    let leaf_iterations = 8
+
+    let leaf_option_iterations = 4
+
+    let extend_iterations = 4
+
+    let extend_option_iterations = 2
+  end
 end
 
 let multisig_salt = "multisig"
