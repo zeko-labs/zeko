@@ -57,9 +57,9 @@ module Max_excess_actions = struct
 
     let outer = Int.pow 2 9
 
-    let count_commits = Int.pow 2 9
+    let count_commits = 0
 
-    let emergency_da = Int.pow 2 9
+    let emergency_da = 0
   end
 
   module Finalize_cancelled_deposit = struct
