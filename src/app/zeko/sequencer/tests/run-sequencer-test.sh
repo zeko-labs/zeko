@@ -15,8 +15,6 @@ NUM_PROVERS="$2"
 PROVER_PIDS=()
 PROVERS=()
 
-export ZEKO_CIRCUITS_MODE=$MODE
-
 case "$MODE" in
 fake | real) ;;
 *)
