@@ -29,7 +29,7 @@ open struct
       let trans0, proof0 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.leaf
+        (Lazy.force Ase.With_length.leaf)
           ( [ Field.one ]
           , { action_state = Field.of_string "6"
             ; length = Unsigned.UInt32.of_string "42"
@@ -38,12 +38,13 @@ open struct
       let trans1, proof1 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.leaf_option ([ Field.of_string "2" ], trans0.target)
+        (Lazy.force Ase.With_length.leaf_option)
+          ([ Field.of_string "2" ], trans0.target)
 
       let trans2, proof2 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.merge
+        (Lazy.force Ase.With_length.merge)
           { left = trans0
           ; left_proof = proof0
           ; right = trans1
@@ -53,12 +54,13 @@ open struct
       let trans3, proof3 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.extend ([ Field.of_string "99" ], (trans2, proof2))
+        (Lazy.force Ase.With_length.extend)
+          ([ Field.of_string "99" ], (trans2, proof2))
 
       let trans4, proof4 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.With_length.extend_option
+        (Lazy.force Ase.With_length.extend_option)
           ([ Field.of_string "99" ], (trans3, proof3))
     end in
     (trans4, proof4)
@@ -67,17 +69,19 @@ open struct
     let open struct
       let trans0, proof0 =
         Promise.block_on_async_exn
-        @@ fun () -> Ase.Without_length.leaf ([ Field.one ], Field.of_string "6")
+        @@ fun () ->
+        (Lazy.force Ase.Without_length.leaf) ([ Field.one ], Field.of_string "6")
 
       let trans1, proof1 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.Without_length.leaf_option ([ Field.of_string "2" ], trans0.target)
+        (Lazy.force Ase.Without_length.leaf_option)
+          ([ Field.of_string "2" ], trans0.target)
 
       let trans2, proof2 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.Without_length.merge
+        (Lazy.force Ase.Without_length.merge)
           { left = trans0
           ; left_proof = proof0
           ; right = trans1
@@ -87,12 +91,13 @@ open struct
       let trans3, proof3 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.Without_length.extend ([ Field.of_string "99" ], (trans2, proof2))
+        (Lazy.force Ase.Without_length.extend)
+          ([ Field.of_string "99" ], (trans2, proof2))
 
       let trans4, proof4 =
         Promise.block_on_async_exn
         @@ fun () ->
-        Ase.Without_length.extend_option
+        (Lazy.force Ase.Without_length.extend_option)
           ([ Field.of_string "99" ], (trans3, proof3))
     end in
     (trans4, proof4)
@@ -118,7 +123,7 @@ open struct
 
   let _inner_stmt, _inner_proof =
     let open struct
-      let Compile_simple.[ sync; action ] = Inner_rules_inst.provers
+      let Compile_simple.[ sync; action ] = Lazy.force Inner_rules_inst.provers
 
       let ase_with_length : Rule_inner_sync.Ase_inst.t =
         Rule_inner_sync.Ase_inst.make ~proof_source:ase_with_length.source
@@ -162,12 +167,24 @@ open struct
         let inner_public_key = inner_public_key
 
         let chain_l1 = Mina_signature_kind.Testnet
+
+        let max_sequencer_inactivity = 128
+
+        let emergency_da_public_key = point_of_string "223344"
+      end)
+      ()
+
+  module Emergency_da_rules_inst =
+    Emergency_da_rules.Make
+      (struct
+        let chain_l1 = Mina_signature_kind.Testnet
       end)
       ()
 
   let _txn_stmt, _txn_proof =
     let open struct
-      let Compile_simple.[ commit; action; _pause ] = Outer_rules_inst.provers
+      let Compile_simple.[ commit; emergency_commit; action; _pause ] =
+        Lazy.force Outer_rules_inst.provers
 
       (*
     let pause_witness : Rule_pause.Witness.t =
@@ -196,7 +213,8 @@ open struct
       let _stmt, _proof =
         Promise.block_on_async_exn @@ fun () -> action action_witness
 
-      let Compile_simple.[ prove_both ] = Rule_commit.Verify_both_ases.provers
+      let Compile_simple.[ prove_both ] =
+        Lazy.force Rule_commit.Verify_both_ases.provers
 
       let ase_outer =
         let default = Mina_base.Zkapp_account.Actions.empty_state_element in
@@ -250,7 +268,7 @@ open struct
             ; _zkapp_proved
             ; merge
             ] =
-        Txn_rules.provers
+        Lazy.force Txn_rules.provers
 
       let constraint_constants : Genesis_constants.Constraint_constants.t =
         { sub_windows_per_window = 1
@@ -302,6 +320,8 @@ open struct
         ; balance = Currency.Balance.of_mina_string_exn "100000"
         }
 
+      let fee_payer_acc_source = fee_payer_acc
+
       let path_inner =
         `Left (Mina_base.Account.digest fee_payer_acc)
         :: ( List.map ~f:(fun (_, h) -> `Left h)
@@ -323,6 +343,12 @@ open struct
         :: List.map
              ~f:(fun (_, h) -> `Left h)
              (List.drop intermediate_ledger_hashes 2)
+
+      let path_inner_source = path_inner
+
+      let path_fee_payer_source = path_fee_payer
+
+      let path_new_source = path_new
 
       let source_ledger = implied_root old_inner_acc path_inner
 
@@ -442,10 +468,10 @@ open struct
         let (Typ typ) = Account_set.typ in
         typ.value_of_fields ([| x |], typ.constraint_system_auxiliary ())
 
-      (* let of_account_set x =
-         let (Typ typ) = Account_set.typ in
-         let fields, _aux = typ.value_to_fields x in
-         match fields with [| f |] -> f | _ -> failwith __LOC__ *)
+      let account_set_to_field x =
+        let (Typ typ) = Account_set.typ in
+        let fields, _aux = typ.value_to_fields x in
+        match fields with [| f |] -> f | _ -> failwith __LOC__
 
       let derive pk =
         Mina_base.Account_id.create pk Mina_base.Token_id.default
@@ -501,6 +527,11 @@ open struct
         { Txn_state.get_account_set_x =
             list_to_fun [ first.S.before; second.S.before ]
         ; get_account_set_z = list_to_fun [ first.after; second.after ]
+        ; get_account_set_y_prev_hash =
+            list_to_fun [ first.S.y_prev_hash; second.S.y_prev_hash ]
+        ; get_account_set_y_prev_path =
+            List.map ~f:convert_path [ first.y_prev_path; second.y_prev_path ]
+            |> list_to_fun
         ; get_account_set_x_path =
             List.map ~f:convert_path [ first.before_path; second.before_path ]
             |> list_to_fun
@@ -599,6 +630,8 @@ open struct
         Mina_base.Receipt.Chain_hash.(
           cons_zkapp_command_commitment Unsigned.UInt32.zero
             (Zkapp_command_commitment full_transaction_commitment) empty)
+
+      let receipt_chain_hash_0 = receipt_chain_hash
 
       let fee_payer_acc =
         { fee_payer_acc with nonce = Unsigned.UInt32.one; receipt_chain_hash }
@@ -716,6 +749,8 @@ open struct
             (Zkapp_command_commitment full_transaction_commitment)
             receipt_chain_hash)
 
+      let receipt_chain_hash_1 = receipt_chain_hash
+
       let fee_payer_acc =
         { fee_payer_acc with nonce = Unsigned.UInt32.one; receipt_chain_hash }
 
@@ -776,10 +811,9 @@ open struct
 
       let da_signature =
         let input =
-          let open Random_oracle.Input.Chunked in
-          (* append *)
-          stmt.target_ledger |> field
-          (* (stmt.target_acc_set |> of_account_set |> field) *)
+          Random_oracle.Input.Chunked.(
+            append (field stmt.target_ledger)
+              (field (account_set_to_field stmt.target_acc_set)))
         in
         let payload =
           Random_oracle.hash
@@ -789,18 +823,23 @@ open struct
         Signature_lib.Schnorr.Chunked.sign ~signature_kind da_kp.private_key
           (Random_oracle.Input.Chunked.field payload)
 
-      let da_key =
-        da_kp.public_key |> Public_key.compress
-        |> fun p : Zeko_util.Even_PC.t ->
-        { public_key = p.Public_key.Compressed.Poly.x }
-
       let () = assert (Int.(List.length old_inner_acc_path = 35))
 
       let () = assert (Int.(List.length new_inner_acc_path = 35))
 
-      let witness : Outer_rules_inst.Rule_commit_inst.Witness.t =
-        { txn_snark = Txn_rules.make_unchecked ~proof stmt
-        ; public_key = point_of_string "29421"
+      let da_multisig : Multisig.Witness.t =
+        { signatures =
+            [ { Multisig.Maybe_signature.public_key =
+                  Public_key.compress da_kp.public_key
+              ; signature = da_signature
+              ; is_some = true
+              }
+            ]
+        ; quorum = Field.of_int 1
+        }
+
+      let base_witness : Outer_rules_inst.Rule_commit_inst.Base_witness.t =
+        { public_key = point_of_string "29421"
         ; vk_hash = Snark_params.Tick.Field.zero
         ; slot_range =
             { lower = Mina_numbers.Global_slot_since_genesis.zero
@@ -810,14 +849,493 @@ open struct
         ; new_inner_acc = old_inner_acc
         ; old_inner_acc_path = convert_path old_inner_acc_path
         ; new_inner_acc_path
-        ; da_signature
-        ; da_key
+        ; da_multisig
+        ; emergency_mode = false
+        }
+
+      let witness : Outer_rules_inst.Rule_commit_inst.Witness.t =
+        { txn_snark = Txn_rules.make_unchecked ~proof stmt
+        ; base_witness
         ; verify_both_ases
         }
 
-      let stmt, proof = Promise.block_on_async_exn @@ fun () -> commit witness
+      let commit_stmt, commit_proof =
+        Promise.block_on_async_exn @@ fun () -> commit witness
+
+      let Compile_simple.[ emergency_da_apply ] =
+        Lazy.force Emergency_da_rules_inst.provers
+
+      let to_emergency_path path =
+        List.map
+          ~f:(function
+            | `Left hash_other ->
+                ( { Rule_emergency_da.Ledger_path.Step.hash_other
+                  ; is_right = false
+                  }
+                  : Rule_emergency_da.Ledger_path.Step.t )
+            | `Right hash_other ->
+                ( { Rule_emergency_da.Ledger_path.Step.hash_other
+                  ; is_right = true
+                  }
+                  : Rule_emergency_da.Ledger_path.Step.t ) )
+          path
+
+      let action_fields_of_emergency_output
+          ((_, (account_update, _digest, _calls)) :
+            Mina_base.Zkapp_statement.t
+            * ( Mina_base.Account_update.Body.t
+              * Mina_base.Zkapp_command.Digest.Account_update.t
+              * ( Mina_base.Account_update.t
+                , Mina_base.Zkapp_command.Digest.Account_update.t
+                , Rollup_state.Zkapp_call_forest.Digest.t )
+                Mina_base.Zkapp_command.Call_forest.t ) ) : Field.t array =
+        let Mina_base.Account_update.Body.{ actions; _ } = account_update in
+        match actions with
+        | [ action_fields ] ->
+            action_fields
+        | _ ->
+            failwith __LOC__
+
+      let emergency_da_action ~source_ledger_hash ~target_ledger_hash
+          ~ledger_index ~account : Rule_emergency_da.Action.t =
+        { source_ledger_hash; target_ledger_hash; ledger_index; account }
+
+      let assert_action_fields_equal expected actual =
+        assert (Int.(Array.length expected = Array.length actual)) ;
+        assert (Array.for_all2_exn expected actual ~f:Field.equal)
+
+      let action_to_fields action =
+        let (Snark_params.Tick.Typ.Typ action_typ) =
+          Rule_emergency_da.Action.typ
+        in
+        let fields, _aux = action_typ.value_to_fields action in
+        fields
+
+      let fee_payer_acc_after_first =
+        { fee_payer_acc_source with
+          nonce = Unsigned.UInt32.one
+        ; receipt_chain_hash = receipt_chain_hash_0
+        }
+
+      let fee_payer_balance_after_third =
+        let b, _ =
+          Currency.Balance.add_signed_amount_flagged
+            fee_payer_acc_after_first.balance
+            third_account_update.balance_change
+        in
+        b
+
+      let fee_payer_acc_after_third =
+        { fee_payer_acc_after_first with
+          receipt_chain_hash = receipt_chain_hash_1
+        ; balance = fee_payer_balance_after_third
+        }
+
+      let new_account_created =
+        { Mina_base.Account.empty with
+          public_key = Public_key.compress new_kp.public_key
+        ; balance = Currency.Balance.of_mina_string_exn "1"
+        ; delegate = Some (Public_key.compress new_kp.public_key)
+        }
+
+      let emergency_sparse_ledger : Mina_ledger.Sparse_ledger.t =
+        Mina_ledger.Sparse_ledger.of_root
+          ~depth:constraint_constants.ledger_depth stmt.source_ledger
+        |> fun x ->
+        Mina_ledger.Sparse_ledger.add_path x path_inner_source
+          (id_of old_inner_acc) old_inner_acc
+        |> fun x ->
+        Mina_ledger.Sparse_ledger.add_path x path_fee_payer_source
+          (id_of fee_payer_acc_source)
+          fee_payer_acc_source
+        |> fun x ->
+        Mina_ledger.Sparse_ledger.add_path x path_new_source account_id_new
+          Mina_base.Account.empty
+
+      let update_sparse ledger account_id account =
+        let idx = Mina_ledger.Sparse_ledger.find_index_exn ledger account_id in
+        Mina_ledger.Sparse_ledger.set_exn ledger idx account
+
+      let emergency_ledger_1 =
+        update_sparse emergency_sparse_ledger
+          (id_of fee_payer_acc_source)
+          fee_payer_acc_after_first
+
+      let emergency_ledger_2 =
+        update_sparse emergency_ledger_1 (id_of old_inner_acc) old_inner_acc
+
+      let emergency_ledger_3 =
+        update_sparse emergency_ledger_2
+          (id_of fee_payer_acc_source)
+          fee_payer_acc_after_third
+
+      let emergency_ledger_4 =
+        update_sparse emergency_ledger_3 account_id_new new_account_created
+
+      let ledger0 =
+        Mina_ledger.Sparse_ledger.merkle_root emergency_sparse_ledger
+
+      let ledger1 = Mina_ledger.Sparse_ledger.merkle_root emergency_ledger_1
+
+      let ledger2 = Mina_ledger.Sparse_ledger.merkle_root emergency_ledger_2
+
+      let ledger3 = Mina_ledger.Sparse_ledger.merkle_root emergency_ledger_3
+
+      let ledger4 = Mina_ledger.Sparse_ledger.merkle_root emergency_ledger_4
+
+      let () = assert (Mina_base.Ledger_hash.equal ledger0 stmt.source_ledger)
+
+      let () = assert (Mina_base.Ledger_hash.equal ledger4 stmt.target_ledger)
+
+      let fee_payer_index =
+        Mina_ledger.Sparse_ledger.find_index_exn emergency_sparse_ledger
+          (id_of fee_payer_acc_source)
+
+      let inner_index =
+        Mina_ledger.Sparse_ledger.find_index_exn emergency_sparse_ledger
+          (id_of old_inner_acc)
+
+      let new_index =
+        Mina_ledger.Sparse_ledger.find_index_exn emergency_sparse_ledger
+          account_id_new
+
+      let fee_payer_path_0 =
+        Mina_ledger.Sparse_ledger.path_exn emergency_sparse_ledger
+          fee_payer_index
+
+      let inner_path_1 =
+        Mina_ledger.Sparse_ledger.path_exn emergency_ledger_1 inner_index
+
+      let fee_payer_path_2 =
+        Mina_ledger.Sparse_ledger.path_exn emergency_ledger_2 fee_payer_index
+
+      let new_path_3 =
+        Mina_ledger.Sparse_ledger.path_exn emergency_ledger_3 new_index
+
+      let emergency_da_witness_1 : Rule_emergency_da.Witness.t =
+        { public_key = point_of_string "281"
+        ; vk_hash = Field.zero
+        ; old_account = fee_payer_acc_source
+        ; new_account = fee_payer_acc_after_first
+        ; ledger_path = to_emergency_path fee_payer_path_0
+        }
+
+      let emergency_da_witness_2 : Rule_emergency_da.Witness.t =
+        { public_key = point_of_string "281"
+        ; vk_hash = Field.zero
+        ; old_account = old_inner_acc
+        ; new_account = old_inner_acc
+        ; ledger_path = to_emergency_path inner_path_1
+        }
+
+      let emergency_da_witness_3 : Rule_emergency_da.Witness.t =
+        { public_key = point_of_string "281"
+        ; vk_hash = Field.zero
+        ; old_account = fee_payer_acc_after_first
+        ; new_account = fee_payer_acc_after_third
+        ; ledger_path = to_emergency_path fee_payer_path_2
+        }
+
+      let emergency_da_witness_4 : Rule_emergency_da.Witness.t =
+        { public_key = point_of_string "281"
+        ; vk_hash = Field.zero
+        ; old_account = Mina_base.Account.empty
+        ; new_account = new_account_created
+        ; ledger_path = to_emergency_path new_path_3
+        }
+
+      let emergency_da_out_1, _emergency_da_proof_1 =
+        Promise.block_on_async_exn
+        @@ fun () -> emergency_da_apply emergency_da_witness_1
+
+      let emergency_da_out_2, _emergency_da_proof_2 =
+        Promise.block_on_async_exn
+        @@ fun () -> emergency_da_apply emergency_da_witness_2
+
+      let emergency_da_out_3, _emergency_da_proof_3 =
+        Promise.block_on_async_exn
+        @@ fun () -> emergency_da_apply emergency_da_witness_3
+
+      let emergency_da_out_4, _emergency_da_proof_4 =
+        Promise.block_on_async_exn
+        @@ fun () -> emergency_da_apply emergency_da_witness_4
+
+      let emergency_da_action_fields_1 =
+        action_fields_of_emergency_output emergency_da_out_1
+
+      let emergency_da_action_fields_2 =
+        action_fields_of_emergency_output emergency_da_out_2
+
+      let emergency_da_action_fields_3 =
+        action_fields_of_emergency_output emergency_da_out_3
+
+      let emergency_da_action_fields_4 =
+        action_fields_of_emergency_output emergency_da_out_4
+
+      let emergency_da_action_1 =
+        emergency_da_action ~source_ledger_hash:ledger0
+          ~target_ledger_hash:ledger1
+          ~ledger_index:(Zeko_util.Checked32.of_int fee_payer_index)
+          ~account:fee_payer_acc_after_first
+
+      let emergency_da_action_2 =
+        emergency_da_action ~source_ledger_hash:ledger1
+          ~target_ledger_hash:ledger2
+          ~ledger_index:(Zeko_util.Checked32.of_int inner_index)
+          ~account:old_inner_acc
+
+      let emergency_da_action_3 =
+        emergency_da_action ~source_ledger_hash:ledger2
+          ~target_ledger_hash:ledger3
+          ~ledger_index:(Zeko_util.Checked32.of_int fee_payer_index)
+          ~account:fee_payer_acc_after_third
+
+      let emergency_da_action_4 =
+        emergency_da_action ~source_ledger_hash:ledger3
+          ~target_ledger_hash:ledger4
+          ~ledger_index:(Zeko_util.Checked32.of_int new_index)
+          ~account:new_account_created
+
+      let expected_action_fields_1 = action_to_fields emergency_da_action_1
+
+      let expected_action_fields_2 = action_to_fields emergency_da_action_2
+
+      let expected_action_fields_3 = action_to_fields emergency_da_action_3
+
+      let expected_action_fields_4 = action_to_fields emergency_da_action_4
+
+      let () =
+        assert_action_fields_equal expected_action_fields_1
+          emergency_da_action_fields_1
+
+      let () =
+        assert_action_fields_equal expected_action_fields_2
+          emergency_da_action_fields_2
+
+      let () =
+        assert_action_fields_equal expected_action_fields_3
+          emergency_da_action_fields_3
+
+      let () =
+        assert_action_fields_equal expected_action_fields_4
+          emergency_da_action_fields_4
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_action_1.source_ledger_hash
+            ledger0 )
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_action_1.target_ledger_hash
+            ledger1 )
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_action_2.source_ledger_hash
+            ledger1 )
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_action_2.target_ledger_hash
+            ledger2 )
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_action_3.source_ledger_hash
+            ledger2 )
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_action_3.target_ledger_hash
+            ledger3 )
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_action_4.source_ledger_hash
+            ledger3 )
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_action_4.target_ledger_hash
+            ledger4 )
+
+      let emergency_da_actions =
+        [ emergency_da_action_1
+        ; emergency_da_action_2
+        ; emergency_da_action_3
+        ; emergency_da_action_4
+        ]
+
+      let action_state_from_actions =
+        let (Typ typ) = Rule_emergency_da.Action.typ in
+        List.fold emergency_da_actions
+          ~init:Mina_base.Zkapp_account.Actions.empty_state_element
+          ~f:(fun acc action ->
+            let action_fields, _aux = typ.value_to_fields action in
+            let actions =
+              Mina_base.Zkapp_account.Actions.of_event_list [ action_fields ]
+            in
+            Mina_base.Zkapp_account.Actions.push_events acc actions )
+
+      let emergency_da_source_stmt : Emergency_da_folder.Stmt.t =
+        { source_ledger = stmt.source_ledger
+        ; target_ledger = stmt.source_ledger
+        ; target_action_state =
+            Mina_base.Zkapp_account.Actions.empty_state_element
+        }
+
+      let ( ({ source = emergency_da_proof_source
+             ; target = emergency_da_proof_target
+             } :
+              Emergency_da_folder.trans )
+          , emergency_da_proof ) =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        (Lazy.force Emergency_da_folder.leaf_option)
+          ( List.map emergency_da_actions
+              ~f:(fun action : Emergency_da_folder.Elem.t ->
+                { Emergency_da_folder.Elem.advance = true; action } )
+          , emergency_da_source_stmt )
+
+      let () =
+        assert (
+          Mina_base.Ledger_hash.equal emergency_da_proof_target.target_ledger
+            stmt.target_ledger )
+
+      let () =
+        assert (
+          Field.equal emergency_da_proof_target.target_action_state
+            action_state_from_actions )
+
+      let emergency_da_inst : Rule_commit.Emergency_da_inst.t =
+        Rule_commit.Emergency_da_inst.make
+          ~proof_source:emergency_da_proof_source
+          ~proof_target:emergency_da_proof_target ~proof:emergency_da_proof
+          emergency_da_source_stmt []
+
+      let last_commit : Rollup_state.Outer_action.Commit.t =
+        { ledger = stmt.source_ledger
+        ; inner_action_state = Rollup_state.Inner_action_state.With_length.empty
+        ; synchronized_outer_action_state =
+            Rollup_state.Outer_action_state.With_length.empty
+        ; slot_range =
+            { lower = Zeko_util.Slot.zero; upper = Zeko_util.Slot.zero }
+        }
+
+      let before_last_commit = Rollup_state.Outer_action_state.empty
+
+      let last_commit_actions_hash, after_last_commit =
+        let (Typ typ) =
+          Typ.(Field.typ * Rollup_state.Outer_action.Commit.typ)
+        in
+        let action_fields, _aux =
+          typ.value_to_fields (Field.of_int 0, last_commit)
+        in
+        let actions =
+          Mina_base.Zkapp_account.Actions.of_event_list [ action_fields ]
+        in
+        let after_last_commit_field =
+          Mina_base.Zkapp_account.Actions.push_events
+            (Rollup_state.Outer_action_state.raw before_last_commit)
+            actions
+        in
+        ( actions.hash
+        , Rollup_state.Outer_action_state.unsafe_value_of_field
+            after_last_commit_field )
+
+      let count_commits_stmt : Count_commits.Definition.Stmt.t =
+        { source_action_state = after_last_commit
+        ; target_action_state = after_last_commit
+        ; n_commits = Zeko_util.Checked32.zero
+        }
+
+      let ( ({ source = count_commits_proof_source
+             ; target = count_commits_proof_target
+             } :
+              Count_commits.trans )
+          , count_commits_proof ) =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        (Lazy.force Count_commits.leaf_option) ([], count_commits_stmt)
+
+      let count_commits_init : Count_commits.Definition.Init.t =
+        { original_action_state = after_last_commit }
+
+      let count_commits_inst : Rule_commit.Count_commits_inst.t =
+        Rule_commit.Count_commits_inst.make
+          ~proof_source:count_commits_proof_source
+          ~proof_target:count_commits_proof_target ~proof:count_commits_proof
+          count_commits_init []
+
+      let Compile_simple.[ verify_emergency_folders ] =
+        Lazy.force Rule_commit.Verify_emergency_folders.provers
+
+      let verify_emergency_folders_stmt, verify_emergency_folders_proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        verify_emergency_folders (count_commits_inst, emergency_da_inst)
+
+      let verify_emergency_folders =
+        Rule_commit.Verify_emergency_folders.make_unchecked
+          ~proof:verify_emergency_folders_proof verify_emergency_folders_stmt
+
+      let Compile_simple.[ verify_base ] =
+        Lazy.force Rule_commit.Verify_base.provers
+
+      let ase_outer_source =
+        Rollup_state.Outer_action_state.raw
+          Rollup_state.Outer_action_state.empty
+
+      let ase_outer_target =
+        Rollup_state.Outer_action_state.raw after_last_commit
+
+      let ase_outer_emergency : Rule_commit.Ase_outer_inst.t =
+        Rule_commit.Ase_outer_inst.make ~proof_source:ase_outer_source
+          ~proof_target:ase_outer_target ase_outer_source
+          [ last_commit_actions_hash ]
+
+      let verify_both_ases_emergency_stmt, verify_both_ases_emergency_proof =
+        Promise.block_on_async_exn
+        @@ fun () -> prove_both (ase_outer_emergency, ase_inner)
+
+      let verify_both_ases_emergency =
+        Rule_commit.Verify_both_ases.make_unchecked
+          ~proof:verify_both_ases_emergency_proof
+          verify_both_ases_emergency_stmt
+
+      let verify_base_stmt, verify_base_proof =
+        Promise.block_on_async_exn
+        @@ fun () ->
+        verify_base
+          (Txn_rules.make_unchecked ~proof stmt, verify_both_ases_emergency)
+
+      let verify_base =
+        Rule_commit.Verify_base.make_unchecked ~proof:verify_base_proof
+          verify_base_stmt
+
+      let base_witness_emergency =
+        { base_witness with
+          slot_range =
+            { lower = Zeko_util.Slot.of_int 128
+            ; upper = Zeko_util.Slot.of_int 128
+            }
+        }
+
+      let emergency_witness :
+          Outer_rules_inst.Rule_commit_inst.Emergency_commit.Witness.t =
+        { base_witness = base_witness_emergency
+        ; before_last_commit
+        ; last_commit
+        ; verify_emergency_folders
+        ; verify_base
+        }
+
+      let _stmt, _proof =
+        Promise.block_on_async_exn
+        @@ fun () -> emergency_commit emergency_witness
     end in
-    (stmt, proof)
+    (commit_stmt, commit_proof)
 end
 
 open struct
@@ -902,7 +1420,11 @@ open struct
 
     let zeko_l2 = inner_public_key
 
+    let emergency_da_public_key = point_of_string "44444"
+
     let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
+
+    let max_sequencer_inactivity = 128
 
     let holder_account_l1_permissions_enabled : Mina_base.Permissions.t =
       { edit_state = Proof
@@ -946,17 +1468,19 @@ open struct
   module Inner_rules = Inner_rules.Make (Inputs) ()
 
   let Compile_simple.[ cancel_deposit; finalize_withdrawal; _ ] =
-    Bridge.System_L1_enabled.provers
+    Lazy.force Bridge.System_L1_enabled.provers
 
   let Compile_simple.[ finalize_deposit; inner_receive ] =
-    Bridge.System_L2.provers
+    Lazy.force Bridge.System_L2.provers
 
   let Compile_simple.[ outer_token_owner ] =
-    Bridge.System_L1_token_owner.provers
+    Lazy.force Bridge.System_L1_token_owner.provers
 
-  let Compile_simple.[ _; outer_action_witness; _ ] = Outer_rules.provers
+  let Compile_simple.[ _; _; outer_action_witness; _ ] =
+    Lazy.force Outer_rules.provers
 
-  let Compile_simple.[ _; inner_action_witness ] = Inner_rules.provers
+  let Compile_simple.[ _; inner_action_witness ] =
+    Lazy.force Inner_rules.provers
 
   module Deposit = struct
     let recipient = Keypair.create ()
@@ -1010,7 +1534,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Outer_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Outer_rules.tag) )
               |> Compile_simple.Verification_key.hash
           ; witness = deposit_witness
           }
@@ -1089,7 +1614,7 @@ open struct
         let Bridge.Check_accepted.{ source; target }, proof =
           Promise.block_on_async_exn
           @@ fun () ->
-          Bridge.Check_accepted.leaf_option
+          (Lazy.force Bridge.Check_accepted.leaf_option)
             ( [ Commit commit_witness ]
             , { params = deposit_params
               ; action_state =
@@ -1126,7 +1651,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Bridge.System_L2.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Bridge.System_L2.tag) )
               |> Compile_simple.Verification_key.hash
           ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
           ; inner_authorization_kind = Rule_bridge_finalize_deposit.A.None_given
@@ -1277,7 +1803,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Outer_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Outer_rules.tag) )
               |> Compile_simple.Verification_key.hash
           ; witness = deposit_witness
           }
@@ -1378,8 +1905,9 @@ open struct
             action_state [ commit_action ]
         in
         let [ prover ] =
-          Bridge.Rule_bridge_finalize_cancelled_deposit.Verify_two_outer_ases
-          .provers
+          Lazy.force
+            Bridge.Rule_bridge_finalize_cancelled_deposit.Verify_two_outer_ases
+            .provers
         in
         let stmt, proof =
           Promise.block_on_async_exn @@ fun () -> prover (commit_ase, sync_ase)
@@ -1392,7 +1920,7 @@ open struct
           let Bridge.Check_accepted.{ source; target }, proof =
             Promise.block_on_async_exn
             @@ fun () ->
-            Bridge.Check_accepted.leaf_option
+            (Lazy.force Bridge.Check_accepted.leaf_option)
               ( [ Commit commit_witness ]
               , { params = deposit_params
                 ; action_state =
@@ -1437,9 +1965,10 @@ open struct
             action_state []
         in
         let [ prover ] =
-          Bridge.Rule_bridge_finalize_cancelled_deposit
-          .Verify_check_accepted_and_ase
-          .provers
+          Lazy.force
+            Bridge.Rule_bridge_finalize_cancelled_deposit
+            .Verify_check_accepted_and_ase
+            .provers
         in
         let stmt, proof =
           Promise.block_on_async_exn
@@ -1461,7 +1990,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_enabled.tag )
+                (Lazy.force Bridge.System_L1_enabled.tag) )
               |> Compile_simple.Verification_key.hash
           ; may_use_token =
               Bridge.Rule_bridge_finalize_cancelled_deposit.May_use_token.No
@@ -1478,7 +2007,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_token_owner.tag )
+                (Lazy.force Bridge.System_L1_token_owner.tag) )
               |> Compile_simple.Verification_key.hash
           }
       in
@@ -1571,7 +2100,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_token_owner.tag )
+                (Lazy.force Bridge.System_L1_token_owner.tag) )
               |> Compile_simple.Verification_key.hash
           ; a = helper_account.body
           }
@@ -1608,7 +2137,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Inner_rules.tag) )
               |> Compile_simple.Verification_key.hash
           ; amount
           }
@@ -1642,7 +2172,8 @@ open struct
           ; vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Inner_rules.tag) )
               |> Compile_simple.Verification_key.hash
           ; witness = withdrawal_witness
           }
@@ -1723,7 +2254,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_enabled.tag )
+                (Lazy.force Bridge.System_L1_enabled.tag) )
               |> Compile_simple.Verification_key.hash
           ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
           ; outer_authorization_kind =
@@ -1739,12 +2270,13 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_token_owner.tag )
+                (Lazy.force Bridge.System_L1_token_owner.tag) )
               |> Compile_simple.Verification_key.hash
           ; l2_holder_vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
-              Compile_simple.Verification_key.of_tag Inner_rules.tag )
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Inner_rules.tag) )
               |> Compile_simple.Verification_key.hash
           }
       in
@@ -1841,7 +2373,7 @@ open struct
               ( Promise.block_on_async_exn
               @@ fun () ->
               Compile_simple.Verification_key.of_tag
-                Bridge.System_L1_token_owner.tag )
+                (Lazy.force Bridge.System_L1_token_owner.tag) )
               |> Compile_simple.Verification_key.hash
           ; a = helper_account.body
           }

@@ -318,10 +318,15 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
     ; may_use_token =
         constant Account_update.May_use_token.typ Parents_own_token
     ; authorization_kind =
-        { is_signed = Boolean.false_
-        ; is_proved = Boolean.true_
-        ; verification_key_hash = l2_holder_vk_hash
-        }
+        (* FIXME: awful hack to get around the fact that in fake mode, we don't have a correct vk hash *)
+        ( match Sys.getenv_opt "MODE" with
+        | Some "fake" ->
+            constant Account_update.Authorization_kind.typ None_given
+        | Some "real" | _ ->
+            { is_signed = Boolean.false_
+            ; is_proved = Boolean.true_
+            ; verification_key_hash = l2_holder_vk_hash
+            } )
     }
   in
   let a', (children : Calls.t) =

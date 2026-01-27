@@ -39,6 +39,20 @@ let send ?(proving_timeout = 10.) ?(wait_for_prover_timeout = 600.)
     ?(attempts = 5) (state : State.t) (input : Prover.Input.t) : Prover.Output.t Deferred.t
 ```
 
+## CLI
+
+Run the prover worker (RabbitMQ consumer):
+
+```bash
+dune exec ./cli.exe -- run-server \
+  --mq-host <string> \
+  [--fake-proving-time <float>]
+```
+
+Options:
+- `--mq-host` (required): RabbitMQ host:port for the prover queue.
+- `--fake-proving-time` (optional): simulate proving time in seconds.
+
 Send function picks one of the available provers, sends a request to it and returns the result.
 It does by rotating provers list by `next` index and picking the first `Available` prover.
 By doing this it ensures that all the provers are used equally and if one of them is stuck, it will be skipped until next round.

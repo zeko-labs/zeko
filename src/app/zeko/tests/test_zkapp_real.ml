@@ -39,7 +39,7 @@ let old_inner_acc =
 
 let Compile_simple.
       [ _signed_command; _zkapp_single; zkapp_double; _zkapp_proved; _merge ] =
-  Txn_rules.provers
+  Lazy.force Txn_rules.provers
 
 let constraint_constants : Genesis_constants.Constraint_constants.t =
   { sub_windows_per_window = 1
@@ -307,6 +307,11 @@ let make_update_acc_set_witness first second =
   { Txn_state.get_account_set_x =
       list_to_fun [ first.S.before; second.S.before ]
   ; get_account_set_z = list_to_fun [ first.after; second.after ]
+  ; get_account_set_y_prev_hash =
+      list_to_fun [ first.S.y_prev_hash; second.S.y_prev_hash ]
+  ; get_account_set_y_prev_path =
+      List.map ~f:convert_path [ first.y_prev_path; second.y_prev_path ]
+      |> list_to_fun
   ; get_account_set_x_path =
       List.map ~f:convert_path [ first.before_path; second.before_path ]
       |> list_to_fun

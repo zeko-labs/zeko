@@ -46,6 +46,82 @@ module Verify_both_ases = struct
             () )
 end
 
+(** Used to prove the number of commits in the emergency case. *)
+module Count_commits_inst = Count_commits.Make (struct
+  let get_iterations = Zeko_constants.Max_excess_actions.Commit.count_commits
+end)
+
+(** Used to verify emergency DA folder proof. *)
+module Emergency_da_inst = Emergency_da_folder.Make (struct
+  let get_iterations = Zeko_constants.Max_excess_actions.Commit.emergency_da
+end)
+
+(** Proves emergency folders (count commits + emergency DA). *)
+module Verify_emergency_folders = struct
+  let main (w : (Count_commits_inst.t * Emergency_da_inst.t) V.t) =
+    let* count_commits, emergency_da =
+      exists ~compute:(V.get w)
+        Typ.(Count_commits_inst.typ * Emergency_da_inst.typ)
+    in
+    let* count_commits, verify_count_commits =
+      Count_commits_inst.get count_commits
+    in
+    let*| emergency_da, verify_emergency_da =
+      Emergency_da_inst.get emergency_da
+    in
+    Compile_simple.
+      { prevs = Two_prevs (verify_count_commits, verify_emergency_da)
+      ; out = (count_commits, emergency_da)
+      }
+
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy
+      { branch_name = "Verify_emergency_folders"
+      ; tags =
+          Two_tags
+            (Lazy.force Count_commits.tag, Lazy.force Emergency_da_folder.tag)
+      ; main
+      }
+
+  include
+    ( val Compile_simple.compile ~name:"Verify_emergency_folders"
+            ~branches:[ rule ]
+            ~out_typ:
+              Typ.(
+                Count_commits.Definition.Stmt.typ * Emergency_da_folder.Stmt.typ)
+            () )
+end
+
+module Verify_base = struct
+  let main (w : (Txn_rules.t * Verify_both_ases.t) V.t) =
+    let* txn, verify_both_ases =
+      exists ~compute:(V.get w) Typ.(Txn_rules.typ * Verify_both_ases.typ)
+    in
+    let* txn_stmt, verify_txn = Txn_rules.get txn in
+    let*| both_ases, verify_both_ases = Verify_both_ases.get verify_both_ases in
+    let ase_outer, ase_inner = both_ases in
+    Compile_simple.
+      { prevs = Two_prevs (verify_txn, verify_both_ases)
+      ; out = (txn_stmt, (ase_outer, ase_inner))
+      }
+
+  let rule : _ Compile_simple.branch lazy_t =
+    lazy
+      { branch_name = "Verify_base"
+      ; tags =
+          Two_tags (Lazy.force Txn_rules.tag, Lazy.force Verify_both_ases.tag)
+      ; main
+      }
+
+  include
+    ( val Compile_simple.compile ~name:"Verify_base_wrappers" ~branches:[ rule ]
+            ~out_typ:
+              Typ.(
+                Txn_state.Zeko_stmt.typ
+                * (Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ))
+            () )
+end
+
 module Make (Inputs : sig
   (** max_valid_while_size signifies how big the valid_while can be for commits. *)
   val max_valid_while_size : int
@@ -54,6 +130,10 @@ module Make (Inputs : sig
   val inner_public_key : PC.t
 
   val chain_l1 : Mina_signature_kind.t
+
+  val max_sequencer_inactivity : int
+
+  val emergency_da_public_key : PC.t
 end) =
 struct
   open Inputs
@@ -70,18 +150,26 @@ struct
         let length = Account_set.height
       end)
 
-  module Witness = struct
+  module Base_witness = struct
     type t =
-      { txn_snark : Txn_rules.t  (** The ledger transition we are performing. *)
-      ; public_key : PC.t  (** Our public key on the L2 *)
+      { public_key : PC.t  (** Our public key on the L2 *)
       ; vk_hash : F.t  (** Our vk hash *)
-      ; verify_both_ases : Verify_both_ases.t
       ; old_inner_acc : Account.t
       ; old_inner_acc_path : Path.t
       ; new_inner_acc : Account.t
       ; new_inner_acc_path : Path.t
       ; da_multisig : Multisig.Witness.t
       ; slot_range : Slot_range.t
+      ; emergency_mode : Zeko_util.Boolean.t
+      }
+    [@@deriving snarky]
+  end
+
+  module Witness = struct
+    type t =
+      { txn_snark : Txn_rules.t
+      ; base_witness : Base_witness.t
+      ; verify_both_ases : Verify_both_ases.t
       }
     [@@deriving snarky]
   end
@@ -107,22 +195,30 @@ struct
     in
     content
 
-  let main (w : Witness.t V.t) =
+  type da_mode = Multisig | Emergency of Emergency_da_folder.Stmt.var
+
+  let main ?(check_sequencer_precondition = true) ~da_mode
+      (w : Base_witness.var) (txn_stmt : Txn_state.Zeko_stmt.var)
+      ((ase_outer, ase_inner) :
+        Ase_outer_inst.Stmt.var * Ase_inner_inst.Stmt.var ) =
     with_label __LOC__
     @@ fun () ->
-    let* ({ txn_snark
-          ; public_key
-          ; vk_hash
-          ; verify_both_ases
-          ; old_inner_acc
-          ; old_inner_acc_path
-          ; new_inner_acc
-          ; new_inner_acc_path
-          ; da_multisig
-          ; slot_range
-          } :
-           Witness.var ) =
-      with_label __LOC__ @@ fun () -> exists ~compute:(V.get w) Witness.typ
+    let ({ public_key
+         ; vk_hash
+         ; old_inner_acc
+         ; old_inner_acc_path
+         ; new_inner_acc
+         ; new_inner_acc_path
+         ; da_multisig
+         ; slot_range
+         ; emergency_mode
+         }
+          : Base_witness.var ) =
+      w
+    in
+    let* status_flags_precondition =
+      Outer_state.Status_flags.of_bools_var ~paused:Boolean.false_
+        ~emergency:emergency_mode
     in
     with_label __LOC__
     @@ fun () ->
@@ -130,19 +226,19 @@ struct
     let* implied_root_old = implied_root old_inner_acc old_inner_acc_path in
     let* implied_root_new = implied_root new_inner_acc new_inner_acc_path in
 
-    let* ( { source_ledger
-           ; target_ledger
-           ; source_local_state
-           ; target_local_state
-           ; sequencer
-           ; accumulated_fees
-           ; slot_range = txn_snark_slot_range
-           ; global_slot_range
-           ; source_acc_set
-           ; target_acc_set
-           }
-         , verify_txn_snark ) =
-      Txn_rules.get txn_snark
+    let ({ source_ledger
+         ; target_ledger
+         ; source_local_state
+         ; target_local_state
+         ; sequencer
+         ; accumulated_fees
+         ; slot_range = txn_snark_slot_range
+         ; global_slot_range
+         ; source_acc_set
+         ; target_acc_set
+         }
+          : Txn_state.Zeko_stmt.var ) =
+      txn_stmt
     in
     with_label __LOC__
     @@ fun () ->
@@ -156,25 +252,42 @@ struct
         assert_equal ~label:__LOC__ typ target_local_state dummy)
     in
 
-    (* DA check, simply see if public key in question has signed our ledger. *)
-    let* () =
-      with_label __LOC__
-      @@ fun () ->
-      let input =
-        let open Random_oracle.Input.Chunked in
-        append
-          (Ledger_hash.var_to_field target_ledger |> field)
-          (Account_set.to_input_var target_acc_set)
-      in
-      let* payload =
-        make_checked (fun () ->
-            Random_oracle.Checked.hash
-              ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
-              (Random_oracle.Checked.pack_input input) )
-      in
-      Multisig.check ~signature_kind:chain_l1 da_multisig payload
+    let* da_key_opt =
+      match da_mode with
+      | Multisig ->
+          (* DA check, simply see if public key in question has signed our ledger. *)
+          let* () =
+            with_label __LOC__
+            @@ fun () ->
+            let input =
+              let open Random_oracle.Input.Chunked in
+              append
+                (Ledger_hash.var_to_field target_ledger |> field)
+                (Account_set.to_input_var target_acc_set)
+            in
+            let* payload =
+              make_checked (fun () ->
+                  Random_oracle.Checked.hash
+                    ~init:
+                      (Hash_prefix_create.salt
+                         Zeko_constants.da_layer_check_salt )
+                    (Random_oracle.Checked.pack_input input) )
+            in
+            Multisig.check ~signature_kind:chain_l1 da_multisig payload
+          in
+          let*| da_key = Multisig.of_witness_var da_multisig in
+          Some da_key
+      | Emergency emergency_da_stmt ->
+          let* () =
+            assert_equal ~label:__LOC__ Ledger_hash.typ
+              emergency_da_stmt.source_ledger source_ledger
+          in
+          let* () =
+            assert_equal ~label:__LOC__ Ledger_hash.typ
+              emergency_da_stmt.target_ledger target_ledger
+          in
+          Checked.return None
     in
-    let* da_key = Multisig.of_witness_var da_multisig in
 
     (* Sequencer must take fees. A non-zero magnitude would
        either mean printing or burning L2 MINA. *)
@@ -240,11 +353,6 @@ struct
         .outer_action_state
     in
 
-    (* Extract information from Verify_both_ases wrapper proof. *)
-    let* (ase_outer, ase_inner), verify_ases =
-      Verify_both_ases.get verify_both_ases
-    in
-
     let Ase_outer_inst.Stmt.
           { source = synchronized_outer_action_state'
           ; target = outer_action_state
@@ -302,6 +410,16 @@ struct
       new_inner_action_state
     in
 
+    let* status_flags_update =
+      match da_mode with
+      | Multisig ->
+          Outer_state.Status_flags.of_bools_var ~paused:Boolean.false_
+            ~emergency:Boolean.false_
+      | Emergency _ ->
+          Outer_state.Status_flags.of_bools_var ~paused:Boolean.false_
+            ~emergency:Boolean.true_
+    in
+
     (* Finalize update  *)
     let update =
       { default_account_update.update with
@@ -326,7 +444,7 @@ struct
                    to many other zkapps.
                 *)
             ; sequencer = None (* We don't update the sequencer. *)
-            ; paused = None (* We don't pause the rollup. *)
+            ; status_flags = Some status_flags_update
             ; pause_key = None (* We don't update the pause key. *)
             ; da_key = None
             ; acc_set = Some target_acc_set
@@ -356,11 +474,15 @@ struct
                        The state we already know from the ledger hash,
                        but the length is information we didn't have before.
                     *)
-                ; sequencer = Some sequencer (* We must be the sequencer. *)
-                ; paused = Some Boolean.false_ (* We must not be paused. *)
+                ; sequencer =
+                    (* We must be the sequencer. *)
+                    ( if check_sequencer_precondition then Some sequencer
+                    else None )
+                ; status_flags =
+                    Some status_flags_precondition (* We must not be paused. *)
                 ; pause_key =
                     None (* We don't care about who can pause the rollup. *)
-                ; da_key = Some da_key
+                ; da_key = da_key_opt
                 ; acc_set = Some source_acc_set
                 }
               |> var_to_precondition_fine
@@ -405,19 +527,157 @@ struct
       ; use_full_commitment = Boolean.true_
       }
     in
+    let emergency_da_account_update_opt =
+      match da_mode with
+      | Emergency emergency_da_stmt ->
+          let preconditions =
+            { default_account_update.preconditions with
+              account =
+                { default_account_update.preconditions.account with
+                  action_state =
+                    Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.true_
+                      emergency_da_stmt.target_action_state
+                }
+            }
+          in
+          Some
+            { default_account_update with
+              public_key = constant PC.typ emergency_da_public_key
+            ; preconditions
+            }
+      | Multisig ->
+          None
+    in
 
     (* Assemble some stuff to help the prover and calculate public output *)
     let*| out =
       make_outputs ~chain:chain_l1 account_update
-        [ (sequencer_account_update, []) ]
+        ( (sequencer_account_update, [])
+        ::
+        ( match emergency_da_account_update_opt with
+        | None ->
+            []
+        | Some emergency_da_au ->
+            [ (emergency_da_au, []) ] ) )
     in
-    Compile_simple.{ prevs = Two_prevs (verify_txn_snark, verify_ases); out }
+    out
 
   let rule : _ Compile_simple.branch lazy_t =
     lazy
       { branch_name = "Rollup step"
       ; tags =
           Two_tags (Lazy.force Txn_rules.tag, Lazy.force Verify_both_ases.tag)
-      ; main
+      ; main =
+          (fun (w : Witness.t V.t) ->
+            let* Witness.{ txn_snark; base_witness; verify_both_ases } =
+              exists ~compute:(V.get w) Witness.typ
+            in
+            let* txn_stmt, verify_txn_snark = Txn_rules.get txn_snark in
+            let* (ase_outer, ase_inner), verify_both_ases =
+              Verify_both_ases.get verify_both_ases
+            in
+            let*| out =
+              main ~da_mode:Multisig base_witness txn_stmt (ase_outer, ase_inner)
+            in
+            Compile_simple.
+              { prevs = Two_prevs (verify_txn_snark, verify_both_ases); out } )
       }
+
+  (** Specialized version of the main function, used for emergency commits.
+      Only usable after [max_sequencer_inactivity] slots of the sequencer not committing. *)
+  module Emergency_commit = struct
+    module Witness = struct
+      type t =
+        { base_witness : Base_witness.t
+        ; before_last_commit : Rollup_state.Outer_action_state.t
+        ; last_commit : Rollup_state.Outer_action.Commit.t
+        ; verify_emergency_folders : Verify_emergency_folders.t
+        ; verify_base : Verify_base.t
+        }
+      [@@deriving snarky]
+    end
+
+    let rule : _ Compile_simple.branch lazy_t =
+      lazy
+        { branch_name = "Emergency step"
+        ; tags =
+            Two_tags
+              ( Lazy.force Verify_base.tag
+              , Lazy.force Verify_emergency_folders.tag )
+        ; main =
+            (fun (w : Witness.t V.t) ->
+              let* Witness.
+                     { base_witness
+                     ; before_last_commit
+                     ; last_commit
+                     ; verify_emergency_folders
+                     ; verify_base
+                     } =
+                exists ~compute:(V.get w) Witness.typ
+              in
+              let* (txn_stmt, (ase_outer, ase_inner)), verify_base =
+                Verify_base.get verify_base
+              in
+              let* (count_commits, emergency_da_stmt), verify_emergency_folders
+                  =
+                Verify_emergency_folders.get verify_emergency_folders
+              in
+
+              (* Check that at least [max_sequencer_inactivity] slots have passed between last_commit and and this new commit *)
+              let* () =
+                assert_var __LOC__ (fun () ->
+                    let* diff =
+                      Slot.Checked.diff base_witness.slot_range.lower
+                        last_commit.slot_range.upper
+                    in
+                    let* inactivity_ok =
+                      Mina_numbers.Global_slot_span.Checked.(
+                        diff
+                        >= constant
+                             (Global_slot_span
+                                (Unsigned.UInt32.of_int max_sequencer_inactivity)
+                             ))
+                    in
+                    let* ok =
+                      if_ base_witness.emergency_mode ~typ:Boolean.typ
+                        ~then_:Boolean.true_ ~else_:inactivity_ok
+                    in
+                    Checked.return ok )
+              in
+
+              let Count_commits.Definition.Stmt.
+                    { source_action_state; target_action_state; n_commits } =
+                count_commits
+              in
+              (* Apply last_commit to before_last_commit *)
+              let* after_last_commit =
+                Outer_action.push_commit_var last_commit before_last_commit
+              in
+              (* Check that counting started immediately after last_commit *)
+              let* () =
+                assert_equal ~label:__LOC__ Outer_action_state.typ
+                  after_last_commit source_action_state
+              in
+              (* Check that target_action_state is the target of ase_outer, i.e. the outer action state precondition *)
+              let* () =
+                assert_equal ~label:__LOC__ Outer_action_state.typ
+                  target_action_state ase_outer.target
+              in
+              (* Check that there has been no commits since last_commit *)
+              let* () =
+                assert_equal ~label:__LOC__ Checked32.typ n_commits
+                  Checked32.Checked.zero
+              in
+
+              let*| out =
+                main ~check_sequencer_precondition:false
+                  ~da_mode:(Emergency emergency_da_stmt) base_witness txn_stmt
+                  (ase_outer, ase_inner)
+              in
+              Compile_simple.
+                { prevs = Two_prevs (verify_base, verify_emergency_folders)
+                ; out
+                } )
+        }
+  end
 end

@@ -39,7 +39,10 @@ The api is exposed as `Async.Rpc` which is a typesafe ocaml rpc with binprot ser
 ### Running the node
 
 ```bash
-MINA_PRIVATE_KEY=<opaque> dune exec ./cli.exe -- run-node --port 8002 --da-node-to-sync http://localhost:8000 --da-node-to-sync http://localhost:8001
+MINA_PRIVATE_KEY=<base58> dune exec ./cli.exe -- run-node \
+  --db-dir <string?> \
+  --port <int?> \
+  --network-id <string?>
 ```
 
 To see all the options run:
@@ -47,6 +50,13 @@ To see all the options run:
 ```bash
 dune exec ./cli.exe -- run-node --help
 ```
+
+Options:
+- `--db-dir` (optional, default `da_db`): directory for the node DB.
+- `--port` (optional, default `8080`): RPC port.
+- `--random-sk`: generate a random signer key (testing mode; ignores `MINA_PRIVATE_KEY`).
+- `--no-migrations`: skip DB migrations on startup.
+- `--network-id` (optional, default `zeko`): network id used as salt for receipt logic.
 
 ## Client description
 

@@ -5,7 +5,7 @@
 
 (executable
  (name compile_circuits)
- (libraries zeko_circuits compile_simple compile_simple_fake)
+ (libraries zeko_circuits compile_simple compile_simple_real)
  (instrumentation
   (backend bisect_ppx))
  (preprocess

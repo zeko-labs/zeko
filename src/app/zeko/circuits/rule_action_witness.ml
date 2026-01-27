@@ -21,6 +21,10 @@ struct
     in
     let* actions = Outer_action.witness_to_actions_var witness in
     let valid_while = Slot_range.Checked.to_valid_while witness.slot_range in
+    let* status_flags_precondition =
+      Outer_state.Status_flags.of_bools_var ~paused:Boolean.false_
+        ~emergency:Boolean.false_
+    in
     let account_update =
       { default_account_update with
         public_key
@@ -34,8 +38,8 @@ struct
                 state =
                   Outer_state.fine
                     { pause_key = None
-                    ; paused =
-                        Some Boolean.false_
+                    ; status_flags =
+                        Some status_flags_precondition
                         (* We don't allow adding actions if the rollup is paused since it signals something is wrong. *)
                     ; ledger_hash = None
                     ; inner_action_state = { length = None; state = None }

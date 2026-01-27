@@ -531,6 +531,8 @@ let prove_zkapp ~source_acc_set
       Zeko_circuits.Zeko_transaction_snark.update_acc_set_witness =
     { get_account_set_x = list_to_unit_function xs
     ; get_account_set_z = list_to_unit_function zs
+    ; get_account_set_y_prev_hash = list_to_unit_function xs
+    ; get_account_set_y_prev_path = list_to_unit_function xs_paths
     ; get_account_set_x_path = list_to_unit_function xs_paths
     ; get_account_set_y_path = list_to_unit_function ys_paths
     }
@@ -833,7 +835,9 @@ let create_deploy_inner ~(zeko_kp : Keypair.t) () =
         ; sequencer
         ; da_key
         ; acc_set = failwith "FIXME"
-        ; paused = false
+        ; status_flags =
+            Zeko_circuits.Rollup_state.Outer_state.Status_flags.of_bools
+              ~paused:false ~emergency:false
         }
         : Zeko_circuits.Rollup_state.Outer_state.t )
     in

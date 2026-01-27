@@ -307,6 +307,10 @@ struct
               }
           }
         in
+        let* status_flags_precondition =
+          Rollup_state.Outer_state.Status_flags.of_bools_var
+            ~paused:Boolean.false_ ~emergency:Boolean.false_
+        in
         let witness_outer =
           { default_account_update with
             public_key = constant PC.typ zeko_l1
@@ -318,7 +322,7 @@ struct
                     state =
                       Rollup_state.Outer_state.fine
                         { pause_key = None
-                        ; paused = Some Boolean.false_ (* must not be paused *)
+                        ; status_flags = Some status_flags_precondition
                         ; ledger_hash = None
                         ; inner_action_state = { state = None; length = None }
                         ; sequencer = None

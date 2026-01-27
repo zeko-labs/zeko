@@ -17,10 +17,21 @@ module Outer_rules_inst =
         Signature_lib.Public_key.compress pk
 
       let chain_l1 = Mina_signature_kind.Testnet
+
+      let max_sequencer_inactivity = 128
+
+      let emergency_da_public_key =
+        let pk =
+          Snark_params.Tick.Inner_curve.(
+            to_affine_exn @@ point_near_x
+            @@ Snark_params.Tick.Field.of_int 223344)
+        in
+        Signature_lib.Public_key.compress pk
     end)
     ()
 
-let Compile_simple.[ _commit; _action; pause ] = Outer_rules_inst.provers
+let Compile_simple.[ _commit; _emergency_commit; _action; pause ] =
+  Lazy.force Outer_rules_inst.provers
 
 let point_of_string_even s : Zeko_util.Even_PC.t =
   let x, _ =
@@ -41,4 +52,3 @@ let pause_witness : Rule_pause.Witness.t =
   }
 
 let _stmt, _proof = Promise.block_on_async_exn @@ fun () -> pause pause_witness
-

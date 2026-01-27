@@ -32,6 +32,7 @@ let generate_circuits_config =
            let holder_accounts_l1 = [ generate_keypair () ] in
            let helper_token_owner_l1 = generate_keypair () in
            let zeko_l1 = generate_keypair () in
+           let emergency_da = generate_keypair () in
            let t : Zeko_circuits_config.t =
              { chain_l1 = Testnet
              ; chain_l2 = Testnet
@@ -39,6 +40,7 @@ let generate_circuits_config =
              ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
              ; helper_token_owner_l1 = fst helper_token_owner_l1
              ; zeko_l1 = fst zeko_l1
+             ; emergency_da_public_key = fst emergency_da
              ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
              }
            in
@@ -46,6 +48,7 @@ let generate_circuits_config =
              { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
              ; helper_token_owner_l1 = snd helper_token_owner_l1
              ; zeko_l1 = snd zeko_l1
+             ; emergency_da = snd emergency_da
              }
            in
            Core.printf "circuits config: %s\n%!"
@@ -65,10 +68,6 @@ let update_outer_verification_keys =
            ~doc:"bool Only check if the verification keys are up to date"
        in
        fun () ->
-         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
-         let sender =
-           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
-         in
          let l1_uri = Uri.of_string l1_uri in
          let open Zeko_types in
          let logger = Logger.create () in
@@ -139,6 +138,10 @@ let update_outer_verification_keys =
 
          if only_check then return ()
          else
+           let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+           let sender =
+             Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+           in
            let%bind nonce =
              Gql_client.infer_nonce ~logger l1_uri
                (Public_key.compress sender.public_key)
@@ -384,7 +387,7 @@ let update_inner_verification_keys =
                ~precondition:
                  Outer_state.
                    { pause_key = None
-                   ; paused = None
+                   ; status_flags = None
                    ; ledger_hash =
                        Some (Ledger_hash.var_of_t source_ledger_hash)
                    ; inner_action_state = { state = None; length = None }
@@ -395,7 +398,7 @@ let update_inner_verification_keys =
                ~update:
                  Outer_state.
                    { pause_key = None
-                   ; paused = None
+                   ; status_flags = None
                    ; ledger_hash =
                        Some (Ledger_hash.var_of_t target_ledger_hash)
                    ; inner_action_state = { state = None; length = None }
@@ -482,7 +485,7 @@ let update_da_key =
                ~precondition:
                  Outer_state.
                    { pause_key = None
-                   ; paused = None
+                   ; status_flags = None
                    ; ledger_hash = None
                    ; inner_action_state = { state = None; length = None }
                    ; sequencer = None
@@ -492,7 +495,7 @@ let update_da_key =
                ~update:
                  Outer_state.
                    { pause_key = None
-                   ; paused = None
+                   ; status_flags = None
                    ; ledger_hash = None
                    ; inner_action_state = { state = None; length = None }
                    ; sequencer = None
@@ -596,7 +599,9 @@ let set_pause =
            >>| Or_error.ok_exn
            >>| Utils.value_of_zkapp_state
                  Zeko_circuits.Rollup_state.Outer_state.typ
-           >>| fun { paused; _ } -> paused
+           >>| fun { status_flags; _ } ->
+           Zeko_circuits.Rollup_state.Outer_state.Status_flags.paused
+             status_flags
          in
 
          [%log info] "Current paused: %b" current_paused ;
@@ -615,7 +620,7 @@ let set_pause =
              ~precondition:
                Rollup_state.Outer_state.
                  { pause_key = None
-                 ; paused = None
+                 ; status_flags = None
                  ; ledger_hash = None
                  ; inner_action_state = { state = None; length = None }
                  ; sequencer = None
@@ -625,9 +630,12 @@ let set_pause =
              ~update:
                Rollup_state.Outer_state.
                  { pause_key = None
-                 ; paused =
-                     ( if value then Some Zeko_util.Boolean.true_
-                     else Some Zeko_util.Boolean.false_ )
+                 ; status_flags =
+                     Some
+                       (Field.Var.constant
+                          (Rollup_state.Outer_state.Status_flags.to_field
+                             (Rollup_state.Outer_state.Status_flags.of_bools
+                                ~paused:value ~emergency:false ) ) )
                  ; ledger_hash = None
                  ; inner_action_state = { state = None; length = None }
                  ; sequencer = None

@@ -1034,6 +1034,7 @@ module Types = struct
       ; holder_accounts_l1 : Public_key.Compressed.t list
       ; holder_account_l2 : Public_key.Compressed.t
       ; helper_token_owner_l1 : Public_key.Compressed.t
+      ; emergency_da_public_key : Public_key.Compressed.t
       ; chain_l1 : Mina_signature_kind.t
       ; chain_l2 : Mina_signature_kind.t
       ; withdrawal_delay : int
@@ -1066,6 +1067,9 @@ module Types = struct
           ; field "helperTokenOwnerL1" ~typ:(non_null public_key)
               ~args:Arg.[]
               ~resolve:(fun _ t -> t.helper_token_owner_l1)
+          ; field "emergencyDaPublicKey" ~typ:(non_null public_key)
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.emergency_da_public_key)
           ; field "chainL1" ~typ:(non_null string)
               ~args:Arg.[]
               ~resolve:(fun _ t -> signature_kind_to_string t.chain_l1)
@@ -2594,6 +2598,7 @@ module Queries = struct
         ; holder_accounts_l1 = Inputs.holder_accounts_l1
         ; holder_account_l2 = Inputs.holder_account_l2
         ; helper_token_owner_l1 = Inputs.helper_token_owner_l1
+        ; emergency_da_public_key = Inputs.emergency_da_public_key
         ; chain_l1 = Inputs.chain_l1
         ; chain_l2 = Inputs.chain_l2
         ; withdrawal_delay =

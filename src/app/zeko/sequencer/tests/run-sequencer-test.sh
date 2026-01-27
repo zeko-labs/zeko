@@ -15,6 +15,8 @@ NUM_PROVERS="$2"
 PROVER_PIDS=()
 PROVERS=()
 
+export MODE
+
 case "$MODE" in
 fake | real) ;;
 *)
@@ -100,7 +102,7 @@ else
 fi
 for ((i = 0; i < NUM_PROVERS; i++)); do
   PORT=$((9990 + i))
-  $BIN run-server --mq-host "localhost:5672" >/dev/null &
+  $BIN run-server --mq-host "localhost:5672" &
   PROVER_PID=$!
   PROVER_PIDS+=("$PROVER_PID")
   PROVERS+=("localhost:$PORT")

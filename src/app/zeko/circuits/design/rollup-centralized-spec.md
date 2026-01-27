@@ -62,6 +62,16 @@ val max_valid_while_size : nat
 
 val zeko_token_owner : account_id
 
+(* Emergency DA account for action-based DA proofs. *)
+val emergency_da_pk : public_key
+
+type emergency_da_action =
+  { source_ledger : ledger_hash
+  ; target_ledger : ledger_hash
+  ; account_index : nat
+  ; account : account
+  }
+
 (* Commit work to L1. *)
 let do_commit
   ~txn_snark
@@ -138,6 +148,91 @@ let do_commit
       { public_key = sequencer
       ; use_full_commitment = true
       }
+    }
+  ]
+
+(* Emergency DA rule: apply a single account update to a sparse ledger opening
+   and emit an action containing source/target ledger hashes, account index, and account. *)
+let do_emergency_da_step ~ledger_opening ~account_update =
+  let source_ledger = ledger_opening.root in
+  let target_ledger = apply_account ledger_opening account_update in
+  let account_index = index_from_path ledger_opening.path in
+  [ { public_key = emergency_da_pk
+    ; actions = [ emergency_da_action
+        { source_ledger
+        ; target_ledger
+        ; account_index
+        ; account = account_update
+        }
+      ]
+    }
+  ]
+
+let count_commits original_action_state actions =
+  let f (acc_action_state, n) = function
+    | (Commit _) as action ->
+      List.append action acc_action_state, n + 1
+    | (Witness _) as action ->
+      List.append action acc_action_state, n
+  in
+  List.fold_left ~init:(original_action_state, 0) ~f actions
+
+val max_sequencer_inactivity : nat
+
+(* Emergency commit in case of sequencer's inactivity *)
+let do_emergency_commit
+  ~txn_snark
+  ~valid_while
+  ~new_actions
+  ~new_inner_actions
+  ~old_inner_action_state_length
+  ~unsynchronized_actions
+  ~pause_key
+  ~da_key
+  ~outer_action_state_before_last_commit
+  ~last_commit
+  ~actions_since_last_commit
+  ~emergency_da_action_state
+  =
+  let [ commit ] =
+    do_commit
+      ~txn_snark
+      ~valid_while
+      ~new_actions
+      ~new_inner_actions
+      ~old_inner_action_state_length
+      ~unsynchronized_actions
+      ~pause_key
+      ~da_key
+  in
+
+  (* Count commits since last commit *)
+  let (target_action_state, n_commits) = count_commits
+    (List.append last_commit outer_action_state_before_last_commit)
+    actions_since_last_commit
+  in
+
+  (* Check that there has not been any commit after last commit *)
+  assert n_commits = 0 ;
+
+  (* Check that count_commits is matching the precondition *)
+  assert target_action_state = commit.preconditions.action_state ;
+
+  (* Check that enought time elapsed since last commit *)
+  assert commit.preconditions.valid_while.lower - last_commit.valid_while.upper >= max_sequencer_inactivity;
+
+  (* Replace DA multisig with emergency DA action-state precondition. *)
+  assert emergency_da_action_state matches commit.preconditions.target_ledger ;
+
+  (* Remove sequencer preconditions *)
+  [ { commit with
+      children = []
+    ; preconditions.app_state.sequencer = Ignore
+    ; children =
+        [ { public_key = emergency_da_pk
+          ; preconditions.action_state = emergency_da_action_state
+          }
+        ]
     }
   ]
 

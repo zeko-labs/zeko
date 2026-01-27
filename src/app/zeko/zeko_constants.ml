@@ -56,6 +56,10 @@ module Max_excess_actions = struct
     let inner = Int.pow 2 9
 
     let outer = Int.pow 2 9
+
+    let count_commits = 0
+
+    let emergency_da = 0
   end
 
   module Finalize_cancelled_deposit = struct
@@ -120,6 +124,18 @@ module Folder_iterations = struct
     let extend_iterations = Int.pow 2 4
 
     let extend_option_iterations = Int.pow 2 3
+  end
+
+  module Count_commits : FOLDER_ITERATIONS = Check_accepted
+
+  module Emergency_da : FOLDER_ITERATIONS = struct
+    let leaf_iterations = 8
+
+    let leaf_option_iterations = 4
+
+    let extend_iterations = 4
+
+    let extend_option_iterations = 2
   end
 end
 

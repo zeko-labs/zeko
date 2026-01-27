@@ -190,9 +190,42 @@ end
 
 module Outer_state = struct
   (* NB: change precondition code too if you change this *)
+  module Status_flags = struct
+    type t = { paused : bool; emergency : bool }
+
+    type var = F.var
+
+    let to_field { paused; emergency } =
+      let p = if paused then Field.one else Field.zero in
+      let e = if emergency then Field.of_int 2 else Field.zero in
+      Field.add p e
+
+    let typ =
+      let open Snark_params.Tick in
+      Typ.transport F.typ ~there:to_field ~back:(fun flags ->
+          let flag_int = Field.to_string flags |> Int.of_string in
+          let paused = Int.(flag_int land 1 = 1) in
+          let emergency = Int.(flag_int land 2 = 2) in
+          { paused; emergency } )
+
+    let of_bools ~paused ~emergency = { paused; emergency }
+
+    let of_bools_var ~paused ~emergency =
+      let one = Field.Var.constant Field.one in
+      let two = Field.Var.constant (Field.of_int 2) in
+      let zero = Field.Var.constant Field.zero in
+      let* p = Field.Checked.if_ paused ~then_:one ~else_:zero in
+      let* e = Field.Checked.if_ emergency ~then_:two ~else_:zero in
+      Checked.return Field.Checked.(p + e)
+
+    let paused (flags : t) = flags.paused
+
+    let emergency (flags : t) = flags.emergency
+  end
+
   type t =
     { pause_key : Even_PC.t
-    ; paused : Boolean.t
+    ; status_flags : Status_flags.t
     ; ledger_hash : Ledger_hash.t  (** The ledger hash of the rollup *)
     ; inner_action_state : Inner_action_state.With_length.t
     ; sequencer : Even_PC.t
@@ -203,7 +236,7 @@ module Outer_state = struct
 
   type fine =
     { pause_key : Even_PC.var option
-    ; paused : Boolean.var option
+    ; status_flags : Status_flags.var option
     ; ledger_hash : Ledger_hash.var option
     ; inner_action_state : Inner_action_state.With_length.fine
     ; sequencer : Even_PC.var option
@@ -216,7 +249,7 @@ module Outer_state = struct
   *)
   let _ = function
     | ({ pause_key = _
-       ; paused = _
+       ; status_flags = _
        ; ledger_hash = _
        ; inner_action_state = _
        ; sequencer = _
@@ -229,7 +262,7 @@ module Outer_state = struct
 
   let fine
       ({ pause_key
-       ; paused
+       ; status_flags
        ; ledger_hash
        ; inner_action_state
        ; sequencer
@@ -238,7 +271,7 @@ module Outer_state = struct
        } :
         fine ) : Fine.t =
     [ Whole (Even_PC.typ, pause_key)
-    ; Whole (Boolean.typ, paused)
+    ; Whole (Status_flags.typ, status_flags)
     ; Whole (Ledger_hash.typ, ledger_hash)
     ; Recursive (Inner_action_state.With_length.fine inner_action_state)
     ; Whole (Even_PC.typ, sequencer)

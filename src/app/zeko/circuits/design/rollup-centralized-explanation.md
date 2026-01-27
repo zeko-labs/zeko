@@ -10,6 +10,7 @@ It should be possible to have a stake in the rollup.
 And above all, it should be secure.
 
 To that end, here is a summary of what we want from the core protocol:
+
 - The core rollup protocol does not handle transfer of value/MINA.
 - There is an associated token called ZEKO, using the fungible
   token standard, minted on the L1.
@@ -25,10 +26,14 @@ To that end, here is a summary of what we want from the core protocol:
   to ensure that sequencer does not waste work synchronizing something that
   might be rolled back immediately.
 - Actions on the outside:
-  + Witness (witness arbitrary account update)
-  + Commit (sequencer committed)
+  - Witness (witness arbitrary account update)
+  - Commit (sequencer committed)
 - There is a backup special committee that can pause the rollup.
   Being paused is indicated by a field on the outer account.
+- There is an emergency DA rule that allows committing without the DA multisig.
+  It proves, inside the circuit, that a sequence of account updates was applied
+  to transform a source ledger into a target ledger and that those updates were
+  posted as actions on a dedicated emergency DA account.
 
 How can we implement transfers of tokens on top of this?
 Consider the coremost MINA case:
@@ -42,6 +47,7 @@ of actions.
 Withdrawals happen correspondingly, the other way around.
 We also wish to support timeouts on deposits.
 We do this by regarding a deposit as having three states:
+
 - Unknown
 - Accepted
 - Rejected
@@ -116,6 +122,42 @@ a tight bound, since choosing a tight bound means that _future_ sequencers
 can profit from those deposits being processed.
 
 To prevent this from happening, we also specify a maximum size for the slot range.
+
+## Emergency commit
+
+When the sequencer goes offline, we need a way to unblock the system
+without decentralization of sequencing already in place.
+
+An emergency commit may be issued by anyone once enough time has
+passed since the upper bound of the last commit slot range.
+That upper bound witnesses the latest possible time a commit could
+have occurred; if the current slot is past it by a fixed margin,
+then no commit has happened since.
+
+Malicious sequencer can not pick a very large upper bound, since the slot range is capped by max_valid_size.
+
+However, we can only certify “no commit happened” relative to one of
+the last five outer action states. To make this check viable,
+the sequencer must maintain rolling commits over at least five slots
+within the max_sequencer_inactivity window. With a sufficiently
+large window (e.g., on the order of a month), this obligation is
+trivial for a healthy sequencer.
+
+### Emergency DA rule (actions-based DA)
+
+In emergency mode we replace the DA multisig check with an emergency DA proof.
+The rule applies a single account update to a sparse ledger opening and emits
+an action that contains:
+  - source ledger hash
+  - target ledger hash
+  - account index (derived from the ledger path)
+  - the updated account
+
+Because zkApp actions are limited in size, the emergency DA rule only supports
+one account update per transaction. We then fold a list of such actions with a
+folder proof to produce an action-state transition, and the emergency commit
+requires that the DA proof's source/target ledgers match the transaction SNARK.
+The emergency DA account's action state is used as an on-chain precondition.
 
 ## ZEKO token
 

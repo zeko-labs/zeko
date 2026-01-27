@@ -1,8 +1,13 @@
 # Specs
 
-- (rollup-centralized-spec.md)[./rollup-centralized-spec.md]
+- [rollup-centralized-spec.md](./rollup-centralized-spec.md)
+- [rollup-centralized-explanation.md](./rollup-centralized-explanation.md)
+- [da-layer.md](./da-layer.md)
+- [prover.md](./prover.md)
+- [parallel-merger.md](./parallel-merger.md)
+- [sequencer.md](./sequencer.md)
 
-The other files are not up-to-date.
+Files in `old/` are historical and not up-to-date.
 
 Rough OCaml-y specs can be found in this directory.
 You are meant to read the account update generating functions
