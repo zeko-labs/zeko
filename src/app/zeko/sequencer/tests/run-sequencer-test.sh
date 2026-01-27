@@ -15,6 +15,8 @@ NUM_PROVERS="$2"
 PROVER_PIDS=()
 PROVERS=()
 
+export MODE
+
 case "$MODE" in
 fake | real) ;;
 *)

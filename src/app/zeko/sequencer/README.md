@@ -12,14 +12,14 @@ Think of the sequencer as the conductor of an orchestra in Zeko. It plays a vita
 ## Build
 
 ```bash
-DUNE_PROFILE=devnet dune build
+DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
 ```
 
 ## Tests
 
 ```bash
 dune build
-./tests/run_sequencer_test.sh {fake | real}
+./src/app/zeko/sequencer/tests/run-sequencer-test.sh {fake | real} <num_provers>
 ```
 
 ## Run
@@ -32,13 +32,21 @@ export DUNE_PROFILE=devnet
 dune exec ./run.exe -- \
     -p <int?> \
     --l1-uri <string> \
-    --zkapp-pk <string> \
-    --max-pool-size <int?> \
+    --archive-uri <string> \
     --commitment-period <float?> \
+    --max-pool-size <int?> \
     --da-node <string list> \
+    --da-keys <string> \
     --da-quorum <int> \
+    --mq-host <string> \
     --db-dir <string?> \
-    --network-id <string?>
+    --checkpoints-dir <string?> \
+    --postgres-uri <string> \
+    --deposit-delay-blocks <int?> \
+    --fee-modifier <float?> \
+    --minimum-fee <float?> \
+    --slot-acceptance <float?> \
+    --commit-validity-period <int?>
 ```
 
 Run help to see the options:
@@ -56,8 +64,14 @@ export MINA_PRIVATE_KEY="base58 signer private key"
 export DUNE_PROFILE=devnet
 dune exec ./deploy.exe -- \
     --l1-uri <string> \
-    --test-accounts-path <string?> \
-    --da-node <string list>
+    --ledger-input <string?> \
+    --faucet-account <string?> \
+    --da-node <string list> \
+    --pause-key <string> \
+    --sequencer-key <string> \
+    --da-keys <string> \
+    --da-quorum <int> \
+    --account-creation-fee <string>
 ```
 
 Run help to see the options:
@@ -83,31 +97,6 @@ dune exec ./archive_relay/run.exe -- \
 ```
 
 To run the adapter from docker see the section below.
-
-## Use with docker
-
-Build:
-
-```bash
-make docker
-```
-
-Run:
-
-```bash
-docker run -p <port>:<port> \
-           -v <local-db-path>:<container-db-path> \
-           -e DA_PROVIDER=<da-evm-provider> \
-           -e DA_PRIVATE_KEY=<da-private-key> \
-           -e MINA_PRIVATE_KEY=<mina-private-key> \
-           dcspark/zeko -p <port> \
-           --zkapp-pk <zkapp-pk> \
-           --l1-uri <mina-node-graphql> \
-           --archive-uri <mina-archive-node-graphql> \
-           --commitment-period <int> \
-           --da-contract-address <da-layer-contract> \
-           --db-dir <container-db-path>
-```
 
 ### Running archive relay adapter from docker
 

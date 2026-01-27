@@ -319,10 +319,10 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
         constant Account_update.May_use_token.typ Parents_own_token
     ; authorization_kind =
         (* FIXME: awful hack to get around the fact that in fake mode, we don't have a correct vk hash *)
-        ( match Sys.getenv_opt "ZEKO_CIRCUITS_CONFIG" with
-        | Some "test" ->
+        ( match Sys.getenv_opt "MODE" with
+        | Some "fake" ->
             constant Account_update.Authorization_kind.typ None_given
-        | _ ->
+        | Some "real" | _ ->
             { is_signed = Boolean.false_
             ; is_proved = Boolean.true_
             ; verification_key_hash = l2_holder_vk_hash
