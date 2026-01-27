@@ -94,9 +94,9 @@ da3_pid=$!
 if [ "$MODE" = "fake" ]; then
   # For some reason prover can't connect immediately to message queue sometimes
   sleep 5
-  BIN="$SEQUENCER_BUILD_ROOT/prover/cli_fake.exe"
+  BIN="ZEKO_CIRCUITS_MODE=fake $SEQUENCER_BUILD_ROOT/prover/cli_fake.exe"
 else
-  BIN="$SEQUENCER_BUILD_ROOT/prover/cli.exe"
+  BIN="ZEKO_CIRCUITS_MODE=real $SEQUENCER_BUILD_ROOT/prover/cli.exe"
 fi
 for ((i = 0; i < NUM_PROVERS; i++)); do
   PORT=$((9990 + i))
@@ -117,7 +117,7 @@ wait_for_port 8557 $da3_pid
 echo "All services started successfully"
 
 if [ "$MODE" = "fake" ]; then
-  $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
+  ZEKO_CIRCUITS_MODE=fake  $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
 else
-  $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"
+  ZEKO_CIRCUITS_MODE=real $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"
 fi
