@@ -15,8 +15,6 @@ NUM_PROVERS="$2"
 PROVER_PIDS=()
 PROVERS=()
 
-export MODE
-
 case "$MODE" in
 fake | real) ;;
 *)
@@ -102,7 +100,7 @@ else
 fi
 for ((i = 0; i < NUM_PROVERS; i++)); do
   PORT=$((9990 + i))
-  $BIN run-server --mq-host "localhost:5672" &
+  ZEKO_CIRCUITS_MODE=$MODE $BIN run-server --mq-host "localhost:5672" &
   PROVER_PID=$!
   PROVER_PIDS+=("$PROVER_PID")
   PROVERS+=("localhost:$PORT")
@@ -119,7 +117,7 @@ wait_for_port 8557 $da3_pid
 echo "All services started successfully"
 
 if [ "$MODE" = "fake" ]; then
-  $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
+  ZEKO_CIRCUITS_MODE=$MODE  $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
 else
-  $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"
+  ZEKO_CIRCUITS_MODE=$MODE $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"
 fi
