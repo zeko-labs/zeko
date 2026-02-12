@@ -453,7 +453,9 @@ let rec start_posting_diffs_from ?pushed_diff t
                   Signature_table.insert c
                     { target_ledger_hash; public_key; signature } )
                 t.db_pool
-              >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s"
+              >>| fun r ->
+              if Ivar.is_full t.stop then ()
+              else caqti_ok_exn ~msg:"Failed to insert signatures into db: %s" r
             in
             Condition.broadcast t.pushed_signature () ;
             start_posting_diffs_from t ~node_location
