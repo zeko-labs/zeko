@@ -259,12 +259,19 @@ module Rpc = struct
                 node_location data ~versions
             else return (Error e) )
 
-  let post_diff ~logger ~node_location ~ledger_openings ~acc_set_openings ~diff
-      =
+  let post_diff ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_openings ~acc_set_openings ~diff =
+    [%log debug] "Posting diff to da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:5 ~logger node_location Rpc.Post_diff.V1.t
       { ledger_openings; diff; acc_set_openings }
 
-  let get_diff ~logger ~node_location ~ledger_hash =
+  let get_diff ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_hash =
+    [%log debug] "Getting diff from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch_with_fallback_same_query ~max_tries:1 ~logger node_location
       ledger_hash
       ~versions:
@@ -275,28 +282,50 @@ module Rpc = struct
             (Rpc.Get_diff.V1.t, Option.map ~f:Diff.Stable.V1.to_latest)
         ]
 
-  let get_diff_source ~logger ~node_location ~ledger_hash =
+  let get_diff_source ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_hash =
+    [%log debug] "Getting diff source from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.V1.t
       ledger_hash
 
-  let get_node_public_key ~logger ~node_location () =
+  let get_node_public_key ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) () =
+    [%log debug] "Getting node public key from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_signer_public_key.V1.t
       ()
 
-  let get_signature ~logger ~node_location ~ledger_hash =
+  let get_signature ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_hash =
+    [%log debug] "Getting signature from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.V1.t
       ledger_hash
 
-  let get_ledger_hashes_chain ~logger ~node_location ?max_length ~source ~target
-      () =
+  let get_ledger_hashes_chain ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ?max_length ~source ~target () =
+    [%log debug] "Getting ledger hashes chain from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_ledger_hashes_chain.V1.t
       { source; target; max_length }
 
-  let get_diffs_chain ~logger ~node_location ?max_length ~source ~target () =
+  let get_diffs_chain ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ?max_length ~source ~target () =
+    [%log debug] "Getting diffs chain from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_diffs_chain.V1.t
       { source; target; max_length }
 
-  let has_diff ~logger ~node_location ~ledger_hash =
+  let has_diff ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_hash =
+    [%log debug] "Checking if diff exists in da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Has_diff.V1.t ledger_hash
 end
 
@@ -641,13 +670,21 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
       (Int.to_string_hum n) ;
     get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
   in
+  [%log debug] "Fetched %s intervals"
+    (Int.to_string_hum (List.length intervals)) ;
   return
   @@ Ok
        (List.map intervals ~f:(fun (source, target) ->
+            [%log debug] "Creating lazy chunk from %s to %s"
+              (Ledger_hash.to_decimal_string source)
+              (Ledger_hash.to_decimal_string target) ;
             lazy
-              (get_diffs_chain ~logger ~config
-                 ~source_ledger_hash:(`Specific source)
-                 ~target_ledger_hash:target () ) ) )
+              ( [%log debug] "Forcing diffs chunk from %s to %s"
+                  (Ledger_hash.to_decimal_string source)
+                  (Ledger_hash.to_decimal_string target) ;
+                get_diffs_chain ~logger ~config
+                  ~source_ledger_hash:(`Specific source)
+                  ~target_ledger_hash:target () ) ) )
 
 let map_diffs ?interval_size ~logger ~depth ~config ~source_ledger_hash
     ~target_ledger_hash ~f () =
@@ -655,6 +692,8 @@ let map_diffs ?interval_size ~logger ~depth ~config ~source_ledger_hash
     get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
       ~source_ledger_hash ~target_ledger_hash ()
   in
+  [%log debug] "Fetched %s lazy chunks"
+    (Int.to_string_hum (List.length lazy_chunks)) ;
   let l = List.length lazy_chunks in
   Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
       let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in

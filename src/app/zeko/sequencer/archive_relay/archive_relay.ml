@@ -274,6 +274,9 @@ let sync_archive (t : t) ~hash =
     ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.ledger))
     ~target_ledger_hash:hash ()
     ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+      [%log debug]
+        !"Applying diff with source ledger hash: %{sexp: Ledger_hash.t}"
+        (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) ;
       (* Sanity check *)
       let source_ledger_hash_matches =
         Ledger_hash.equal
