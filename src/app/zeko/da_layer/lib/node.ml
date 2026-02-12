@@ -28,6 +28,7 @@ let get_signature t ~ledger_hash =
 let get_ledger_hashes_chain t
     ({ source = source_opt; target; max_length = max_length_opt } :
       Rpc_def.Get_ledger_hashes_chain.V1.Query.t ) =
+  let logger = t.logger in
   let max_length =
     match max_length_opt with Some n -> n | None -> Int.max_value
   in
@@ -38,6 +39,11 @@ let get_ledger_hashes_chain t
     | `Specific source ->
         source
   in
+  [%log debug] "Getting ledger hashes chain from $source to $target"
+    ~metadata:
+      [ ("source", `String (Ledger_hash.to_decimal_string source))
+      ; ("target", `String (Ledger_hash.to_decimal_string target))
+      ] ;
   let rec go n current =
     if Ledger_hash.equal current source || n <= 0 then return []
     else
@@ -108,10 +114,30 @@ let implementations t =
       ; (* Get_diffs_chain *)
         Rpc.Rpc.implement Rpc_def.Get_diffs_chain.V1.t
           (fun () { source; target; max_length } ->
+            let logger = t.logger in
             let%bind chain =
               get_ledger_hashes_chain t { source; target; max_length }
             in
+            [%log debug]
+              "Got ledger hashes chain from $source to $target with length \
+               $length"
+              ~metadata:
+                [ ( "source"
+                  , `String
+                      ( match source with
+                      | `Genesis ->
+                          "genesis"
+                      | `Specific source ->
+                          Ledger_hash.to_decimal_string source ) )
+                ; ("target", `String (Ledger_hash.to_decimal_string target))
+                ; ("length", `Int (List.length chain))
+                ] ;
             Deferred.List.map ~how:`Parallel chain ~f:(fun ledger_hash ->
+                [%log debug] "Getting diff for ledger hash: $ledger_hash"
+                  ~metadata:
+                    [ ( "ledger_hash"
+                      , `String (Ledger_hash.to_decimal_string ledger_hash) )
+                    ] ;
                 Db.Async.get_diff ~ledger_hash t.db
                 >>| fun diff ->
                 Option.value_exn ~here:[%here] ~message:"Diff not found" diff ) )
