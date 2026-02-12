@@ -536,31 +536,27 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
               Rpc.get_node_public_key ~logger:t.logger ~node_location () )
             ()
         in
-        let%bind is_signature_present =
-          Pool.use
-            (fun c ->
-              Signature_table.get_signature_opt c last_ledger_hash public_key )
-            t.db_pool
-          >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s"
-          >>| Option.is_some
-        in
-        if is_signature_present then return ()
-        else (
-          [%log info]
-            "Signature from node %s not present, fetching and inserting"
-            (Host_and_port.to_string node_location.value) ;
-          let%bind public_key, signature =
-            Rpc.get_signature ~logger:t.logger ~node_location
-              ~ledger_hash:last_ledger_hash
-            >>| Or_error.ok_exn
-            >>| fun x -> Option.value_exn ~message:"Signature not found" x
-          in
-          Pool.use
-            (fun c ->
-              Signature_table.insert c
-                { target_ledger_hash; public_key; signature } )
-            t.db_pool
-          >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s" )
+        Pool.use
+          (with_transaction ~f:(fun c ->
+               let%bind.Deferred.Result signature_opt =
+                 Signature_table.get_signature_opt c last_ledger_hash public_key
+               in
+               if Option.is_some signature_opt then return (Ok ())
+               else (
+                 [%log info]
+                   "Signature from node %s not present, fetching and inserting"
+                   (Host_and_port.to_string node_location.value) ;
+                 let%bind public_key, signature =
+                   Rpc.get_signature ~logger:t.logger ~node_location
+                     ~ledger_hash:last_ledger_hash
+                   >>| Or_error.ok_exn
+                   >>| fun x ->
+                   Option.value_exn ~message:"Signature not found" x
+                 in
+                 Signature_table.insert c
+                   { target_ledger_hash; public_key; signature } ) ) )
+          t.db_pool
+        >>| caqti_ok_exn ~msg:"Failed to refetch signature: %s"
   in
   don't_wait_for
     (within' ~monitor:Monitor.main (fun () ->
