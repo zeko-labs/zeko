@@ -684,8 +684,23 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
                   ~source_ledger_hash:(`Specific source)
                   ~target_ledger_hash:target () ) ) )
 
-let map_diffs ?interval_size ~logger ~depth ~config ~source_ledger_hash
-    ~target_ledger_hash ~f () =
+let map_diffs :
+       ?interval_size:int
+    -> logger:Logger.t
+    -> depth:int
+    -> config:Config.t
+    -> source_ledger_hash:[< `Genesis | `Specific of Field.t ]
+    -> target_ledger_hash:Field.t
+    -> f:
+         (   current_chunk:int
+          -> current_diff:int
+          -> chunks_length:int
+          -> Diff.Stable.V3.t
+          -> 'a Deferred.t )
+    -> unit
+    -> ('a list, Error.t) Deferred.Result.t =
+ fun ?interval_size ~logger ~depth ~config ~source_ledger_hash
+     ~target_ledger_hash ~f () ->
   let%bind.Deferred.Result lazy_chunks =
     get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
       ~source_ledger_hash ~target_ledger_hash ()
@@ -693,12 +708,23 @@ let map_diffs ?interval_size ~logger ~depth ~config ~source_ledger_hash
   [%log debug] "Fetched %s lazy chunks"
     (Int.to_string_hum (List.length lazy_chunks)) ;
   let l = List.length lazy_chunks in
-  Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
-      let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in
-      Deferred.List.mapi ~how:`Sequential diffs ~f:(fun j diff ->
-          f ~current_chunk:i ~current_diff:j ~chunks_length:l diff )
-      >>| Result.return )
-  >>| Result.all >>| Result.map ~f:List.join
+  let%map.Deferred.Result result =
+    Deferred.List.foldi ~init:(Ok []) lazy_chunks ~f:(fun i acc lazy_chunk ->
+        match acc with
+        | Error err ->
+            return (Error err)
+        | Ok acc -> (
+            match%bind Lazy.force lazy_chunk with
+            | Ok diffs ->
+                let%bind result =
+                  Deferred.List.mapi ~how:`Sequential diffs ~f:(fun j diff ->
+                      f ~current_chunk:i ~current_diff:j ~chunks_length:l diff )
+                in
+                return (Ok (result :: acc))
+            | Error err ->
+                return (Error err) ) )
+  in
+  List.rev result |> List.join
 
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
 let get_diff ~logger ~config ~ledger_hash =
