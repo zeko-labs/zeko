@@ -327,6 +327,49 @@ module Rpc = struct
     [%log debug] "Checking if diff exists in da node %s"
       (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Has_diff.V1.t ledger_hash
+
+  let pipe_dispatch rpc query (host_and_port : Host_and_port.t) =
+    let open Async in
+    Deferred.Or_error.try_with_join ~here:[%here] (fun () ->
+        Tcp.with_connection
+          (Tcp.Where_to_connect.of_host_and_port host_and_port)
+          ~timeout:(Time.Span.of_sec 1.) (fun _ r w ->
+            let open Deferred.Let_syntax in
+            match%bind
+              Rpc.Connection.create
+                ~handshake_timeout:
+                  (Time.Span.of_sec
+                     Node_config_unconfigurable_constants
+                     .rpc_handshake_timeout_sec )
+                ~heartbeat_config:
+                  (Rpc.Connection.Heartbeat_config.create
+                     ~timeout:
+                       (Time_ns.Span.of_sec
+                          Node_config_unconfigurable_constants
+                          .rpc_heartbeat_timeout_sec )
+                     ~send_every:
+                       (Time_ns.Span.of_sec
+                          Node_config_unconfigurable_constants
+                          .rpc_heartbeat_send_every_sec )
+                     () )
+                r w
+                ~connection_state:(fun _ -> ())
+            with
+            | Error exn ->
+                return
+                  (Or_error.errorf
+                     !"Error connecting to the daemon on \
+                       %{sexp:Host_and_port.t} using the RPC call, %s,: %s"
+                     host_and_port (Rpc.Pipe_rpc.name rpc) (Exn.to_string exn) )
+            | Ok conn ->
+                Rpc.Pipe_rpc.dispatch rpc conn query ) )
+
+  let diffs_stream ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~source
+      ~target () =
+    [%log debug] "Getting diffs stream from da node %s"
+      (Host_and_port.to_string node_location.value) ;
+    pipe_dispatch Rpc.Diffs_stream.V1.t { source; target } node_location.value
 end
 
 module Config = struct
@@ -628,9 +671,29 @@ let diff_exists ~logger ~config ~ledger_hash () =
   try_all_nodes ~config ~f:(fun ~node_location () ->
       Rpc.has_diff ~logger ~node_location ~ledger_hash )
 
+let stream_diffs ~logger ~config ~source_ledger_hash ~target_ledger_hash () =
+  try_all_nodes ~config ~f:(fun ~node_location () ->
+      match%bind
+        Rpc.diffs_stream ~logger ~node_location ~source:source_ledger_hash
+          ~target:target_ledger_hash ()
+      with
+      | Ok (Ok stream) ->
+          return (Ok stream)
+      | Ok (Error err) ->
+          return (Error err)
+      | Error err ->
+          return (Error err) )
+
 (** Lazily fetch chunks of diffs, used to minimize memory usage *)
 let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
-    ~target_ledger_hash () =
+    ~target_ledger_hash
+    (rpc :
+         logger:Logger.t
+      -> config:Config.t
+      -> source_ledger_hash:[ `Genesis | `Specific of Field.t ]
+      -> target_ledger_hash:Field.t
+      -> unit
+      -> ('a, Error.t) result Deferred.t ) () =
   let source_ledger_hash =
     match source_ledger_hash with
     | `Genesis ->
@@ -680,8 +743,7 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
               ( [%log debug] "Forcing diffs chunk from %s to %s"
                   (Ledger_hash.to_decimal_string source)
                   (Ledger_hash.to_decimal_string target) ;
-                get_diffs_chain ~logger ~config
-                  ~source_ledger_hash:(`Specific source)
+                rpc ~logger ~config ~source_ledger_hash:(`Specific source)
                   ~target_ledger_hash:target () ) ) )
 
 let map_diffs :
@@ -703,7 +765,9 @@ let map_diffs :
      ~target_ledger_hash ~f () ->
   let%bind.Deferred.Result lazy_chunks =
     get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
-      ~source_ledger_hash ~target_ledger_hash ()
+      ~source_ledger_hash ~target_ledger_hash
+      (get_diffs_chain ?max_length:None)
+      ()
   in
   [%log debug] "Fetched %s lazy chunks"
     (Int.to_string_hum (List.length lazy_chunks)) ;
@@ -725,6 +789,44 @@ let map_diffs :
                 return (Error err) ) )
   in
   List.rev result |> List.join
+
+let iter_diffs :
+       ?interval_size:int
+    -> logger:Logger.t
+    -> depth:int
+    -> config:Config.t
+    -> source_ledger_hash:[< `Genesis | `Specific of Field.t ]
+    -> target_ledger_hash:Field.t
+    -> f:
+         (   current_chunk:int
+          -> chunks_length:int
+          -> Diff.Stable.V2.t (* TODO: use the latest version of Diff *)
+          -> unit Deferred.t )
+    -> unit
+    -> (unit, Error.t) Deferred.Result.t =
+ fun ?interval_size ~logger ~depth ~config ~source_ledger_hash
+     ~target_ledger_hash ~f () ->
+  let%bind.Deferred.Result lazy_chunks =
+    get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
+      ~source_ledger_hash ~target_ledger_hash stream_diffs ()
+  in
+  [%log debug] "Fetched %s lazy chunks"
+    (Int.to_string_hum (List.length lazy_chunks)) ;
+  let l = List.length lazy_chunks in
+  Deferred.List.foldi ~init:(Ok ()) lazy_chunks ~f:(fun i acc lazy_chunk ->
+      match acc with
+      | Error err ->
+          return (Error err)
+      | Ok () -> (
+          match%bind Lazy.force lazy_chunk with
+          | Ok (diffs, _) ->
+              let%bind () =
+                Pipe.iter diffs ~f:(fun diff ->
+                    f ~current_chunk:i ~chunks_length:l diff )
+              in
+              return (Ok ())
+          | Error err ->
+              return (Error err) ) )
 
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
 let get_diff ~logger ~config ~ledger_hash =
