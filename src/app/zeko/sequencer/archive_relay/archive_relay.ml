@@ -269,11 +269,12 @@ let prune_checkpoints t =
 
 let sync_archive (t : t) ~hash =
   let logger = t.logger in
-  Da_layer.Client.map_diffs ~interval_size:t.interval_size ~logger
-    ~config:t.da_config ~depth:constraint_constants.ledger_depth
+  Da_layer.Client.iter_diffs ~logger ~config:t.da_config
+    ~depth:constraint_constants.ledger_depth
     ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.ledger))
     ~target_ledger_hash:hash ()
-    ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+    ~f:(fun ~current_chunk ~chunks_length diff ->
+      let diff = Da_layer.Diff.Stable.V2.to_latest diff in
       [%log debug]
         !"Applying diff with source ledger hash: %{sexp: Ledger_hash.t}"
         (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) ;
@@ -366,7 +367,6 @@ let sync_archive (t : t) ~hash =
               return ()
           | Error e ->
               raise (Error.to_exn e) ) )
-  >>| Result.map ~f:ignore
 
 let fetch_current_ledger_hash ~logger ~zeko_uri () =
   match Sys.getenv_opt "ZEKO_ARCHIVE_RELAY_OVERRIDE_TARGET_LEDGER_HASH" with
