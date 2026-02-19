@@ -1,5 +1,7 @@
+module Async = Async_kernel
+
 module type Full = sig
-  open Core
+  open Core_kernel
   open Mina_base
   open Mina_transaction
   open Snark_params

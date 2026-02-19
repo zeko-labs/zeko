@@ -1,4 +1,5 @@
-open Core
+open Core_kernel
+module Async = Async_kernel
 open Signature_lib
 open Mina_base
 open Mina_transaction
@@ -4275,6 +4276,7 @@ module Make_str (A : Wire_types.Concrete) = struct
 
     let%test_unit "creating trivial zkapps with different nonces makes unique \
                    verification keypairs" =
+      (* let module Async = Original_async in *)
       let open Async.Deferred.Let_syntax in
       let test_distinct_verification ~prover ~valid_vk ~invalid_vk =
         let stmt : Zkapp_statement.t =
@@ -4295,16 +4297,16 @@ module Make_str (A : Wire_types.Concrete) = struct
         assert (Or_error.is_error invalid_verification)
       in
       let `VK vk_a, `Prover prover_a = create_trivial_snapp ~unique_id:0 () in
-      let vk_a = Async.Thread_safe.block_on_async_exn (fun () -> vk_a) in
+      let vk_a = Run_in_thread.block_on_async_exn (fun () -> vk_a) in
       let `VK vk_b, `Prover prover_b = create_trivial_snapp ~unique_id:1 () in
-      let vk_b = Async.Thread_safe.block_on_async_exn (fun () -> vk_b) in
+      let vk_b = Run_in_thread.block_on_async_exn (fun () -> vk_b) in
       assert (
         not
           ([%equal:
              ( Pickles.Side_loaded.Verification_key.t
              , Snark_params.Tick.Field.t )
              With_hash.t] vk_a vk_b ) ) ;
-      Async.Thread_safe.block_on_async_exn (fun () ->
+      Run_in_thread.block_on_async_exn (fun () ->
           let%bind () =
             test_distinct_verification ~prover:prover_a ~valid_vk:vk_a.data
               ~invalid_vk:vk_b.data

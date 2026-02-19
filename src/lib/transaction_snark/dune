@@ -5,18 +5,15 @@
  (inline_tests
   (flags -verbose -show-counts))
  (libraries
-  ;; opam libraries
-  async
-  async_unix
+ ;; opam libraries
+  async_kernel
   bignum
-  core
+  core_kernel
   splittable_random
   ;; local libraries
   bitstring_lib
   bounded_types
   cache_dir
-  coda_genesis_ledger
-  consensus
   crypto_params
   currency
   data_hash_lib
@@ -27,7 +24,6 @@
   kimchi_pasta
   kimchi_pasta.basic
   logger
-  merkle_ledger
   mina_base
   mina_base.util
   mina_ledger
