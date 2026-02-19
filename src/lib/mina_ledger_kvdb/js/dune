@@ -1,0 +1,10 @@
+(library
+ (name mina_ledger_kvdb_js)
+ (public_name mina_ledger.kvdb.js)
+ (libraries
+  core_kernel
+  key_value_database
+  merkle_ledger)
+ (preprocess
+  (pps ppx_jane))
+ (implements mina_ledger_kvdb))

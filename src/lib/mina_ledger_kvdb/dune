@@ -1,0 +1,10 @@
+(library
+ (name mina_ledger_kvdb)
+ (public_name mina_ledger.kvdb)
+ (libraries
+  core_kernel
+  merkle_ledger)
+ (preprocess
+  (pps ppx_jane))
+ (virtual_modules mina_ledger_kvdb)
+ (default_implementation mina_ledger.kvdb.native))

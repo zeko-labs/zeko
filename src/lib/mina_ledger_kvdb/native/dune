@@ -1,0 +1,9 @@
+(library
+ (name mina_ledger_kvdb_native)
+ (public_name mina_ledger.kvdb.native)
+ (libraries
+  rocksdb
+  merkle_ledger)
+ (preprocess
+  (pps ppx_jane))
+ (implements mina_ledger_kvdb))

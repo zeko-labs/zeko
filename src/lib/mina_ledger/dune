@@ -16,17 +16,14 @@
    ppx_assert))
  (libraries
   ;; opam libraries
-  rocks
   integers
   async_kernel
   base.caml
   base
-  core
   core_kernel
   sexplib0
   bin_prot.shape
   base.base_internalhash_types
-  async
   core_kernel.uuid
   ppx_inline_test.config
   ;; local libraries
@@ -41,7 +38,6 @@
   pickles_types
   mina_base.import
   o1trace
-  rocksdb
   random_oracle
   currency
   genesis_constants
@@ -50,6 +46,7 @@
   kimchi_pasta.basic
   merkle_mask
   merkle_ledger
+  mina_ledger.kvdb
   mina_base
   mina_transaction
   mina_transaction_logic
