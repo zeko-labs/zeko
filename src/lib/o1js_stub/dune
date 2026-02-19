@@ -8,6 +8,8 @@
   ../crypto/kimchi_bindings/js/node_js/plonk_wasm.js
   ../crypto/kimchi_bindings/js/node_js/plonk_wasm_bg.wasm)
  (libraries
+  ;; zeko ;;
+  zeko_circuits
   ;; opam libraries ;;
   core_kernel
   base
