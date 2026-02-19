@@ -331,38 +331,49 @@ module Rpc = struct
   let pipe_dispatch rpc query (host_and_port : Host_and_port.t) =
     let open Async in
     Deferred.Or_error.try_with_join ~here:[%here] (fun () ->
-        Tcp.with_connection
-          (Tcp.Where_to_connect.of_host_and_port host_and_port)
-          ~timeout:(Time.Span.of_sec 1.) (fun _ r w ->
-            let open Deferred.Let_syntax in
-            match%bind
-              Rpc.Connection.create
-                ~handshake_timeout:
-                  (Time.Span.of_sec
-                     Node_config_unconfigurable_constants
-                     .rpc_handshake_timeout_sec )
-                ~heartbeat_config:
-                  (Rpc.Connection.Heartbeat_config.create
-                     ~timeout:
-                       (Time_ns.Span.of_sec
-                          Node_config_unconfigurable_constants
-                          .rpc_heartbeat_timeout_sec )
-                     ~send_every:
-                       (Time_ns.Span.of_sec
-                          Node_config_unconfigurable_constants
-                          .rpc_heartbeat_send_every_sec )
-                     () )
-                r w
-                ~connection_state:(fun _ -> ())
-            with
-            | Error exn ->
-                return
-                  (Or_error.errorf
-                     !"Error connecting to the daemon on \
-                       %{sexp:Host_and_port.t} using the RPC call, %s,: %s"
-                     host_and_port (Rpc.Pipe_rpc.name rpc) (Exn.to_string exn) )
-            | Ok conn ->
-                Rpc.Pipe_rpc.dispatch rpc conn query ) )
+        let%bind _socket, r, w =
+          Tcp.connect
+            (Tcp.Where_to_connect.of_host_and_port host_and_port)
+            ~timeout:(Time.Span.of_sec 1.)
+        in
+        let open Deferred.Let_syntax in
+        match%bind
+          Rpc.Connection.create
+            ~handshake_timeout:
+              (Time.Span.of_sec
+                 Node_config_unconfigurable_constants.rpc_handshake_timeout_sec )
+            ~heartbeat_config:
+              (Rpc.Connection.Heartbeat_config.create
+                 ~timeout:
+                   (Time_ns.Span.of_sec
+                      Node_config_unconfigurable_constants
+                      .rpc_heartbeat_timeout_sec )
+                 ~send_every:
+                   (Time_ns.Span.of_sec
+                      Node_config_unconfigurable_constants
+                      .rpc_heartbeat_send_every_sec )
+                 () )
+            r w
+            ~connection_state:(fun _ -> ())
+        with
+        | Error exn ->
+            return
+              (Or_error.errorf
+                 !"Error connecting to the daemon on %{sexp:Host_and_port.t} \
+                   using the RPC call, %s,: %s"
+                 host_and_port (Rpc.Pipe_rpc.name rpc) (Exn.to_string exn) )
+        | Ok conn -> (
+            match%map Rpc.Pipe_rpc.dispatch rpc conn query with
+            | Ok (Ok (pipe, metadata)) ->
+                upon (Pipe.closed pipe) (fun () ->
+                    don't_wait_for (Rpc.Connection.close conn) ) ;
+                Ok (Ok (pipe, metadata))
+            | Ok (Error _ as rpc_err) ->
+                don't_wait_for (Rpc.Connection.close conn) ;
+                Ok rpc_err
+            | Error _ as transport_err ->
+                don't_wait_for (Rpc.Connection.close conn) ;
+                transport_err ) )
 
   let diffs_stream ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~source
@@ -799,6 +810,7 @@ let iter_diffs :
     -> target_ledger_hash:Field.t
     -> f:
          (   current_chunk:int
+          -> current_diff:int
           -> chunks_length:int
           -> Diff.Stable.V2.t (* TODO: use the latest version of Diff *)
           -> unit Deferred.t )
@@ -821,8 +833,12 @@ let iter_diffs :
           match%bind Lazy.force lazy_chunk with
           | Ok (diffs, _) ->
               let%bind () =
-                Pipe.iter diffs ~f:(fun diff ->
-                    f ~current_chunk:i ~chunks_length:l diff )
+                Pipe.fold diffs ~init:0 ~f:(fun j diff ->
+                    let%map () =
+                      f ~current_chunk:i ~current_diff:j ~chunks_length:l diff
+                    in
+                    j + 1 )
+                >>| ignore
               in
               return (Ok ())
           | Error err ->
