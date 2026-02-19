@@ -163,7 +163,7 @@ let implementations t =
                          , `String (Ledger_hash.to_decimal_string ledger_hash)
                          )
                        ] ;
-                   let%map diff_v3 =
+                   let%bind diff_v3 =
                      Db.Async.get_diff ~ledger_hash t.db
                      >>| fun o ->
                      Option.value_exn o ~here:[%here]
@@ -188,7 +188,7 @@ let implementations t =
                          , `String (Ledger_hash.to_decimal_string ledger_hash)
                          )
                        ] ;
-                   Pipe.write_without_pushback w diff_v2 ) ) ;
+                   Pipe.write w diff_v2 ) ) ;
 
             return (Ok r) )
       ]
