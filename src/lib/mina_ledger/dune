@@ -32,12 +32,10 @@
   sgn
   syncable_ledger
   snark_params
-  zkapp_command_builder
   pickles
   pickles.backend
   pickles_types
   mina_base.import
-  o1trace
   random_oracle
   currency
   genesis_constants

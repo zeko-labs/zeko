@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 
 module Sender : sig
   type t = Local | Remote of Peer.t [@@deriving sexp, equal, yojson, compare]
@@ -8,7 +8,11 @@ end
 
 module Incoming : sig
   type 'a t = { data : 'a; sender : Sender.t; received_at : Time.t }
-  [@@deriving equal, sexp, yojson, compare]
+  [@@deriving equal, yojson, compare]
+
+  val sexp_of_t : ('a -> Sexp.t) -> 'a t -> Sexp.t
+
+  val t_of_sexp : (Sexp.t -> 'a) -> Sexp.t -> 'a t
 
   val sender : 'a t -> Sender.t
 

@@ -1,5 +1,6 @@
 open Core_kernel
 open Mina_base
+module Async = Async_kernel
 
 module At_most_two = struct
   [%%versioned

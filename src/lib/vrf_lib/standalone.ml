@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 
 (* This VRF is based on the one described in appendix C of https://eprint.iacr.org/2017/573.pdf *)
 
@@ -290,7 +290,7 @@ end = struct
   end
 end
 
-open Core
+open Core_kernel
 
 module Bigint_scalar
     (Impl : Snarky_backendless.Snark_intf.S) (M : sig

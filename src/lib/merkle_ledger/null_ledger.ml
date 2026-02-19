@@ -13,6 +13,7 @@ module Make (Inputs : Intf.Inputs.Intf) : sig
        and type account := Inputs.Account.t
 end = struct
   open Inputs
+  module Async = Async_kernel
 
   type t = { uuid : Uuid.t; depth : int } [@@deriving sexp_of]
 
@@ -25,7 +26,8 @@ end = struct
 
   module Addr = Location.Addr
 
-  let create ~depth () = { uuid = Uuid_unix.create (); depth }
+  let create ~depth () =
+    { uuid = Uuid.create_random Random.State.default; depth }
 
   let empty_hash_at_height =
     Empty_hashes.extensible_cache (module Hash) ~init_hash:Hash.empty_account

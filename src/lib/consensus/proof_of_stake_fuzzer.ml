@@ -522,7 +522,7 @@ let main () =
          (UInt32.to_int epoch)
          (List.length proposal_chain) ;
        (*
-      Core.Printf.printf !"%s\n%!"
+      Printf.printf !"%s\n%!"
         (String.concat ~sep:":" @@ List.map proposal_chain ~f:(fun (_, block_data) ->
           UInt32.to_string @@ Global_slot_since_genesis.slot @@ Block_data.global_slot block_data));
       *)
@@ -530,7 +530,7 @@ let main () =
          Deferred.List.fold proposal_chain
            ~init:(base_transition, base_staged_ledger)
            ~f:(fun previous_chain ((_, block_data) as proposal) ->
-             Core.Printf.printf !"[%d] %d --> %d\n%!" (UInt32.to_int epoch)
+             Printf.printf !"[%d] %d --> %d\n%!" (UInt32.to_int epoch)
                ( UInt32.to_int @@ Global_slot_since_genesis.slot_number
                @@ Consensus_state.global_slot @@ Mina_block.consensus_state
                @@ fst previous_chain )

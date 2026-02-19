@@ -1,6 +1,6 @@
 open Core_kernel
 open Mina_numbers
-open Async
+open Async_kernel
 open Currency
 open Signature_lib
 open Mina_base

@@ -9,6 +9,7 @@
   ../crypto/kimchi_bindings/js/node_js/plonk_wasm_bg.wasm)
  (libraries
   ;; zeko ;;
+  compile_simple_real
   zeko_circuits
   ;; opam libraries ;;
   core_kernel

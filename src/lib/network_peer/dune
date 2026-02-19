@@ -3,17 +3,13 @@
  (public_name network_peer)
  (libraries
   ;; opam libraries
-  core
-  async
-  async.async_rpc
-  async_rpc_kernel
   core_kernel
+  core_kernel.caml_unix
   bin_prot.shape
   sexplib0
   base.caml
   base.base_internalhash_types
   result
-  async_kernel
   mina_metrics
   ppx_version.runtime
   bounded_types)

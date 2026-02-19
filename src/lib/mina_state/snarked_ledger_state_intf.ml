@@ -1,5 +1,5 @@
 module type Full = sig
-  open Core
+  open Core_kernel
   open Mina_base
   open Snark_params
   open Currency

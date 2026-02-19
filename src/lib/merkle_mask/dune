@@ -20,13 +20,10 @@
   masking_merkle_tree_intf)
  (libraries
   ;; opam libraries
-  async
   async_kernel
   base.base_internalhash_types
   base.caml
   bitstring
-  core
-  core.uuid
   core_kernel
   core_kernel.uuid
   integers

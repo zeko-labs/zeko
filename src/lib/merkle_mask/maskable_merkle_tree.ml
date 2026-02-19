@@ -1,6 +1,6 @@
 (* maskable_merkle_tree.ml -- Merkle tree that can have associated masks *)
 
-open Core
+open Core_kernel
 
 module type Inputs_intf = sig
   include Inputs_intf.S

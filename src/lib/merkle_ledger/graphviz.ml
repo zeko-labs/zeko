@@ -1,4 +1,4 @@
-open Async
+open Async_kernel
 
 module Make (Inputs : Intf.Graphviz.I) :
   Intf.Graphviz.S
@@ -163,7 +163,8 @@ module Make (Inputs : Intf.Graphviz.I) :
         |> List.concat |> String.concat ~sep:"\n"
       in
       let code = wrapper ~name body in
-      Writer.save path ~contents:code
+      Stdio.Out_channel.write_all path ~data:code ;
+      Deferred.unit
   end
 
   let write = Dot_writer.write

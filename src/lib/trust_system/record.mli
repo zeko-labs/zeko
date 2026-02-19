@@ -5,6 +5,8 @@ module Stable : sig
   end
 end]
 
+open Core_kernel
+
 module type S = sig
   val init : unit -> t
 
@@ -18,6 +20,6 @@ end
 val decay_rate : float
 
 module Make (Now : sig
-  val now : unit -> Core.Time.t
+  val now : unit -> Time.t
 end) : S
 [@@warning "-67"]

@@ -1,12 +1,12 @@
-open Core
+open Core_kernel
 
 [%%versioned
 module Stable = struct
   module V1 = struct
     type t =
       { trust : float
-      ; trust_last_updated : Core.Time.Stable.V1.t
-      ; banned_until_opt : Core.Time.Stable.V1.t option
+      ; trust_last_updated : (Time.t[@version_asserted])
+      ; banned_until_opt : ((Time.t[@version_asserted]) option)
       }
 
     let to_latest = Fn.id

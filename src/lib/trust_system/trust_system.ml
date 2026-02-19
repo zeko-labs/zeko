@@ -1,5 +1,5 @@
 (** The trust system, instantiated with Coda-specific stuff. *)
-open Core
+open Core_kernel
 
 open Async_kernel
 

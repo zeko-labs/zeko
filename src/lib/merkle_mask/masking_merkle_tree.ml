@@ -1,7 +1,9 @@
 (* masking_merkle_tree.ml -- implements a mask in front of a Merkle tree; see
    RFC 0004 and docs/specs/merkle_tree.md *)
 
-open Core
+open Core_kernel
+
+module Async = Async_kernel
 
 (* builds a Merkle tree mask; it's a Merkle tree, with some additional
    operations
@@ -100,7 +102,7 @@ module Make (Inputs : Inputs_intf.S) = struct
     }
 
   let create ~depth () =
-    { uuid = Uuid_unix.create ()
+    { uuid = Uuid.create_random Random.State.default
     ; parent = Error __LOC__
     ; detached_parent_signal = Async.Ivar.create ()
     ; current_location = None
@@ -634,7 +636,7 @@ module Make (Inputs : Inputs_intf.S) = struct
 
     (* copy tables in t; use same parent *)
     let copy t =
-      { uuid = Uuid_unix.create ()
+      { uuid = Uuid.create_random Random.State.default
       ; parent = Ok (get_parent t)
       ; detached_parent_signal = Async.Ivar.create ()
       ; current_location = t.current_location

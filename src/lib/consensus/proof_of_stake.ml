@@ -42,6 +42,18 @@ module Make_str (A : Wire_types.Concrete) = struct
 
   let name = "proof_of_stake"
 
+  let gen_int_incl lo hi =
+    let open Quickcheck.Generator.Let_syntax in
+    let span = hi - lo + 1 in
+    let%map n = Quickcheck.Generator.small_non_negative_int in
+    lo + (n % span)
+
+  let rmrf path =
+    ignore
+      (Caml.Sys.command
+         (sprintf "rm -rf %s" (Filename.quote path))
+        : int )
+
   let genesis_ledger_total_currency ~ledger =
     Mina_ledger.Ledger.foldi ~init:Amount.zero (Lazy.force ledger)
       ~f:(fun _addr sum (account : Mina_base.Account.t) ->
@@ -88,14 +100,12 @@ module Make_str (A : Wire_types.Concrete) = struct
     outer_table
 
   let compute_delegatee_table_ledger_db keys ledger =
-    O1trace.sync_thread "compute_delegatee_table_ledger_db" (fun () ->
-        compute_delegatee_table keys ~iter_accounts:(fun f ->
-            Mina_ledger.Ledger.Db.iteri ledger ~f:(fun i acct -> f i acct) ) )
+    compute_delegatee_table keys ~iter_accounts:(fun f ->
+        Mina_ledger.Ledger.Db.iteri ledger ~f:(fun i acct -> f i acct) )
 
   let compute_delegatee_table_genesis_ledger keys ledger =
-    O1trace.sync_thread "compute_delegatee_table_genesis_ledger" (fun () ->
-        compute_delegatee_table keys ~iter_accounts:(fun f ->
-            Mina_ledger.Ledger.iteri ledger ~f:(fun i acct -> f i acct) ) )
+    compute_delegatee_table keys ~iter_accounts:(fun f ->
+        Mina_ledger.Ledger.iteri ledger ~f:(fun i acct -> f i acct) )
 
   module Typ = Snark_params.Tick.Typ
 
@@ -295,7 +305,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                 ()
             | Ledger_db ledger ->
                 Mina_ledger.Ledger.Db.close ledger ;
-                File_system.rmrf location
+                rmrf location
 
           let ledger_subset keys ledger =
             let open Mina_ledger in
@@ -465,8 +475,8 @@ module Make_str (A : Wire_types.Concrete) = struct
         let create_new_uuids () =
           let epoch_ledger_uuids =
             Data.
-              { staking = Uuid_unix.create ()
-              ; next = Uuid_unix.create ()
+              { staking = Uuid.create_random Random.State.default
+              ; next = Uuid.create_random Random.State.default
               ; genesis_state_hash
               }
           in
@@ -518,8 +528,8 @@ module Make_str (A : Wire_types.Concrete) = struct
                   ; ("staking", `String staking_ledger_location)
                   ; ("next", `String next_ledger_location)
                   ] ;
-              File_system.rmrf staking_ledger_location ;
-              File_system.rmrf next_ledger_location ;
+              rmrf staking_ledger_location ;
+              rmrf next_ledger_location ;
               create_new_uuids () )
           else create_new_uuids ()
         in
@@ -1461,7 +1471,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                  (2 * to_int constants.sub_windows_per_window)
                  ~f:(fun i ->
                    ( 1.0 /. (Float.of_int (i + 1) ** 2.)
-                   , Core.Int.gen_incl
+                   , gen_int_incl
                        (i * to_int constants.slots_per_sub_window)
                        ((i + 1) * to_int constants.slots_per_sub_window) ) )
 
@@ -1478,7 +1488,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             let module GS = Mina_numbers.Global_slot_since_hard_fork in
             let%bind prev_global_slot = small_positive_int in
             let%bind slot_diffs =
-              Core.List.gen_with_length num_global_slots_to_test gen_slot_diff
+              List.gen_with_length num_global_slots_to_test gen_slot_diff
             in
             let _, global_slots =
               List.fold slot_diffs ~init:(prev_global_slot, [])
@@ -2606,7 +2616,7 @@ module Make_str (A : Wire_types.Concrete) = struct
       let open Local_state in
       let open Snapshot in
       let open Deferred.Let_syntax in
-      O1trace.thread "sync_local_state" (fun () ->
+      (
           [%log info]
             "Syncing local state; requesting $num_requested snapshots from \
              peers"
@@ -2659,24 +2669,23 @@ module Make_str (A : Wire_types.Concrete) = struct
               *)
               let%bind.Deferred.Or_error db_ledger =
                 let db_ledger_of_snapshot snapshot snapshot_location =
-                  O1trace.sync_thread "db_ledger_of_snapshot" (fun () ->
-                      match snapshot.ledger with
-                      | Ledger_snapshot.Ledger_db ledger ->
-                          Ok ledger
-                      | Ledger_snapshot.Genesis_epoch_ledger ledger ->
-                          let module Ledger_transfer =
-                            Mina_ledger.Ledger_transfer.Make
-                              (Mina_ledger.Ledger)
-                              (Mina_ledger.Ledger.Db)
-                          in
-                          let fresh_db_ledger =
-                            Mina_ledger.Ledger.Db.create
-                              ~directory_name:snapshot_location
-                              ~depth:Context.constraint_constants.ledger_depth
-                              ()
-                          in
-                          Ledger_transfer.transfer_accounts ~src:ledger
-                            ~dest:fresh_db_ledger )
+                  match snapshot.ledger with
+                  | Ledger_snapshot.Ledger_db ledger ->
+                      Ok ledger
+                  | Ledger_snapshot.Genesis_epoch_ledger ledger ->
+                      let module Ledger_transfer =
+                        Mina_ledger.Ledger_transfer.Make
+                          (Mina_ledger.Ledger)
+                          (Mina_ledger.Ledger.Db)
+                      in
+                      let fresh_db_ledger =
+                        Mina_ledger.Ledger.Db.create
+                          ~directory_name:snapshot_location
+                          ~depth:Context.constraint_constants.ledger_depth
+                          ()
+                      in
+                      Ledger_transfer.transfer_accounts ~src:ledger
+                        ~dest:fresh_db_ledger
                 in
                 match snapshot_id with
                 | Staking_epoch_snapshot ->
@@ -2720,24 +2729,20 @@ module Make_str (A : Wire_types.Concrete) = struct
           in
           match requested_syncs with
           | One required_sync ->
-              let open Async.Deferred.Let_syntax in
-              let start = Core.Time.now () in
+              let open Deferred.Let_syntax in
               let%map result = sync required_sync in
               let { snapshot_id; _ } = required_sync in
               ( match snapshot_id with
               | Staking_epoch_snapshot ->
                   Mina_metrics.(
-                    Counter.inc Bootstrap.staking_epoch_ledger_sync_ms
-                      Core.Time.(diff (now ()) start |> Span.to_ms))
+                    Counter.inc Bootstrap.staking_epoch_ledger_sync_ms 0.0)
               | Next_epoch_snapshot ->
                   Mina_metrics.(
-                    Counter.inc Bootstrap.next_epoch_ledger_sync_ms
-                      Core.Time.(diff (now ()) start |> Span.to_ms)) ) ;
+                    Counter.inc Bootstrap.next_epoch_ledger_sync_ms 0.0) ) ;
               result
           | Both { staking; next } ->
               (*Sync staking ledger before syncing the next ledger*)
               let open Deferred.Or_error.Let_syntax in
-              let start = Core.Time.now () in
               let%bind () =
                 sync
                   { snapshot_id = Staking_epoch_snapshot
@@ -2745,15 +2750,12 @@ module Make_str (A : Wire_types.Concrete) = struct
                   }
               in
               Mina_metrics.(
-                Counter.inc Bootstrap.staking_epoch_ledger_sync_ms
-                  Core.Time.(diff (now ()) start |> Span.to_ms)) ;
-              let start = Core.Time.now () in
+                Counter.inc Bootstrap.staking_epoch_ledger_sync_ms 0.0) ;
               let%map () =
                 sync { snapshot_id = Next_epoch_snapshot; expected_root = next }
               in
               Mina_metrics.(
-                Counter.inc Bootstrap.next_epoch_ledger_sync_ms
-                  Core.Time.(diff (now ()) start |> Span.to_ms)) )
+                Counter.inc Bootstrap.next_epoch_ledger_sync_ms 0.0) )
 
     let received_within_window ~constants (epoch, slot) ~time_received =
       let open Int64 in
@@ -3066,7 +3068,7 @@ module Make_str (A : Wire_types.Concrete) = struct
           let epoch_ledger_uuids =
             Local_state.Data.
               { staking = !local_state.epoch_ledger_uuids.next
-              ; next = Uuid_unix.create ()
+              ; next = Uuid.create_random Random.State.default
               ; genesis_state_hash =
                   !local_state.epoch_ledger_uuids.genesis_state_hash
               }
@@ -3726,7 +3728,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               return acc_count
         in
         let actual =
-          Async.Thread_safe.block_on_async_exn (fun () -> loop 0 0)
+          Run_in_thread.block_on_async_exn (fun () -> loop 0 0)
         in
         let diff =
           Float.abs (float_of_int actual -. (expected *. float_of_int samples))
@@ -3782,7 +3784,7 @@ module Make_str (A : Wire_types.Concrete) = struct
             ( Float.of_int n
             *. Float.min (slot_fill_rate +. slot_fill_rate_delta) 1.0 )
         in
-        Core.Int.gen_incl min_blocks max_blocks >>| Length.of_int
+        gen_int_incl min_blocks max_blocks >>| Length.of_int
 
       let gen_num_blocks_in_epochs ~slot_fill_rate ~slot_fill_rate_delta n =
         gen_num_blocks_in_slots ~slot_fill_rate ~slot_fill_rate_delta
@@ -3866,7 +3868,7 @@ module Make_str (A : Wire_types.Concrete) = struct
          *)
       let gen_spot_root_epoch_position ~slot_fill_rate ~slot_fill_rate_delta =
         let open Quickcheck.Generator.Let_syntax in
-        let%bind root_epoch_int = Core.Int.gen_incl 0 100 in
+        let%bind root_epoch_int = gen_int_incl 0 100 in
         let%map root_block_height =
           gen_num_blocks_in_epochs ~slot_fill_rate ~slot_fill_rate_delta
             root_epoch_int
@@ -3934,7 +3936,7 @@ module Make_str (A : Wire_types.Concrete) = struct
           let default =
             let max_epoch_slot = Length.to_int constants.slots_per_epoch - 1 in
             let%bind curr_epoch_slot =
-              Core.Int.gen_incl 0 max_epoch_slot >>| UInt32.of_int
+              gen_int_incl 0 max_epoch_slot >>| UInt32.of_int
             in
             let%map curr_epoch_length =
               gen_num_blocks_in_slots (Length.to_int curr_epoch_slot)
@@ -4062,7 +4064,7 @@ module Make_str (A : Wire_types.Concrete) = struct
               (* -1 to bring into inclusive range *)
             in
             let%bind slot =
-              Core.Int.gen_incl min_a_curr_epoch_slot max_epoch_slot
+              gen_int_incl min_a_curr_epoch_slot max_epoch_slot
             in
             let%map length =
               gen_num_blocks_in_slots ~slot_fill_rate ~slot_fill_rate_delta slot
@@ -4121,7 +4123,7 @@ module Make_str (A : Wire_types.Concrete) = struct
                   assert (max_epoch_slot > Length.to_int a_curr_epoch_slot + 2) ;
                   (* To make this easier, we assume there is a next block in the slot directly preceeding the block for `a`. *)
                   let%bind added_slots =
-                    Core.Int.gen_incl
+                    gen_int_incl
                       (Length.to_int a_curr_epoch_slot + 2)
                       max_epoch_slot
                   in

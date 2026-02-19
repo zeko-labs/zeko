@@ -1,6 +1,7 @@
 module Make (Inputs : Intf.Inputs.DATABASE) = struct
   (* The max depth of a merkle tree can never be greater than 253. *)
   open Inputs
+  module Async = Async_kernel
 
   module Db_error = struct
     [@@@warning "-4"] (* due to deriving sexp below *)
@@ -44,21 +45,18 @@ module Make (Inputs : Intf.Inputs.DATABASE) = struct
   let depth t = t.depth
 
   let create ?directory_name ~depth () =
-    let open Core in
-    (* for ^/ and Unix below *)
     assert (depth < 0xfe) ;
-    let uuid = Uuid_unix.create () in
+    let uuid = Uuid.create_random Random.State.default in
     let directory =
       match directory_name with
       | None ->
           (* Create in the autogen path, where we know we have write
              permissions.
           *)
-          Cache_dir.autogen_path ^/ Uuid.to_string uuid
+          Filename.concat Cache_dir.autogen_path (Uuid.to_string uuid)
       | Some name ->
           name
     in
-    Unix.mkdir_p directory ;
     let kvdb = Kvdb.create directory in
     { uuid
     ; kvdb
@@ -71,7 +69,7 @@ module Make (Inputs : Intf.Inputs.DATABASE) = struct
   let zeko_kvdb t = t.kvdb
 
   let create_checkpoint t ~directory_name () =
-    let uuid = Uuid_unix.create () in
+    let uuid = Uuid.create_random Random.State.default in
     let kvdb = Kvdb.create_checkpoint t.kvdb directory_name in
     { uuid
     ; kvdb

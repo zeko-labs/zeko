@@ -5,7 +5,6 @@
  (libraries
   ;; opam libraries
   sexplib0
-  core
   ppx_inline_test.config
   base.caml
   async_kernel
@@ -13,11 +12,8 @@
   bin_prot.shape
   base
   result
-  async
-  async_unix
   ;; local libraries
   mina_metrics
-  rocksdb
   pipe_lib
   logger
   key_value_database

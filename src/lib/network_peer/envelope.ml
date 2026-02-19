@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 
 module Sender = struct
   type t = Local | Remote of Peer.t [@@deriving sexp, compare]
@@ -46,7 +46,7 @@ module Sender = struct
           String.concat ~sep:":" (List.map ~f:(Printf.sprintf "%x") segments)
     in
     let remote =
-      let inet = Unix.Inet_addr.of_string ip in
+      let inet = Caml_unix.inet_addr_of_string ip in
       let%bind peer_id = String.gen_nonempty in
       let%map libp2p_port = Int.gen_uniform_incl 1025 49151 in
       Peer.create inet ~peer_id ~libp2p_port
@@ -73,7 +73,28 @@ module Incoming = struct
     ; received_at : Time.t
           [@to_yojson time_to_yojson] [@of_yojson time_of_yojson]
     }
-  [@@deriving equal, sexp, yojson, compare]
+  [@@deriving equal, yojson, compare]
+
+  let sexp_of_t sexp_of_a { data; sender; received_at } =
+    Sexp.List
+      [ sexp_of_a data
+      ; Sender.sexp_of_t sender
+      ; Sexp.Atom (Time.to_string received_at)
+      ]
+
+  let t_of_sexp a_of_sexp = function
+    | Sexp.List [ data; sender; received_at ] ->
+        { data = a_of_sexp data
+        ; sender = Sender.t_of_sexp sender
+        ; received_at =
+            ( match received_at with
+            | Sexp.Atom s ->
+                Time.of_string s
+            | _ ->
+                failwith "Incoming.t_of_sexp: received_at must be atom" )
+        }
+    | _ ->
+        failwith "Incoming.t_of_sexp: expected 3-tuple list"
 
   let sender t = t.sender
 

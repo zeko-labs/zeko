@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 open Signature_lib
 open Merkle_ledger
 open Mina_base
@@ -27,7 +27,7 @@ module Location_binable = struct
 end
 
 module Kvdb : Intf.Key_value_database with type config := string =
-  Rocksdb.Database
+  Mina_ledger_kvdb.Database
 
 module Storage_locations : Intf.Storage_locations = struct
   let key_value_db_dir = "mina_key_value_db"

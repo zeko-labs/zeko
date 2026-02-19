@@ -3,7 +3,7 @@
  (name genesis_ledger)
  (libraries
   ;; opam libraries
-  core
+  core_kernel
   ;; local libraries
   key_gen
   mina_base

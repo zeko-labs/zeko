@@ -1,5 +1,5 @@
 open Unsigned
-open Core
+open Core_kernel
 open Snark_params.Tick
 module Wire_types = Mina_wire_types.Consensus_global_slot
 

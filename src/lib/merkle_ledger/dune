@@ -7,19 +7,14 @@
  (modules_without_implementation location_intf)
  (libraries
   ;; opam libraries
-  async
   async_kernel
-  async_unix
   base.base_internalhash_types
   base.caml
   bin_prot.shape
   bitstring
-  core
-  core.uuid
   core_kernel
   core_kernel.uuid
   integers
-  rocks
   sexplib0
   ;; local libraries
   bounded_types

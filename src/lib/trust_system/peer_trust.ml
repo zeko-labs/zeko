@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 open Async_kernel
 open Pipe_lib
 
@@ -28,7 +28,7 @@ module type Input_intf = sig
   module Peer_id : sig
     type t [@@deriving sexp, to_yojson]
 
-    val ip : t -> Unix.Inet_addr.Blocking_sexp.t
+    val ip : t -> Network_peer.Peer.Inet_addr.t
   end
 
   module Now : sig
@@ -63,8 +63,7 @@ module Time_with_json = struct
 
   let of_yojson = function
     | `String time ->
-        Ok
-          (Time.of_string_gen ~if_no_timezone:(`Use_this_one Time.Zone.utc) time)
+        Ok (Time.of_string time)
     | _ ->
         Error "Trust_system.Peer_trust: Could not parse time"
 end
@@ -148,7 +147,7 @@ module Make0 (Inputs : Input_intf) = struct
 
   let lookup_ip t ip =
     List.filter (peer_statuses t) ~f:(fun (p, _status) ->
-        Unix.Inet_addr.equal (Peer_id.ip p) ip )
+        Network_peer.Peer.Inet_addr.compare (Peer_id.ip p) ip = 0 )
 
   let reset_ip ({ db; _ } as t) ip =
     Option.value_map db ~default:() ~f:(fun db' ->
@@ -252,7 +251,7 @@ let%test_module "peer_trust" =
     module Peer_id = struct
       type t = int [@@deriving sexp, yojson]
 
-      let ip t = Unix.Inet_addr.of_string (sprintf "127.0.0.%d" t)
+      let ip t = Caml_unix.inet_addr_of_string (sprintf "127.0.0.%d" t)
     end
 
     module Action = struct
@@ -305,7 +304,7 @@ let%test_module "peer_trust" =
 
     let setup_mock_db () =
       let res =
-        Async_unix__Thread_safe.block_on_async_exn (fun () ->
+        Run_in_thread.block_on_async_exn (fun () ->
             Peer_trust_test.create () )
       in
       don't_wait_for
@@ -320,7 +319,7 @@ let%test_module "peer_trust" =
 
     let nolog = Logger.null ()
 
-    let ip_of_id id = Unix.Inet_addr.of_string (sprintf "127.0.0.%d" id)
+    let ip_of_id id = Caml_unix.inet_addr_of_string (sprintf "127.0.0.%d" id)
 
     let peer0 = ip_of_id 0
 
@@ -341,8 +340,11 @@ let%test_module "peer_trust" =
             let%map () = Peer_trust_test.record db nolog 0 Insta_ban in
             match Peer_trust_test.lookup_ip db peer0 with
             | [ (_, { trust = -1.0; banned = Banned_until time }) ] ->
-                [%test_eq: Time.t] time
-                @@ Time.add !Mock_now.current_time Time.Span.day ;
+                [%test_eq: string]
+                  (Time.to_string_abs time ~zone:Time.Zone.utc)
+                  (Time.to_string_abs
+                     (Time.add !Mock_now.current_time Time.Span.day)
+                     ~zone:Time.Zone.utc ) ;
                 assert_upcall_pipe [ 0 ] ;
                 true
             | _ ->
@@ -496,12 +498,28 @@ module Make (Action : Action_intf) = Make0 (struct
   end
 
   module Config = String
-  module Db =
-    Rocksdb.Serializable.Make
-      (Network_peer.Peer.Stable.Latest)
+
+  module Mock_db =
+    Key_value_database.Make_mock
+      (Network_peer.Peer)
       (Record.Stable.Latest)
+
+  module Db = struct
+    type t = Mock_db.t
+    type config = string
+
+    let create (_ : config) = Mock_db.create ()
+    let get = Mock_db.get
+    let get_batch = Mock_db.get_batch
+    let set = Mock_db.set
+    let remove = Mock_db.remove
+    let close = Mock_db.close
+    let set_batch = Mock_db.set_batch
+    let to_alist = Mock_db.to_alist
+  end
+
   module Action = Action
   include Log_events
 
-  let remove_dir = File_system.remove_dir
+  let remove_dir _ = Deferred.unit
 end)

@@ -215,8 +215,8 @@ let step (type data_in_pipe write_return)
       short_lived_write state short_lived_sink data
 
 let background_thread ~name (t : _ state_t) =
-  O1trace.background_thread (name ^ "-swappable") (fun () ->
-      Deferred.repeat_until_finished t step )
+  let (_ : string) = name in
+  don't_wait_for (Deferred.repeat_until_finished t step)
 
 let create (type data_in_pipe pipe_kind write_return) ?warn_on_drop ~name
     (type_ : (data_in_pipe, pipe_kind, write_return) Strict_pipe.type_) :

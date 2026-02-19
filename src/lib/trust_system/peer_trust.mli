@@ -8,7 +8,7 @@
     responsibility of the caller, which is Trust_system. *)
 
 open Async_kernel
-open Core
+open Core_kernel
 open Pipe_lib
 
 (** What we do in response to some trust-affecting action. *)
@@ -75,13 +75,13 @@ module Make (Action : Action_intf) : sig
   (** Look up the score of all peers associated with an IP and whether they are banned .*)
   val lookup_ip :
        t
-    -> Unix.Inet_addr.Blocking_sexp.t
+    -> Network_peer.Peer.Inet_addr.t
     -> (Network_peer.Peer.t * Peer_status.t) list
 
   (** reset status of all peers associated with an IP; return the reset statuses *)
   val reset_ip :
        t
-    -> Unix.Inet_addr.Blocking_sexp.t
+    -> Network_peer.Peer.Inet_addr.t
     -> (Network_peer.Peer.t * Peer_status.t) list
 
   (** get all peer, status pairs in the trust system *)

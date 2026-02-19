@@ -241,6 +241,8 @@ module type SYNCABLE = sig
   val merkle_root : t -> root_hash
 end
 
+module Async = Async_kernel
+
 module Inputs = struct
   module type Intf = sig
     module Key : Key

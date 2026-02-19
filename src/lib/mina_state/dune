@@ -24,7 +24,7 @@
    h_list.ppx))
  (libraries
   ;; opam libraries
-  core
+  core_kernel
   ;; local libraries
   signature_lib
   pickles.backend
