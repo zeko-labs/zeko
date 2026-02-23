@@ -156,39 +156,42 @@ let implementations t =
               get_ledger_hashes_chain t { source; target; max_length = None }
             in
             don't_wait_for
-              (Deferred.List.iter ~how:`Sequential chain ~f:(fun ledger_hash ->
-                   [%log debug] "Getting diff for ledger hash: $ledger_hash"
-                     ~metadata:
-                       [ ( "ledger_hash"
-                         , `String (Ledger_hash.to_decimal_string ledger_hash)
-                         )
-                       ] ;
-                   let%bind diff_v3 =
-                     Db.Async.get_diff ~ledger_hash t.db
-                     >>| fun o ->
-                     Option.value_exn o ~here:[%here]
-                       ~message:
-                         (sprintf "Diff stream didn't find diff %s"
-                            (Ledger_hash.to_decimal_string ledger_hash) )
-                   in
-                   (* TODO: use the latest version of Diff *)
-                   let diff_v2 =
-                     { Diff.Stable.V2.source_ledger_hash =
-                         diff_v3.source_ledger_hash
-                     ; changed_accounts = diff_v3.changed_accounts
-                     ; command_with_action_step_flags =
-                         diff_v3.command_with_action_step_flags
-                     ; timestamp = diff_v3.timestamp
-                     }
-                   in
-                   [%log debug]
-                     "Wrote diff to pipe for ledger hash: $ledger_hash"
-                     ~metadata:
-                       [ ( "ledger_hash"
-                         , `String (Ledger_hash.to_decimal_string ledger_hash)
-                         )
-                       ] ;
-                   Pipe.write w diff_v2 ) ) ;
+              ( Deferred.List.iter ~how:`Sequential chain ~f:(fun ledger_hash ->
+                    [%log debug] "Getting diff for ledger hash: $ledger_hash"
+                      ~metadata:
+                        [ ( "ledger_hash"
+                          , `String (Ledger_hash.to_decimal_string ledger_hash)
+                          )
+                        ] ;
+                    let%bind diff_v3 =
+                      Db.Async.get_diff ~ledger_hash t.db
+                      >>| fun o ->
+                      Option.value_exn o ~here:[%here]
+                        ~message:
+                          (sprintf "Diff stream didn't find diff %s"
+                             (Ledger_hash.to_decimal_string ledger_hash) )
+                    in
+                    (* TODO: use the latest version of Diff *)
+                    let diff_v2 =
+                      { Diff.Stable.V2.source_ledger_hash =
+                          diff_v3.source_ledger_hash
+                      ; changed_accounts = diff_v3.changed_accounts
+                      ; command_with_action_step_flags =
+                          diff_v3.command_with_action_step_flags
+                      ; timestamp = diff_v3.timestamp
+                      }
+                    in
+                    let%map () = Pipe.write w diff_v2 in
+                    [%log debug]
+                      "Wrote diff to pipe for ledger hash: $ledger_hash"
+                      ~metadata:
+                        [ ( "ledger_hash"
+                          , `String (Ledger_hash.to_decimal_string ledger_hash)
+                          )
+                        ] )
+              >>| fun () ->
+              [%log debug] "Closing pipe" ;
+              Pipe.close w ) ;
 
             return (Ok r) )
       ]
