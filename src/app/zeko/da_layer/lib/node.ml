@@ -174,15 +174,17 @@ let implementations t =
                       ; timestamp = diff_v3.timestamp
                       }
                     in
+                    let%map () = Pipe.write w diff_v2 in
                     [%log debug]
                       "Wrote diff to pipe for ledger hash: $ledger_hash"
                       ~metadata:
                         [ ( "ledger_hash"
                           , `String (Ledger_hash.to_decimal_string ledger_hash)
                           )
-                        ] ;
-                    Pipe.write w diff_v2 )
-              >>| fun () -> Pipe.close w ) ;
+                        ] )
+              >>| fun () ->
+              [%log debug] "Closing pipe" ;
+              Pipe.close w ) ;
 
             return (Ok r) )
       ; Rpc.Pipe_rpc.implement Rpc_def.Diffs_stream.V2.t

@@ -306,7 +306,9 @@ let sync_archive (t : t) ~hash =
           Ledger.set_at_index_exn ledger index account ) ;
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
-          Ledger.commit ledger ; return ()
+          [%log info] "No command with action step flags, committing ledger" ;
+          Ledger.commit ledger ;
+          return ()
       | Some (command, _) -> (
           let command =
             User_command.write_all_proofs_to_disk ~signature_kind:t.chain
@@ -357,12 +359,15 @@ let sync_archive (t : t) ~hash =
           in
 
           match%bind
+            [%log debug] "Dispatching transition frontier to archive" ;
             Archive_client.dispatch ~logger
               { value = t.archive_uri; name = "archive-uri" }
               (Archive_lib.Diff.Transition_frontier transition_frontier)
           with
           | Ok () ->
+              [%log debug] "Dispatched transition frontier to archive" ;
               Ledger.commit ledger ;
+              [%log debug] "Committed ledger" ;
               Protocol_state.set kvdb ~data:new_protocol_state ;
               return ()
           | Error e ->
