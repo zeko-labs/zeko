@@ -150,29 +150,36 @@ let implementations t =
               get_ledger_hashes_chain t { source; target; max_length = None }
             in
             don't_wait_for
-              ( Deferred.List.iter ~how:`Sequential chain ~f:(fun ledger_hash ->
-                    [%log debug] "Getting diff for ledger hash: $ledger_hash"
-                      ~metadata:
-                        [ ( "ledger_hash"
-                          , `String (Ledger_hash.to_decimal_string ledger_hash)
-                          )
-                        ] ;
-                    let%bind diff =
-                      Db.Async.get_diff ~ledger_hash t.db
-                      >>| fun o ->
-                      Option.value_exn o ~here:[%here]
-                        ~message:
-                          (sprintf "Diff stream didn't find diff %s"
-                             (Ledger_hash.to_decimal_string ledger_hash) )
-                    in
-                    let%map () = Pipe.write w diff in
-                    [%log debug]
-                      "Wrote diff to pipe for ledger hash: $ledger_hash"
-                      ~metadata:
-                        [ ( "ledger_hash"
-                          , `String (Ledger_hash.to_decimal_string ledger_hash)
-                          )
-                        ] )
+              ( Monitor.try_with (fun () ->
+                    Deferred.List.iter ~how:`Sequential chain
+                      ~f:(fun ledger_hash ->
+                        [%log debug]
+                          "Getting diff for ledger hash: $ledger_hash"
+                          ~metadata:
+                            [ ( "ledger_hash"
+                              , `String
+                                  (Ledger_hash.to_decimal_string ledger_hash) )
+                            ] ;
+                        let%bind diff =
+                          Db.Async.get_diff ~ledger_hash t.db
+                          >>| fun o ->
+                          Option.value_exn o ~here:[%here]
+                            ~message:
+                              (sprintf "Diff stream didn't find diff %s"
+                                 (Ledger_hash.to_decimal_string ledger_hash) )
+                        in
+                        let%map () = Pipe.write w diff in
+                        [%log debug]
+                          "Wrote diff to pipe for ledger hash: $ledger_hash"
+                          ~metadata:
+                            [ ( "ledger_hash"
+                              , `String
+                                  (Ledger_hash.to_decimal_string ledger_hash) )
+                            ] ) )
+              >>| Result.iter_error ~f:(fun exn ->
+                      [%log error] "Diff stream worker crashed: $error"
+                        ~metadata:
+                          [ ("error", `String (Exn.to_string_mach exn)) ] )
               >>| fun () ->
               [%log debug] "Closing pipe" ;
               Pipe.close w ) ;
