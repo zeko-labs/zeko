@@ -389,7 +389,7 @@ let update_inner_verification_keys =
              Da_layer.Client.distribute_diff ~logger ~config:da_config
                ~ledger_openings
                ~acc_set_openings:
-                 (Indexed_merkle_tree.Sparse.of_db_subset ~db:imt
+                 (Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:imt
                     ~keys:new_accounts_keys )
                ~diff
            in

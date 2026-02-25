@@ -497,8 +497,8 @@ module Sequencer = struct
             Da_layer.Client.enqueue_diff t.da_client ~genesis:false
               ~ledger_openings:source_ledger
               ~acc_set_openings:
-                (Indexed_merkle_tree.Sparse.of_db_subset ~db:t.imt
-                   ~keys:new_accounts_keys )
+                (Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
+                   ~db:t.imt ~keys:new_accounts_keys )
               ~diff
               ~target_ledger_hash:(L.Db.merkle_root t.ledger)
           in
@@ -573,8 +573,8 @@ module Sequencer = struct
               Da_layer.Client.enqueue_diff t.da_client ~genesis:false
                 ~ledger_openings:source_ledger
                 ~acc_set_openings:
-                  (Indexed_merkle_tree.Sparse.of_db_subset ~db:t.imt
-                     ~keys:new_accounts_keys )
+                  (Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
+                     ~db:t.imt ~keys:new_accounts_keys )
                 ~diff
                 ~target_ledger_hash:(L.Db.merkle_root t.ledger)
             in
@@ -789,7 +789,9 @@ module Sequencer = struct
 
           [%log info] "Creating genesis diff" ;
           let ledger = L.of_database t.ledger in
-          let%bind diffs = Da_layer.Client.create_genesis_diffs ledger in
+          let%bind diffs =
+            Da_layer.Client.create_genesis_diffs ~logger ledger
+          in
           let%bind () =
             Deferred.List.iteri ~how:`Sequential diffs
               ~f:(fun
@@ -849,7 +851,7 @@ module Sequencer = struct
               () ) ;
 
           let acc_set_openings =
-            Da_layer.Client.get_acc_set_openings
+            Da_layer.Client.get_acc_set_openings ~logger
               ~diff:(Da_layer.Diff.drop_time diff)
               ~ledger_openings ~imt:t.imt
           in

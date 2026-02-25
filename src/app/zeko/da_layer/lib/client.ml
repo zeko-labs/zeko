@@ -870,7 +870,7 @@ let distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff =
 (** One diff can be too big, split it into multiple smaller ones
     To have only one diff set [max_size] to [Int.max_value]
 *)
-let create_genesis_diffs ?(max_size = 50) ledger =
+let create_genesis_diffs ?(max_size = 50) ~logger ledger =
   let%map account_ids =
     Ledger.to_list ledger >>| List.map ~f:Account.identifier
   in
@@ -895,19 +895,22 @@ let create_genesis_diffs ?(max_size = 50) ledger =
               ~source_ledger_hash:(Sparse_ledger.merkle_root ledger_openings)
               ~changed_accounts:chunk ~command_with_action_step_flags:None
           in
+          [%log debug] "Adding accounts to acc set db" ;
           List.iter chunk ~f:(fun (_, account) ->
               ( Indexed_merkle_tree.Db.get_or_create_entry_exn acc_set
                   (Account_id.derive_token_id
                      ~owner:(Account.identifier account) )
                 : [ `Added | `Existed ] * Indexed_merkle_tree.Db.witness )
               |> ignore ) ;
+          [%log debug] "Creating acc set openings" ;
           let acc_set_openings =
-            Indexed_merkle_tree.Sparse.of_db_subset ~db:acc_set
+            Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:acc_set
               ~keys:
-                ( List.map chunk ~f:snd
-                |> List.map ~f:(fun acc ->
-                       Account_id.derive_token_id
-                         ~owner:(Account.identifier acc) ) )
+                ( [%log debug] "Getting accounts from chunk" ;
+                  List.map chunk ~f:snd
+                  |> List.map ~f:(fun acc ->
+                         Account_id.derive_token_id
+                           ~owner:(Account.identifier acc) ) )
           in
           ( diff
           , ledger_openings
@@ -916,7 +919,7 @@ let create_genesis_diffs ?(max_size = 50) ledger =
 
 (** Distribute diff of initial accounts *)
 let distribute_genesis_diff ~logger ~config ~ledger =
-  let%bind diffs = create_genesis_diffs ledger in
+  let%bind diffs = create_genesis_diffs ~logger ledger in
   Deferred.List.iter ~how:`Sequential diffs
     ~f:(fun (diff, ledger_openings, acc_set_openings, `Target _) ->
       distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff )

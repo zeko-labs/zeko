@@ -429,8 +429,10 @@ module Sparse = struct
 
   include Sparse_ledger_lib.Sparse_ledger.Make (Hash) (Account_id) (Entry)
 
-  let of_db_subset ~db ~keys =
+  let of_db_subset ~logger ~db ~keys =
+    [%log debug] "Creating sparse ledger from db subset" ;
     let sparse = of_hash ~depth:(Db.depth db) (Db.merkle_root db) in
+    [%log debug] "Folding keys" ;
     List.fold keys ~init:sparse ~f:(fun sparse key ->
         let aid = Account_id.with_empty_key key in
         let entry =

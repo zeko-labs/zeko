@@ -230,7 +230,7 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
           Da_layer.Client.distribute_diff ~logger ~config:da_config
             ~ledger_openings:old_ledger_openings
             ~acc_set_openings:
-              (Indexed_merkle_tree.Sparse.of_db_subset ~db:imt
+              (Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:imt
                  ~keys:new_accounts_keys )
             ~diff
         else
