@@ -23,7 +23,7 @@ let generate_even_key =
 
 let generate_circuits_config =
   ( "generate-circuits-config"
-  , Command.basic ~summary:"Update the verification keys of the outer zkApps"
+  , Command.basic ~summary:"Generate the circuits config and deploy config"
       (let%map_open.Command circuits_config_output =
          flag "--circuits-config-output" (optional string)
            ~doc:"string Circuits config output"

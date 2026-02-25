@@ -690,9 +690,7 @@ let stream_diffs ~logger ~config ~source_ledger_hash ~target_ledger_hash () =
       with
       | Ok (Ok stream) ->
           return (Ok stream)
-      | Ok (Error err) ->
-          return (Error err)
-      | Error err ->
+      | Ok (Error err) | Error err ->
           return (Error err) )
 
 (** Lazily fetch chunks of diffs, used to minimize memory usage *)
