@@ -880,7 +880,9 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
         let account = Ledger.get_at_index_exn ledger index in
         (index, account) )
   in
-  let acc_set = Indexed_merkle_tree.Db.create ~depth:(Ledger.depth ledger) () in
+  let acc_set =
+    Indexed_merkle_tree.In_memory.create ~depth:(Ledger.depth ledger) ()
+  in
   Ledger.with_ephemeral_ledger ~depth:(Ledger.depth ledger) ~f:(fun ephemeral ->
       let account_chunks = List.chunks_of changed_accounts ~length:max_size in
       [%log debug] "Created %s account chunks"
@@ -899,14 +901,11 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
           in
           [%log debug] "Adding accounts to acc set db" ;
           List.iter chunk ~f:(fun (_, account) ->
-              ( Indexed_merkle_tree.Db.get_or_create_entry_exn acc_set
-                  (Account_id.derive_token_id
-                     ~owner:(Account.identifier account) )
-                : [ `Added | `Existed ] * Indexed_merkle_tree.Db.witness )
-              |> ignore ) ;
+              Indexed_merkle_tree.In_memory.insert_exn acc_set
+                (Account_id.derive_token_id ~owner:(Account.identifier account)) ) ;
           [%log debug] "Creating acc set openings" ;
           let acc_set_openings =
-            Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:acc_set
+            Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger ~db:acc_set
               ~keys:
                 ( [%log debug] "Getting accounts from chunk" ;
                   List.map chunk ~f:snd
