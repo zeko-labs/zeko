@@ -334,7 +334,7 @@ module Rpc = struct
         let%bind _socket, r, w =
           Tcp.connect
             (Tcp.Where_to_connect.of_host_and_port host_and_port)
-            ~timeout:(Time.Span.of_sec 1.)
+            ~timeout:(Time.Span.of_sec 5.)
         in
         let open Deferred.Let_syntax in
         match%bind
