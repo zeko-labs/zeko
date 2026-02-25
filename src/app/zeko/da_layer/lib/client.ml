@@ -871,7 +871,7 @@ let distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff =
     To have only one diff set [max_size] to [Int.max_value]
 *)
 let create_genesis_diffs ?(max_size = 50) ~logger ledger =
-  let%map account_ids =
+  let%bind account_ids =
     Ledger.to_list ledger >>| List.map ~f:Account.identifier
   in
   let changed_accounts =
@@ -887,7 +887,7 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
       let account_chunks = List.chunks_of changed_accounts ~length:max_size in
       [%log debug] "Created %s account chunks"
         (Int.to_string_hum (List.length account_chunks)) ;
-      List.map account_chunks ~f:(fun chunk ->
+      Deferred.List.map ~how:`Sequential account_chunks ~f:(fun chunk ->
           let ledger_openings =
             Sparse_ledger.of_ledger_subset_exn ephemeral
               (List.map chunk ~f:snd |> List.map ~f:Account.identifier)
@@ -913,10 +913,11 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
                          Account_id.derive_token_id
                            ~owner:(Account.identifier acc) ) )
           in
-          ( diff
-          , ledger_openings
-          , acc_set_openings
-          , `Target (Ledger.merkle_root ephemeral) ) ) )
+          return
+            ( diff
+            , ledger_openings
+            , acc_set_openings
+            , `Target (Ledger.merkle_root ephemeral) ) ) )
 
 (** Distribute diff of initial accounts *)
 let distribute_genesis_diff ~logger ~config ~ledger =
