@@ -23,39 +23,59 @@ let generate_even_key =
 
 let generate_circuits_config =
   ( "generate-circuits-config"
-  , Command.basic ~summary:"Generate a circuits config"
-      (Command_unix.Param.return (fun () ->
-           let generate_keypair () =
-             let kp = Keypair.create () in
-             (Public_key.compress kp.public_key, kp.private_key)
-           in
-           let holder_accounts_l1 = [ generate_keypair () ] in
-           let helper_token_owner_l1 = generate_keypair () in
-           let zeko_l1 = generate_keypair () in
-           let emergency_da = generate_keypair () in
-           let t : Zeko_circuits_config.t =
-             { chain_l1 = Testnet
-             ; chain_l2 = Testnet
-             ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
-             ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
-             ; helper_token_owner_l1 = fst helper_token_owner_l1
-             ; zeko_l1 = fst zeko_l1
-             ; emergency_da_public_key = fst emergency_da
-             ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
-             }
-           in
-           let deploy_config : Zeko_circuits_config.Deploy.t =
-             { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
-             ; helper_token_owner_l1 = snd helper_token_owner_l1
-             ; zeko_l1 = snd zeko_l1
-             ; emergency_da = snd emergency_da
-             }
-           in
-           Core.printf "circuits config: %s\n%!"
-             (Yojson.Safe.pretty_to_string @@ Zeko_circuits_config.to_yojson t) ;
-           Core.printf "deploy config: %s\n%!"
-             ( Yojson.Safe.pretty_to_string
-             @@ Zeko_circuits_config.Deploy.to_yojson deploy_config ) ) ) )
+  , Command.basic ~summary:"Generate the circuits config and deploy config"
+      (let%map_open.Command circuits_config_output =
+         flag "--circuits-config-output" (optional string)
+           ~doc:"string Circuits config output"
+       and deploy_config_output =
+         flag "--deploy-config-output" (optional string)
+           ~doc:"string Deploy config output"
+       in
+       fun () ->
+         let generate_keypair () =
+           let kp = Keypair.create () in
+           (Public_key.compress kp.public_key, kp.private_key)
+         in
+         let holder_accounts_l1 = [ generate_keypair () ] in
+         let helper_token_owner_l1 = generate_keypair () in
+         let zeko_l1 = generate_keypair () in
+         let emergency_da = generate_keypair () in
+         let t : Zeko_circuits_config.t =
+           { chain_l1 = Testnet
+           ; chain_l2 = Testnet
+           ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
+           ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
+           ; helper_token_owner_l1 = fst helper_token_owner_l1
+           ; zeko_l1 = fst zeko_l1
+           ; emergency_da_public_key = fst emergency_da
+           ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
+           }
+         in
+         let deploy_config : Zeko_circuits_config.Deploy.t =
+           { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
+           ; helper_token_owner_l1 = snd helper_token_owner_l1
+           ; zeko_l1 = snd zeko_l1
+           ; emergency_da = snd emergency_da
+           }
+         in
+         let circuits_config_json = Zeko_circuits_config.to_yojson t in
+         let deploy_config_json =
+           Zeko_circuits_config.Deploy.to_yojson deploy_config
+         in
+         let () =
+           match circuits_config_output with
+           | None ->
+               Core.printf "circuits config: %s\n%!"
+                 (Yojson.Safe.pretty_to_string circuits_config_json)
+           | Some output_file ->
+               Yojson.Safe.to_file output_file circuits_config_json
+         in
+         match deploy_config_output with
+         | None ->
+             Core.printf "deploy config: %s\n%!"
+               (Yojson.Safe.pretty_to_string deploy_config_json)
+         | Some output_file ->
+             Yojson.Safe.to_file output_file deploy_config_json ) )
 
 let update_outer_verification_keys =
   ( "update-outer-verification-keys"

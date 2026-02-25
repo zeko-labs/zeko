@@ -269,11 +269,14 @@ let prune_checkpoints t =
 
 let sync_archive (t : t) ~hash =
   let logger = t.logger in
-  Da_layer.Client.map_diffs ~interval_size:t.interval_size ~logger
-    ~config:t.da_config ~depth:constraint_constants.ledger_depth
+  Da_layer.Client.iter_diffs ~logger ~config:t.da_config
+    ~depth:constraint_constants.ledger_depth
     ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.ledger))
     ~target_ledger_hash:hash ()
     ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+      [%log debug]
+        !"Applying diff with source ledger hash: %{sexp: Ledger_hash.t}"
+        (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) ;
       (* Sanity check *)
       let source_ledger_hash_matches =
         Ledger_hash.equal
@@ -302,7 +305,9 @@ let sync_archive (t : t) ~hash =
           Ledger.set_at_index_exn ledger index account ) ;
       match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
       | None ->
-          Ledger.commit ledger ; return ()
+          [%log info] "No command with action step flags, committing ledger" ;
+          Ledger.commit ledger ;
+          return ()
       | Some (command, _) -> (
           let command =
             User_command.write_all_proofs_to_disk ~signature_kind:t.chain
@@ -353,74 +358,85 @@ let sync_archive (t : t) ~hash =
           in
 
           match%bind
+            [%log debug] "Dispatching transition frontier to archive" ;
             Archive_client.dispatch ~logger
               { value = t.archive_uri; name = "archive-uri" }
               (Archive_lib.Diff.Transition_frontier transition_frontier)
           with
           | Ok () ->
+              [%log debug] "Dispatched transition frontier to archive" ;
               Ledger.commit ledger ;
+              [%log debug] "Committed ledger" ;
               Protocol_state.set kvdb ~data:new_protocol_state ;
               return ()
           | Error e ->
               raise (Error.to_exn e) ) )
-  >>| Result.map ~f:ignore
 
-let fetch_current_ledger_hash ~zeko_uri () =
-  let query =
-    {|
+let fetch_current_ledger_hash ~logger ~zeko_uri () =
+  match Sys.getenv_opt "ZEKO_ARCHIVE_RELAY_OVERRIDE_TARGET_LEDGER_HASH" with
+  | Some hash ->
+      [%log info] "Using override target ledger hash: %s" hash ;
+      return (Ok (Ledger_hash.of_decimal_string hash))
+  | None -> (
+      let query =
+        {|
       query {
         stateHashes {
           unprovedLedgerHash
         }
       }
     |}
-  in
-  let body =
-    Yojson.Safe.to_string
-    @@ `Assoc [ ("query", `String query); ("variables", `Assoc []) ]
-  in
-  let headers =
-    List.fold ~init:(Cohttp.Header.init ())
-      ~f:(fun acc (k, v) -> Cohttp.Header.add acc k v)
-      [ ("Accept", "application/json"); ("Content-Type", "application/json") ]
-  in
-  let%bind.Deferred.Result response, body =
-    Deferred.Or_error.try_with ~here:[%here] ~extract_exn:true (fun () ->
-        Cohttp_async.Client.post ~headers
-          ~body:(Cohttp_async.Body.of_string body)
-          zeko_uri )
-    |> Deferred.Result.map_error ~f:(fun e -> Error.to_string_hum e)
-  in
-  let%bind body_str = Cohttp_async.Body.to_string body in
-  let%bind.Deferred.Result body_json =
-    match
-      Cohttp.Code.code_of_status (Cohttp_async.Response.status response)
-    with
-    | 200 ->
-        Deferred.return (Ok (Yojson.Safe.from_string body_str))
-    | code ->
-        Deferred.return
-          (Error (Printf.sprintf "Status code %d -- %s" code body_str))
-  in
-  let open Yojson.Safe.Util in
-  match (member "errors" body_json, member "data" body_json) with
-  | `Null, `Null ->
-      return (Error "Empty response from graphql query")
-  | error, `Null ->
-      return (Error (Yojson.Safe.to_string error))
-  | _, raw_json ->
-      let unproved_ledger_hash =
-        member "stateHashes" raw_json
-        |> member "unprovedLedgerHash"
-        |> to_string |> Ledger_hash.of_decimal_string
       in
-      return (Ok unproved_ledger_hash)
+      let body =
+        Yojson.Safe.to_string
+        @@ `Assoc [ ("query", `String query); ("variables", `Assoc []) ]
+      in
+      let headers =
+        List.fold ~init:(Cohttp.Header.init ())
+          ~f:(fun acc (k, v) -> Cohttp.Header.add acc k v)
+          [ ("Accept", "application/json")
+          ; ("Content-Type", "application/json")
+          ]
+      in
+      let%bind.Deferred.Result response, body =
+        Deferred.Or_error.try_with ~here:[%here] ~extract_exn:true (fun () ->
+            Cohttp_async.Client.post ~headers
+              ~body:(Cohttp_async.Body.of_string body)
+              zeko_uri )
+        |> Deferred.Result.map_error ~f:(fun e -> Error.to_string_hum e)
+      in
+      let%bind body_str = Cohttp_async.Body.to_string body in
+      let%bind.Deferred.Result body_json =
+        match
+          Cohttp.Code.code_of_status (Cohttp_async.Response.status response)
+        with
+        | 200 ->
+            Deferred.return (Ok (Yojson.Safe.from_string body_str))
+        | code ->
+            Deferred.return
+              (Error (Printf.sprintf "Status code %d -- %s" code body_str))
+      in
+      let open Yojson.Safe.Util in
+      match (member "errors" body_json, member "data" body_json) with
+      | `Null, `Null ->
+          return (Error "Empty response from graphql query")
+      | error, `Null ->
+          return (Error (Yojson.Safe.to_string error))
+      | _, raw_json ->
+          let unproved_ledger_hash =
+            member "stateHashes" raw_json
+            |> member "unprovedLedgerHash"
+            |> to_string |> Ledger_hash.of_decimal_string
+          in
+          return (Ok unproved_ledger_hash) )
 
 let sync (t : t) () =
   let logger = t.logger in
   Thread_safe.block_on_async_exn (fun () ->
       let%bind ledger_hash =
-        match%bind fetch_current_ledger_hash ~zeko_uri:t.zeko_uri () with
+        match%bind
+          fetch_current_ledger_hash ~logger ~zeko_uri:t.zeko_uri ()
+        with
         | Ok hash ->
             [%log info] "Fetched ledger hash: %s"
               (Ledger_hash.to_decimal_string hash) ;

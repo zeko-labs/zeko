@@ -259,12 +259,19 @@ module Rpc = struct
                 node_location data ~versions
             else return (Error e) )
 
-  let post_diff ~logger ~node_location ~ledger_openings ~acc_set_openings ~diff
-      =
+  let post_diff ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_openings ~acc_set_openings ~diff =
+    [%log debug] "Posting diff to da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:5 ~logger node_location Rpc.Post_diff.V1.t
       { ledger_openings; diff; acc_set_openings }
 
-  let get_diff ~logger ~node_location ~ledger_hash =
+  let get_diff ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_hash =
+    [%log debug] "Getting diff from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch_with_fallback_same_query ~max_tries:1 ~logger node_location
       ledger_hash
       ~versions:
@@ -275,29 +282,105 @@ module Rpc = struct
             (Rpc.Get_diff.V1.t, Option.map ~f:Diff.Stable.V1.to_latest)
         ]
 
-  let get_diff_source ~logger ~node_location ~ledger_hash =
+  let get_diff_source ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_hash =
+    [%log debug] "Getting diff source from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.V1.t
       ledger_hash
 
-  let get_node_public_key ~logger ~node_location () =
+  let get_node_public_key ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) () =
+    [%log debug] "Getting node public key from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_signer_public_key.V1.t
       ()
 
-  let get_signature ~logger ~node_location ~ledger_hash =
+  let get_signature ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_hash =
+    [%log debug] "Getting signature from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.V1.t
       ledger_hash
 
-  let get_ledger_hashes_chain ~logger ~node_location ?max_length ~source ~target
-      () =
+  let get_ledger_hashes_chain ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ?max_length ~source ~target () =
+    [%log debug] "Getting ledger hashes chain from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_ledger_hashes_chain.V1.t
       { source; target; max_length }
 
-  let get_diffs_chain ~logger ~node_location ?max_length ~source ~target () =
+  let get_diffs_chain ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ?max_length ~source ~target () =
+    [%log debug] "Getting diffs chain from da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_diffs_chain.V1.t
       { source; target; max_length }
 
-  let has_diff ~logger ~node_location ~ledger_hash =
+  let has_diff ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
+      ~ledger_hash =
+    [%log debug] "Checking if diff exists in da node %s"
+      (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Has_diff.V1.t ledger_hash
+
+  let pipe_dispatch rpc query (host_and_port : Host_and_port.t) =
+    let open Async in
+    Deferred.Or_error.try_with_join ~here:[%here] (fun () ->
+        let%bind _socket, r, w =
+          Tcp.connect
+            (Tcp.Where_to_connect.of_host_and_port host_and_port)
+            ~timeout:(Time.Span.of_sec 5.)
+        in
+        let open Deferred.Let_syntax in
+        match%bind
+          Rpc.Connection.create
+            ~handshake_timeout:
+              (Time.Span.of_sec
+                 Node_config_unconfigurable_constants.rpc_handshake_timeout_sec )
+            ~heartbeat_config:
+              (Rpc.Connection.Heartbeat_config.create
+                 ~timeout:
+                   (Time_ns.Span.of_sec
+                      Node_config_unconfigurable_constants
+                      .rpc_heartbeat_timeout_sec )
+                 ~send_every:
+                   (Time_ns.Span.of_sec
+                      Node_config_unconfigurable_constants
+                      .rpc_heartbeat_send_every_sec )
+                 () )
+            r w
+            ~connection_state:(fun _ -> ())
+        with
+        | Error exn ->
+            return
+              (Or_error.errorf
+                 !"Error connecting to the daemon on %{sexp:Host_and_port.t} \
+                   using the RPC call, %s,: %s"
+                 host_and_port (Rpc.Pipe_rpc.name rpc) (Exn.to_string exn) )
+        | Ok conn -> (
+            match%map Rpc.Pipe_rpc.dispatch rpc conn query with
+            | Ok (Ok (pipe, metadata)) ->
+                upon (Pipe.closed pipe) (fun () ->
+                    don't_wait_for (Rpc.Connection.close conn) ) ;
+                Ok (Ok (pipe, metadata))
+            | Ok (Error _ as rpc_err) ->
+                don't_wait_for (Rpc.Connection.close conn) ;
+                Ok rpc_err
+            | Error _ as transport_err ->
+                don't_wait_for (Rpc.Connection.close conn) ;
+                transport_err ) )
+
+  let diffs_stream ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~source
+      ~target () =
+    [%log debug] "Getting diffs stream from da node %s"
+      (Host_and_port.to_string node_location.value) ;
+    pipe_dispatch Rpc.Diffs_stream.V2.t { source; target } node_location.value
 end
 
 module Config = struct
@@ -424,7 +507,9 @@ let rec start_posting_diffs_from ?pushed_diff t
                   Signature_table.insert c
                     { target_ledger_hash; public_key; signature } )
                 t.db_pool
-              >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s"
+              >>| fun r ->
+              if Ivar.is_full t.stop then ()
+              else caqti_ok_exn ~msg:"Failed to insert signatures into db: %s" r
             in
             Condition.broadcast t.pushed_signature () ;
             start_posting_diffs_from t ~node_location
@@ -507,31 +592,27 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
               Rpc.get_node_public_key ~logger:t.logger ~node_location () )
             ()
         in
-        let%bind is_signature_present =
-          Pool.use
-            (fun c ->
-              Signature_table.get_signature_opt c last_ledger_hash public_key )
-            t.db_pool
-          >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s"
-          >>| Option.is_some
-        in
-        if is_signature_present then return ()
-        else (
-          [%log info]
-            "Signature from node %s not present, fetching and inserting"
-            (Host_and_port.to_string node_location.value) ;
-          let%bind public_key, signature =
-            Rpc.get_signature ~logger:t.logger ~node_location
-              ~ledger_hash:last_ledger_hash
-            >>| Or_error.ok_exn
-            >>| fun x -> Option.value_exn ~message:"Signature not found" x
-          in
-          Pool.use
-            (fun c ->
-              Signature_table.insert c
-                { target_ledger_hash; public_key; signature } )
-            t.db_pool
-          >>| caqti_ok_exn ~msg:"Failed to insert signatures into db: %s" )
+        Pool.use
+          (with_transaction ~f:(fun c ->
+               let%bind.Deferred.Result signature_opt =
+                 Signature_table.get_signature_opt c last_ledger_hash public_key
+               in
+               if Option.is_some signature_opt then return (Ok ())
+               else (
+                 [%log info]
+                   "Signature from node %s not present, fetching and inserting"
+                   (Host_and_port.to_string node_location.value) ;
+                 let%bind public_key, signature =
+                   Rpc.get_signature ~logger:t.logger ~node_location
+                     ~ledger_hash:last_ledger_hash
+                   >>| Or_error.ok_exn
+                   >>| fun x ->
+                   Option.value_exn ~message:"Signature not found" x
+                 in
+                 Signature_table.insert c
+                   { target_ledger_hash; public_key; signature } ) ) )
+          t.db_pool
+        >>| caqti_ok_exn ~msg:"Failed to refetch signature: %s"
   in
   don't_wait_for
     (within' ~monitor:Monitor.main (fun () ->
@@ -601,9 +682,27 @@ let diff_exists ~logger ~config ~ledger_hash () =
   try_all_nodes ~config ~f:(fun ~node_location () ->
       Rpc.has_diff ~logger ~node_location ~ledger_hash )
 
+let stream_diffs ~logger ~config ~source_ledger_hash ~target_ledger_hash () =
+  try_all_nodes ~config ~f:(fun ~node_location () ->
+      match%bind
+        Rpc.diffs_stream ~logger ~node_location ~source:source_ledger_hash
+          ~target:target_ledger_hash ()
+      with
+      | Ok (Ok stream) ->
+          return (Ok stream)
+      | Ok (Error err) | Error err ->
+          return (Error err) )
+
 (** Lazily fetch chunks of diffs, used to minimize memory usage *)
 let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
-    ~target_ledger_hash () =
+    ~target_ledger_hash
+    (rpc :
+         logger:Logger.t
+      -> config:Config.t
+      -> source_ledger_hash:[ `Genesis | `Specific of Field.t ]
+      -> target_ledger_hash:Field.t
+      -> unit
+      -> ('a, Error.t) result Deferred.t ) () =
   let source_ledger_hash =
     match source_ledger_hash with
     | `Genesis ->
@@ -641,27 +740,107 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
       (Int.to_string_hum n) ;
     get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
   in
+  [%log debug] "Fetched %s intervals"
+    (Int.to_string_hum (List.length intervals)) ;
   return
   @@ Ok
        (List.map intervals ~f:(fun (source, target) ->
+            [%log debug] "Creating lazy chunk from %s to %s"
+              (Ledger_hash.to_decimal_string source)
+              (Ledger_hash.to_decimal_string target) ;
             lazy
-              (get_diffs_chain ~logger ~config
-                 ~source_ledger_hash:(`Specific source)
-                 ~target_ledger_hash:target () ) ) )
+              ( [%log debug] "Forcing diffs chunk from %s to %s"
+                  (Ledger_hash.to_decimal_string source)
+                  (Ledger_hash.to_decimal_string target) ;
+                rpc ~logger ~config ~source_ledger_hash:(`Specific source)
+                  ~target_ledger_hash:target () ) ) )
 
-let map_diffs ?interval_size ~logger ~depth ~config ~source_ledger_hash
-    ~target_ledger_hash ~f () =
+let map_diffs :
+       ?interval_size:int
+    -> logger:Logger.t
+    -> depth:int
+    -> config:Config.t
+    -> source_ledger_hash:[< `Genesis | `Specific of Field.t ]
+    -> target_ledger_hash:Field.t
+    -> f:
+         (   current_chunk:int
+          -> current_diff:int
+          -> chunks_length:int
+          -> Diff.Stable.V3.t
+          -> 'a Deferred.t )
+    -> unit
+    -> ('a list, Error.t) Deferred.Result.t =
+ fun ?interval_size ~logger ~depth ~config ~source_ledger_hash
+     ~target_ledger_hash ~f () ->
   let%bind.Deferred.Result lazy_chunks =
     get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
-      ~source_ledger_hash ~target_ledger_hash ()
+      ~source_ledger_hash ~target_ledger_hash
+      (get_diffs_chain ?max_length:None)
+      ()
   in
+  [%log debug] "Fetched %s lazy chunks"
+    (Int.to_string_hum (List.length lazy_chunks)) ;
   let l = List.length lazy_chunks in
-  Deferred.List.mapi ~how:`Sequential lazy_chunks ~f:(fun i lazy_chunk ->
-      let%bind.Deferred.Result diffs = Lazy.force lazy_chunk in
-      Deferred.List.mapi ~how:`Sequential diffs ~f:(fun j diff ->
-          f ~current_chunk:i ~current_diff:j ~chunks_length:l diff )
-      >>| Result.return )
-  >>| Result.all >>| Result.map ~f:List.join
+  let%map.Deferred.Result result =
+    Deferred.List.foldi ~init:(Ok []) lazy_chunks ~f:(fun i acc lazy_chunk ->
+        match acc with
+        | Error err ->
+            return (Error err)
+        | Ok acc -> (
+            match%bind Lazy.force lazy_chunk with
+            | Ok diffs ->
+                let%bind result =
+                  Deferred.List.mapi ~how:`Sequential diffs ~f:(fun j diff ->
+                      f ~current_chunk:i ~current_diff:j ~chunks_length:l diff )
+                in
+                return (Ok (result :: acc))
+            | Error err ->
+                return (Error err) ) )
+  in
+  List.rev result |> List.join
+
+let iter_diffs :
+       ?interval_size:int
+    -> logger:Logger.t
+    -> depth:int
+    -> config:Config.t
+    -> source_ledger_hash:[< `Genesis | `Specific of Field.t ]
+    -> target_ledger_hash:Field.t
+    -> f:
+         (   current_chunk:int
+          -> current_diff:int
+          -> chunks_length:int
+          -> Diff.Stable.V3.t
+          -> unit Deferred.t )
+    -> unit
+    -> (unit, Error.t) Deferred.Result.t =
+ fun ?interval_size ~logger ~depth ~config ~source_ledger_hash
+     ~target_ledger_hash ~f () ->
+  let%bind.Deferred.Result lazy_chunks =
+    get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
+      ~source_ledger_hash ~target_ledger_hash stream_diffs ()
+  in
+  [%log debug] "Fetched %s lazy chunks"
+    (Int.to_string_hum (List.length lazy_chunks)) ;
+  let l = List.length lazy_chunks in
+  Deferred.List.foldi ~init:(Ok ()) lazy_chunks ~f:(fun i acc lazy_chunk ->
+      match acc with
+      | Error err ->
+          return (Error err)
+      | Ok () -> (
+          match%bind Lazy.force lazy_chunk with
+          | Ok (diffs, _) ->
+              let%bind () =
+                Pipe.fold diffs ~init:0 ~f:(fun j diff ->
+                    let%map () =
+                      f ~current_chunk:i ~current_diff:j ~chunks_length:l diff
+                    in
+                    j + 1 )
+                >>| ignore
+              in
+              return (Ok ())
+          | Error err ->
+              return (Error err) ) )
 
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
 let get_diff ~logger ~config ~ledger_hash =

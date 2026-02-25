@@ -132,7 +132,7 @@ module Get_ledger_hashes_chain = struct
   end
 end
 
-(* val get_diffs_chain : source:Ledger_hash.t option -> target:Ledger_hash.t -> Diff.t *)
+(* val get_diffs_chain : source:Ledger_hash.t option -> target:Ledger_hash.t -> Diff.t list *)
 module Get_diffs_chain = struct
   module V1 = struct
     module Query = struct
@@ -151,5 +151,26 @@ module Get_diffs_chain = struct
     let t : (Query.t, Response.t) Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Get_diffs_chain" ~version:1 ~bin_query:Query.bin_t
         ~bin_response:Response.bin_t
+  end
+end
+
+(* val diffs_stream : source:Ledger_hash.t option -> target:Ledger_hash.t -> Diff.t stream *)
+module Diffs_stream = struct
+  module V2 = struct
+    module Query = struct
+      type t =
+        { source : [ `Genesis | `Specific of Ledger_hash.Stable.V1.t ]
+        ; target : Ledger_hash.Stable.V1.t
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    module Response = struct
+      type t = Diff.Stable.V3.t [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Query.t, Response.t, Error.t) Rpc.Pipe_rpc.t =
+      Rpc.Pipe_rpc.create ~name:"Diffs_stream" ~version:2 ~bin_query:Query.bin_t
+        ~bin_response:Response.bin_t ~bin_error:Error.bin_t ()
   end
 end
