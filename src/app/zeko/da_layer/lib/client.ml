@@ -900,9 +900,9 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
           ~changed_accounts:chunk ~command_with_action_step_flags:None
       in
       [%log debug] "Adding accounts to acc set db" ;
-      List.iter chunk ~f:(fun (_, account) ->
-          Indexed_merkle_tree.In_memory.insert_exn acc_set
-            (Account_id.derive_token_id ~owner:(Account.identifier account)) ) ;
+      Indexed_merkle_tree.In_memory.insert_batch_exn acc_set
+        (List.map chunk ~f:(fun (_, account) ->
+             Account_id.derive_token_id ~owner:(Account.identifier account) ) ) ;
       [%log debug] "Creating acc set openings" ;
       let acc_set_openings =
         Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger ~db:acc_set

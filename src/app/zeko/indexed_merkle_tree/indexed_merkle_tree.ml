@@ -484,6 +484,38 @@ module In_memory = struct
   let recompute_after_leaf_changes t leaf_indices =
     List.iter leaf_indices ~f:(recompute_path_to_root t)
 
+  let recompute_after_leaf_changes_batch t leaf_indices =
+    let touched = Hashtbl.create (module Node_key) in
+    List.iter leaf_indices ~f:(fun leaf_index ->
+        let idx = ref leaf_index in
+        for height = 0 to t.depth - 1 do
+          let parent = !idx / 2 in
+          Hashtbl.set touched ~key:(height + 1, parent) ~data:() ;
+          idx := parent
+        done ) ;
+    for height = 1 to t.depth do
+      let level_nodes =
+        Hashtbl.keys touched
+        |> List.filter ~f:(fun (h, _) -> h = height)
+        |> List.sort ~compare:(fun (_, a) (_, b) -> Int.compare a b)
+      in
+      List.iter level_nodes ~f:(fun (_h, index) ->
+          let child_height = height - 1 in
+          let left_index = index * 2 in
+          let right_index = left_index + 1 in
+          let left_hash =
+            get_node_hash t ~height:child_height ~index:left_index
+          in
+          let right_hash =
+            get_node_hash t ~height:child_height ~index:right_index
+          in
+          let parent_hash =
+            Hash.Stable.Latest.merge ~height:child_height left_hash right_hash
+          in
+          Hashtbl.set t.node_hashes ~key:(height, index) ~data:parent_hash )
+    done ;
+    t.root <- get_node_hash t ~height:t.depth ~index:0
+
   let find_lower_entry_tid t tid =
     let left, present, _right = Set.split t.keys tid in
     match present with Some _ -> Set.max_elt left | None -> Set.max_elt left
@@ -534,23 +566,61 @@ module In_memory = struct
     t
 
   let insert_exn t tid =
-    if Hashtbl.mem t.key_to_leaf tid then failwith "Duplicate IMT key insert" ;
-    let x_tid =
-      find_lower_entry_tid t tid
-      |> Option.value_exn ~message:"No lower key found for IMT insert"
+    let insert_without_recompute_exn t tid =
+      if Hashtbl.mem t.key_to_leaf tid then failwith "Duplicate IMT key insert" ;
+      let x_tid =
+        find_lower_entry_tid t tid
+        |> Option.value_exn ~message:"No lower key found for IMT insert"
+      in
+      let x_leaf = Hashtbl.find_exn t.key_to_leaf x_tid in
+      let x_entry = Hashtbl.find_exn t.leaf_to_entry x_leaf in
+      let z_tid = x_entry.value_next in
+      let y_leaf = alloc_leaf_exn t in
+      let y_entry = { Entry.value = tid; value_next = z_tid } in
+      let x_entry' = { x_entry with value_next = tid } in
+      t.keys <- Set.add t.keys tid ;
+      Hashtbl.set t.key_to_leaf ~key:tid ~data:y_leaf ;
+      set_leaf_entry t ~leaf_index:y_leaf y_entry ;
+      set_leaf_entry t ~leaf_index:x_leaf x_entry' ;
+      t.num_entries <- t.num_entries + 1 ;
+      [ x_leaf; y_leaf ]
     in
-    let x_leaf = Hashtbl.find_exn t.key_to_leaf x_tid in
-    let x_entry = Hashtbl.find_exn t.leaf_to_entry x_leaf in
-    let z_tid = x_entry.value_next in
-    let y_leaf = alloc_leaf_exn t in
-    let y_entry = { Entry.value = tid; value_next = z_tid } in
-    let x_entry' = { x_entry with value_next = tid } in
-    t.keys <- Set.add t.keys tid ;
-    Hashtbl.set t.key_to_leaf ~key:tid ~data:y_leaf ;
-    set_leaf_entry t ~leaf_index:y_leaf y_entry ;
-    set_leaf_entry t ~leaf_index:x_leaf x_entry' ;
-    t.num_entries <- t.num_entries + 1 ;
-    recompute_after_leaf_changes t [ x_leaf; y_leaf ]
+    let touched = insert_without_recompute_exn t tid in
+    recompute_after_leaf_changes t touched
+
+  let insert_batch_exn t tids =
+    let seen = Hashtbl.Poly.create () in
+    List.iter tids ~f:(fun tid ->
+        if Hashtbl.mem t.key_to_leaf tid then
+          failwith "Duplicate IMT key insert" ;
+        if Hashtbl.mem seen tid then failwith "Duplicate IMT key insert (batch)" ;
+        Hashtbl.set seen ~key:tid ~data:() ) ;
+    let needed = List.length tids in
+    if t.next_free_leaf_index + needed > max_leaves t then
+      failwith "Out_of_leaves" ;
+    let touched =
+      List.concat_map tids ~f:(fun tid ->
+          (* Inline to avoid per-insert root recomputation *)
+          if Hashtbl.mem t.key_to_leaf tid then
+            failwith "Duplicate IMT key insert" ;
+          let x_tid =
+            find_lower_entry_tid t tid
+            |> Option.value_exn ~message:"No lower key found for IMT insert"
+          in
+          let x_leaf = Hashtbl.find_exn t.key_to_leaf x_tid in
+          let x_entry = Hashtbl.find_exn t.leaf_to_entry x_leaf in
+          let z_tid = x_entry.value_next in
+          let y_leaf = alloc_leaf_exn t in
+          let y_entry = { Entry.value = tid; value_next = z_tid } in
+          let x_entry' = { x_entry with value_next = tid } in
+          t.keys <- Set.add t.keys tid ;
+          Hashtbl.set t.key_to_leaf ~key:tid ~data:y_leaf ;
+          set_leaf_entry t ~leaf_index:y_leaf y_entry ;
+          set_leaf_entry t ~leaf_index:x_leaf x_entry' ;
+          t.num_entries <- t.num_entries + 1 ;
+          [ x_leaf; y_leaf ] )
+    in
+    recompute_after_leaf_changes_batch t touched
 end
 
 module Sparse = struct
@@ -640,6 +710,28 @@ let%test_unit "in-memory imt duplicate insert errors" =
   In_memory.insert_exn t tid ;
   assert (
     Result.is_error (Or_error.try_with (fun () -> In_memory.insert_exn t tid)) )
+
+let%test_unit "in-memory imt batch insert preserves input order semantics" =
+  let depth = 8 in
+  let t_seq = In_memory.create ~depth () in
+  let t_batch = In_memory.create ~depth () in
+  let tids =
+    [ 10; 7; 9; 8; 12; 11 ]
+    |> List.map ~f:(fun i -> Token_id.of_field (Field.of_int i))
+  in
+  List.iter tids ~f:(In_memory.insert_exn t_seq) ;
+  In_memory.insert_batch_exn t_batch tids ;
+  [%test_eq: Hash.t]
+    (In_memory.merkle_root t_seq)
+    (In_memory.merkle_root t_batch) ;
+  List.iter (lowest_key :: highest_key :: tids) ~f:(fun tid ->
+      [%test_eq: Entry.t option]
+        (In_memory.get_entry_by_tid t_seq tid)
+        (In_memory.get_entry_by_tid t_batch tid) ;
+      assert (
+        Option.equal In_memory.Path.equal
+          (In_memory.get_path_by_tid t_seq tid)
+          (In_memory.get_path_by_tid t_batch tid) ) )
 
 let%test_unit "in-memory imt out of leaves errors" =
   (* depth=1 has exactly two leaves, already occupied by sentinels *)
