@@ -380,7 +380,7 @@ module Rpc = struct
       ~target () =
     [%log debug] "Getting diffs stream from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    pipe_dispatch Rpc.Diffs_stream.V1.t { source; target } node_location.value
+    pipe_dispatch Rpc.Diffs_stream.V2.t { source; target } node_location.value
 end
 
 module Config = struct
@@ -812,7 +812,7 @@ let iter_diffs :
          (   current_chunk:int
           -> current_diff:int
           -> chunks_length:int
-          -> Diff.Stable.V2.t (* TODO: use the latest version of Diff *)
+          -> Diff.Stable.V3.t
           -> unit Deferred.t )
     -> unit
     -> (unit, Error.t) Deferred.Result.t =

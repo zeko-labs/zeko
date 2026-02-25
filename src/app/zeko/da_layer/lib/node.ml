@@ -142,52 +142,7 @@ let implementations t =
                 >>| fun diff ->
                 Option.value_exn ~here:[%here] ~message:"Diff not found" diff ) )
       ; (* Diffs_stream *)
-        Rpc.Pipe_rpc.implement Rpc_def.Diffs_stream.V1.t
-          (fun () { source; target } ->
-            let logger = t.logger in
-            let r, w = Pipe.create () in
-            let%bind chain =
-              get_ledger_hashes_chain t { source; target; max_length = None }
-            in
-            don't_wait_for
-              ( Deferred.List.iter ~how:`Sequential chain ~f:(fun ledger_hash ->
-                    [%log debug] "Getting diff for ledger hash: $ledger_hash"
-                      ~metadata:
-                        [ ( "ledger_hash"
-                          , `String (Ledger_hash.to_decimal_string ledger_hash)
-                          )
-                        ] ;
-                    let%bind diff_v3 =
-                      Db.Async.get_diff ~ledger_hash t.db
-                      >>| fun o ->
-                      Option.value_exn o ~here:[%here]
-                        ~message:
-                          (sprintf "Diff stream didn't find diff %s"
-                             (Ledger_hash.to_decimal_string ledger_hash) )
-                    in
-                    let diff_v2 =
-                      { Diff.Stable.V2.source_ledger_hash =
-                          diff_v3.source_ledger_hash
-                      ; changed_accounts = diff_v3.changed_accounts
-                      ; command_with_action_step_flags =
-                          diff_v3.command_with_action_step_flags
-                      ; timestamp = diff_v3.timestamp
-                      }
-                    in
-                    let%map () = Pipe.write w diff_v2 in
-                    [%log debug]
-                      "Wrote diff to pipe for ledger hash: $ledger_hash"
-                      ~metadata:
-                        [ ( "ledger_hash"
-                          , `String (Ledger_hash.to_decimal_string ledger_hash)
-                          )
-                        ] )
-              >>| fun () ->
-              [%log debug] "Closing pipe" ;
-              Pipe.close w ) ;
-
-            return (Ok r) )
-      ; Rpc.Pipe_rpc.implement Rpc_def.Diffs_stream.V2.t
+        Rpc.Pipe_rpc.implement Rpc_def.Diffs_stream.V2.t
           (fun () { source; target } ->
             let logger = t.logger in
             let r, w = Pipe.create () in
@@ -210,15 +165,17 @@ let implementations t =
                           (sprintf "Diff stream didn't find diff %s"
                              (Ledger_hash.to_decimal_string ledger_hash) )
                     in
+                    let%map () = Pipe.write w diff in
                     [%log debug]
                       "Wrote diff to pipe for ledger hash: $ledger_hash"
                       ~metadata:
                         [ ( "ledger_hash"
                           , `String (Ledger_hash.to_decimal_string ledger_hash)
                           )
-                        ] ;
-                    Pipe.write w diff )
-              >>| fun () -> Pipe.close w ) ;
+                        ] )
+              >>| fun () ->
+              [%log debug] "Closing pipe" ;
+              Pipe.close w ) ;
 
             return (Ok r) )
       ]
