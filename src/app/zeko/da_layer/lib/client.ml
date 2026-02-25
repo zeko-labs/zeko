@@ -883,41 +883,41 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
   let acc_set =
     Indexed_merkle_tree.In_memory.create ~depth:(Ledger.depth ledger) ()
   in
-  Ledger.with_ephemeral_ledger ~depth:(Ledger.depth ledger) ~f:(fun ephemeral ->
-      let account_chunks = List.chunks_of changed_accounts ~length:max_size in
-      [%log debug] "Created %s account chunks"
-        (Int.to_string_hum (List.length account_chunks)) ;
-      Deferred.List.map ~how:`Sequential account_chunks ~f:(fun chunk ->
-          let ledger_openings =
-            Sparse_ledger.of_ledger_subset_exn ephemeral
-              (List.map chunk ~f:snd |> List.map ~f:Account.identifier)
-          in
-          List.iter chunk ~f:(fun (index, account) ->
-              Ledger.set_at_index_exn ephemeral index account ) ;
-          let diff =
-            Diff.create
-              ~source_ledger_hash:(Sparse_ledger.merkle_root ledger_openings)
-              ~changed_accounts:chunk ~command_with_action_step_flags:None
-          in
-          [%log debug] "Adding accounts to acc set db" ;
-          List.iter chunk ~f:(fun (_, account) ->
-              Indexed_merkle_tree.In_memory.insert_exn acc_set
-                (Account_id.derive_token_id ~owner:(Account.identifier account)) ) ;
-          [%log debug] "Creating acc set openings" ;
-          let acc_set_openings =
-            Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger ~db:acc_set
-              ~keys:
-                ( [%log debug] "Getting accounts from chunk" ;
-                  List.map chunk ~f:snd
-                  |> List.map ~f:(fun acc ->
-                         Account_id.derive_token_id
-                           ~owner:(Account.identifier acc) ) )
-          in
-          return
-            ( diff
-            , ledger_openings
-            , acc_set_openings
-            , `Target (Ledger.merkle_root ephemeral) ) ) )
+  let ephemeral = Ledger.create_ephemeral ~depth:(Ledger.depth ledger) () in
+  let account_chunks = List.chunks_of changed_accounts ~length:max_size in
+  [%log debug] "Created %s account chunks"
+    (Int.to_string_hum (List.length account_chunks)) ;
+  Deferred.List.map ~how:`Sequential account_chunks ~f:(fun chunk ->
+      let ledger_openings =
+        Sparse_ledger.of_ledger_subset_exn ephemeral
+          (List.map chunk ~f:snd |> List.map ~f:Account.identifier)
+      in
+      List.iter chunk ~f:(fun (index, account) ->
+          Ledger.set_at_index_exn ephemeral index account ) ;
+      let diff =
+        Diff.create
+          ~source_ledger_hash:(Sparse_ledger.merkle_root ledger_openings)
+          ~changed_accounts:chunk ~command_with_action_step_flags:None
+      in
+      [%log debug] "Adding accounts to acc set db" ;
+      List.iter chunk ~f:(fun (_, account) ->
+          Indexed_merkle_tree.In_memory.insert_exn acc_set
+            (Account_id.derive_token_id ~owner:(Account.identifier account)) ) ;
+      [%log debug] "Creating acc set openings" ;
+      let acc_set_openings =
+        Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger ~db:acc_set
+          ~keys:
+            ( [%log debug] "Getting accounts from chunk" ;
+              List.map chunk ~f:snd
+              |> List.map ~f:(fun acc ->
+                     Account_id.derive_token_id ~owner:(Account.identifier acc) )
+            )
+      in
+      return
+        ( diff
+        , ledger_openings
+        , acc_set_openings
+        , `Target (Ledger.merkle_root ephemeral) ) )
 
 (** Distribute diff of initial accounts *)
 let distribute_genesis_diff ~logger ~config ~ledger =
