@@ -883,6 +883,8 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
   let acc_set = Indexed_merkle_tree.Db.create ~depth:(Ledger.depth ledger) () in
   Ledger.with_ephemeral_ledger ~depth:(Ledger.depth ledger) ~f:(fun ephemeral ->
       let account_chunks = List.chunks_of changed_accounts ~length:max_size in
+      [%log debug] "Created %s account chunks"
+        (Int.to_string_hum (List.length account_chunks)) ;
       List.map account_chunks ~f:(fun chunk ->
           let ledger_openings =
             Sparse_ledger.of_ledger_subset_exn ephemeral
