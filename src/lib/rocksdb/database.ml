@@ -4,6 +4,7 @@ type t = { uuid : Uuid.Stable.V1.t; db : (Rocks.t[@sexp.opaque]) }
 [@@deriving sexp]
 
 let create directory =
+  Core.Unix.mkdir_p directory ;
   let opts = Rocks.Options.create () in
   Rocks.Options.set_create_if_missing opts true ;
   Rocks.Options.set_prefix_extractor opts
