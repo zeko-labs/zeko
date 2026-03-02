@@ -410,6 +410,219 @@ module Db : Database_intf = struct
     merkle_path t location
 end
 
+module In_memory = struct
+  module Path = Db.Path
+
+  module Node_key = struct
+    module T = struct
+      type t = int * int [@@deriving compare, sexp, hash]
+    end
+
+    include T
+    include Hashable.Make_plain (T)
+  end
+
+  type t =
+    { depth : int
+    ; mutable root : Hash.t
+    ; mutable num_entries : int
+    ; mutable next_free_leaf_index : int
+    ; mutable keys : Token_id.Set.t
+    ; key_to_leaf : (Token_id.t, int) Hashtbl.Poly.t
+    ; leaf_to_entry : (int, Entry.t) Hashtbl.Poly.t
+    ; node_hashes : (Node_key.t, Hash.t) Hashtbl.t
+    ; empty_hashes : (int, Hash.t) Hashtbl.Poly.t
+    }
+
+  let depth t = t.depth
+
+  let merkle_root t = t.root
+
+  let num_entries t = t.num_entries
+
+  let max_leaves t = 1 lsl t.depth
+
+  let leaf_hash (entry : Entry.t) : Hash.t =
+    Ledger_hash.of_hash (Entry.data_hash entry)
+
+  let rec empty_hash t height =
+    match Hashtbl.find t.empty_hashes height with
+    | Some h ->
+        h
+    | None ->
+        let h =
+          if height = 0 then Hash.Stable.Latest.empty_account
+          else
+            let prev = empty_hash t (height - 1) in
+            Hash.Stable.Latest.merge ~height:(height - 1) prev prev
+        in
+        Hashtbl.set t.empty_hashes ~key:height ~data:h ;
+        h
+
+  let get_node_hash t ~height ~index =
+    Hashtbl.find t.node_hashes (height, index)
+    |> Option.value ~default:(empty_hash t height)
+
+  let set_leaf_entry t ~leaf_index (entry : Entry.t) =
+    Hashtbl.set t.leaf_to_entry ~key:leaf_index ~data:entry ;
+    Hashtbl.set t.node_hashes ~key:(0, leaf_index) ~data:(leaf_hash entry)
+
+  let recompute_path_to_root t leaf_index =
+    let idx = ref leaf_index in
+    for height = 0 to t.depth - 1 do
+      let parent = !idx / 2 in
+      let left_index = if !idx % 2 = 0 then !idx else !idx - 1 in
+      let right_index = left_index + 1 in
+      let left_hash = get_node_hash t ~height ~index:left_index in
+      let right_hash = get_node_hash t ~height ~index:right_index in
+      let parent_hash = Hash.Stable.Latest.merge ~height left_hash right_hash in
+      Hashtbl.set t.node_hashes ~key:(height + 1, parent) ~data:parent_hash ;
+      idx := parent
+    done ;
+    t.root <- get_node_hash t ~height:t.depth ~index:0
+
+  let recompute_after_leaf_changes t leaf_indices =
+    List.iter leaf_indices ~f:(recompute_path_to_root t)
+
+  let recompute_after_leaf_changes_batch t leaf_indices =
+    let touched = Hashtbl.create (module Node_key) in
+    List.iter leaf_indices ~f:(fun leaf_index ->
+        let idx = ref leaf_index in
+        for height = 0 to t.depth - 1 do
+          let parent = !idx / 2 in
+          Hashtbl.set touched ~key:(height + 1, parent) ~data:() ;
+          idx := parent
+        done ) ;
+    for height = 1 to t.depth do
+      let level_nodes =
+        Hashtbl.keys touched
+        |> List.filter ~f:(fun (h, _) -> h = height)
+        |> List.sort ~compare:(fun (_, a) (_, b) -> Int.compare a b)
+      in
+      List.iter level_nodes ~f:(fun (_h, index) ->
+          let child_height = height - 1 in
+          let left_index = index * 2 in
+          let right_index = left_index + 1 in
+          let left_hash =
+            get_node_hash t ~height:child_height ~index:left_index
+          in
+          let right_hash =
+            get_node_hash t ~height:child_height ~index:right_index
+          in
+          let parent_hash =
+            Hash.Stable.Latest.merge ~height:child_height left_hash right_hash
+          in
+          Hashtbl.set t.node_hashes ~key:(height, index) ~data:parent_hash )
+    done ;
+    t.root <- get_node_hash t ~height:t.depth ~index:0
+
+  let find_lower_entry_tid t tid =
+    let left, present, _right = Set.split t.keys tid in
+    match present with Some _ -> Set.max_elt left | None -> Set.max_elt left
+
+  let get_entry_by_tid t tid =
+    let%bind.Option leaf = Hashtbl.find t.key_to_leaf tid in
+    Hashtbl.find t.leaf_to_entry leaf
+
+  let get_path_by_tid t tid =
+    let%map.Option leaf_index = Hashtbl.find t.key_to_leaf tid in
+    List.init t.depth ~f:(fun height ->
+        let level_index = leaf_index lsr height in
+        let bit_set = Int.(level_index land 1 <> 0) in
+        let sibling_index = level_index lxor 1 in
+        let sibling_hash = get_node_hash t ~height ~index:sibling_index in
+        if bit_set then `Right sibling_hash else `Left sibling_hash )
+
+  let alloc_leaf_exn t =
+    if t.next_free_leaf_index >= max_leaves t then failwith "Out_of_leaves" ;
+    let i = t.next_free_leaf_index in
+    t.next_free_leaf_index <- t.next_free_leaf_index + 1 ;
+    i
+
+  let insert_bootstrap_leaf_exn t tid entry =
+    let leaf = alloc_leaf_exn t in
+    t.keys <- Set.add t.keys tid ;
+    Hashtbl.set t.key_to_leaf ~key:tid ~data:leaf ;
+    set_leaf_entry t ~leaf_index:leaf entry ;
+    t.num_entries <- t.num_entries + 1 ;
+    recompute_after_leaf_changes t [ leaf ]
+
+  let create ~depth () =
+    let t =
+      { depth
+      ; root = Hash.Stable.Latest.empty_account
+      ; num_entries = 0
+      ; next_free_leaf_index = 0
+      ; keys = Token_id.Set.empty
+      ; key_to_leaf = Hashtbl.Poly.create ()
+      ; leaf_to_entry = Hashtbl.Poly.create ()
+      ; node_hashes = Hashtbl.create (module Node_key)
+      ; empty_hashes = Hashtbl.Poly.create ()
+      }
+    in
+    ignore (empty_hash t depth : Hash.t) ;
+    insert_bootstrap_leaf_exn t lowest_key lowest_entry ;
+    insert_bootstrap_leaf_exn t highest_key highest_entry ;
+    t
+
+  let insert_exn t tid =
+    let insert_without_recompute_exn t tid =
+      if Hashtbl.mem t.key_to_leaf tid then failwith "Duplicate IMT key insert" ;
+      let x_tid =
+        find_lower_entry_tid t tid
+        |> Option.value_exn ~message:"No lower key found for IMT insert"
+      in
+      let x_leaf = Hashtbl.find_exn t.key_to_leaf x_tid in
+      let x_entry = Hashtbl.find_exn t.leaf_to_entry x_leaf in
+      let z_tid = x_entry.value_next in
+      let y_leaf = alloc_leaf_exn t in
+      let y_entry = { Entry.value = tid; value_next = z_tid } in
+      let x_entry' = { x_entry with value_next = tid } in
+      t.keys <- Set.add t.keys tid ;
+      Hashtbl.set t.key_to_leaf ~key:tid ~data:y_leaf ;
+      set_leaf_entry t ~leaf_index:y_leaf y_entry ;
+      set_leaf_entry t ~leaf_index:x_leaf x_entry' ;
+      t.num_entries <- t.num_entries + 1 ;
+      [ x_leaf; y_leaf ]
+    in
+    let touched = insert_without_recompute_exn t tid in
+    recompute_after_leaf_changes t touched
+
+  let insert_batch_exn t tids =
+    let seen = Hashtbl.Poly.create () in
+    List.iter tids ~f:(fun tid ->
+        if Hashtbl.mem t.key_to_leaf tid then
+          failwith "Duplicate IMT key insert" ;
+        if Hashtbl.mem seen tid then failwith "Duplicate IMT key insert (batch)" ;
+        Hashtbl.set seen ~key:tid ~data:() ) ;
+    let needed = List.length tids in
+    if t.next_free_leaf_index + needed > max_leaves t then
+      failwith "Out_of_leaves" ;
+    let touched =
+      List.concat_map tids ~f:(fun tid ->
+          (* Inline to avoid per-insert root recomputation *)
+          if Hashtbl.mem t.key_to_leaf tid then
+            failwith "Duplicate IMT key insert" ;
+          let x_tid =
+            find_lower_entry_tid t tid
+            |> Option.value_exn ~message:"No lower key found for IMT insert"
+          in
+          let x_leaf = Hashtbl.find_exn t.key_to_leaf x_tid in
+          let x_entry = Hashtbl.find_exn t.leaf_to_entry x_leaf in
+          let z_tid = x_entry.value_next in
+          let y_leaf = alloc_leaf_exn t in
+          let y_entry = { Entry.value = tid; value_next = z_tid } in
+          let x_entry' = { x_entry with value_next = tid } in
+          t.keys <- Set.add t.keys tid ;
+          Hashtbl.set t.key_to_leaf ~key:tid ~data:y_leaf ;
+          set_leaf_entry t ~leaf_index:y_leaf y_entry ;
+          set_leaf_entry t ~leaf_index:x_leaf x_entry' ;
+          t.num_entries <- t.num_entries + 1 ;
+          [ x_leaf; y_leaf ] )
+    in
+    recompute_after_leaf_changes_batch t touched
+end
+
 module Sparse = struct
   [%%versioned
   module Stable = struct
@@ -429,8 +642,10 @@ module Sparse = struct
 
   include Sparse_ledger_lib.Sparse_ledger.Make (Hash) (Account_id) (Entry)
 
-  let of_db_subset ~db ~keys =
+  let of_db_subset ~logger ~db ~keys =
+    [%log debug] "Creating sparse ledger from db subset" ;
     let sparse = of_hash ~depth:(Db.depth db) (Db.merkle_root db) in
+    [%log debug] "Folding keys" ;
     List.fold keys ~init:sparse ~f:(fun sparse key ->
         let aid = Account_id.with_empty_key key in
         let entry =
@@ -442,4 +657,85 @@ module Sparse = struct
           |> Option.value_exn ~message:"Could not find path"
         in
         add_path sparse path aid entry )
+
+  let of_in_memory_subset ~logger ~db ~keys =
+    [%log debug] "Creating sparse ledger from in-memory imt subset" ;
+    let sparse =
+      of_hash ~depth:(In_memory.depth db) (In_memory.merkle_root db)
+    in
+    List.fold keys ~init:sparse ~f:(fun sparse key ->
+        let aid = Account_id.with_empty_key key in
+        let entry =
+          In_memory.get_entry_by_tid db key
+          |> Option.value_exn ~message:"Could not find in-memory IMT entry"
+        in
+        let path =
+          In_memory.get_path_by_tid db key
+          |> Option.value_exn ~message:"Could not find in-memory IMT path"
+        in
+        add_path sparse path aid entry )
 end
+
+let%test_unit "in-memory imt matches db for deterministic inserts" =
+  let depth = 8 in
+  let db = Db.create ~depth () in
+  let mem = In_memory.create ~depth () in
+  let tids =
+    [ 7; 2; 15; 3; 20; 11; 19; 4 ]
+    |> List.map ~f:(fun i -> Token_id.of_field (Field.of_int i))
+  in
+  List.iter tids ~f:(fun tid ->
+      ignore
+        (Db.get_or_create_entry_exn db tid : [ `Added | `Existed ] * Db.witness) ;
+      In_memory.insert_exn mem tid ) ;
+  [%test_eq: Hash.t] (Db.merkle_root db) (In_memory.merkle_root mem) ;
+  let keys = lowest_key :: highest_key :: tids in
+  List.iter keys ~f:(fun tid ->
+      [%test_eq: Entry.t option]
+        (Db.get_entry_by_tid db tid)
+        (In_memory.get_entry_by_tid mem tid) ;
+      assert (
+        Option.equal Db.Path.equal
+          (Db.get_path_by_tid db tid)
+          (In_memory.get_path_by_tid mem tid) ) ;
+      if not (Token_id.equal tid lowest_key) then
+        [%test_eq: Token_id.t option]
+          (Db.find_lower_entry_tid db tid)
+          (In_memory.find_lower_entry_tid mem tid) ) ;
+  Db.close db
+
+let%test_unit "in-memory imt duplicate insert errors" =
+  let t = In_memory.create ~depth:8 () in
+  let tid = Token_id.of_field (Field.of_int 42) in
+  In_memory.insert_exn t tid ;
+  assert (
+    Result.is_error (Or_error.try_with (fun () -> In_memory.insert_exn t tid)) )
+
+let%test_unit "in-memory imt batch insert preserves input order semantics" =
+  let depth = 8 in
+  let t_seq = In_memory.create ~depth () in
+  let t_batch = In_memory.create ~depth () in
+  let tids =
+    [ 10; 7; 9; 8; 12; 11 ]
+    |> List.map ~f:(fun i -> Token_id.of_field (Field.of_int i))
+  in
+  List.iter tids ~f:(In_memory.insert_exn t_seq) ;
+  In_memory.insert_batch_exn t_batch tids ;
+  [%test_eq: Hash.t]
+    (In_memory.merkle_root t_seq)
+    (In_memory.merkle_root t_batch) ;
+  List.iter (lowest_key :: highest_key :: tids) ~f:(fun tid ->
+      [%test_eq: Entry.t option]
+        (In_memory.get_entry_by_tid t_seq tid)
+        (In_memory.get_entry_by_tid t_batch tid) ;
+      assert (
+        Option.equal In_memory.Path.equal
+          (In_memory.get_path_by_tid t_seq tid)
+          (In_memory.get_path_by_tid t_batch tid) ) )
+
+let%test_unit "in-memory imt out of leaves errors" =
+  (* depth=1 has exactly two leaves, already occupied by sentinels *)
+  let t = In_memory.create ~depth:1 () in
+  let tid = Token_id.of_field (Field.of_int 5) in
+  assert (
+    Result.is_error (Or_error.try_with (fun () -> In_memory.insert_exn t tid)) )
