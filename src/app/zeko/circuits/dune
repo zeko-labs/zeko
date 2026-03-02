@@ -4,6 +4,7 @@
    (:standard -w @a-42-40-44-70-45-41))))
 
 (library
+ (public_name zeko_circuits)
  (name zeko_circuits)
  (libraries
   ;; opam libraries
@@ -64,4 +65,4 @@
   zeko_util
   zeko_as_prover)
  (virtual_modules zeko_as_prover)
- (default_implementation zeko_circuits_as_prover))
+ (default_implementation zeko_circuits.as_prover))

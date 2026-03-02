@@ -1,8 +1,10 @@
 (env
  (_
-  (flags (:standard -w @a-42-40-44-70-45-41))))
+  (flags
+   (:standard -w @a-42-40-44-70-45-41))))
 
 (library
+ (public_name zeko_compile_simple.real)
  (name compile_simple_real_impl)
  (implements compile_simple)
  (libraries
@@ -27,9 +29,7 @@
 
 (library
  (name compile_simple_real)
- (libraries
-  core_kernel
-  compile_simple_real_impl)
+ (libraries core_kernel compile_simple_real_impl)
  (instrumentation
   (backend bisect_ppx))
  (preprocess

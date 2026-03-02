@@ -4,6 +4,7 @@
    (:standard -w @a-42-40-44-70-45-41))))
 
 (library
+ (public_name zeko_compile_simple)
  (name compile_simple)
  (libraries
   ;; opam libraries
@@ -14,4 +15,5 @@
  (preprocess
   (pps ppx_mina))
  (modules compile_simple compile_simple_intf)
- (virtual_modules compile_simple))
+ (virtual_modules compile_simple)
+ (default_implementation zeko_compile_simple.real))

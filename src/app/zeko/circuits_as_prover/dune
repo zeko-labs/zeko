@@ -1,9 +1,10 @@
-(env (_ (flags (:standard -w @a-42-40-44-70-45-41))))
+(env
+ (_
+  (flags
+   (:standard -w @a-42-40-44-70-45-41))))
 
 (library
+ (public_name zeko_circuits.as_prover)
  (name zeko_circuits_as_prover)
-  (implements zeko_circuits)
- (libraries
-  zeko_circuits
-  )
-)
+ (implements zeko_circuits)
+ (libraries zeko_circuits))

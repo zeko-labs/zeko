@@ -1,4 +1,5 @@
 (library
+ (public_name zeko_constants)
  (name zeko_constants)
  (libraries mina_base signature_lib snark_params genesis_constants currency)
  (inline_tests)
