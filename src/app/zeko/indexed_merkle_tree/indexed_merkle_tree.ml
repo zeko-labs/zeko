@@ -102,7 +102,7 @@ module Hash = struct
     end
   end]
 
-  let merge = Ledger_hash.merge
+  let merge = Stable.Latest.merge
 end
 
 module Inputs = struct

@@ -16,18 +16,20 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
     ~ledger_openings ~acc_set_openings ~diff =
   (* 1 *)
   let%bind.Result () =
-    match
-      Ledger_hash.equal
-        (Sparse_ledger.merkle_root ledger_openings)
-        (Diff.source_ledger_hash diff)
-    with
-    | true ->
-        Ok ()
-    | false ->
-        Error
-          (Error.create "Source ledger hash mismatch"
-             (Diff.source_ledger_hash diff)
-             Ledger_hash.sexp_of_t )
+    try
+      match
+        Ledger_hash.equal
+          (Sparse_ledger.merkle_root_without_cache_exn ledger_openings)
+          (Diff.source_ledger_hash diff)
+      with
+      | true ->
+          Ok ()
+      | false ->
+          Error
+            (Error.create "Source ledger hash mismatch"
+               (Diff.source_ledger_hash diff)
+               Ledger_hash.sexp_of_t )
+    with e -> Error (Error.of_exn e)
   in
 
   (* 2 *)
@@ -88,7 +90,8 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
     @@ Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
          [| target_ledger_hash
-          ; Indexed_merkle_tree.Sparse.merkle_root acc_set_openings
+          ; Indexed_merkle_tree.Sparse.merkle_root_without_cache_exn
+              acc_set_openings
          |]
   in
   let signature =
