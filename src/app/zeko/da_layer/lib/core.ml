@@ -85,14 +85,17 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id ~(signer : Keypair.t)
   let target_ledger_hash = Sparse_ledger.merkle_root target_ledger in
 
   (* 5 *)
-  let message =
-    Random_oracle.Input.Chunked.field
-    @@ Random_oracle.hash
-         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
-         [| target_ledger_hash
-          ; Indexed_merkle_tree.Sparse.merkle_root_without_cache_exn
-              acc_set_openings
-         |]
+  let%bind.Result message =
+    try
+      Random_oracle.Input.Chunked.field
+      @@ Random_oracle.hash
+           ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+           [| target_ledger_hash
+            ; Indexed_merkle_tree.Sparse.merkle_root_without_cache_exn
+                acc_set_openings
+           |]
+      |> Result.return
+    with e -> Error (Error.of_exn e)
   in
   let signature =
     Schnorr.Chunked.sign ~signature_kind:network_id signer.private_key message
