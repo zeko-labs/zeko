@@ -212,10 +212,10 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
                 failwith "Unreachable"
           in
           let diff =
-            Da_layer.Diff.create
+            Da_layer.Diff.create_pending
               ~source_ledger_hash:
                 (Sparse_ledger.merkle_root old_ledger_openings)
-              ~changed_accounts ~command_with_action_step_flags:None
+              ~changed_accounts ~actions:(`Actions [])
           in
           let new_accounts_keys =
             List.filter changed_accounts ~f:(fun (index, _) ->

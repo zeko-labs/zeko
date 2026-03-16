@@ -547,12 +547,11 @@ let update_inner_verification_keys =
 
            (* Distribute diff to DA layer *)
            let diff =
-             Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:diff
-               ~command_with_action_step_flags:None
+             Da_layer.Diff.create_pending ~source_ledger_hash
+               ~changed_accounts:diff ~actions:(`Actions [])
            in
            let new_accounts_keys =
-             List.filter (Da_layer.Diff.changed_accounts diff)
-               ~f:(fun (index, _) ->
+             List.filter diff.changed_accounts ~f:(fun (index, _) ->
                  Account.equal
                    (Sparse_ledger.get_exn ledger_openings index)
                    Account.empty )

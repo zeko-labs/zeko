@@ -488,18 +488,18 @@ module Sequencer = struct
                 (index, L.get_at_index_exn l index) )
           in
           let diff =
-            Da_layer.Diff.create
+            Da_layer.Diff.create_pending
               ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
               ~changed_accounts
-              ~command_with_action_step_flags:
-                (Some
-                   ( User_command.read_all_proofs_from_disk command
-                   , match command with
-                     | Signed_command _ ->
-                         []
-                     | Zkapp_command command ->
-                         Zkapp_command.all_account_updates_list command
-                         |> List.map ~f:(fun _ -> true) ) )
+              ~actions:
+                (`Command_with_action_step_flags
+                  ( User_command.read_all_proofs_from_disk command
+                  , match command with
+                    | Signed_command _ ->
+                        []
+                    | Zkapp_command command ->
+                        Zkapp_command.all_account_updates_list command
+                        |> List.map ~f:(fun _ -> true) ) )
           in
           let new_accounts_keys =
             List.filter changed_accounts ~f:(fun (index, _) ->
@@ -577,9 +577,9 @@ module Sequencer = struct
             in
             let diff =
               (* FIXME: add fee transfer command to DA *)
-              Da_layer.Diff.create
+              Da_layer.Diff.create_pending
                 ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
-                ~changed_accounts ~command_with_action_step_flags:None
+                ~changed_accounts ~actions:(`Actions [])
             in
             let new_accounts_keys =
               List.filter changed_accounts ~f:(fun (index, _) ->
@@ -851,9 +851,7 @@ module Sequencer = struct
           (* Apply accounts diff *)
           let mask = L.of_database t.ledger in
           let ledger_openings =
-            Da_layer.Client.get_ledger_openings
-              ~diff:(Da_layer.Diff.drop_time diff)
-              ~ledger:mask
+            Da_layer.Client.get_ledger_openings ~diff ~ledger:mask
           in
           let changed_accounts =
             Da_layer.Diff.Stable.Latest.changed_accounts diff
@@ -873,9 +871,8 @@ module Sequencer = struct
               () ) ;
 
           let acc_set_openings =
-            Da_layer.Client.get_acc_set_openings ~logger
-              ~diff:(Da_layer.Diff.drop_time diff)
-              ~ledger_openings ~imt:t.imt
+            Da_layer.Client.get_acc_set_openings ~logger ~diff ~ledger_openings
+              ~imt:t.imt
           in
 
           (* Store diff to DA client *)
@@ -889,15 +886,16 @@ module Sequencer = struct
 
           (* Add events and actions *)
           let result =
-            match
-              Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
-            with
-            | Some (Zkapp_command command, _) ->
+            match diff.actions with
+            | `Command_with_action_step_flags (Zkapp_command command, _) ->
                 apply_events_and_actions t.ledger t.archive
                   (Zkapp_command.write_all_proofs_to_disk
                      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                      ~proof_cache_db:t.merger_ctx.proof_cache_db command )
-            | _ ->
+            | `Command_with_action_step_flags (Signed_command _, _) ->
+                Ok ( (* No events or actions in signed command *) )
+            | `Actions _actions ->
+                (* let () = failwith "TODO" in *)
                 Ok ( (* No events nor actions to add *) )
           in
           return
