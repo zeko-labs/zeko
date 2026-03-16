@@ -813,6 +813,9 @@ module Sequencer = struct
           let ledger = L.of_database t.ledger in
           let%bind diffs =
             Da_layer.Client.create_genesis_diffs ~logger ledger
+              ~get_actions_for_aid:(fun aid ->
+                Archive.query_actions t.archive aid
+                |> List.map ~f:(fun x -> List.map x.actions ~f:Array.to_list) )
           in
           let%bind () =
             Deferred.List.iteri ~how:`Sequential diffs
@@ -895,7 +898,6 @@ module Sequencer = struct
             | `Command_with_action_step_flags (Signed_command _, _) ->
                 Ok ( (* No events or actions in signed command *) )
             | `Actions _actions ->
-                (* let () = failwith "TODO" in *)
                 Ok ( (* No events nor actions to add *) )
           in
           return

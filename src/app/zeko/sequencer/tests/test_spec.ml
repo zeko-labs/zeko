@@ -108,6 +108,7 @@ module Transaction_spec = struct
     ; sender : Keypair.t * Account_nonce.t
     ; receiver : Public_key.Compressed.t
     ; amount : Currency.Amount.t
+    ; actions : Field.t list list option
     }
   [@@deriving sexp]
 
@@ -152,7 +153,15 @@ module Transaction_spec = struct
     let%bind fee = gen_fee () in
     let%bind amount = gen_amount () in
     let nonces = Map.set nonces ~key:sender ~data:(Account_nonce.succ nonce) in
-    let spec = { fee; amount; receiver; sender = (sender, nonce) } in
+    let%bind actions = List.gen_non_empty Field.gen in
+    let spec =
+      { fee
+      ; amount
+      ; receiver
+      ; sender = (sender, nonce)
+      ; actions = Some [ actions ]
+      }
+    in
     return (spec, nonces)
 end
 
@@ -179,8 +188,12 @@ module Test_spec = struct
 end
 
 let command_send ?chain ?(valid_until = Global_slot_since_genesis.max_value)
-    { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount } :
-    Signed_command.t =
+    { Transaction_spec.fee
+    ; sender = sender, sender_nonce
+    ; receiver
+    ; amount
+    ; actions = _
+    } : Signed_command.t =
   let sender_pk = Public_key.compress sender.public_key in
   let signature_kind =
     match chain with
@@ -207,8 +220,12 @@ let account_update_send ?chain ?(use_full_commitment = true)
       (Zkapp_basic.Or_ignore.Ignore, Zkapp_basic.Or_ignore.Ignore))
     ?(global_slot_precondition =
       (Zkapp_basic.Or_ignore.Ignore, Zkapp_basic.Or_ignore.Ignore))
-    { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount } :
-    Zkapp_command.t =
+    { Transaction_spec.fee
+    ; sender = sender, sender_nonce
+    ; receiver
+    ; amount
+    ; actions
+    } : Zkapp_command.t =
   let signature_kind =
     Option.value ~default:Mina_signature_kind.t_DEPRECATED chain
   in
@@ -245,7 +262,8 @@ let account_update_send ?chain ?(use_full_commitment = true)
               ; balance_change = Amount.Signed.(negate (of_unsigned amount))
               ; increment_nonce = double_sender_nonce
               ; events = []
-              ; actions = []
+              ; actions =
+                  Option.value ~default:[] actions |> List.map ~f:Array.of_list
               ; call_data = Snark_params.Tick.Field.zero
               ; call_depth = 0
               ; preconditions =
@@ -474,7 +492,7 @@ module Sequencer_spec = struct
     print_endline "(* Post genesis batch *)" ;
     run (fun () ->
         Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
-          ~ledger:ephemeral_ledger ) ;
+          ~ledger:ephemeral_ledger ~get_actions_for_aid:(fun _aid -> []) ) ;
 
     print_endline "(* Deploy zkapp *)" ;
     run (fun () ->

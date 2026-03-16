@@ -1253,11 +1253,8 @@ let sync_ledger =
                Ledger.Mask.Attached.commit mask ;
 
                let () =
-                 match
-                   Da_layer.Diff.Stable.Latest.command_with_action_step_flags
-                     diff
-                 with
-                 | Some (Zkapp_command command, _) ->
+                 match diff.actions with
+                 | `Command_with_action_step_flags (Zkapp_command command, _) ->
                      Sequencer.apply_events_and_actions ledger
                        (Archive.create ~kvdb:(Ledger.Db.zeko_kvdb ledger))
                        (Zkapp_command.write_all_proofs_to_disk
@@ -1266,7 +1263,9 @@ let sync_ledger =
                             (Proof_cache_tag.create_identity_db ())
                           command )
                      |> Or_error.ok_exn
-                 | _ ->
+                 | `Command_with_action_step_flags (Signed_command _, _) ->
+                     ( (* No events nor actions to add *) )
+                 | `Actions _ ->
                      ( (* No events nor actions to add *) )
                in
 

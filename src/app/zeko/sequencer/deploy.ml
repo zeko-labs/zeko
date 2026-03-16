@@ -239,7 +239,7 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
               "(* Post the whole genesis diff with all the accounts *)"
           in
           Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
-            ~ledger:new_ledger
+            ~ledger:new_ledger ~get_actions_for_aid:(fun _aid -> [])
       in
 
       print_endline "(* Deploy contract *)" ;

@@ -923,7 +923,7 @@ let distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff =
 (** One diff can be too big, split it into multiple smaller ones
     To have only one diff set [max_size] to [Int.max_value]
 *)
-let create_genesis_diffs ?(max_size = 50) ~logger ledger =
+let create_genesis_diffs ?(max_size = 50) ~logger ledger ~get_actions_for_aid =
   let%bind account_ids =
     Ledger.to_list ledger >>| List.map ~f:Account.identifier
   in
@@ -948,12 +948,16 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
         in
         List.iter chunk ~f:(fun (index, account) ->
             Ledger.set_at_index_exn ephemeral index account ) ;
+        let actions =
+          List.map chunk ~f:(fun (_, account) ->
+              let aid = Account.identifier account in
+              (aid, get_actions_for_aid (Account.identifier account)) )
+        in
         let diff =
           Diff.create_pending
             ~source_ledger_hash:(Sparse_ledger.merkle_root ledger_openings)
-            ~changed_accounts:chunk ~actions:(`Actions [])
+            ~changed_accounts:chunk ~actions:(`Actions actions)
         in
-        (* let () = failwith "TODO" in *)
         [%log debug] "Adding accounts to acc set db" ;
         Indexed_merkle_tree.In_memory.insert_batch_exn acc_set
           (List.map chunk ~f:(fun (_, account) ->
@@ -982,8 +986,8 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
   result
 
 (** Distribute diff of initial accounts *)
-let distribute_genesis_diff ~logger ~config ~ledger =
-  let%bind diffs = create_genesis_diffs ~logger ledger in
+let distribute_genesis_diff ~logger ~config ~ledger ~get_actions_for_aid =
+  let%bind diffs = create_genesis_diffs ~logger ledger ~get_actions_for_aid in
   Deferred.List.iter ~how:`Sequential diffs
     ~f:(fun (diff, ledger_openings, acc_set_openings, `Target _) ->
       distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff )
