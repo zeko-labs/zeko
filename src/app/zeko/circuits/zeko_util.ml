@@ -419,6 +419,12 @@ module Checked32 = struct
   type var = Checked.t
 end
 
+module Checked64 = struct
+  include Mina_numbers.Nat.Make64 ()
+
+  type var = Checked.t
+end
+
 let push_actions_var ~actions state =
   let@ () = make_checked in
   Random_oracle.Checked.hash ~init:Hash_prefix_states.zkapp_actions

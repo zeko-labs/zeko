@@ -193,6 +193,12 @@ module Checked32 : sig
   type var = Checked.t
 end
 
+module Checked64 : sig
+  include module type of Mina_numbers.Nat.Make64 ()
+
+  type var = Checked.t
+end
+
 val push_actions_var :
   actions:Field.Var.t -> Field.Var.t -> Field.Var.t Checked.t
 

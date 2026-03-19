@@ -29,7 +29,7 @@ module Action = struct
     ; target_ledger_hash : Ledger_hash.t
     ; source_acc_set : Account_set.t
     ; target_acc_set : Account_set.t
-    ; ledger_index : Checked32.t
+    ; ledger_index : Checked64.t
     ; account : Account.t
     }
   [@@deriving snarky]
@@ -56,15 +56,15 @@ let implied_root (account : Account.var) (path : Ledger_path.Path.var) =
       let* right = Field.Checked.if_ is_right ~then_:acc ~else_:hash_other in
       make_checked @@ fun () -> Ledger_hash.merge_var ~height left right )
 
-let index_of_path (path : Ledger_path.Path.var) : Checked32.var Checked.t =
-  Checked.List.foldi path ~init:Checked32.Checked.zero
+let index_of_path (path : Ledger_path.Path.var) : Checked64.var Checked.t =
+  Checked.List.foldi path ~init:Checked64.Checked.zero
     ~f:(fun height acc Ledger_path.Step.{ is_right; _ } ->
       let* add =
-        if_ is_right ~typ:Checked32.typ
-          ~then_:(Checked32.Checked.constant (Checked32.of_int (1 lsl height)))
-          ~else_:Checked32.Checked.zero
+        if_ is_right ~typ:Checked64.typ
+          ~then_:(Checked64.Checked.constant (Checked64.of_int (1 lsl height)))
+          ~else_:Checked64.Checked.zero
       in
-      Checked32.Checked.add acc add )
+      Checked64.Checked.add acc add )
 
 module Make (Inputs : sig
   val chain_l1 : Mina_signature_kind.t

@@ -28,7 +28,7 @@ module M = struct
         ; target_ledger_hash = Ledger_hash.empty_hash
         ; source_acc_set = Account_set.dummy
         ; target_acc_set = Account_set.dummy
-        ; ledger_index = Checked32.zero
+        ; ledger_index = Checked64.zero
         ; account = Account.empty
         }
     }
