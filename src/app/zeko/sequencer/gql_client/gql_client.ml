@@ -463,6 +463,8 @@ let send_zkapp (uri : Uri.t) command =
           ]
     end
   in
+  printf "query: %s\n%!" q#query ;
+  printf "variables: %s\n%!" (Yojson.Basic.pretty_to_string q#variables) ;
   let%bind.Deferred.Result result = Graphql_client.Client.query_json q uri in
   return (Ok Yojson.Safe.(to_string result))
 
