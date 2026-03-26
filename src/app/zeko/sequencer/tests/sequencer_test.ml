@@ -30,8 +30,7 @@ let da_config_with3 =
 
 let da_keys =
   run (fun () ->
-      Da_layer.Client.Config.fetch_public_keys ~logger da_config_with3
-      >>| Or_error.ok_exn )
+      Da_layer.Client.Config.fetch_public_keys ~logger da_config_with3 )
 
 let da_quorum = 2
 
