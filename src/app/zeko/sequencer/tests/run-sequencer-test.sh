@@ -81,13 +81,13 @@ wait_for_port 5672 $$
 $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet --block-period 9999999 &
 l1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --random-sk --network-id testnet --db-dir "$TMP_DIR/da1_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --random-sk --network-id testnet --db-dir "$TMP_DIR/da1_db" &
 da1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --random-sk --network-id testnet --db-dir "$TMP_DIR/da2_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --random-sk --network-id testnet --db-dir "$TMP_DIR/da2_db" &
 da2_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --random-sk --network-id testnet --db-dir "$TMP_DIR/da3_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --random-sk --healthcheck-port 8560 --network-id testnet --db-dir "$TMP_DIR/da3_db" &
 da3_pid=$!
 
 # Launch provers
