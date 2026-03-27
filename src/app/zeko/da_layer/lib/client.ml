@@ -493,7 +493,7 @@ let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
           source_ledger_hash
           (Host_and_port.to_string node_location.value) ;
         let%bind () = Deferred.any [ pushed_diff; Ivar.read t.stop ] in
-        start_posting_diffs_from
+        start_posting_diffs_from ?timeout_on_failure
           ~pushed_diff:(Condition.wait t.pushed_diff)
           t ~node_location ~source_ledger_hash ()
     | Some { diff; ledger_openings; acc_set_openings; target_ledger_hash; _ }
@@ -521,7 +521,8 @@ let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
                       ] ;
                   after timeout
             in
-            start_posting_diffs_from t ~node_location ~source_ledger_hash ()
+            start_posting_diffs_from ?timeout_on_failure t ~node_location
+              ~source_ledger_hash ()
         | Ok (public_key, signature) ->
             [%log info]
               !"Posted diff to da node %s with hash: %{sexp: Ledger_hash.t}"
@@ -538,7 +539,7 @@ let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
               else caqti_ok_exn ~msg:"Failed to insert signatures into db: %s" r
             in
             Condition.broadcast t.pushed_signature () ;
-            start_posting_diffs_from t ~node_location
+            start_posting_diffs_from ?timeout_on_failure t ~node_location
               ~source_ledger_hash:(Some target_ledger_hash) () )
 
 let wait_for_successful_healthcheck ~timeout ~logger ~node_location () =
