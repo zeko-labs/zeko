@@ -194,6 +194,10 @@ module Rpc = struct
     in
     go max_tries []
 
+  let healthcheck ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) () =
+    dispatch ~max_tries:1 ~logger node_location Rpc.Healthcheck.V1.t ()
+
   module Versioned_rpc_same_query = struct
     type ('q, 'latest) t =
       | V : ('q, 'r) Async.Rpc.Rpc.t * ('r -> 'latest) -> ('q, 'latest) t
@@ -399,10 +403,18 @@ module Config = struct
   let of_node_locations nodes = { nodes }
 
   let fetch_public_keys ~logger t =
-    let%map.Deferred.Result fetched_da_keys =
+    let%map.Deferred fetched_da_keys =
       Deferred.List.map ~how:`Parallel t.nodes ~f:(fun node_location ->
-          Rpc.get_node_public_key ~logger ~node_location () )
-      >>| Result.all
+          Rpc.get_node_public_key ~logger ~node_location ()
+          >>| function
+          | Ok result ->
+              Some result
+          | Error err ->
+              [%log warn] "Failed to get node public key from da node %s: %s"
+                (Host_and_port.to_string node_location.value)
+                (Error.to_string_hum err) ;
+              None )
+      >>| List.filter_opt
     in
     List.sort fetched_da_keys ~compare:Public_key.Compressed.compare
 end
@@ -419,9 +431,7 @@ type t =
   }
 
 let create ~logger ~(config : Config.t) ~quorum ~da_keys ~db_pool =
-  let%map.Deferred.Result fetched_da_keys =
-    Config.fetch_public_keys ~logger config
-  in
+  let%map.Deferred fetched_da_keys = Config.fetch_public_keys ~logger config in
   let sorted_da_keys =
     List.sort da_keys ~compare:Public_key.Compressed.compare
   in
@@ -461,7 +471,7 @@ let enqueue_diff t ~target_ledger_hash ~ledger_openings ~acc_set_openings ~diff
   in
   Condition.broadcast t.pushed_diff ()
 
-let rec start_posting_diffs_from ?pushed_diff t
+let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
     ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
     ~source_ledger_hash () =
   if Ivar.is_full t.stop then return ()
@@ -483,7 +493,7 @@ let rec start_posting_diffs_from ?pushed_diff t
           source_ledger_hash
           (Host_and_port.to_string node_location.value) ;
         let%bind () = Deferred.any [ pushed_diff; Ivar.read t.stop ] in
-        start_posting_diffs_from
+        start_posting_diffs_from ?timeout_on_failure
           ~pushed_diff:(Condition.wait t.pushed_diff)
           t ~node_location ~source_ledger_hash ()
     | Some { diff; ledger_openings; acc_set_openings; target_ledger_hash; _ }
@@ -495,7 +505,24 @@ let rec start_posting_diffs_from ?pushed_diff t
         | Error err ->
             [%log error] "Failed to post diff to da node: %s"
               (Error.to_string_hum err) ;
-            start_posting_diffs_from t ~node_location ~source_ledger_hash ()
+            let%bind () =
+              match timeout_on_failure with
+              | None ->
+                  return ()
+              | Some timeout ->
+                  [%log warn]
+                    "Failed to post diff to da node $host_and_port, retrying \
+                     in %s"
+                    (Time_ns.Span.to_string_hum timeout)
+                    ~metadata:
+                      [ ( "host_and_port"
+                        , `String (Host_and_port.to_string node_location.value)
+                        )
+                      ] ;
+                  after timeout
+            in
+            start_posting_diffs_from ?timeout_on_failure t ~node_location
+              ~source_ledger_hash ()
         | Ok (public_key, signature) ->
             [%log info]
               !"Posted diff to da node %s with hash: %{sexp: Ledger_hash.t}"
@@ -512,8 +539,24 @@ let rec start_posting_diffs_from ?pushed_diff t
               else caqti_ok_exn ~msg:"Failed to insert signatures into db: %s" r
             in
             Condition.broadcast t.pushed_signature () ;
-            start_posting_diffs_from t ~node_location
+            start_posting_diffs_from ?timeout_on_failure t ~node_location
               ~source_ledger_hash:(Some target_ledger_hash) () )
+
+let wait_for_successful_healthcheck ~timeout ~logger ~node_location () =
+  keep_retrying ~delay:timeout ~logger
+    ~f:(fun () ->
+      match%map Rpc.healthcheck ~logger ~node_location () with
+      | Ok () ->
+          Ok ()
+      | Error err ->
+          [%log warn] "Healthcheck failed for node $host_and_port: $error"
+            ~metadata:
+              [ ( "host_and_port"
+                , `String (Host_and_port.to_string node_location.value) )
+              ; ("error", `String (Error.to_string_hum err))
+              ] ;
+          Error err )
+    ()
 
 let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
   let return = Deferred.Result.return in
@@ -570,6 +613,10 @@ let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
 let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
     ~target_ledger_hash =
   let logger = t.logger in
+  let%bind.Deferred () =
+    wait_for_successful_healthcheck ~timeout:(Time_ns.Span.of_sec 30.) ~logger
+      ~node_location ()
+  in
   let%bind last_ledger_hash =
     keep_retrying ~logger
       ~f:(fun () ->
@@ -616,7 +663,8 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
   in
   don't_wait_for
     (within' ~monitor:Monitor.main (fun () ->
-         start_posting_diffs_from t ~node_location
+         start_posting_diffs_from t
+           ~timeout_on_failure:(Time_ns.Span.of_sec 10.) ~node_location
            ~source_ledger_hash:last_ledger_hash () ) )
 
 let start_client t ~target_ledger_hash =

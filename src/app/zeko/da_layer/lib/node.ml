@@ -62,7 +62,9 @@ let get_ledger_hashes_chain t
 let implementations t =
   Rpc.Implementations.create_exn ~on_unknown_rpc:`Close_connection
     ~implementations:
-      [ (* Post_diff *)
+      [ (* Healthcheck *)
+        Rpc.Rpc.implement Rpc_def.Healthcheck.V1.t (fun () () -> return ())
+      ; (* Post_diff *)
         Rpc.Rpc.implement Rpc_def.Post_diff.V1.t
           (fun () { ledger_openings; acc_set_openings; diff } ->
             match
@@ -187,7 +189,30 @@ let implementations t =
             return (Ok r) )
       ]
 
-let create_server ~chain ~port ~logger ~db_dir ~signer_sk ~no_migrations () =
+let start_healthcheck_server ~logger ~port =
+  let%map _server =
+    Cohttp_async.Server.create_expert
+      ~on_handler_error:
+        (`Call
+          (fun _ exn ->
+            [%log error] "Unhandled exception: %s" (Exn.to_string exn) ) )
+      (Async.Tcp.Where_to_listen.of_port port)
+      (fun ~body:_ _sock req ->
+        let uri = Cohttp_async.Request.uri req in
+        let status, body =
+          match Uri.path uri with
+          | "" | "/" | "/health" | "/ping" ->
+              (`OK, "pong\n")
+          | _ ->
+              (`Not_found, "not found\n")
+        in
+        Cohttp_async.Server.respond_string ~status body
+        >>| fun response -> `Response response )
+  in
+  [%log info] "Healthcheck server started on port %d" port
+
+let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer_sk
+    ~no_migrations () =
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
   in
@@ -209,6 +234,13 @@ let create_server ~chain ~port ~logger ~db_dir ~signer_sk ~no_migrations () =
   if not no_migrations then Migrations.run_migrations ~logger t.db ;
 
   let implementations = implementations t in
+  let%bind () =
+    match healthcheck_port with
+    | None ->
+        return ()
+    | Some healthcheck_port ->
+        start_healthcheck_server ~logger ~port:healthcheck_port
+  in
   Tcp.Server.create
     ~on_handler_error:
       (`Call

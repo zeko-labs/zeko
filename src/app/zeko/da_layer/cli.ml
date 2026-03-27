@@ -16,6 +16,10 @@ let run_node =
          flag "--port"
            (optional_with_default 8080 int)
            ~doc:"int Port to listen on"
+       and healthcheck_port =
+         flag "--healthcheck-port"
+           (optional_with_default 8081 int)
+           ~doc:"int Optional HTTP port exposing /health for simple probes"
        and testing_mode =
          flag "--random-sk" no_arg
            ~doc:"Run in testing mode, the signer key will be generated randomly"
@@ -51,7 +55,7 @@ let run_node =
          let%bind () =
            Deferred.ignore_m
            @@ Da_layer.Node.create_server ~chain ~logger ~port ~db_dir
-                ~signer_sk:signer ~no_migrations ()
+                ~healthcheck_port ~signer_sk:signer ~no_migrations ()
          in
          [%log info] "Server started on port %d" port ;
          Async.never () ) )

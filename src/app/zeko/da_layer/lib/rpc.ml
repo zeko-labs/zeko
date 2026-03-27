@@ -4,6 +4,15 @@ open Mina_ledger
 open Mina_base
 open Signature_lib
 
+(* val healthcheck : unit -> unit *)
+module Healthcheck = struct
+  module V1 = struct
+    let t : (unit, unit) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Healthcheck" ~version:1 ~bin_query:Unit.bin_t
+        ~bin_response:Unit.bin_t
+  end
+end
+
 (* val post_diff : ledger_openings:Sparse_ledger.t -> diff:Diff.t -> (Public_key.Compressed.t * Signature.t) *)
 module Post_diff = struct
   module V1 = struct
