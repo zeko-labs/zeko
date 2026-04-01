@@ -126,16 +126,24 @@ module Folder_iterations = struct
     let extend_option_iterations = Int.pow 2 3
   end
 
-  module Count_commits : FOLDER_ITERATIONS = Check_accepted
+  module Count_commits : FOLDER_ITERATIONS = struct
+    let leaf_iterations = 1
+
+    let leaf_option_iterations = 1
+
+    let extend_iterations = 1
+
+    let extend_option_iterations = 1
+  end
 
   module Emergency_da : FOLDER_ITERATIONS = struct
-    let leaf_iterations = 8
+    let leaf_iterations = 1
 
-    let leaf_option_iterations = 4
+    let leaf_option_iterations = 1
 
-    let extend_iterations = 4
+    let extend_iterations = 1
 
-    let extend_option_iterations = 2
+    let extend_option_iterations = 1
   end
 end
 
