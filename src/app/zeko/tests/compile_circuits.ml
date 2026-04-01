@@ -14,6 +14,11 @@ module Inputs = struct
 
   let holder_accounts_l1 = [ point_of_string "89888" ]
 
+  let multisig_update =
+    { Zeko_circuits.Multisig.public_keys = holder_accounts_l1
+    ; quorum = Snark_params.Tick.Field.of_int 1
+    }
+
   let holder_account_l2 = point_of_string "11111"
 
   let helper_token_owner_l1 = point_of_string "5123111"

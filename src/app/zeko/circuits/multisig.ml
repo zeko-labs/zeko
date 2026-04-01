@@ -35,7 +35,7 @@ module Witness = struct
   type t = { signatures : Signatures.t; quorum : F.t } [@@deriving snarky]
 end
 
-type t = { public_keys : PC.t list; quorum : F.t }
+type t = { public_keys : PC.t list; quorum : Field.t } [@@deriving yojson]
 
 (** We save only hash to the outer state *)
 module Commitment = struct

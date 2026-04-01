@@ -18,6 +18,9 @@ module Outer_rules_inst =
 
       let chain_l1 = Mina_signature_kind.Testnet
 
+      let multisig_key =
+        { Multisig.public_keys = [ inner_public_key ]; quorum = Field.one }
+
       let max_sequencer_inactivity = 128
 
       let emergency_da_public_key =
@@ -30,7 +33,7 @@ module Outer_rules_inst =
     end)
     ()
 
-let Compile_simple.[ _commit; _emergency_commit; _action; pause ] =
+let Compile_simple.[ _commit; _emergency_commit; _action; pause; _ ] =
   Lazy.force Outer_rules_inst.provers
 
 let point_of_string_even s : Zeko_util.Even_PC.t =

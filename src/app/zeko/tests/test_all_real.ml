@@ -118,12 +118,18 @@ open struct
     Inner_rules.Make
       (struct
         let chain_l2 = Mina_signature_kind.Testnet
+
+        let multisig_key =
+          { Multisig.public_keys = [ point_of_string "89888" ]
+          ; quorum = Field.one
+          }
       end)
       ()
 
   let _inner_stmt, _inner_proof =
     let open struct
-      let Compile_simple.[ sync; action ] = Lazy.force Inner_rules_inst.provers
+      let Compile_simple.[ sync; action; _ ] =
+        Lazy.force Inner_rules_inst.provers
 
       let ase_with_length : Rule_inner_sync.Ase_inst.t =
         Rule_inner_sync.Ase_inst.make ~proof_source:ase_with_length.source
@@ -168,6 +174,11 @@ open struct
 
         let chain_l1 = Mina_signature_kind.Testnet
 
+        let multisig_key =
+          { Multisig.public_keys = [ point_of_string "89888" ]
+          ; quorum = Field.one
+          }
+
         let max_sequencer_inactivity = 128
 
         let emergency_da_public_key = point_of_string "223344"
@@ -183,7 +194,7 @@ open struct
 
   let _txn_stmt, _txn_proof =
     let open struct
-      let Compile_simple.[ commit; emergency_commit; action; _pause ] =
+      let Compile_simple.[ commit; emergency_commit; action; _pause; _ ] =
         Lazy.force Outer_rules_inst.provers
 
       (*
@@ -1412,6 +1423,11 @@ open struct
       ; point_of_string "46513"
       ]
 
+    let multisig_key =
+      { Zeko_circuits.Multisig.public_keys = holder_accounts_l1
+      ; quorum = Snark_params.Tick.Field.of_int 1
+      }
+
     let holder_account_l2 = point_of_string "11111"
 
     let helper_token_owner_l1 = point_of_string "5123111"
@@ -1467,19 +1483,19 @@ open struct
 
   module Inner_rules = Inner_rules.Make (Inputs) ()
 
-  let Compile_simple.[ cancel_deposit; finalize_withdrawal; _ ] =
+  let Compile_simple.[ cancel_deposit; finalize_withdrawal; _; _ ] =
     Lazy.force Bridge.System_L1_enabled.provers
 
-  let Compile_simple.[ finalize_deposit; inner_receive ] =
+  let Compile_simple.[ finalize_deposit; inner_receive; _ ] =
     Lazy.force Bridge.System_L2.provers
 
-  let Compile_simple.[ outer_token_owner ] =
+  let Compile_simple.[ outer_token_owner; _ ] =
     Lazy.force Bridge.System_L1_token_owner.provers
 
-  let Compile_simple.[ _; _; outer_action_witness; _ ] =
+  let Compile_simple.[ _; _; outer_action_witness; _; _ ] =
     Lazy.force Outer_rules.provers
 
-  let Compile_simple.[ _; inner_action_witness ] =
+  let Compile_simple.[ _; inner_action_witness; _ ] =
     Lazy.force Inner_rules.provers
 
   module Deposit = struct

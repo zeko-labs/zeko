@@ -44,6 +44,10 @@ let generate_circuits_config =
            { chain_l1 = Testnet
            ; chain_l2 = Testnet
            ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
+           ; multisig_key =
+               { public_keys = List.map holder_accounts_l1 ~f:fst
+               ; quorum = Field.of_int 1
+               }
            ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
            ; helper_token_owner_l1 = fst helper_token_owner_l1
            ; zeko_l1 = fst zeko_l1
