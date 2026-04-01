@@ -627,11 +627,11 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
     !"Found last ledger hash: %{sexp: Ledger_hash.t option} for node %s"
     last_ledger_hash
     (Host_and_port.to_string node_location.value) ;
-  let%map () =
-    match last_ledger_hash with
-    | None ->
+  let%bind () =
+    match (last_ledger_hash, Ivar.is_full t.stop) with
+    | None, _ | _, true ->
         return ()
-    | Some last_ledger_hash ->
+    | Some last_ledger_hash, false ->
         (* In case we've started from checkpoint, we need to refetch the signature *)
         let%bind public_key =
           keep_retrying ~logger:t.logger
@@ -659,17 +659,20 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
                  Signature_table.insert c
                    { target_ledger_hash; public_key; signature } ) ) )
           t.db_pool
-        >>| caqti_ok_exn ~msg:"Failed to refetch signature: %s"
+        >>| fun res ->
+        if Ivar.is_full t.stop then ()
+        else caqti_ok_exn ~msg:"Failed to refetch signature: %s" res
   in
-  don't_wait_for
-    (within' ~monitor:Monitor.main (fun () ->
-         start_posting_diffs_from t
-           ~timeout_on_failure:(Time_ns.Span.of_sec 10.) ~node_location
-           ~source_ledger_hash:last_ledger_hash () ) )
+  if Ivar.is_full t.stop then return ()
+  else
+    start_posting_diffs_from t ~timeout_on_failure:(Time_ns.Span.of_sec 10.)
+      ~node_location ~source_ledger_hash:last_ledger_hash ()
 
 let start_client t ~target_ledger_hash =
-  Deferred.List.iter ~how:`Parallel t.config.nodes ~f:(fun node_location ->
-      catch_up t ~node_location ~target_ledger_hash )
+  List.iter t.config.nodes ~f:(fun node_location ->
+      don't_wait_for
+        (within' ~monitor:Monitor.main (fun () ->
+             catch_up t ~node_location ~target_ledger_hash ) ) )
 
 let rec get_multisig ?pushed_signature t ~ledger_hash =
   let pushed_signature =

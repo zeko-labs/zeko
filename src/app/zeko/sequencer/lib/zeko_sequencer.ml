@@ -1093,7 +1093,7 @@ module Sequencer = struct
         ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
       >>| Or_error.ok_exn
     in
-    let%bind () =
+    let () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)
     in
     return t
