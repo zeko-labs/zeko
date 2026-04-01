@@ -18,7 +18,7 @@ module Outer_rules_inst =
 
       let chain_l1 = Mina_signature_kind.Testnet
 
-      let multisig_key =
+      let multisig_update =
         { Multisig.public_keys = [ inner_public_key ]; quorum = Field.one }
 
       let max_sequencer_inactivity = 128
