@@ -443,6 +443,262 @@ let update_outer_state ~signature_kind ~(signer : Keypair.t)
 module Change_permissions =
   Zeko_circuits.Rule_change_permissions.Make (Zeko_circuits_config.Inputs) ()
 
+module Multisig_update = Zeko_circuits.Rule_multisig_update.Make (struct
+  let chain = Zeko_circuits_config.Inputs.chain_l1
+
+  let multisig_key = Zeko_circuits_config.Inputs.multisig_key
+end)
+
+module Multisig_update_payload = struct
+  type t = { body : Account_update.Body.t; payload : Field.t }
+  [@@deriving yojson]
+
+  let create ~signature_kind body =
+    let payload =
+      Zkapp_command.Digest.Account_update.create_body ~signature_kind body
+    in
+    { body; payload = (payload :> Field.t) }
+end
+
+module Multisig_update_signature = struct
+  type t =
+    { public_key : Public_key.Compressed.t
+    ; signature : Signature.t
+    ; payload : Field.t
+    }
+  [@@deriving yojson]
+end
+
+module Multisig_update_kind = struct
+  type t =
+    | Outer
+    | Bridge_holder_l1_enabled
+    | Bridge_holder_l1_disabled
+    | Bridge_token_owner_l1
+  [@@deriving yojson, compare, equal]
+end
+
+module Signed_multisig_update = struct
+  type t =
+    { kind : Multisig_update_kind.t
+    ; body : Account_update.Body.t
+    ; payload : Field.t
+    ; signer_public_key : Public_key.Compressed.t
+    ; signature : Signature.t
+    }
+  [@@deriving yojson]
+end
+
+let outer_rules_vk_hash () =
+  Compile_simple.Verification_key.of_tag
+    (Lazy.force Zeko_types.Outer_rules_inst.tag)
+  |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+
+let build_permissions_multisig_update_payload ~(permissions : Permissions.t) =
+  let%map vk_hash = outer_rules_vk_hash () in
+  Multisig_update_payload.create ~signature_kind:Zeko_circuits_config.t.chain_l1
+    { Account_update.Body.dummy with
+      public_key = Zeko_circuits_config.t.zeko_l1
+    ; authorization_kind = Proof vk_hash
+    ; update = { Update.dummy with permissions = Set permissions }
+    ; use_full_commitment = true
+    }
+
+let sign_multisig_update_payload ~(signer : Keypair.t)
+    ({ payload; _ } : Multisig_update_payload.t) =
+  { Multisig_update_signature.public_key = Public_key.compress signer.public_key
+  ; signature =
+      Signature_lib.Schnorr.Chunked.sign
+        ~signature_kind:Zeko_circuits_config.t.chain_l1 signer.private_key
+        (Random_oracle.Input.Chunked.field payload)
+  ; payload
+  }
+
+let vk_hash_of_multisig_kind = function
+  | Multisig_update_kind.Outer ->
+      outer_rules_vk_hash ()
+  | Bridge_holder_l1_enabled ->
+      Compile_simple.Verification_key.of_tag
+        (Lazy.force Zeko_types.Bridge_inst_mina.System_L1_enabled.tag)
+      |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+  | Bridge_holder_l1_disabled ->
+      Compile_simple.Verification_key.of_tag
+        (Lazy.force Zeko_types.Bridge_inst_mina.System_L1_disabled.tag)
+      |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+  | Bridge_token_owner_l1 ->
+      Compile_simple.Verification_key.of_tag
+        (Lazy.force Zeko_types.Bridge_inst_mina.System_L1_token_owner.tag)
+      |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+
+let build_outer_state_multisig_update_body
+    ~(precondition : Rollup_state.Outer_state.fine)
+    ~(update : Rollup_state.Outer_state.fine) =
+  let%map vk_hash = outer_rules_vk_hash () in
+  let update =
+    Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine update
+    |> Pickles_types.Vector.Vector_8.map ~f:(function
+         | None ->
+             Zkapp_basic.Set_or_keep.Keep
+         | Some x ->
+             Set
+               ( Field.Var.to_constant x
+               |> Option.value_exn ~message:"Fine fields need to be constants"
+               ) )
+  in
+  let precondition =
+    Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine precondition
+    |> Pickles_types.Vector.Vector_8.map ~f:(function
+         | None ->
+             Zkapp_basic.Or_ignore.Ignore
+         | Some x ->
+             Check
+               ( Field.Var.to_constant x
+               |> Option.value_exn ~message:"Fine fields need to be constants"
+               ) )
+  in
+  { Account_update.Body.dummy with
+    public_key = Zeko_circuits_config.t.zeko_l1
+  ; update = { Update.dummy with app_state = update }
+  ; preconditions =
+      { Preconditions.accept with
+        account =
+          { Zkapp_precondition.Account.accept with state = precondition }
+      }
+  ; use_full_commitment = true
+  ; authorization_kind = Proof vk_hash
+  }
+
+let build_verification_key_multisig_update_body ~(kind : Multisig_update_kind.t)
+    ~(public_key : Public_key.Compressed.t)
+    ~(verification_key : Compile_simple.Verification_key.t) =
+  let%map vk_hash = vk_hash_of_multisig_kind kind in
+  { Account_update.Body.dummy with
+    public_key
+  ; update =
+      { Update.dummy with
+        verification_key =
+          Set
+            (Verification_key_wire.Stable.Latest.M.of_binable
+               ( match Is_compile_simple_real.is_compile_simple_real with
+               | Some eq ->
+                   let _, vk_eq = Type_equal.detuple2 eq in
+                   Type_equal.conv vk_eq verification_key
+               | None ->
+                   Pickles.Side_loaded.Verification_key.dummy ) )
+      }
+  ; use_full_commitment = true
+  ; authorization_kind = Proof vk_hash
+  }
+
+let sign_multisig_update ~(signer : Keypair.t) ~(kind : Multisig_update_kind.t)
+    ~(body : Account_update.Body.t) =
+  let payload =
+    Zkapp_command.Digest.Account_update.create_body
+      ~signature_kind:Zeko_circuits_config.t.chain_l1 body
+  in
+  let payload = (payload :> Field.t) in
+  { Signed_multisig_update.kind
+  ; body
+  ; payload
+  ; signer_public_key = Public_key.compress signer.public_key
+  ; signature =
+      Signature_lib.Schnorr.Chunked.sign
+        ~signature_kind:Zeko_circuits_config.t.chain_l1 signer.private_key
+        (Random_oracle.Input.Chunked.field payload)
+  }
+
+let submit_multisig_update ~(kind : Multisig_update_kind.t)
+    ~(signer : Keypair.t) ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)
+    ~(payload : Multisig_update_payload.t)
+    ~(signatures : Multisig_update_signature.t list) =
+  let prove =
+    match kind with
+    | Outer ->
+        let Compile_simple.[ _; _; _; _; prover ] =
+          Lazy.force Zeko_types.Outer_rules_inst.provers
+        in
+        prover
+    | Bridge_holder_l1_enabled ->
+        let Compile_simple.[ _; _; _; prover ] =
+          Lazy.force Zeko_types.Bridge_inst_mina.System_L1_enabled.provers
+        in
+        prover
+    | Bridge_holder_l1_disabled ->
+        let Compile_simple.[ _; prover ] =
+          Lazy.force Zeko_types.Bridge_inst_mina.System_L1_disabled.provers
+        in
+        prover
+    | Bridge_token_owner_l1 ->
+        let Compile_simple.[ _; prover ] =
+          Lazy.force Zeko_types.Bridge_inst_mina.System_L1_token_owner.provers
+        in
+        prover
+  in
+  let proof_cache_db = Proof_cache_tag.create_identity_db () in
+  let payload_hash =
+    Multisig_update_payload.create
+      ~signature_kind:Zeko_circuits_config.t.chain_l1 payload.body
+  in
+  if not (Field.equal payload.payload payload_hash.payload) then
+    failwith "multisig submit: payload/body mismatch"
+  else
+    let signature_map =
+      List.fold signatures ~init:Signature_lib.Public_key.Compressed.Map.empty
+        ~f:(fun
+             acc
+             ({ public_key; signature; payload } : Multisig_update_signature.t)
+           ->
+          if not (Field.equal payload payload_hash.payload) then
+            failwith "multisig submit: signature payload mismatch"
+          else Map.set acc ~key:public_key ~data:signature )
+    in
+    let ordered_signatures =
+      List.map Zeko_circuits_config.Inputs.multisig_key.public_keys
+        ~f:(fun public_key -> (public_key, Map.find signature_map public_key))
+    in
+    let quorum =
+      Int.of_string
+        (Field.to_string Zeko_circuits_config.Inputs.multisig_key.quorum)
+    in
+    let multisig =
+      Zeko_types.Multisig.Witness.make ~signatures:ordered_signatures ~quorum
+    in
+    let%map account_updates =
+      let%map (_stmt, (body, _, calls)), proof =
+        prove
+          { Zeko_circuits.Rule_multisig_update.Witness.multisig
+          ; a = payload.body
+          }
+        |> Promise.to_deferred
+      in
+      Utils.attach_proof_to_forest
+        ~signature_kind:Zeko_circuits_config.t.chain_l1 ~proof_cache_db ~body
+        ~calls:
+          (Zkapp_command.Call_forest.map calls
+             ~f:Account_update.read_all_proofs_from_disk )
+        ~proof
+      |> Zkapp_command.Call_forest.map
+           ~f:(Account_update.write_all_proofs_to_disk ~proof_cache_db)
+    in
+    let command : Zkapp_command.t =
+      { fee_payer =
+          { Account_update.Fee_payer.body =
+              { public_key = Public_key.compress signer.public_key
+              ; fee
+              ; valid_until = None
+              ; nonce
+              }
+          ; authorization = Signature.dummy
+          }
+      ; account_updates =
+          Utils.rehash_forest ~signature_kind:Zeko_circuits_config.t.chain_l1
+            account_updates
+      ; memo = Signed_command_memo.empty
+      }
+    in
+    Utils.sign_zkapp_command ~signature_kind:Zeko_circuits_config.t.chain_l1
+      command [ signer ]
+
 let update_permissions ~logger ~signature_kind ~(signer : Keypair.t)
     ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~gql_uri
     ~(permissions : Permissions.t) =

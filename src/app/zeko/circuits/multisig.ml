@@ -50,6 +50,7 @@ let commit { public_keys; quorum } =
   if List.length public_keys > Zeko_constants.da_multisig_max_length then
     failwith "Public keys length exceeds the maximum length"
   else
+    let public_keys = List.sort public_keys ~compare:PC.compare in
     let padded =
       public_keys
       @ List.init

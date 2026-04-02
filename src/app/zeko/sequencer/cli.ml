@@ -10,6 +10,36 @@ module Sequencer = Zeko_sequencer.Sequencer
 
 let take2 (a, b, _) = (a, b)
 
+let default_admin_permissions : Permissions.t =
+  { edit_state = Either
+  ; send = Proof
+  ; receive = None
+  ; set_delegate = Proof
+  ; set_permissions = Proof
+  ; set_verification_key = (Proof, Mina_numbers.Txn_version.current)
+  ; set_zkapp_uri = Proof
+  ; edit_action_state = Proof
+  ; set_token_symbol = Proof
+  ; increment_nonce = Proof
+  ; set_voting_for = Proof
+  ; set_timing = Proof
+  ; access = None
+  }
+
+let load_json_file path f =
+  Yojson.Safe.from_file path |> f |> Result.ok_or_failwith
+
+let write_json ?output json =
+  match output with
+  | None ->
+      Core.printf "%s\n%!" (Yojson.Safe.pretty_to_string json)
+  | Some output ->
+      Yojson.Safe.to_file output json
+
+let write_signed_multisig_updates ?output updates =
+  write_json ?output
+    (`List (List.map updates ~f:Deploy.Signed_multisig_update.to_yojson))
+
 let generate_even_key =
   ( "generate-even-key"
   , Command.basic ~summary:"Generate a private key with an even public key"
@@ -83,10 +113,15 @@ let generate_circuits_config =
 
 let update_outer_verification_keys =
   ( "update-outer-verification-keys"
-  , Command.async ~summary:"Update the verification keys of the outer zkApps"
+  , Command.async
+      ~summary:
+        "Build and sign multisig updates for the outer zkApp verification keys"
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
        and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and output =
+         flag "--output" (optional string)
+           ~doc:"string Output signed update JSON file"
        and only_check =
          flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
@@ -130,31 +165,43 @@ let update_outer_verification_keys =
          let%bind outer_vk =
            Lazy.force Outer_rules_inst.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
-         and bridge_holder_vk =
+         and bridge_holder_enabled_vk =
            Lazy.force Bridge_inst_mina.System_L1_enabled.tag
+           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
+         and bridge_holder_disabled_vk =
+           Lazy.force Bridge_inst_mina.System_L1_disabled.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          and helper_token_owner_vk =
            Lazy.force Bridge_inst_mina.System_L1_token_owner.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          in
-         let deploy_config =
-           Option.value_exn Zeko_circuits_config.deploy_config
-         in
          let outer =
-           ( outer_vk
-           , fetched_outer_vk
-           , Keypair.of_private_key_exn deploy_config.zeko_l1 )
+           (outer_vk, fetched_outer_vk, Zeko_circuits_config.t.zeko_l1)
+         in
+         let bridge_holder_kind, bridge_holder_vk =
+           let enabled_hash =
+             Compile_simple.Verification_key.hash bridge_holder_enabled_vk
+           in
+           let disabled_hash =
+             Compile_simple.Verification_key.hash bridge_holder_disabled_vk
+           in
+           if Field.equal fetched_bridge_holder_vk enabled_hash then
+             ( Deploy.Multisig_update_kind.Bridge_holder_l1_enabled
+             , bridge_holder_enabled_vk )
+           else if Field.equal fetched_bridge_holder_vk disabled_hash then
+             ( Deploy.Multisig_update_kind.Bridge_holder_l1_disabled
+             , bridge_holder_disabled_vk )
+           else
+             failwith "Current bridge holder vk is neither enabled nor disabled"
          in
          let bridge_holders =
-           List.map deploy_config.holder_accounts_l1 ~f:(fun sk ->
-               ( bridge_holder_vk
-               , fetched_bridge_holder_vk
-               , Keypair.of_private_key_exn sk ) )
+           List.map Zeko_circuits_config.t.holder_accounts_l1 ~f:(fun pk ->
+               (bridge_holder_vk, fetched_bridge_holder_vk, pk) )
          in
          let helper_token_owner =
            ( helper_token_owner_vk
            , fetched_helper_token_owner_vk
-           , Keypair.of_private_key_exn deploy_config.helper_token_owner_l1 )
+           , Zeko_circuits_config.t.helper_token_owner_l1 )
          in
          pp "Core rollup" (take2 outer) ;
          pp "Bridge holder" (take2 @@ List.hd_exn bridge_holders) ;
@@ -163,48 +210,54 @@ let update_outer_verification_keys =
          if only_check then return ()
          else
            let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
-           let sender =
+           let signer =
              Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
-           in
-           let%bind nonce =
-             Gql_client.infer_nonce ~logger l1_uri
-               (Public_key.compress sender.public_key)
-             >>| Or_error.ok_exn
            in
            let to_update =
              List.filter_map
                ([ outer; helper_token_owner ] @ bridge_holders)
                ~f:(fun (new_vk, old_vk, kp) ->
-                 let hash = Compile_simple.Verification_key.hash new_vk in
-                 if Field.equal hash old_vk then None else Some (new_vk, kp) )
+                 if
+                   Field.equal
+                     (Compile_simple.Verification_key.hash new_vk)
+                     old_vk
+                 then None
+                 else Some (new_vk, kp) )
            in
-           let command =
-             Deploy.update_verification_keys
-               ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
-               ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-               ~nonce to_update
-             |> Zkapp_command.read_all_proofs_from_disk
+           let%map signed_updates =
+             Deferred.List.map to_update ~how:`Sequential
+               ~f:(fun (new_vk, pk) ->
+                 let kind =
+                   if
+                     Public_key.Compressed.equal pk
+                       Zeko_circuits_config.t.zeko_l1
+                   then Deploy.Multisig_update_kind.Outer
+                   else if
+                     Public_key.Compressed.equal pk
+                       Zeko_circuits_config.t.helper_token_owner_l1
+                   then Deploy.Multisig_update_kind.Bridge_token_owner_l1
+                   else bridge_holder_kind
+                 in
+                 let%map body =
+                   Deploy.build_verification_key_multisig_update_body ~kind
+                     ~public_key:pk ~verification_key:new_vk
+                 in
+                 Deploy.sign_multisig_update ~signer ~kind ~body )
            in
-           match%map Gql_client.send_zkapp l1_uri command with
-           | Ok _ ->
-               let txn_hash =
-                 Mina_transaction.Transaction_hash.hash_command
-                   (Zkapp_command command)
-               in
-               [%log info] "Successfully sent zkapp command: %s"
-                 (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
-           | Error (`Failed_request err) ->
-               [%log error] "Failed request: %s" err
-           | Error (`Graphql_error err) ->
-               [%log error] "Graphql request: %s" err ) )
+           write_signed_multisig_updates ?output signed_updates ) )
 
 let update_inner_verification_keys =
   ( "update-inner-verification-keys"
-  , Command.async ~summary:"Update the verification keys of the inner zkApps"
+  , Command.async
+      ~summary:
+        "Build and sign the outer multisig update needed for inner vk changes"
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
        and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
        and da_node = flag "--da-node" (required string) ~doc:"string DA node"
+       and output =
+         flag "--output" (optional string)
+           ~doc:"string Output signed update JSON file"
        and only_check =
          flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
@@ -397,17 +450,9 @@ let update_inner_verification_keys =
                     ~keys:new_accounts_keys )
                ~diff
            in
-           let%bind command =
-             let%map nonce =
-               Gql_client.infer_nonce ~logger l1_uri
-                 (Public_key.compress sender.public_key)
-               >>| Or_error.ok_exn
-             in
+           let%bind body =
              let open Zeko_circuits.Rollup_state in
-             Deploy.update_outer_state
-               ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
-               ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-               ~nonce
+             Deploy.build_outer_state_multisig_update_body
                ~precondition:
                  Outer_state.
                    { pause_key = None
@@ -430,30 +475,26 @@ let update_inner_verification_keys =
                    ; da_key = None
                    ; acc_set = None
                    }
-             |> Zkapp_command.read_all_proofs_from_disk
            in
-           match%map Gql_client.send_zkapp l1_uri command with
-           | Ok _ ->
-               let txn_hash =
-                 Mina_transaction.Transaction_hash.hash_command
-                   (Zkapp_command command)
-               in
-               [%log info] "Successfully sent zkapp command: %s"
-                 (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
-           | Error (`Failed_request err) ->
-               [%log error] "Failed request: %s" err
-           | Error (`Graphql_error err) ->
-               [%log error] "Graphql request: %s" err ) )
+           let signed_update =
+             Deploy.sign_multisig_update ~signer:sender
+               ~kind:Deploy.Multisig_update_kind.Outer ~body
+           in
+           return (write_signed_multisig_updates ?output [ signed_update ]) ) )
 
 let update_da_key =
   ( "update-da-key"
-  , Command.async ~summary:"Update the DA key of the outer zkApp"
+  , Command.async
+      ~summary:"Build and sign the outer multisig update for the DA key"
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
        and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
        and da_keys =
          flag "--da-key" (listed string) ~doc:"string list of DA keys"
        and da_quorum = flag "--quorum" (required int) ~doc:"int DA quorum"
+       and output =
+         flag "--output" (optional string)
+           ~doc:"string Output signed update JSON file"
        and only_check =
          flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
@@ -495,17 +536,9 @@ let update_da_key =
 
          if only_check then return ()
          else
-           let%bind command =
-             let%map nonce =
-               Gql_client.infer_nonce ~logger l1_uri
-                 (Public_key.compress sender.public_key)
-               >>| Or_error.ok_exn
-             in
+           let%map body =
              let open Zeko_circuits.Rollup_state in
-             Deploy.update_outer_state
-               ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
-               ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-               ~nonce
+             Deploy.build_outer_state_multisig_update_body
                ~precondition:
                  Outer_state.
                    { pause_key = None
@@ -526,28 +559,60 @@ let update_da_key =
                    ; da_key = Some (Field.Var.constant new_da_key)
                    ; acc_set = None
                    }
-             |> Zkapp_command.read_all_proofs_from_disk
            in
-           match%map Gql_client.send_zkapp l1_uri command with
-           | Ok _ ->
-               let txn_hash =
-                 Mina_transaction.Transaction_hash.hash_command
-                   (Zkapp_command command)
-               in
-               [%log info] "Successfully sent zkapp command: %s"
-                 (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
-           | Error (`Failed_request err) ->
-               [%log error] "Failed request: %s" err
-           | Error (`Graphql_error err) ->
-               [%log error] "Graphql request: %s" err ) )
+           let signed_update =
+             Deploy.sign_multisig_update ~signer:sender
+               ~kind:Deploy.Multisig_update_kind.Outer ~body
+           in
+           write_signed_multisig_updates ?output [ signed_update ] ) )
 
 let update_permissions =
   ( "update-permissions"
-  , Command.async ~summary:""
+  , Command.async
+      ~summary:"Build and sign the outer multisig update for permissions"
+      (let%map_open.Command output =
+         flag "--output" (optional string)
+           ~doc:"string Output signed update JSON file"
+       and permissions_file =
+         flag "--permissions-file" (optional string)
+           ~doc:"string Optional JSON file with Permissions.t"
+       in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let signer =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+         in
+         let permissions =
+           match permissions_file with
+           | None ->
+               default_admin_permissions
+           | Some path ->
+               load_json_file path [%of_yojson: Permissions.t]
+         in
+         let%map body =
+           Deploy.build_permissions_multisig_update_payload ~permissions
+         in
+         let signed_update =
+           Deploy.sign_multisig_update ~signer
+             ~kind:Deploy.Multisig_update_kind.Outer ~body:body.body
+         in
+         write_signed_multisig_updates ?output [ signed_update ] ) )
+
+let multisig_submit =
+  ( "multisig-submit"
+  , Command.async
+      ~summary:
+        "Collect signed updates, prove the matching multisig branch, and submit"
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
-       and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI" in
+       and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and signed_update_files =
+         flag "--signed-update-file" (listed string)
+           ~doc:"string Signed update JSON file; may be repeated"
+       in
        fun () ->
+         if List.is_empty signed_update_files then
+           failwith "--signed-update-file is required" ;
          let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
          let sender =
            Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
@@ -555,54 +620,78 @@ let update_permissions =
          let l1_uri = Uri.of_string l1_uri in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
-
-         let%bind nonce =
-           Gql_client.infer_nonce ~logger l1_uri
-             (Public_key.compress sender.public_key)
-           >>| Or_error.ok_exn
+         let signed_updates =
+           List.concat_map signed_update_files ~f:(fun path ->
+               load_json_file path
+                 [%of_yojson: Deploy.Signed_multisig_update.t list] )
          in
-         let%bind command =
-           Deploy.update_permissions ~logger
-             ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
-             ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-             ~nonce ~gql_uri:l1_uri
-             ~permissions:
-               { edit_state = Either
-               ; send = Proof
-               ; receive = None
-               ; set_delegate = Proof
-               ; set_permissions = Proof
-               ; set_verification_key =
-                   (Either, Mina_numbers.Txn_version.current)
-               ; set_zkapp_uri = Proof
-               ; edit_action_state = Proof
-               ; set_token_symbol = Proof
-               ; increment_nonce = Proof
-               ; set_voting_for = Proof
-               ; set_timing = Proof
-               ; access = None
-               }
-           >>| Zkapp_command.read_all_proofs_from_disk
+         let groups =
+           List.fold signed_updates ~init:String.Map.empty
+             ~f:(fun acc (signed_update : Deploy.Signed_multisig_update.t) ->
+               let key =
+                 Yojson.Safe.to_string
+                   (`List
+                     [ Deploy.Multisig_update_kind.to_yojson signed_update.kind
+                     ; `String (Field.to_string signed_update.payload)
+                     ] )
+               in
+               Map.update acc key ~f:(function
+                 | None ->
+                     [ signed_update ]
+                 | Some xs ->
+                     signed_update :: xs ) )
          in
-         match%map Gql_client.send_zkapp l1_uri command with
-         | Ok _ ->
-             let txn_hash =
-               Mina_transaction.Transaction_hash.hash_command
-                 (Zkapp_command command)
-             in
-             [%log info] "Successfully sent zkapp command: %s"
-               (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
-         | Error (`Failed_request err) ->
-             [%log error] "Failed request: %s" err
-         | Error (`Graphql_error err) ->
-             [%log error] "Graphql request: %s" err ) )
+         let groups = Map.data groups in
+         let%map () =
+           Deferred.List.iter groups ~how:`Sequential ~f:(fun group ->
+               let first = List.hd_exn group in
+               let payload =
+                 Deploy.Multisig_update_payload.
+                   { body = first.body; payload = first.payload }
+               in
+               let signatures =
+                 List.map group ~f:(fun signed_update ->
+                     Deploy.Multisig_update_signature.
+                       { public_key = signed_update.signer_public_key
+                       ; signature = signed_update.signature
+                       ; payload = signed_update.payload
+                       } )
+               in
+               let%bind nonce =
+                 Gql_client.infer_nonce ~logger l1_uri
+                   (Public_key.compress sender.public_key)
+                 >>| Or_error.ok_exn
+               in
+               let%bind command =
+                 Deploy.submit_multisig_update ~kind:first.kind ~signer:sender
+                   ~fee:(Currency.Fee.of_mina_string_exn "0.1")
+                   ~nonce ~payload ~signatures
+                 >>| Zkapp_command.read_all_proofs_from_disk
+               in
+               match%map Gql_client.send_zkapp l1_uri command with
+               | Ok _ ->
+                   let txn_hash =
+                     Mina_transaction.Transaction_hash.hash_command
+                       (Zkapp_command command)
+                   in
+                   [%log info] "Successfully sent zkapp command: %s"
+                     (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
+               | Error (`Failed_request err) ->
+                   [%log error] "Failed request: %s" err
+               | Error (`Graphql_error err) ->
+                   [%log error] "Graphql request: %s" err )
+         in
+         () ) )
 
 let set_pause =
   ( "set-pause"
-  , Command.async ~summary:"Set the pause of the outer zkapp"
+  , Command.async ~summary:"Build and sign the outer multisig pause update"
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
        and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and output =
+         flag "--output" (optional string)
+           ~doc:"string Output signed update JSON file"
        and value =
          flag "--value" (required bool) ~doc:"bool Value to set the pause to"
        in
@@ -630,17 +719,9 @@ let set_pause =
 
          [%log info] "Current paused: %b" current_paused ;
 
-         let%bind command =
-           let%map nonce =
-             Gql_client.infer_nonce ~logger l1_uri
-               (Public_key.compress sender.public_key)
-             >>| Or_error.ok_exn
-           in
+         let%map body =
            let open Zeko_circuits in
-           Deploy.update_outer_state
-             ~signature_kind:Zeko_circuits_config.t.chain_l1 ~signer:sender
-             ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-             ~nonce
+           Deploy.build_outer_state_multisig_update_body
              ~precondition:
                Rollup_state.Outer_state.
                  { pause_key = None
@@ -666,20 +747,12 @@ let set_pause =
                  ; da_key = None
                  ; acc_set = None
                  }
-           |> Zkapp_command.read_all_proofs_from_disk
          in
-         match%map Gql_client.send_zkapp l1_uri command with
-         | Ok _ ->
-             let txn_hash =
-               Mina_transaction.Transaction_hash.hash_command
-                 (Zkapp_command command)
-             in
-             [%log info] "Successfully sent zkapp command: %s"
-               (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
-         | Error (`Failed_request err) ->
-             [%log error] "Failed request: %s" err
-         | Error (`Graphql_error err) ->
-             [%log error] "Graphql request: %s" err ) )
+         let signed_update =
+           Deploy.sign_multisig_update ~signer:sender
+             ~kind:Deploy.Multisig_update_kind.Outer ~body
+         in
+         write_signed_multisig_updates ?output [ signed_update ] ) )
 
 let migrate =
   ( "migrate"
@@ -851,6 +924,7 @@ let () =
     ; update_inner_verification_keys
     ; update_da_key
     ; update_permissions
+    ; multisig_submit
     ; set_pause
     ; migrate
     ; dump_ledger
