@@ -261,6 +261,9 @@ let update_inner_verification_keys =
        and only_check =
          flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
+       and db_path =
+         flag "--db-path" (optional string)
+           ~doc:"string Path to the ledger file"
        in
        fun () ->
          let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
@@ -282,47 +285,63 @@ let update_inner_verification_keys =
                  Zeko_circuits.Rollup_state.Outer_state.typ
            >>| fun { ledger_hash; _ } -> ledger_hash
          in
-
-         (* Sync ledger *)
-         let ledger =
-           Ledger.create_ephemeral
-             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
-         in
-         let imt =
-           Indexed_merkle_tree.Db.create
-             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
-         in
          let da_config = Da_layer.Client.Config.of_string_list [ da_node ] in
-         let%bind () =
-           Da_layer.Client.map_diffs ~logger ~config:da_config
-             ~depth:Zeko_constants.constraint_constants.ledger_depth
-             ~source_ledger_hash:`Genesis
-             ~target_ledger_hash:commited_ledger_hash ()
-             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
-               assert (
-                 Ledger_hash.equal
-                   (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
-                   (Ledger.merkle_root ledger) ) ;
-               let progress =
-                 Float.of_int current_chunk /. Float.of_int chunks_length
+         let%bind ledger, imt =
+           match db_path with
+           | Some db_path ->
+               let ledger =
+                 Ledger.Db.create ~directory_name:db_path
+                   ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+                 |> Ledger.of_database
                in
-               [%log info] "Sync progress: %.2f%%" (progress *. 100.0) ;
-               let changed_accounts =
-                 Da_layer.Diff.Stable.Latest.changed_accounts diff
-                 |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+               let imt =
+                 Indexed_merkle_tree.Db.create
+                   ~depth:Zeko_constants.constraint_constants.ledger_depth ()
                in
-               List.iter changed_accounts ~f:(fun (index, account) ->
-                   Ledger.set_at_index_exn ledger index account ) ;
-               (* Add to Indexed Merkle Tree *)
-               List.iter changed_accounts ~f:(fun (_, account) ->
-                   let aid = Account.identifier account in
-                   let _w =
-                     Indexed_merkle_tree.Db.get_or_create_entry_exn imt
-                       (Account_id.derive_token_id ~owner:aid)
-                   in
-                   () ) ;
-               return () )
-           >>| Or_error.ok_exn >>| ignore
+               return (ledger, imt)
+           | None ->
+               (* Sync ledger *)
+               let ledger =
+                 Ledger.create_ephemeral
+                   ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+               in
+               let imt =
+                 Indexed_merkle_tree.Db.create
+                   ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+               in
+               let%map () =
+                 Da_layer.Client.map_diffs ~logger ~config:da_config
+                   ~depth:Zeko_constants.constraint_constants.ledger_depth
+                   ~source_ledger_hash:`Genesis
+                   ~target_ledger_hash:commited_ledger_hash ()
+                   ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+                     assert (
+                       Ledger_hash.equal
+                         (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
+                         (Ledger.merkle_root ledger) ) ;
+                     let progress =
+                       Float.of_int current_chunk /. Float.of_int chunks_length
+                     in
+                     [%log info] "Sync progress: %.2f%%" (progress *. 100.0) ;
+                     let changed_accounts =
+                       Da_layer.Diff.Stable.Latest.changed_accounts diff
+                       |> List.sort ~compare:(fun (a, _) (b, _) ->
+                              Int.compare a b )
+                     in
+                     List.iter changed_accounts ~f:(fun (index, account) ->
+                         Ledger.set_at_index_exn ledger index account ) ;
+                     (* Add to Indexed Merkle Tree *)
+                     List.iter changed_accounts ~f:(fun (_, account) ->
+                         let aid = Account.identifier account in
+                         let _w =
+                           Indexed_merkle_tree.Db.get_or_create_entry_exn imt
+                             (Account_id.derive_token_id ~owner:aid)
+                         in
+                         () ) ;
+                     return () )
+                 >>| Or_error.ok_exn >>| ignore
+               in
+               (ledger, imt)
          in
 
          let pp label (real_vk, old_vk) =
