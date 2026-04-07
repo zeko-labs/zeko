@@ -33,6 +33,8 @@ end) : sig
 
   val typ : (var, t) Typ.t
 
+  val dummy : t
+
   val to_input_var : var -> Field.Var.t Random_oracle.Input.Chunked.t
 
   module PathStep : sig

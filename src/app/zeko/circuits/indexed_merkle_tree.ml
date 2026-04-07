@@ -23,6 +23,8 @@ struct
 
   let typ = F.typ
 
+  let dummy = Field.zero
+
   module PathStep = struct
     type t = { hash_other : F.t; is_right : Boolean.t } [@@deriving snarky]
   end
