@@ -84,9 +84,11 @@ transaction message includes `Nats-Msg-Id: <target_ledger_hash>`.
 
 `zeko.health` carries:
 
-- `component`
+- `service`
 - `instance_id`
 - `status`
+- `last_published_hash`
+- `unproved_hash`
 - `timestamp`
 
 Run help to see the options:
@@ -110,13 +112,18 @@ Run it with:
 
 ```bash
 export DUNE_PROFILE=devnet
-dune exec ./explorer/run.exe -- \
+dune exec ./explorer/explorer_backfill_server.exe -- \
     -p <int?> \
     --da-node <string list> \
     --nats-url <string>
 ```
 
-The GraphQL HTTP endpoint stays on `/graphql`.
+The backfill API is a separate process from the sequencer GraphQL API. By
+default the sequencer listens on `8080` and the standalone backfill server
+listens on `8090`, so they do not conflict unless you explicitly bind both to
+the same port.
+
+The backfill GraphQL HTTP endpoint stays on `/graphql`.
 The service requires `--nats-url` because each backfill republishes historical
 diffs into NATS.
 
@@ -160,6 +167,12 @@ responses as GraphQL-SSE events.
 - `ok`
 - `instanceId`
 - `startedAt`
+
+## Explorer acceptance tests
+
+The explorer-specific tests now live under
+`src/app/zeko/sequencer/explorer/tests/` and use copied `.feature` files from
+the explorer spike as the main test inventory.
 
 ## Deploy rollup contract to L1
 

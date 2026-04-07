@@ -1,9 +1,8 @@
-; Explorer support libraries, test modules, and the backfill service executable.
+; Explorer support libraries and the standalone backfill server executable.
 
 (library
  (name explorer_events)
- (inline_tests)
- (modules explorer_events explorer_events_tests)
+ (modules explorer_events)
  (libraries
   da_layer
   nats_client
@@ -20,8 +19,10 @@
 
 (library
  (name explorer_backfill_service)
- (inline_tests)
- (modules explorer_backfill_service explorer_backfill_service_tests)
+ (modules
+  explorer_backfill_service
+  explorer_backfill_graphql
+  explorer_backfill_sse)
  (libraries
   explorer_events
   sequencer_lib
@@ -42,15 +43,15 @@
   uri
   core
   core_kernel
-  async
+ async
   async_unix
   ppx_inline_test.config)
  (preprocess
   (pps ppx_let ppx_jane ppx_mina)))
 
 (executable
- (name run)
- (modules run)
+ (name explorer_backfill_server)
+ (modules explorer_backfill_server)
  (libraries
   explorer_backfill_service
   sequencer_lib

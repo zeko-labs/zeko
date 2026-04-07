@@ -1,6 +1,6 @@
-(* Runs the standalone explorer backfill service: tracks in-memory backfill
-   jobs, republishes DA diffs to NATS, and exposes GraphQL query/mutation/
-   subscription endpoints for job control and progress streaming. *)
+(* Owns explorer backfill job state and execution: tracks in-memory jobs,
+   republishes DA diffs to NATS, and exposes the snapshots used by the GraphQL
+   and SSE transport layers. *)
 
 open Core
 open Async
@@ -303,196 +303,47 @@ let parse_ledger_hash hash =
   |> Or_error.map_error ~f:(fun err ->
          Error.tag_arg err "Invalid ledger hash" hash String.sexp_of_t )
 
-let start_backfill t ~from_hash ~to_hash =
-  let job =
-    { id = Uuid.to_string (Uuid_unix.create ())
-    ; from_hash
-    ; to_hash
-    ; status = Queued
-    ; diffs_published = 0
-    ; error = None
-    ; created_at = Time.now ()
-    ; started_at = None
-    ; finished_at = None
-    ; subscribers = ref []
-    }
-  in
+let create_job ?error ?started_at ?finished_at ~status ~from_hash ~to_hash () =
+  { id = Uuid.to_string (Uuid_unix.create ())
+  ; from_hash
+  ; to_hash
+  ; status
+  ; diffs_published = 0
+  ; error
+  ; created_at = Time.now ()
+  ; started_at
+  ; finished_at
+  ; subscribers = ref []
+  }
+
+let register_job t job =
   Hashtbl.set t.jobs ~key:job.id ~data:job ;
   notify_subscribers job ;
+  job
+
+let start_backfill t ~from_hash ~to_hash =
+  let job =
+    create_job ~status:Queued ~from_hash ~to_hash ()
+  in
+  let job = register_job t job in
   run_job t job ;
   job
+
+let failed_job_snapshot_from_strings ~from_hash ~to_hash error =
+  let now = Time.now () in
+  { id = Uuid.to_string (Uuid_unix.create ())
+  ; from_hash
+  ; to_hash
+  ; status = string_of_job_status Failed
+  ; diffs_published = 0
+  ; error = Some error
+  ; created_at = timestamp_string now
+  ; started_at = None
+  ; finished_at = Some (timestamp_string now)
+  }
 
 let start_backfill_from_strings t ~from_hash ~to_hash =
   let open Or_error.Let_syntax in
   let%bind from_hash = parse_ledger_hash from_hash in
   let%map to_hash = parse_ledger_hash to_hash in
   start_backfill t ~from_hash ~to_hash
-
-module Gql = struct
-  open Graphql_async.Schema
-
-  let backfill_job_typ : (t, job_snapshot) typ =
-    obj "BackfillJob"
-      ~fields:(fun _ ->
-        [ field "id" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ job -> job.id)
-        ; field "fromHash" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ job -> job.from_hash)
-        ; field "toHash" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ job -> job.to_hash)
-        ; field "status" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ job -> job.status)
-        ; field "diffsPublished" ~typ:(non_null int) ~args:[]
-            ~resolve:(fun _ job -> job.diffs_published)
-        ; field "error" ~typ:string ~args:[]
-            ~resolve:(fun _ job -> job.error)
-        ; field "createdAt" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ job -> job.created_at)
-        ; field "startedAt" ~typ:string ~args:[]
-            ~resolve:(fun _ job -> job.started_at)
-        ; field "finishedAt" ~typ:string ~args:[]
-            ~resolve:(fun _ job -> job.finished_at)
-        ] )
-
-  let progress_typ : (t, progress_snapshot) typ =
-    obj "BackfillProgress"
-      ~fields:(fun _ ->
-        [ field "id" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ progress -> progress.id)
-        ; field "status" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ progress -> progress.status)
-        ; field "diffsPublished" ~typ:(non_null int) ~args:[]
-            ~resolve:(fun _ progress -> progress.diffs_published)
-        ; field "error" ~typ:string ~args:[]
-            ~resolve:(fun _ progress -> progress.error)
-        ] )
-
-  let health_typ : (t, health_snapshot) typ =
-    obj "Health"
-      ~fields:(fun _ ->
-        [ field "ok" ~typ:(non_null bool) ~args:[]
-            ~resolve:(fun _ value -> value.ok)
-        ; field "instanceId" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ value -> value.instance_id)
-        ; field "startedAt" ~typ:(non_null string) ~args:[]
-            ~resolve:(fun _ value -> value.started_at)
-        ] )
-
-  let query_fields =
-    [ io_field "backfillJob" ~typ:backfill_job_typ
-        ~args:Arg.[ arg "id" ~typ:(non_null string) ]
-        ~resolve:(fun { ctx; _ } () id ->
-          return (Option.map (find_job ctx id) ~f:snapshot))
-    ; io_field "health" ~typ:(non_null health_typ) ~args:[]
-        ~resolve:(fun { ctx; _ } () () -> return (health ctx))
-    ]
-
-  let mutation_fields =
-    [ io_field "backfill" ~typ:(non_null backfill_job_typ)
-        ~args:
-          Arg.
-            [ arg "fromHash" ~typ:(non_null string)
-            ; arg "toHash" ~typ:(non_null string)
-            ]
-        ~resolve:(fun { ctx; _ } () from_hash to_hash ->
-          match start_backfill_from_strings ctx ~from_hash ~to_hash with
-          | Ok job ->
-              return (Ok (snapshot job))
-          | Error err ->
-              return (Error (Error.to_string_hum err)))
-    ]
-
-  let subscription_fields =
-    [ subscription_field "backfillProgress" ~typ:(non_null progress_typ)
-        ~args:Arg.[ arg "id" ~typ:(non_null string) ]
-        ~resolve:(fun { ctx; _ } id ->
-          match subscribe_progress ctx ~id with
-          | Ok progress ->
-              Deferred.Result.return progress
-          | Error err ->
-              Deferred.return (Error (Error.to_string_hum err)))
-    ]
-
-  let schema =
-    Graphql_async.Schema.(
-      schema query_fields ~mutations:mutation_fields
-        ~subscriptions:subscription_fields)
-end
-
-module Sse = struct
-  let headers =
-    Cohttp.Header.of_list
-      [ ("Content-Type", "text/event-stream")
-      ; ("Cache-Control", "no-cache")
-      ; ("Connection", "keep-alive")
-      ]
-
-  let next_event payload =
-    "event: next\ndata: " ^ Yojson.Basic.to_string payload ^ "\n\n"
-
-  let complete_event = "event: complete\ndata: {}\n\n"
-
-  let parse_request req body =
-    Init.Graphql_internal.Params.extract req body
-    |> Result.map_error ~f:Error.of_string
-
-  let execute_subscription t req body =
-    let open Deferred.Let_syntax in
-    match parse_request req body with
-    | Error err ->
-        Deferred.return (Error err)
-    | Ok (query, variables, operation_name) -> (
-        match Graphql_parser.parse query with
-        | Error err ->
-            Deferred.return (Error (Error.of_string err))
-        | Ok doc ->
-            let%map result =
-              Graphql_async.Schema.execute Gql.schema t ?variables
-                ?operation_name doc
-            in
-            match result with
-            | Ok (`Stream stream) ->
-                Ok stream
-            | Ok (`Response _) ->
-                Error
-                  (Error.of_string
-                     "Expected a GraphQL subscription for /graphql/stream")
-            | Error err ->
-                Error
-                  (Error.of_string
-                     ("Invalid GraphQL subscription: "
-                     ^ Yojson.Basic.to_string err ) ) )
-
-  let rec write_stream body_writer stream =
-    let open Deferred.Let_syntax in
-    match stream () with
-    | Seq.Nil ->
-        let%map () = Pipe.write body_writer complete_event in
-        Pipe.close body_writer
-    | Seq.Cons (payload, next) ->
-        let payload =
-          match payload with
-          | Ok payload ->
-              payload
-          | Error err ->
-              err
-        in
-        let%bind () = Pipe.write body_writer (next_event payload) in
-        write_stream body_writer next
-
-let callback t _conn req body =
-    let open Deferred.Let_syntax in
-    let%bind body = Cohttp_async.Body.to_string body in
-    match%bind execute_subscription t req body with
-    | Error err ->
-        Cohttp_async.Server.respond_string ~status:`Bad_request
-          (Error.to_string_hum err)
-        >>| fun response -> `Response response
-    | Ok stream ->
-        let body_reader, body_writer = Pipe.create () in
-        don't_wait_for (write_stream body_writer stream) ;
-        Cohttp_async.Server.respond ~headers
-          ~body:(Cohttp_async.Body.of_pipe body_reader)
-          ()
-        >>| fun response -> `Response response
-end

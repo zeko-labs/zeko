@@ -114,14 +114,16 @@ Encoding rules:
 
 Fields:
 
-- `component`
+- `service`
 - `instance_id`
 - `status`
+- `last_published_hash`
+- `unproved_hash`
 - `timestamp`
 
 Encoding rules:
 
-- `component = "sequencer"`
+- `service = "sequencer-nats-publisher"`
 - `status = "ok"`
 
 Result:

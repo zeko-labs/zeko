@@ -22,7 +22,6 @@ module Sequencer = struct
       ; commitment_period_sec : float
       ; db_dir : string
       ; checkpoints_dir : string option
-      ; nats_url : Uri.t option
       ; signer : Keypair.t
       ; l1_uri : Uri.t
       ; archive_uri : Uri.t
@@ -326,8 +325,11 @@ module Sequencer = struct
       ~source_ledger_hash ~target_ledger_hash
 
   let publish_health_event t =
+    let { State_hashes.unproved_ledger_hash; _ } = get_latest_state t in
     Explorer_events.publish_health (nats_sink t.nats_client) ~logger:t.logger
-      ~component:"sequencer" ~instance_id:t.instance_id ~status:"ok"
+      ~service:"sequencer-nats-publisher" ~instance_id:t.instance_id
+      ~status:"ok" ~last_published_hash:(get_root t)
+      ~unproved_hash:unproved_ledger_hash ()
 
   let diff_with_metadata ~logger ~diff ~acc_set_openings =
     Da_layer.Diff.add_time_and_acc_set ~logger diff
@@ -1152,7 +1154,6 @@ module Sequencer = struct
         ; commitment_period_sec
         ; db_dir
         ; checkpoints_dir
-        ; nats_url
         ; l1_uri
         ; archive_uri
         ; signer

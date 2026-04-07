@@ -88,16 +88,26 @@ let build_finality_message ~logger ~status ~source_ledger_hash
         ]
   }
 
-let build_health_message ~logger ~component ~instance_id ~status =
+let build_health_message ~logger ~service ~instance_id ~status
+    ?last_published_hash ?unproved_hash () =
+  let optional_hash name =
+    function
+    | None ->
+        []
+    | Some hash ->
+        [ (name, Ledger_hash.to_yojson hash) ]
+  in
   { subject = Subject.health
   ; headers = []
   ; payload =
       `Assoc
-        [ ("component", `String component)
-        ; ("instance_id", `String instance_id)
-        ; ("status", `String status)
-        ; ("timestamp", timestamp_json ~logger)
-        ]
+        ( [ ("service", `String service)
+          ; ("instance_id", `String instance_id)
+          ; ("status", `String status)
+          ]
+        @ optional_hash "last_published_hash" last_published_hash
+        @ optional_hash "unproved_hash" unproved_hash
+        @ [ ("timestamp", timestamp_json ~logger) ] )
   }
 
 let publish sink message = sink message
@@ -112,5 +122,8 @@ let publish_finality sink ~logger ~status ~source_ledger_hash ~target_ledger_has
   @@ build_finality_message ~logger ~status ~source_ledger_hash
        ~target_ledger_hash
 
-let publish_health sink ~logger ~component ~instance_id ~status =
-  publish sink @@ build_health_message ~logger ~component ~instance_id ~status
+let publish_health sink ~logger ~service ~instance_id ~status
+    ?last_published_hash ?unproved_hash () =
+  publish sink
+  @@ build_health_message ~logger ~service ~instance_id ~status
+       ?last_published_hash ?unproved_hash ()

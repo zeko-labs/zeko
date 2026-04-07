@@ -1,5 +1,5 @@
-(* Boots the standalone explorer backfill HTTP service and routes GraphQL query
-   traffic plus GraphQL-SSE subscription traffic to the backfill service. *)
+(* Boots the standalone explorer backfill HTTP server and routes GraphQL query
+   traffic plus GraphQL-SSE subscription traffic to the backfill modules. *)
 
 open Core
 open Async
@@ -18,12 +18,12 @@ let run ~logger ~port ~da_config ~nats_url () =
   let graphql_callback =
     Graphql_cohttp_async.make_callback
       (fun ~with_seq_no:_ _req -> service)
-      Explorer_backfill_service.Gql.schema
+      Explorer_backfill_graphql.schema
   in
   let callback ~body _sock req =
     match Uri.path (Cohttp.Request.uri req) with
     | "/graphql/stream" ->
-        Explorer_backfill_service.Sse.callback service () req body
+        Explorer_backfill_sse.callback service () req body
     | _ ->
         graphql_callback () req body
   in
@@ -38,15 +38,19 @@ let run ~logger ~port ~da_config ~nats_url () =
     |> Deferred.ignore_m |> don't_wait_for
   in
   Shutdown.at_shutdown (fun () -> Explorer_backfill_service.shutdown service) ;
-  [%log info] "Explorer backfill service listening on port %d" port ;
+  [%log info] "Explorer backfill server listening on port %d" port ;
   never_returns (Async.Scheduler.go ())
 
 let () =
-  Command.basic ~summary:"Zeko explorer backfill service"
+  Command.basic ~summary:"Zeko explorer backfill server"
     (let%map_open.Command log_json = Flag.Log.json
      and log_level = Flag.Log.level
      and port =
-       flag "-p" (optional_with_default 8090 int) ~doc:"int Port to listen on"
+       flag "-p"
+         (optional_with_default 8090 int)
+         ~doc:
+           "int Port for the standalone backfill GraphQL API; keep distinct \
+            from the sequencer GraphQL port when both run on the same host"
      and da_nodes =
        flag "--da-node" (listed string)
          ~doc:"string Address of the DA node, can be supplied multiple times"
