@@ -8,7 +8,11 @@ cd "$SCRIPT_DIR/.."
 # Don't do anything if we're in a nix shell
 [[ "$IN_NIX_SHELL$CI$BUILDKITE" == "" ]] || exit 0
 
-sum="$(cksum opam.export | grep -oE '^\S*')"
+sum="$(
+    cat opam.export scripts/external-opam-pins.txt \
+    | cksum \
+    | grep -oE '^\S*'
+)"
 switch_dir=opam_switches/"$sum"
 
 if [[ -d _opam ]]; then
@@ -34,3 +38,5 @@ if [[ ! -d "${switch_dir}" ]]; then
 fi
 
 ln -s "${switch_dir}" _opam
+
+./scripts/pin-external-packages.sh

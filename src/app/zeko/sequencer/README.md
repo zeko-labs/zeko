@@ -11,6 +11,11 @@ Think of the sequencer as the conductor of an orchestra in Zeko. It plays a vita
 
 ## Build
 
+The repo-managed OCaml setup imports `opam.export` and then runs
+`./scripts/pin-external-packages.sh`, which pins `nats-client` and
+`nats-client-async` from GitHub into the switch. No `nats-ml` submodule checkout
+is required.
+
 ```bash
 DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
 ```

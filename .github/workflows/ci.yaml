@@ -70,7 +70,7 @@ jobs:
         id: opam_dependencies
         with:
           path: ~/.opam
-          key: zeko_opam_dependencies-${{ hashFiles('./opam.export') }}
+          key: zeko_opam_dependencies-${{ hashFiles('./opam.export', './scripts/external-opam-pins.txt', './scripts/pin-external-packages.sh') }}
       # Install opam dependencies
       - name: 🏗️  Install opam dependencies
         run: |
@@ -84,7 +84,7 @@ jobs:
         id: zeko_build
         with:
           path: ./_build
-          key: zeko_build-${{ hashFiles('./opam.export') }}
+          key: zeko_build-${{ hashFiles('./opam.export', './scripts/external-opam-pins.txt', './scripts/pin-external-packages.sh') }}
       # Build!
       - name: 📦 Build zeko packages
         run: |
