@@ -1,0 +1,46 @@
+(library
+ (name explorer_backfill_service)
+ (inline_tests)
+ (modules explorer_backfill_service)
+ (libraries
+  sequencer_lib
+  da_layer
+  zeko_constants
+  init
+  cli_lib
+  ;; mina ;;
+  mina_base
+  ;; opam libraries ;;
+  cohttp
+  cohttp-async
+  graphql
+  graphql-async
+  uri
+  core
+  core_kernel
+  async
+  async_unix
+  ppx_inline_test.config)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina)))
+
+(executable
+ (name run)
+ (modules run)
+ (libraries
+  explorer_backfill_service
+  sequencer_lib
+  init
+  cli_lib
+  ;; opam libraries ;;
+  cohttp
+  cohttp-async
+  graphql
+  graphql-async
+  core
+  core_kernel
+  async
+  async_unix
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina)))

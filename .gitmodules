@@ -7,3 +7,6 @@
 [submodule "src/lib/crypto/kimchi_bindings/stubs/kimchi-stubs-vendors"]
 	path = src/lib/crypto/kimchi_bindings/stubs/kimchi-stubs-vendors
 	url = https://github.com/MinaProtocol/kimchi-stubs-vendors.git
+[submodule "src/lib/nats-ml"]
+	path = src/lib/nats-ml
+	url = https://github.com/Hebilicious/nats-ml

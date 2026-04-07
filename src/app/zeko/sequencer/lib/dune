@@ -11,6 +11,8 @@
   indexed_merkle_tree
   utils
   gql_client
+  nats_client
+  nats_client_async
   ;; mina ;;
   mina_base
   mina_base.import

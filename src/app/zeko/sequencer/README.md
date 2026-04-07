@@ -45,15 +45,115 @@ dune exec ./run.exe -- \
     --deposit-delay-blocks <int?> \
     --fee-modifier <float?> \
     --minimum-fee <float?> \
+    --nats-url <string?> \
     --slot-acceptance <float?> \
     --commit-validity-period <int?>
 ```
+
+`--nats-url` enables explorer event publishing. Without it, the sequencer keeps
+the existing behavior and all NATS publish paths become no-ops.
+
+When NATS is enabled, the sequencer emits:
+
+- `zeko.l2.transactions`
+- `zeko.l2.finality`
+- `zeko.health`
+
+`zeko.l2.transactions` carries:
+
+- `kind`: `user_command`, `fee_transfer`, `sync_replay`, or `genesis_replay`
+- `target_ledger_hash`
+- `genesis`
+- `diff`
+
+`diff` uses the existing `Da_layer.Diff.Stable.V3` JSON shape and every
+transaction message includes `Nats-Msg-Id: <target_ledger_hash>`.
+
+`zeko.l2.finality` carries:
+
+- `status`: `proved` or `committed`
+- `source_ledger_hash`
+- `target_ledger_hash`
+- `timestamp`
+
+`zeko.health` carries:
+
+- `component`
+- `instance_id`
+- `status`
+- `timestamp`
 
 Run help to see the options:
 
 ```bash
 dune exec ./run.exe -- --help
 ```
+
+## Explorer backfill service
+
+The backfill service republishes historical DA diffs into the same
+`zeko.l2.transactions` NATS subject used by the live sequencer path.
+
+Build it with:
+
+```bash
+DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer/explorer
+```
+
+Run it with:
+
+```bash
+export DUNE_PROFILE=devnet
+dune exec ./explorer/run.exe -- \
+    -p <int?> \
+    --da-node <string list> \
+    --nats-url <string>
+```
+
+The GraphQL HTTP endpoint stays on `/graphql`.
+The service requires `--nats-url` because each backfill republishes historical
+diffs into NATS.
+
+Available GraphQL operations:
+
+- `backfill(fromHash, toHash) -> BackfillJob`
+- `backfillJob(id) -> BackfillJob | null`
+- `health -> Health`
+
+The GraphQL-SSE endpoint is `/graphql/stream`.
+
+Supported subscription:
+
+- `backfillProgress(id) -> BackfillProgress`
+
+Use the same GraphQL subscription document against `/graphql/stream`; the
+service executes the schema subscription and streams `backfillProgress`
+responses as GraphQL-SSE events.
+
+`BackfillJob` fields:
+
+- `id`
+- `fromHash`
+- `toHash`
+- `status`
+- `diffsPublished`
+- `error`
+- `createdAt`
+- `startedAt`
+- `finishedAt`
+
+`BackfillProgress` fields:
+
+- `id`
+- `status`
+- `diffsPublished`
+- `error`
+
+`Health` fields:
+
+- `ok`
+- `instanceId`
+- `startedAt`
 
 ## Deploy rollup contract to L1
 
