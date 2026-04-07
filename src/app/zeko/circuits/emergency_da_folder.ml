@@ -41,6 +41,10 @@ module M = struct
       assert_equal ~label:__LOC__ Ledger_hash.typ x.source_ledger
         x.target_ledger
     in
+    let* () =
+      assert_equal ~label:__LOC__ Account_set.typ x.source_acc_set
+        x.target_acc_set
+    in
     Checked.return x
 
   let step (elem : Elem.var) (stmt : Stmt.var) =
