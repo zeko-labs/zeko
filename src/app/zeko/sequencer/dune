@@ -8,6 +8,7 @@
  (name run)
  (libraries
   sequencer_lib
+  signer_service
   is_compile_simple_real_real
   ;; mina ;;
   init
@@ -32,6 +33,7 @@
  (name run_fake)
  (libraries
   sequencer_lib
+  signer_service
   is_compile_simple_real_fake
   ;; mina ;;
   init

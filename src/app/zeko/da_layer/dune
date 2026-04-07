@@ -1,7 +1,8 @@
 (executable
  (name cli)
  (libraries
-  da_layer
+ da_layer
+  signer_service
   ;; mina ;;
   cli_lib
   ;; opam libraries ;;

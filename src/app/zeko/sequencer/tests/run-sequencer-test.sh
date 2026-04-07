@@ -13,6 +13,7 @@ fi
 MODE="$1"
 NUM_PROVERS="$2"
 PROVER_PIDS=()
+SIGNER_PIDS=()
 PROVERS=()
 
 case "$MODE" in
@@ -31,7 +32,7 @@ fi
 cleanup() {
   local exit_status=$1
   echo "Cleaning up..."
-  kill ${l1_pid:-} ${da1_pid:-} ${da2_pid:-} ${da3_pid:-} "${PROVER_PIDS[@]}" 2>/dev/null
+  kill ${l1_pid:-} ${da1_pid:-} ${da2_pid:-} ${da3_pid:-} "${PROVER_PIDS[@]}" "${SIGNER_PIDS[@]}" 2>/dev/null
   rm -rf "$TMP_DIR"
   docker rm -f pg-sequencer 2>/dev/null
   docker rm -f rabbitmq-sequencer 2>/dev/null
@@ -43,6 +44,7 @@ trap 'cleanup $?' EXIT
 
 SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
+SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
 export ZEKO_SIGNATURE_KIND=testnet
 export ZEKO_CIRCUITS_CONFIG=test
@@ -52,7 +54,7 @@ TMP_DIR=$(mktemp -d)
 wait_for_port() {
   local port=$1
   local pid=$2
-  while ! nc -z localhost $port; do
+  while ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
     sleep 1
 
     if ! kill -0 $pid 2>/dev/null; then
@@ -62,6 +64,12 @@ wait_for_port() {
   done
 
   echo "Port $port is now open"
+}
+
+KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli.exe"
+
+generate_even_key() {
+  "$KEYGEN_BIN" generate-even-key | awk -F': ' '/Private key:/ {print $2}'
 }
 
 docker run --rm --name pg-sequencer \
@@ -78,16 +86,52 @@ docker run -d --name rabbitmq-sequencer \
 wait_for_port 5433 $$
 wait_for_port 5672 $$
 
+SEQUENCER_SIGNER_BIN="$SIGNER_BUILD_ROOT/cli.exe"
+DA_SIGNER_BIN="$SIGNER_BUILD_ROOT/cli.exe"
+
+ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY="$(generate_even_key)"
+DA1_SIGNER_PRIVATE_KEY="$(generate_even_key)"
+DA2_SIGNER_PRIVATE_KEY="$(generate_even_key)"
+DA3_SIGNER_PRIVATE_KEY="$(generate_even_key)"
+
+export ZEKO_TEST_SEQUENCER_SIGNER="127.0.0.1:8600"
+export ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY
+
+MINA_PRIVATE_KEY="$ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY" \
+  "$SEQUENCER_SIGNER_BIN" run --port 8600 --allow-zkapp-signing --max-fee 10 --max-balance-change 1000000 &
+signer_seq_pid=$!
+SIGNER_PIDS+=("$signer_seq_pid")
+
+MINA_PRIVATE_KEY="$DA1_SIGNER_PRIVATE_KEY" \
+  "$DA_SIGNER_BIN" run --port 8601 --allow-field-signing &
+signer_da1_pid=$!
+SIGNER_PIDS+=("$signer_da1_pid")
+
+MINA_PRIVATE_KEY="$DA2_SIGNER_PRIVATE_KEY" \
+  "$DA_SIGNER_BIN" run --port 8602 --allow-field-signing &
+signer_da2_pid=$!
+SIGNER_PIDS+=("$signer_da2_pid")
+
+MINA_PRIVATE_KEY="$DA3_SIGNER_PRIVATE_KEY" \
+  "$DA_SIGNER_BIN" run --port 8603 --allow-field-signing &
+signer_da3_pid=$!
+SIGNER_PIDS+=("$signer_da3_pid")
+
+wait_for_port 8600 $signer_seq_pid
+wait_for_port 8601 $signer_da1_pid
+wait_for_port 8602 $signer_da2_pid
+wait_for_port 8603 $signer_da3_pid
+
 $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet --block-period 9999999 &
 l1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --random-sk --network-id testnet --db-dir "$TMP_DIR/da1_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id testnet --db-dir "$TMP_DIR/da1_db" --signer 127.0.0.1:8601 &
 da1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --random-sk --network-id testnet --db-dir "$TMP_DIR/da2_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id testnet --db-dir "$TMP_DIR/da2_db" --signer 127.0.0.1:8602 &
 da2_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --random-sk --healthcheck-port 8560 --network-id testnet --db-dir "$TMP_DIR/da3_db" &
+$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id testnet --db-dir "$TMP_DIR/da3_db" --signer 127.0.0.1:8603 &
 da3_pid=$!
 
 # Launch provers

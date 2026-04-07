@@ -38,6 +38,15 @@ let mq_host = Host_and_port.of_string "localhost:5672"
 
 let run = Thread_safe.block_on_async_exn
 
+let get_test_signer () =
+  run (fun () ->
+      let location =
+        Sys.getenv_exn "ZEKO_TEST_SEQUENCER_SIGNER"
+        |> Host_and_port.of_string
+      in
+      Signer_service.Client.create ~logger ~location
+      >>| Signer_service.Signer.of_client )
+
 let free_sequencer (sequencer : Sequencer.t Handle.valid_t) =
   Gc.full_major () ;
   run (fun () -> Sequencer.shutdown !sequencer) ;
@@ -62,8 +71,15 @@ let () =
        ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:da_config_with2 ~da_keys
        ~da_quorum ~mq_host ~slot_acceptance () )
     ~f:(fun
-         { outer_kp; signer; specs; sequencer; da_keys; accounts; l1_config; _ }
-       ->
+         { outer_kp
+         ; signer_pk
+         ; specs
+         ; sequencer
+         ; da_keys
+         ; accounts
+         ; l1_config
+         ; _
+         } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
@@ -138,7 +154,7 @@ let () =
           in
           let%bind { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -170,7 +186,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -197,7 +213,7 @@ let () =
             in
             let%bind { ledger_hash = committed_ledger_hash; _ } =
               Gql_client.infer_state ~logger gql_uri
-                ~signer_pk:(Public_key.compress signer.public_key)
+                ~signer_pk
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
               >>| Utils.value_of_zkapp_state
@@ -219,7 +235,8 @@ let () =
                 ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
                 ~da_quorum ~db_dir:None ~checkpoints_dir:None
                 ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
-                ~signer ~deposit_delay_blocks:0 ~mq_host ~fee_modifier:1.0
+                ~signer:(get_test_signer ())
+                ~deposit_delay_blocks:0 ~mq_host ~fee_modifier:1.0
                 ~minimum_fee:0.01 ~slot_acceptance
                 ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
                 ~l1_config
@@ -298,7 +315,7 @@ let () =
     (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri
        ~da_config:da_config_with2 ~da_keys ~da_quorum ~mq_host ~slot_acceptance
        () )
-    ~f:(fun { outer_kp; signer; specs; sequencer; da_keys; l1_config; _ } ->
+    ~f:(fun { outer_kp; signer_pk; specs; sequencer; da_keys; l1_config; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
@@ -321,7 +338,9 @@ let () =
             Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir)
               ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
-              ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:0 ~mq_host
+              ~archive_uri:gql_uri
+              ~signer:(get_test_signer ())
+              ~deposit_delay_blocks:0 ~mq_host
               ~da_keys ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
@@ -338,7 +357,7 @@ let () =
             in
             let%map { ledger_hash = committed_ledger_hash; _ } =
               Gql_client.infer_state ~logger gql_uri
-                ~signer_pk:(Public_key.compress signer.public_key)
+                ~signer_pk
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
               >>| Utils.value_of_zkapp_state
@@ -408,7 +427,7 @@ let () =
     (Sequencer_spec.gen ~logger ~db_dir:db_dir1 ~checkpoints_dir
        ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:da_config_with2 ~da_keys
        ~da_quorum ~mq_host ~slot_acceptance () )
-    ~f:(fun { outer_kp; signer; specs; sequencer; da_keys; l1_config; _ } ->
+    ~f:(fun { outer_kp; signer_pk; specs; sequencer; da_keys; l1_config; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
@@ -433,7 +452,7 @@ let () =
             in
             let%map { ledger_hash = committed_ledger_hash; _ } =
               Gql_client.infer_state ~logger gql_uri
-                ~signer_pk:(Public_key.compress signer.public_key)
+                ~signer_pk
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
               >>| Utils.value_of_zkapp_state
@@ -453,7 +472,8 @@ let () =
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir2)
               ~checkpoints_dir:(Some checkpoints_dir)
               ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
-              ~signer ~deposit_delay_blocks:0 ~mq_host ~da_keys
+              ~signer:(get_test_signer ())
+              ~deposit_delay_blocks:0 ~mq_host ~da_keys
               ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
@@ -498,7 +518,7 @@ let () =
     (Sequencer_spec.gen ~logger ~db_dir ~postgres_uri ~gql_uri
        ~da_config:da_config_with2 ~da_keys ~da_quorum ~mq_host ~slot_acceptance
        () )
-    ~f:(fun { outer_kp; signer; specs; sequencer; da_keys; l1_config; _ } ->
+    ~f:(fun { outer_kp; signer_pk; specs; sequencer; da_keys; l1_config; _ } ->
       let commands =
         List.mapi specs ~f:(fun i spec ->
             if i % 2 = 0 then
@@ -541,7 +561,7 @@ let () =
             in
             let%map { ledger_hash = committed_ledger_hash; _ } =
               Gql_client.infer_state ~logger gql_uri
-                ~signer_pk:(Public_key.compress signer.public_key)
+                ~signer_pk
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
               >>| Utils.value_of_zkapp_state
@@ -559,7 +579,9 @@ let () =
             Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with2 ~da_quorum ~db_dir:(Some db_dir)
               ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
-              ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:0 ~mq_host
+              ~archive_uri:gql_uri
+              ~signer:(get_test_signer ())
+              ~deposit_delay_blocks:0 ~mq_host
               ~da_keys ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
@@ -573,7 +595,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -598,7 +620,7 @@ let () =
     (Sequencer_spec.gen ~logger ~number_of_transactions:5 ~postgres_uri ~gql_uri
        ~da_config:da_config_with2 ~da_keys ~da_quorum ~mq_host
        ~slot_acceptance:(Time.Span.of_min 10.) () )
-    ~f:(fun { specs; sequencer; signer; outer_kp; l1_config; _ } ->
+    ~f:(fun { specs; sequencer; signer_pk; outer_kp; l1_config; _ } ->
       run (fun () ->
           let open Mina_numbers in
           let spec, specs = (List.hd_exn specs, List.tl_exn specs) in
@@ -728,7 +750,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -756,7 +778,7 @@ let () =
        ~slot_acceptance:(Time.Span.of_min 10.)
        ~commit_validity_period:(Global_slot_span.of_int 20)
        () )
-    ~f:(fun { outer_kp; sequencer; signer; l1_config; _ } ->
+    ~f:(fun { outer_kp; sequencer; signer_pk; l1_config; _ } ->
       (* Create l1 accounts *)
       let l1_accounts =
         Array.create ~len:6 ()
@@ -885,7 +907,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -936,7 +958,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -957,7 +979,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -1182,7 +1204,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -1511,7 +1533,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state
@@ -1568,7 +1590,7 @@ let () =
           in
           let%map { ledger_hash = committed_ledger_hash; _ } =
             Gql_client.infer_state ~logger gql_uri
-              ~signer_pk:(Public_key.compress signer.public_key)
+              ~signer_pk
               ~zkapp_pk:(Public_key.compress outer_kp.public_key)
             >>| Or_error.ok_exn
             >>| Utils.value_of_zkapp_state

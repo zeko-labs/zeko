@@ -2,11 +2,10 @@ open Async_kernel
 open Core_kernel
 open Mina_base
 open Mina_transaction
-open Signature_lib
 
 type t =
   { l1_uri : Uri.t
-  ; signer : Keypair.t
+  ; signer : Signer_service.Signer.t
   ; q : unit Throttle.t
   ; mutable nonce : Account.Nonce.t option
   ; max_attempts : int
@@ -48,7 +47,7 @@ let process_command ~logger t (command : Zkapp_command.t) =
             return (Ok nonce)
         | None ->
             Gql_client.infer_nonce ~logger t.l1_uri
-              (Public_key.compress t.signer.public_key)
+              (Signer_service.Signer.public_key t.signer)
             >>| Result.map_error ~f:(fun err -> `Nonce_inference_error err)
       in
       let command =
@@ -59,10 +58,12 @@ let process_command ~logger t (command : Zkapp_command.t) =
             }
         }
       in
-      let command =
-        Zkapp_command.read_all_proofs_from_disk
-        @@ Utils.sign_zkapp_command ~signature_kind:t.signature_kind command
-             [ t.signer ]
+      let%bind.Deferred.Result command =
+        Signer_service.Signer.sign_zkapp_command
+          ~signature_kind:t.signature_kind t.signer
+          (Zkapp_command.read_all_proofs_from_disk command)
+        >>| Result.map_error ~f:(fun err ->
+                `Send_zkapp_error (`Failed_request (Error.to_string_hum err)) )
       in
       let%map.Deferred.Result _result =
         Gql_client.send_zkapp t.l1_uri command
