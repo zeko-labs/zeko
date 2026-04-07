@@ -3,10 +3,10 @@
 (library
  (name explorer_gherkin_tests)
  (inline_tests)
- (modules feature_parser contract_models explorer_gherkin_tests)
+ (modules feature_parser explorer_gherkin_tests)
  (libraries
   explorer_events
- explorer_backfill_service
+  explorer_backfill_service
  sequencer_lib
  da_layer
  zeko_constants
