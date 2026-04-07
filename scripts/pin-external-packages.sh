@@ -1,7 +1,8 @@
 #!/bin/sh
 
-# Installs temporary GitHub-backed opam pins that the repo needs until the
-# corresponding packages are published to opam.
+# Runs the existing external package bootstrap flow for this repo. For now,
+# that also includes temporary GitHub-backed opam pins for nats-client and
+# nats-client-async until those packages are published to opam.
 
 set -eu
 
@@ -15,8 +16,8 @@ cd "$REPO_ROOT"
 git submodule sync && git submodule update --init --recursive
 
 # Temporary workaround until nats-client and nats-client-async are published to
-# opam. After they are published, remove this pin flow and install the released
-# packages via opam.export / normal opam dependency resolution instead.
+# opam. After they are published, keep this script but remove these temporary
+# pin entries and let normal opam dependency resolution install the releases.
 while IFS=' ' read -r package source; do
     case "$package" in
         ''|\#*)

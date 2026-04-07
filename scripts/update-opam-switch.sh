@@ -45,6 +45,6 @@ fi
 
 ln -s "${switch_dir}" _opam
 
-# Temporary workaround until nats-client and nats-client-async are published to
-# opam and can move into normal opam dependency resolution.
+# This existing bootstrap step also applies temporary GitHub pins for
+# nats-client and nats-client-async until those packages are published to opam.
 ./scripts/pin-external-packages.sh
