@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Installs temporary GitHub-backed opam pins that the repo needs until the
+# corresponding packages are published to opam.
+
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"

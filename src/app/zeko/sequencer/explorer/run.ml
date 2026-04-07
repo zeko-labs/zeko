@@ -1,3 +1,6 @@
+(* Boots the standalone explorer backfill HTTP service and routes GraphQL query
+   traffic plus GraphQL-SSE subscription traffic to the backfill service. *)
+
 open Core
 open Async
 open Cli_lib

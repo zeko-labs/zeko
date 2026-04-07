@@ -1,3 +1,5 @@
+; Core sequencer library plus dedicated inline test modules.
+
 (library
  (name sequencer_lib)
  (inline_tests)
@@ -11,6 +13,7 @@
   indexed_merkle_tree
   utils
   gql_client
+  explorer_events
   nats_client
   nats_client_async
   ;; mina ;;

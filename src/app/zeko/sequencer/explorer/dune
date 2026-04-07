@@ -1,15 +1,39 @@
+; Explorer support libraries, test modules, and the backfill service executable.
+
+(library
+ (name explorer_events)
+ (inline_tests)
+ (modules explorer_events explorer_events_tests)
+ (libraries
+  da_layer
+  nats_client
+  nats_client_async
+  ;; mina ;;
+  mina_base
+  snark_params
+  ;; opam libraries ;;
+  yojson
+  core_kernel
+  ppx_inline_test.config)
+ (preprocess
+  (pps ppx_jane ppx_mina)))
+
 (library
  (name explorer_backfill_service)
  (inline_tests)
- (modules explorer_backfill_service)
+ (modules explorer_backfill_service explorer_backfill_service_tests)
  (libraries
+  explorer_events
   sequencer_lib
   da_layer
   zeko_constants
   init
   cli_lib
+  nats_client
+  nats_client_async
   ;; mina ;;
   mina_base
+  snark_params
   ;; opam libraries ;;
   cohttp
   cohttp-async

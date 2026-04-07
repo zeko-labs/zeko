@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Reuses a cached repo-local opam switch keyed by the exported toolchain plus
+# any temporary external pin manifest entries.
+
 set -eo pipefail
 
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"

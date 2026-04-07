@@ -1,3 +1,6 @@
+(* Boots the main Zeko sequencer HTTP service and threads runtime CLI options,
+   including optional explorer NATS publishing, into the sequencer runtime. *)
+
 open Core
 open Async
 open Sequencer_lib

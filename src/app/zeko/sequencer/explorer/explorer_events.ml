@@ -1,3 +1,6 @@
+(* Defines the shared explorer-facing NATS subjects, payload encoding, and
+   publishing helpers used by both the live sequencer path and backfill jobs. *)
+
 open Core_kernel
 open Mina_base
 
@@ -111,62 +114,3 @@ let publish_finality sink ~logger ~status ~source_ledger_hash ~target_ledger_has
 
 let publish_health sink ~logger ~component ~instance_id ~status =
   publish sink @@ build_health_message ~logger ~component ~instance_id ~status
-
-let find_assoc_exn json key =
-  match json with
-  | `Assoc fields ->
-      List.Assoc.find_exn fields key ~equal:String.equal
-  | _ ->
-      failwith "Expected JSON object"
-
-let%test_unit "transaction payload encoding keeps contract fields" =
-  let target_ledger_hash = Ledger_hash.empty_hash in
-  let diff =
-    build_live_diff ~logger:(Logger.create ())
-      ~diff:
-        (Da_layer.Diff.create ~source_ledger_hash:Ledger_hash.empty_hash
-           ~changed_accounts:[] ~command_with_action_step_flags:None )
-      ~acc_set_root:Snark_params.Tick.Field.zero
-  in
-  let message =
-    build_transaction_message ~kind:Transaction_kind.User_command
-      ~target_ledger_hash ~genesis:false ~diff
-  in
-  [%test_eq: string] message.subject Subject.transactions ;
-  [%test_eq: (string * string) list] message.headers
-    (nats_msg_id_headers target_ledger_hash) ;
-  [%test_eq: Yojson.Safe.t]
-    (find_assoc_exn message.payload "kind")
-    (`String "user_command") ;
-  [%test_eq: Yojson.Safe.t]
-    (find_assoc_exn message.payload "genesis")
-    (`Bool false)
-
-let%test_unit "finality payload encoding keeps hashes and status" =
-  let message =
-    build_finality_message ~logger:(Logger.create ())
-      ~status:Finality_status.Committed
-      ~source_ledger_hash:Ledger_hash.empty_hash
-      ~target_ledger_hash:Ledger_hash.empty_hash
-  in
-  [%test_eq: string] message.subject Subject.finality ;
-  [%test_eq: Yojson.Safe.t]
-    (find_assoc_exn message.payload "status")
-    (`String "committed")
-
-let%test_unit "health payload encoding includes component and instance id" =
-  let message =
-    build_health_message ~logger:(Logger.create ()) ~component:"sequencer"
-      ~instance_id:"instance-1" ~status:"ok"
-  in
-  [%test_eq: string] message.subject Subject.health ;
-  [%test_eq: Yojson.Safe.t]
-    (find_assoc_exn message.payload "component")
-    (`String "sequencer") ;
-  [%test_eq: Yojson.Safe.t]
-    (find_assoc_exn message.payload "instance_id")
-    (`String "instance-1")
-
-let%test_unit "nats msg id uses target ledger hash" =
-  [%test_eq: string] (nats_msg_id Ledger_hash.empty_hash)
-    (Ledger_hash.to_decimal_string Ledger_hash.empty_hash)

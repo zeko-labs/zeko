@@ -1,3 +1,7 @@
+(* Implements the Zeko sequencer runtime, including transaction application,
+   DA-layer synchronization, proof/commit orchestration, and explorer event
+   publishing hooks. *)
+
 open Core_kernel
 open Async_kernel
 open Mina_base
@@ -1233,16 +1237,3 @@ module Sequencer = struct
     let () = run_health_heartbeat t in
     return t
 end
-
-let%test_unit "genesis sync labels the first replayed diff as genesis" =
-  [%test_eq: bool]
-    (Sequencer.replay_genesis_flag ~source:`Genesis ~current_chunk:0
-       ~current_diff:0 )
-    true
-
-let%test_unit "checkpoint sync never relabels replayed diffs as genesis" =
-  [%test_eq: bool]
-    (Sequencer.replay_genesis_flag
-       ~source:(`Specific Ledger_hash.empty_hash)
-       ~current_chunk:0 ~current_diff:0 )
-    false

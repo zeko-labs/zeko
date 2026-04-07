@@ -1,3 +1,7 @@
+(* Runs the standalone explorer backfill service: tracks in-memory backfill
+   jobs, republishes DA diffs to NATS, and exposes GraphQL query/mutation/
+   subscription endpoints for job control and progress streaming. *)
+
 open Core
 open Async
 open Sequencer_lib
@@ -476,7 +480,7 @@ module Sse = struct
         let%bind () = Pipe.write body_writer (next_event payload) in
         write_stream body_writer next
 
-  let callback t _conn req body =
+let callback t _conn req body =
     let open Deferred.Let_syntax in
     let%bind body = Cohttp_async.Body.to_string body in
     match%bind execute_subscription t req body with
@@ -492,78 +496,3 @@ module Sse = struct
           ()
         >>| fun response -> `Response response
 end
-
-let%test_unit "status strings are stable" =
-  [%test_eq: string] (string_of_job_status Queued) "queued" ;
-  [%test_eq: string] (string_of_job_status Completed) "completed"
-
-let%test_unit "backfill kind uses genesis replay only for the first genesis diff" =
-  [%test_eq: Explorer_events.Transaction_kind.t]
-    (backfill_kind ~from_hash:genesis_hash ~index:0)
-    Explorer_events.Transaction_kind.Genesis_replay ;
-  [%test_eq: Explorer_events.Transaction_kind.t]
-    (backfill_kind ~from_hash:Ledger_hash.empty_hash ~index:1)
-    Explorer_events.Transaction_kind.Sync_replay
-
-let%test_unit "health snapshot includes the instance id" =
-  let t =
-    { logger = Logger.create ()
-    ; da_config = Da_layer.Client.Config.of_string_list []
-    ; nats_client = None
-    ; jobs = String.Table.create ()
-    ; instance_id = "instance-1"
-    ; started_at = Time.epoch
-    }
-  in
-  [%test_eq: string] (health t).instance_id "instance-1"
-
-let%test_unit "invalid backfill hash returns an error instead of raising" =
-  [%test_eq: bool]
-    (Result.is_error
-       (start_backfill_from_strings
-          { logger = Logger.create ()
-          ; da_config = Da_layer.Client.Config.of_string_list []
-          ; nats_client = None
-          ; jobs = String.Table.create ()
-          ; instance_id = "instance-1"
-          ; started_at = Time.epoch
-          }
-          ~from_hash:"bad-hash" ~to_hash:"also-bad" ) )
-    true
-
-let%test_unit "backfill publish reports dropped when no NATS client is present" =
-  let diff =
-    Explorer_events.build_live_diff ~logger:(Logger.create ())
-      ~diff:
-        (Da_layer.Diff.create ~source_ledger_hash:Ledger_hash.empty_hash
-           ~changed_accounts:[] ~command_with_action_step_flags:None )
-      ~acc_set_root:Snark_params.Tick.Field.zero
-  in
-  let t =
-    { logger = Logger.create ()
-    ; da_config = Da_layer.Client.Config.of_string_list []
-    ; nats_client = None
-    ; jobs = String.Table.create ()
-    ; instance_id = "instance-1"
-    ; started_at = Time.epoch
-    }
-  in
-  [%test_eq: Nats_client_async.publish_result]
-    (publish_backfill_diff t ~from_hash:Ledger_hash.empty_hash ~index:0
-       ~target_ledger_hash:Ledger_hash.empty_hash diff )
-    `Dropped
-
-let%test_unit "sse next event carries GraphQL JSON" =
-  let event =
-    Sse.next_event
-      (`Assoc
-        [ ( "data"
-          , `Assoc
-              [ ( "backfillProgress"
-                , `Assoc [ ("id", `String "job-1") ] )
-              ] )
-        ] )
-  in
-  [%test_eq: bool]
-    (String.is_substring event ~substring:"backfillProgress")
-    true
