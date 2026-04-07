@@ -1,3 +1,4 @@
+# Temporary workaround until nats-client and nats-client-async are published to opam.
 # package source
 nats-client git+https://github.com/Hebilicious/nats-ml.git#fbc597311197b8526af13c97e6c6364955203a30
 nats-client-async git+https://github.com/Hebilicious/nats-ml.git#fbc597311197b8526af13c97e6c6364955203a30

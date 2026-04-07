@@ -76,6 +76,9 @@ jobs:
         run: |
           opam switch import opam.export --yes
           eval "$(opam env)"
+          # Temporary workaround until nats-client and nats-client-async are
+          # published to opam. After release, remove this script and install
+          # the published packages through normal opam dependency resolution.
           ./scripts/pin-external-packages.sh
           opam clean --logs -cs --quiet
       # Retrieve _build dir from cache before initiating a build

@@ -9,6 +9,9 @@ cd "$SCRIPT_DIR/.."
 [[ "$IN_NIX_SHELL$CI$BUILDKITE" == "" ]] || exit 0
 
 sum="$(
+    # Temporary workaround until nats-client and nats-client-async are
+    # published to opam. The switch/cache key must include the pin manifest
+    # while the repo still depends on GitHub pins.
     cat opam.export scripts/external-opam-pins.txt \
     | cksum \
     | grep -oE '^\S*'
@@ -39,4 +42,6 @@ fi
 
 ln -s "${switch_dir}" _opam
 
+# Temporary workaround until nats-client and nats-client-async are published to
+# opam and can move into normal opam dependency resolution.
 ./scripts/pin-external-packages.sh

@@ -11,7 +11,9 @@ cd "$REPO_ROOT"
 # keep the repo-managed submodules in sync first
 git submodule sync && git submodule update --init --recursive
 
-# then install externally pinned opam packages that are not tracked in opam.export
+# Temporary workaround until nats-client and nats-client-async are published to
+# opam. After they are published, remove this pin flow and install the released
+# packages via opam.export / normal opam dependency resolution instead.
 while IFS=' ' read -r package source; do
     case "$package" in
         ''|\#*)
