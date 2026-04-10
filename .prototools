@@ -1,5 +1,4 @@
+ocaml = "4.14.0"
+
 [plugins.tools]
 ocaml = "github://Hebilicious/proto-ocaml@v0.1.2"
-
-[tools.ocaml]
-version = "4.14.0"

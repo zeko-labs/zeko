@@ -26,6 +26,7 @@ DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
 ```bash
 dune build
 ./src/app/zeko/sequencer/tests/run-sequencer-test.sh {fake | real} <num_provers>
+./src/app/zeko/sequencer/tests/run-explorer-tests.sh
 ```
 
 ## Run
@@ -172,7 +173,9 @@ responses as GraphQL-SSE events.
 
 The explorer-specific tests now live under
 `src/app/zeko/sequencer/explorer/tests/` and use copied `.feature` files from
-the explorer spike as the main test inventory.
+the explorer spike as the main test inventory. `run-explorer-tests.sh` runs the
+Gherkin acceptance suite first and then a separate Gherkin-backed real-NATS
+integration executable against a Docker NATS server.
 
 ## Deploy rollup contract to L1
 

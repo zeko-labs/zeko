@@ -25,7 +25,7 @@ while IFS=' ' read -r package source; do
             ;;
     esac
 
-    opam pin add --yes --no-action "$package" "$source"
+    opam pin add --switch . --yes --no-action "$package" "$source"
 done < "$PINS_FILE"
 
-opam install --yes nats-client nats-client-async
+opam install --switch . --yes nats-client nats-client-async

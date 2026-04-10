@@ -42,6 +42,10 @@ let graphql_response service query =
           | Error err ->
               failwith (Yojson.Basic.to_string err) ) )
 
+let graphql_data_exn service query field =
+  find_assoc_exn field
+    (find_assoc_exn "data" (graphql_response service query))
+
 let pipe_read_exn reader =
   Thread_safe.block_on_async_exn (fun () ->
       Pipe.read reader
@@ -51,7 +55,17 @@ let pipe_read_exn reader =
       | `Eof ->
           failwith "Unexpected EOF" )
 
-let add_job service ?(status = Explorer_backfill_service.Queued)
+let pipe_read_string_exn reader =
+  Thread_safe.block_on_async_exn (fun () ->
+      Pipe.read reader
+      >>| function
+      | `Ok value ->
+          value
+      | `Eof ->
+          failwith "Unexpected EOF" )
+
+let add_job (service : Explorer_backfill_service.t)
+    ?(status = Explorer_backfill_service.Queued)
     ?(diffs_published = 0) ?error ?started_at ?finished_at ?(id = "job-1")
     () =
   let job : Explorer_backfill_service.job =
@@ -77,31 +91,70 @@ let sample_diff ?(source_ledger_hash = Ledger_hash.empty_hash) () =
          ~command_with_action_step_flags:None )
     ~acc_set_root:Snark_params.Tick.Field.zero
 
+let sse_request body =
+  let headers = Cohttp.Header.of_list [ ("Content-Type", "application/json") ] in
+  Cohttp.Request.make ~meth:`POST ~headers
+    (Uri.of_string "http://localhost/graphql/stream"),
+  body
+
+let sse_reader_exn service body =
+  let req, body = sse_request body in
+  Thread_safe.block_on_async_exn (fun () ->
+      match%bind Explorer_backfill_sse.execute_subscription service req body with
+      | Error err ->
+          failwith (Error.to_string_hum err)
+      | Ok stream ->
+          let reader, writer = Pipe.create () in
+          don't_wait_for (Explorer_backfill_sse.write_stream writer stream) ;
+          return reader )
+
+let parse_sse_next_event_exn event =
+  let prefix = "event: next\ndata: " in
+  if not (String.is_prefix event ~prefix)
+  then failwithf "Unexpected SSE event: %s" event ()
+  else
+    String.drop_prefix event (String.length prefix)
+    |> String.chop_suffix_exn ~suffix:"\n\n"
+    |> Yojson.Basic.from_string
+
+let backfill_progress_event_exn event =
+  find_assoc_exn "backfillProgress"
+    (find_assoc_exn "data" (parse_sse_next_event_exn event))
+
+let assert_basic_json_equal actual expected =
+  if not (Yojson.Basic.equal actual expected)
+  then
+    failwithf "Expected %s but got %s" (Yojson.Basic.to_string expected)
+      (Yojson.Basic.to_string actual) ()
+
 let%test_unit "A genesis backfill marks only the first replayed diff as genesis" =
   Feature_parser.assert_scenario "backfill-api.feature"
     "A genesis backfill marks only the first replayed diff as genesis" ;
-  [%test_eq: Explorer_events.Transaction_kind.t]
-    (Explorer_backfill_service.backfill_kind
-       ~from_hash:Explorer_backfill_service.genesis_hash ~index:0 )
-    Explorer_events.Transaction_kind.Genesis_replay ;
-  [%test_eq: Explorer_events.Transaction_kind.t]
-    (Explorer_backfill_service.backfill_kind
-       ~from_hash:Explorer_backfill_service.genesis_hash ~index:1 )
-    Explorer_events.Transaction_kind.Sync_replay
+  if
+    not
+      (Poly.equal
+         (Explorer_backfill_service.backfill_kind
+            ~from_hash:Explorer_backfill_service.genesis_hash ~index:0 )
+         Explorer_events.Transaction_kind.Genesis_replay )
+  then failwith "expected the first genesis replay diff to be marked as genesis" ;
+  if
+    not
+      (Poly.equal
+         (Explorer_backfill_service.backfill_kind
+            ~from_hash:Explorer_backfill_service.genesis_hash ~index:1 )
+         Explorer_events.Transaction_kind.Sync_replay )
+  then failwith "expected later genesis replay diffs to be marked as sync"
 
 let%test_unit "The backfill mutation returns a failed job snapshot for invalid hashes" =
   Feature_parser.assert_scenario "backfill-api.feature"
     "The backfill mutation returns a failed job snapshot for invalid hashes" ;
   let service = test_service () in
-  let response =
-    graphql_response service
-      {|mutation { backfill(fromHash: "nonexistent", toHash: "D") { status error } }|}
-  in
   let backfill_job =
-    find_assoc_exn "backfill" (find_assoc_exn "data" response)
+    graphql_data_exn service
+      {|mutation { backfill(fromHash: "nonexistent", toHash: "D") { status error } }|}
+      "backfill"
   in
-  [%test_eq: Yojson.Basic.t]
-    (find_assoc_exn "status" backfill_job)
+  assert_basic_json_equal (find_assoc_exn "status" backfill_job)
     (`String "failed") ;
   [%test_eq: bool]
     (match find_assoc_exn "error" backfill_job with
@@ -117,34 +170,45 @@ let%test_unit "Backfill progress subscriptions stream job updates" =
   let service = test_service () in
   let job = add_job service () in
   let reader =
-    match Explorer_backfill_service.subscribe_progress service ~id:job.id with
-    | Ok reader ->
-        reader
-    | Error err ->
-        failwith (Error.to_string_hum err)
+    sse_reader_exn service
+      (Yojson.Basic.to_string
+         (`Assoc
+           [ ( "query"
+             , `String
+                 (sprintf
+                    {|subscription { backfillProgress(id: "%s") { id status diffsPublished error } }|}
+                    job.id ) )
+           ]) )
   in
-  let initial = pipe_read_exn reader in
-  [%test_eq: int] initial.diffs_published 0 ;
+  let initial =
+    pipe_read_string_exn reader |> backfill_progress_event_exn
+  in
+  assert_basic_json_equal (find_assoc_exn "diffsPublished" initial) (`Int 0) ;
   Explorer_backfill_service.update_job job ~status:Running ~diffs_published:1
     ~started_at:Time.epoch () ;
-  let first = pipe_read_exn reader in
-  [%test_eq: int] first.diffs_published 1 ;
+  let first =
+    pipe_read_string_exn reader |> backfill_progress_event_exn
+  in
+  assert_basic_json_equal (find_assoc_exn "diffsPublished" first) (`Int 1) ;
   Explorer_backfill_service.update_job job ~status:Completed
     ~diffs_published:2 ~finished_at:Time.epoch () ;
-  let final_progress = pipe_read_exn reader in
-  [%test_eq: int] final_progress.diffs_published 2 ;
-  [%test_eq: string] final_progress.status "completed"
+  let final_progress =
+    pipe_read_string_exn reader |> backfill_progress_event_exn
+  in
+  assert_basic_json_equal (find_assoc_exn "diffsPublished" final_progress)
+    (`Int 2) ;
+  assert_basic_json_equal (find_assoc_exn "status" final_progress)
+    (`String "completed")
 
 let%test_unit "The backfill health query exposes the service instance" =
   Feature_parser.assert_scenario "backfill-api.feature"
     "The backfill health query exposes the service instance" ;
-  let response =
-    graphql_response (test_service ())
+  let health =
+    graphql_data_exn (test_service ())
       {|query { health { instanceId startedAt } }|}
+      "health"
   in
-  let health = find_assoc_exn "health" (find_assoc_exn "data" response) in
-  [%test_eq: Yojson.Basic.t]
-    (find_assoc_exn "instanceId" health)
+  assert_basic_json_equal (find_assoc_exn "instanceId" health)
     (`String "instance-1") ;
   [%test_eq: bool]
     (match find_assoc_exn "startedAt" health with
@@ -153,6 +217,59 @@ let%test_unit "The backfill health query exposes the service instance" =
     | _ ->
         false )
     true
+
+let%test_unit "The backfill job query returns the current job snapshot" =
+  Feature_parser.assert_scenario "backfill-api.feature"
+    "The backfill job query returns the current job snapshot" ;
+  let service = test_service () in
+  let job = add_job service ~status:Explorer_backfill_service.Running () in
+  let backfill_job =
+    graphql_data_exn service
+      (sprintf
+         {|query { backfillJob(id: "%s") { id status diffsPublished } }|}
+         job.id )
+      "backfillJob"
+  in
+  assert_basic_json_equal (find_assoc_exn "id" backfill_job) (`String job.id) ;
+  assert_basic_json_equal (find_assoc_exn "status" backfill_job)
+    (`String "running")
+
+let%test_unit "Backfill progress subscriptions stream GraphQL-SSE events" =
+  Feature_parser.assert_scenario "backfill-api.feature"
+    "Backfill progress subscriptions stream GraphQL-SSE events" ;
+  let service = test_service () in
+  let job = add_job service () in
+  let reader =
+    sse_reader_exn service
+      (Yojson.Basic.to_string
+         (`Assoc
+           [ ( "query"
+             , `String
+                 (sprintf
+                    {|subscription { backfillProgress(id: "%s") { id status diffsPublished error } }|}
+                    job.id ) )
+           ]) )
+  in
+  let first =
+    pipe_read_string_exn reader |> backfill_progress_event_exn
+  in
+  assert_basic_json_equal (find_assoc_exn "diffsPublished" first) (`Int 0) ;
+  Explorer_backfill_service.update_job job ~status:Running ~diffs_published:1
+    ~started_at:Time.epoch () ;
+  let running =
+    pipe_read_string_exn reader |> backfill_progress_event_exn
+  in
+  assert_basic_json_equal (find_assoc_exn "diffsPublished" running) (`Int 1) ;
+  Explorer_backfill_service.update_job job ~status:Completed
+    ~diffs_published:2 ~finished_at:Time.epoch () ;
+  let completed =
+    pipe_read_string_exn reader |> backfill_progress_event_exn
+  in
+  assert_basic_json_equal (find_assoc_exn "status" completed)
+    (`String "completed") ;
+  [%test_eq: string]
+    (pipe_read_string_exn reader)
+    Explorer_backfill_sse.complete_event
 
 let%test_unit "Transaction events include the replay kind, diff payload, and NATS dedup header" =
   Feature_parser.assert_scenario "event-contract.feature"

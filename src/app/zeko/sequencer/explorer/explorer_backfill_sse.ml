@@ -48,11 +48,11 @@ let execute_subscription t req body =
 
 let rec write_stream body_writer stream =
   let open Deferred.Let_syntax in
-  match stream () with
-  | Seq.Nil ->
+  match%bind Pipe.read stream with
+  | `Eof ->
       let%map () = Pipe.write body_writer complete_event in
       Pipe.close body_writer
-  | Seq.Cons (payload, next) ->
+  | `Ok payload ->
       let payload =
         match payload with
         | Ok payload ->
@@ -61,7 +61,7 @@ let rec write_stream body_writer stream =
             err
       in
       let%bind () = Pipe.write body_writer (next_event payload) in
-      write_stream body_writer next
+      write_stream body_writer stream
 
 let callback t _conn req body =
   let open Deferred.Let_syntax in
@@ -74,7 +74,5 @@ let callback t _conn req body =
   | Ok stream ->
       let body_reader, body_writer = Pipe.create () in
       don't_wait_for (write_stream body_writer stream) ;
-      Cohttp_async.Server.respond ~headers
-        ~body:(Cohttp_async.Body.of_pipe body_reader)
-        ()
+      Cohttp_async.Server.respond_with_pipe ~headers body_reader
       >>| fun response -> `Response response

@@ -24,3 +24,16 @@ Feature: Explorer Backfill API
     When GraphQL query health is executed
     Then the response includes instanceId
     And the response includes startedAt
+
+  Scenario: The backfill job query returns the current job snapshot
+    Given a standalone backfill service with a stored backfill job
+    When GraphQL query backfillJob is executed for that id
+    Then the response includes the matching job id
+    And the response includes the job status
+
+  Scenario: Backfill progress subscriptions stream GraphQL-SSE events
+    Given a standalone backfill service with a queued backfill job
+    When the GraphQL-SSE endpoint subscribes to that job
+    Then the first SSE event includes diffsPublished 0
+    And later SSE events reflect published progress
+    And the stream finishes with a complete event

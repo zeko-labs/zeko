@@ -513,8 +513,9 @@ module Sequencer_spec = struct
     print_endline "(* Init sequencer *)" ;
 
     let sequencer =
-      run (fun () ->
-          Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
+        run (fun () ->
+          Sequencer.create ?nats_url:None ~logger ~max_pool_size:10
+            ~commitment_period_sec:0.
             ~da_config ~da_keys ~da_quorum ~db_dir ~postgres_uri ~l1_uri:gql_uri
             ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:delay_deposit
             ~mq_host ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance

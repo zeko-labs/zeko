@@ -4,7 +4,6 @@
 
 open Core
 open Async
-open Sequencer_lib
 open Mina_base
 
 type job_status =
@@ -290,17 +289,19 @@ let run_job t job =
          let%bind.Deferred.Result () =
            publish_targets source_ledger_hash 0 target_ledger_hashes
          in
-         return () )
+         Deferred.Result.return () )
      >>= function
-     | Ok () ->
-         update_job job ~status:Completed ~finished_at:(Time.now ()) ()
-     | Error error ->
+     | Ok (Ok ()) ->
+         update_job job ~status:Completed ~finished_at:(Time.now ()) () ;
+         Deferred.unit
+     | Ok (Error error) | Error error ->
          update_job job ~status:Failed ~finished_at:(Time.now ())
-           ~error:(Error.to_string_hum error) () )
+           ~error:(Error.to_string_hum error) () ;
+         Deferred.unit )
 
 let parse_ledger_hash hash =
   Or_error.try_with (fun () -> Ledger_hash.of_decimal_string hash)
-  |> Or_error.map_error ~f:(fun err ->
+  |> Result.map_error ~f:(fun err ->
          Error.tag_arg err "Invalid ledger hash" hash String.sexp_of_t )
 
 let create_job ?error ?started_at ?finished_at ~status ~from_hash ~to_hash () =

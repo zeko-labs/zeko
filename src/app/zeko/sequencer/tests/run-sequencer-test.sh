@@ -44,6 +44,14 @@ trap 'cleanup $?' EXIT
 SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 
+opam exec --switch . -- env -u DUNE_RPC dune build \
+  src/app/zeko/sequencer/tests/testing_ledger/run.exe \
+  src/app/zeko/da_layer/cli.exe \
+  src/app/zeko/sequencer/prover/cli.exe \
+  src/app/zeko/sequencer/prover/cli_fake.exe \
+  src/app/zeko/sequencer/tests/sequencer_test.exe \
+  src/app/zeko/sequencer/tests/sequencer_test_fake.exe
+
 export ZEKO_SIGNATURE_KIND=testnet
 export ZEKO_CIRCUITS_CONFIG=test
 

@@ -14,8 +14,8 @@
   utils
   gql_client
   explorer_events
-  nats_client
-  nats_client_async
+  nats-client
+  nats-client-async
   ;; mina ;;
   mina_base
   mina_base.import

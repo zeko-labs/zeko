@@ -854,14 +854,17 @@ module Sequencer = struct
     in
     don't_wait_for (within' ~monitor:Monitor.main (fun () -> go ()))
 
-  let replay_genesis_flag ~source ~current_chunk ~current_diff =
+  let replay_genesis_flag
+      ~(source : [ `Genesis | `Specific of Field.t ])
+      ~current_chunk ~current_diff =
     match source with
     | `Genesis ->
         current_chunk = 0 && current_diff = 0
     | `Specific _ ->
         false
 
-  let sync ~logger ({ config; _ } as t) da_config source =
+  let sync ~logger ({ config; _ } as t) da_config
+      (source : [ `Genesis | `Specific of Field.t ]) =
     [%log info] "Syncing" ;
     let%bind commited_ledger_hash =
       Gql_client.infer_state ~logger config.l1_uri

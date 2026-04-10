@@ -5,8 +5,8 @@
  (modules explorer_events)
  (libraries
   da_layer
-  nats_client
-  nats_client_async
+  nats-client
+  nats-client-async
   ;; mina ;;
   mina_base
   snark_params
@@ -18,7 +18,8 @@
   (pps ppx_jane ppx_mina)))
 
 (library
- (name explorer_backfill_service)
+ (name explorer_backfill)
+ (wrapped false)
  (modules
   explorer_backfill_service
   explorer_backfill_graphql
@@ -30,8 +31,8 @@
   zeko_constants
   init
   cli_lib
-  nats_client
-  nats_client_async
+  nats-client
+  nats-client-async
   ;; mina ;;
   mina_base
   snark_params
@@ -53,8 +54,9 @@
  (name explorer_backfill_server)
  (modules explorer_backfill_server)
  (libraries
-  explorer_backfill_service
+  explorer_backfill
   sequencer_lib
+  is_compile_simple_real_real
   init
   cli_lib
   ;; opam libraries ;;

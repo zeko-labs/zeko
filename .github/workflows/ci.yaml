@@ -95,6 +95,9 @@ jobs:
       - name: 📦 Build zeko packages
         run: |
           opam exec -- dune build --profile=devnet src/app/zeko/sequencer
+          opam exec -- dune build --profile=devnet src/app/zeko/sequencer/explorer
           opam exec -- dune build --profile=devnet src/app/zeko/da_layer
       - name: 🧪 Run sequencer tests
         run: ./src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1
+      - name: 🧪 Run explorer Gherkin tests
+        run: ./src/app/zeko/sequencer/tests/run-explorer-tests.sh

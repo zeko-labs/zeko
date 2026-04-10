@@ -6,54 +6,76 @@ open Async
 
 open Graphql_async.Schema
 
-let backfill_job_typ : (Explorer_backfill_service.t, Explorer_backfill_service.job_snapshot) typ
+let backfill_job_typ :
+    (Explorer_backfill_service.t, Explorer_backfill_service.job_snapshot option) typ
     =
   obj "BackfillJob"
     ~fields:(fun _ ->
       [ field "id" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ job -> job.id)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) -> job.id)
       ; field "fromHash" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ job -> job.from_hash)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
+            job.from_hash)
       ; field "toHash" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ job -> job.to_hash)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
+            job.to_hash)
       ; field "status" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ job -> job.status)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
+            job.status)
       ; field "diffsPublished" ~typ:(non_null int) ~args:[]
-          ~resolve:(fun _ job -> job.diffs_published)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
+            job.diffs_published)
       ; field "error" ~typ:string ~args:[]
-          ~resolve:(fun _ job -> job.error)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
+            job.error)
       ; field "createdAt" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ job -> job.created_at)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
+            job.created_at)
       ; field "startedAt" ~typ:string ~args:[]
-          ~resolve:(fun _ job -> job.started_at)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
+            job.started_at)
       ; field "finishedAt" ~typ:string ~args:[]
-          ~resolve:(fun _ job -> job.finished_at)
+          ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
+            job.finished_at)
       ] )
 
-let progress_typ : (Explorer_backfill_service.t, Explorer_backfill_service.progress_snapshot) typ
+let progress_typ :
+    (Explorer_backfill_service.t, Explorer_backfill_service.progress_snapshot option) typ
     =
   obj "BackfillProgress"
     ~fields:(fun _ ->
       [ field "id" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ progress -> progress.id)
+          ~resolve:
+            (fun _ (progress : Explorer_backfill_service.progress_snapshot) ->
+              progress.id)
       ; field "status" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ progress -> progress.status)
+          ~resolve:
+            (fun _ (progress : Explorer_backfill_service.progress_snapshot) ->
+              progress.status)
       ; field "diffsPublished" ~typ:(non_null int) ~args:[]
-          ~resolve:(fun _ progress -> progress.diffs_published)
+          ~resolve:
+            (fun _ (progress : Explorer_backfill_service.progress_snapshot) ->
+              progress.diffs_published)
       ; field "error" ~typ:string ~args:[]
-          ~resolve:(fun _ progress -> progress.error)
+          ~resolve:
+            (fun _ (progress : Explorer_backfill_service.progress_snapshot) ->
+              progress.error)
       ] )
 
-let health_typ : (Explorer_backfill_service.t, Explorer_backfill_service.health_snapshot) typ
+let health_typ :
+    (Explorer_backfill_service.t, Explorer_backfill_service.health_snapshot option) typ
     =
   obj "Health"
     ~fields:(fun _ ->
       [ field "ok" ~typ:(non_null bool) ~args:[]
-          ~resolve:(fun _ value -> value.ok)
+          ~resolve:(fun _ (value : Explorer_backfill_service.health_snapshot) ->
+            value.ok)
       ; field "instanceId" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ value -> value.instance_id)
+          ~resolve:(fun _ (value : Explorer_backfill_service.health_snapshot) ->
+            value.instance_id)
       ; field "startedAt" ~typ:(non_null string) ~args:[]
-          ~resolve:(fun _ value -> value.started_at)
+          ~resolve:(fun _ (value : Explorer_backfill_service.health_snapshot) ->
+            value.started_at)
       ] )
 
 let query_fields =
@@ -61,11 +83,12 @@ let query_fields =
       ~args:Arg.[ arg "id" ~typ:(non_null string) ]
       ~resolve:(fun { ctx; _ } () id ->
         return
+          (Ok
           (Option.map (Explorer_backfill_service.find_job ctx id)
-             ~f:Explorer_backfill_service.snapshot ) )
+             ~f:Explorer_backfill_service.snapshot ) ) )
   ; io_field "health" ~typ:(non_null health_typ) ~args:[]
-      ~resolve:(fun { ctx; _ } () () ->
-        return (Explorer_backfill_service.health ctx))
+      ~resolve:(fun { ctx; _ } () ->
+        return (Ok (Explorer_backfill_service.health ctx)))
   ]
 
 let mutation_fields =
