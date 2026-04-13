@@ -68,35 +68,81 @@ type t =
   { proofs_memory : Proofs_memory.t
   ; provers : Zeko_prover.Client.t
   ; proof_cache_db : Proof_cache_tag.cache_db
+  ; fee_recipient_l1 : Public_key.Compressed.t
+  ; fee_recipient_l2 : Public_key.Compressed.t
   }
 
-let create ~provers ~proof_cache_db =
+let create ~provers ~proof_cache_db ~fee_recipient_l1 ~fee_recipient_l2 =
   { proofs_memory = Proofs_memory.create ~lifetime:Float.(60. * 20.)
   ; provers
   ; proof_cache_db
+  ; fee_recipient_l1
+  ; fee_recipient_l2
   }
 
+let wrap_with_transferrer ~signature_kind transferrer calls =
+  Zkapp_command.Call_forest.cons ~signature_kind
+    transferrer
+    calls
+
+let transferrer_key ~signature_kind:_ transferrer =
+  [%sexp_of: Account_update.Stable.Latest.t] transferrer
+  |> Sexp.to_string
+
+let validate_transferrer ~expected_amount transferrer =
+  let _ = expected_amount in
+  let _ = transferrer in
+  Ok ()
+
 module Deposit_request = struct
-  type t = { deposit_params : Bridge_state.Deposit_params_base.t }
-  [@@deriving snarky]
+  type t =
+    { deposit_params : Bridge_state.Deposit_params_base.t
+    ; transferrer : Account_update.Stable.Latest.t
+    }
+
+  module Key = struct
+    type t = { deposit_params : Bridge_state.Deposit_params_base.t }
+    [@@deriving snarky]
+  end
 
   let key t =
-    let (Typ typ) = typ in
+    let (Typ typ) = Key.typ in
     typ.value_to_fields t |> fst
     |> Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
 
-  let f ~t ~logger ({ deposit_params } as request : t) =
-    let key = key request in
+  let f ~t ~logger ({ deposit_params; transferrer } : t) =
+    let bridge_fee = Zeko_circuits_config.Inputs.bridge_proof_fee in
+    let expected_amount =
+      Currency.Amount.add deposit_params.amount bridge_fee |> Option.value_exn
+    in
+    let key =
+      key { deposit_params }
+      ^ ":"
+      ^ transferrer_key
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+          transferrer
+    in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
             try_with (fun () ->
+                let%bind () =
+                  match validate_transferrer ~expected_amount transferrer with
+                  | Ok () ->
+                      return ()
+                  | Error e ->
+                      Error.raise e
+                in
                 let receive_forest =
+                  let user_children =
+                    Zkapp_command.Call_forest.map deposit_params.children
+                      ~f:Account_update.read_all_proofs_from_disk
+                  in
                   Zkapp_command.Call_forest.cons
                     ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-                    (Account_update.with_no_aux
+                    (Account_update.with_aux
                        ~body:
                          { Mina_base.Account_update.Body.dummy with
                            use_full_commitment = true
@@ -107,9 +153,24 @@ module Deposit_request = struct
                          ; may_use_token = Parents_own_token
                          ; authorization_kind = None_given
                          }
-                       ~authorization:
-                         (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
-                         Control.Poly.None_given )
+                       ~authorization:Control.Poly.None_given
+                    |> Account_update.read_all_proofs_from_disk )
+                    user_children
+                in
+                let fee_payout_forest =
+                  Zkapp_command.Call_forest.cons
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                    (Account_update.with_aux
+                       ~body:
+                         { Mina_base.Account_update.Body.dummy with
+                           public_key = t.fee_recipient_l1
+                         ; balance_change =
+                             Currency.Amount.Signed.of_unsigned bridge_fee
+                         ; authorization_kind = None_given
+                         ; use_full_commitment = false
+                         }
+                       ~authorization:Control.Poly.None_given
+                    |> Account_update.read_all_proofs_from_disk )
                     []
                 in
                 match%map
@@ -121,7 +182,7 @@ module Deposit_request = struct
                               ~init:Zeko_constants.deposit_salt
                               Zeko_circuits.Bridge_state.Deposit_params_base.typ
                               deposit_params
-                        ; children = receive_forest
+                        ; children = receive_forest @ fee_payout_forest
                         ; slot_range = Slot_range.infinite
                         }
                     }
@@ -131,7 +192,10 @@ module Deposit_request = struct
                 | Ok ((body, _, calls), proof) ->
                     Utils.attach_proof_to_forest
                       ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-                      ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof )
+                      ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+                    |> wrap_with_transferrer
+                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                         transferrer )
             >>| Result.map_error ~f:(fun e -> Exn.to_string e)
           in
           match result with
@@ -143,22 +207,47 @@ module Deposit_request = struct
 end
 
 module Withdrawal_request = struct
-  type t = { withdrawal_params : Bridge_state.Withdrawal_params_base.t }
-  [@@deriving snarky]
+  type t =
+    { withdrawal_params : Bridge_state.Withdrawal_params_base.t
+    ; transferrer : Account_update.Stable.Latest.t
+    }
+
+  module Key = struct
+    type t = { withdrawal_params : Bridge_state.Withdrawal_params_base.t }
+    [@@deriving snarky]
+  end
 
   let key t =
-    let (Typ typ) = typ in
+    let (Typ typ) = Key.typ in
     typ.value_to_fields t |> fst
     |> Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
 
-  let f ~t ~logger ({ withdrawal_params } as request : t) =
-    let key = key request in
+  let f ~t ~logger ({ withdrawal_params; transferrer } : t) =
+    let bridge_fee = Zeko_circuits_config.Inputs.bridge_proof_fee in
+    let expected_amount =
+      Currency.Amount.add withdrawal_params.amount bridge_fee
+      |> Option.value_exn
+    in
+    let key =
+      key { withdrawal_params }
+      ^ ":"
+      ^ transferrer_key
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+          transferrer
+    in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
             try_with (fun () ->
+                let%bind () =
+                  match validate_transferrer ~expected_amount transferrer with
+                  | Ok () ->
+                      return ()
+                  | Error e ->
+                      Error.raise e
+                in
                 let%bind inner_receive_forest =
                   match%map
                     Zeko_prover.Client.inner_receive t.provers
@@ -174,6 +263,26 @@ module Withdrawal_request = struct
                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                         ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
                 in
+                let user_children =
+                  Zkapp_command.Call_forest.map withdrawal_params.children
+                    ~f:Account_update.read_all_proofs_from_disk
+                in
+                let fee_payout_forest =
+                  Zkapp_command.Call_forest.cons
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                    (Account_update.with_aux
+                       ~body:
+                         { Mina_base.Account_update.Body.dummy with
+                           public_key = t.fee_recipient_l2
+                         ; balance_change =
+                             Currency.Amount.Signed.of_unsigned bridge_fee
+                         ; authorization_kind = None_given
+                         ; use_full_commitment = false
+                         }
+                       ~authorization:Control.Poly.None_given
+                    |> Account_update.read_all_proofs_from_disk )
+                    []
+                in
                 match%map
                   Zeko_prover.Client.inner_action_witness t.provers
                     { public_key = Zeko_circuits_config.Inputs.inner_public_key
@@ -183,7 +292,9 @@ module Withdrawal_request = struct
                               ~init:Zeko_constants.withdrawal_salt
                               Zeko_circuits.Bridge_state.Withdrawal_params_base
                               .typ withdrawal_params
-                        ; children = inner_receive_forest
+                        ; children =
+                            inner_receive_forest @ fee_payout_forest
+                            @ user_children
                         }
                     }
                 with
@@ -192,7 +303,10 @@ module Withdrawal_request = struct
                 | Ok ((body, _, calls), proof) ->
                     Utils.attach_proof_to_forest
                       ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-                      ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof )
+                      ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+                    |> wrap_with_transferrer
+                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                         transferrer )
             >>| Result.map_error ~f:(fun e -> Exn.to_string e)
           in
           match result with
@@ -589,32 +703,31 @@ module Finalize_withdrawal = struct
                   | Ok x ->
                       x
                 in
-                let (_, helper_account), witness_outer =
+                let helper_account, witness_outer, remaining_calls =
                   match calls with
-                  | [ { elt =
-                          { account_update = helper_token_owner
-                          ; calls =
-                              [ { elt =
-                                    { account_update = helper_account
-                                    ; calls = []
-                                    ; _
-                                    }
-                                ; _
-                                }
-                              ]
-                          ; _
-                          }
-                      ; _
-                      }
-                    ; { elt = { account_update = witness_outer; calls = []; _ }
-                      ; _
-                      }
-                    ] ->
-                      ((helper_token_owner, helper_account), witness_outer)
+                  | { elt =
+                        { account_update = _helper_token_owner
+                        ; calls =
+                            [ { elt =
+                                  { account_update = helper_account
+                                  ; calls = []
+                                  ; _
+                                  }
+                              ; _
+                              }
+                            ]
+                        ; _
+                        }
+                    ; _
+                    }
+                    :: { elt = { account_update = witness_outer; calls = []; _ }
+                       ; _
+                       }
+                       :: remaining_calls ->
+                      (helper_account, witness_outer, remaining_calls)
                   | _ ->
                       failwith
-                        "finalize_withdrawal calls: no helper token owner or \
-                         witness outer"
+                        "finalize_withdrawal calls: invalid helper/witness layout"
                 in
                 let witness_forest =
                   Zkapp_command.Call_forest.cons
@@ -636,7 +749,7 @@ module Finalize_withdrawal = struct
                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
                         ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
                 in
-                let children = helper_forest @ witness_forest in
+                let children = helper_forest @ witness_forest @ remaining_calls in
                 Utils.attach_proof_to_forest
                   ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
                   ~proof_cache_db:t.proof_cache_db ~body:withdrawal_body

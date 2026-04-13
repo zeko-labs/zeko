@@ -793,7 +793,8 @@ let () =
               in
               return () ) ) ;
 
-      let submit_deposit ~fee (signer : Keypair.t) deposit_params =
+      let submit_deposit ~fee (signer : Keypair.t)
+          (deposit_params : C.Bridge_state.Deposit_params_base.t) =
         let%bind nonce =
           Gql_client.fetch_nonce ~logger gql_uri
             (Signature_lib.Public_key.compress signer.public_key)
@@ -810,12 +811,6 @@ let () =
             ; authorization = Signature.dummy
             }
         in
-        let%map transfer_forest =
-          Bridge_prover.(
-            prove !sequencer.bridge_prover
-              (Deposit_request.f ~logger { deposit_params }))
-          >>| Or_error.ok_exn
-        in
         let transferrer_update =
           Account_update.with_no_aux
             ~body:
@@ -829,12 +824,16 @@ let () =
               }
             ~authorization:(Control.Poly.Signature Signature.dummy)
         in
+        let%map transfer_forest =
+          Bridge_prover.(
+            prove !sequencer.bridge_prover
+              (Deposit_request.f ~logger { deposit_params; transferrer = transferrer_update }))
+          >>| Or_error.ok_exn
+        in
         let transfer_cmd : Zkapp_command.t =
           { fee_payer
           ; account_updates =
-              Zkapp_command.Call_forest.cons
-                ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-                transferrer_update transfer_forest
+              transfer_forest
               |> Zkapp_command.Call_forest.map
                    ~f:(Account_update.write_all_proofs_to_disk ~proof_cache_db)
           ; memo = Signed_command_memo.empty
@@ -1427,7 +1426,8 @@ let () =
 
       print_endline "Started test 'withdrawals'" ;
 
-      let submit_withdrawal ~fee (signer : Keypair.t) withdrawal_params =
+      let submit_withdrawal ~fee (signer : Keypair.t)
+          (withdrawal_params : C.Bridge_state.Withdrawal_params_base.t) =
         let nonce =
           Sequencer.infer_nonce !sequencer
             (Signature_lib.Public_key.compress signer.public_key)
@@ -1443,12 +1443,6 @@ let () =
             ; authorization = Signature.dummy
             }
         in
-        let%map transfer_forest =
-          Bridge_prover.(
-            prove !sequencer.bridge_prover
-              (Withdrawal_request.f ~logger { withdrawal_params }))
-          >>| Or_error.ok_exn
-        in
         let transferrer_update =
           Account_update.with_no_aux
             ~body:
@@ -1462,12 +1456,17 @@ let () =
               }
             ~authorization:(Control.Poly.Signature Signature.dummy)
         in
+        let%map transfer_forest =
+          Bridge_prover.(
+            prove !sequencer.bridge_prover
+              (Withdrawal_request.f ~logger
+                 { withdrawal_params; transferrer = transferrer_update }))
+          >>| Or_error.ok_exn
+        in
         let transfer_cmd : Zkapp_command.t =
           { fee_payer
           ; account_updates =
-              Zkapp_command.Call_forest.cons
-                ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-                transferrer_update transfer_forest
+              transfer_forest
               |> Zkapp_command.Call_forest.map
                    ~f:(Account_update.write_all_proofs_to_disk ~proof_cache_db)
           ; memo = Signed_command_memo.empty

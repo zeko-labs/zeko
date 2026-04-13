@@ -396,6 +396,43 @@ let is_deposit_finalization (command : User_command.t) =
                   in
                   ( is_helper_valid && is_witness_valid
                   , Some helper_forest.elt.account_update.body.public_key )
+              | [ helper_forest
+                ; witness_forest
+                ; recipient_payout_forest
+                ; sequencer_fee_forest
+                ] ->
+                  let is_helper_valid =
+                    List.is_empty helper_forest.elt.calls
+                    && Token_id.equal
+                         helper_forest.elt.account_update.body.token_id
+                         (Account_id.derive_token_id
+                            ~owner:
+                              ( Account_id.of_public_key
+                              @@ Public_key.decompress_exn
+                                   Zeko_circuits_config.Inputs.holder_account_l2
+                              ) )
+                  in
+                  let is_witness_valid =
+                    List.is_empty witness_forest.elt.calls
+                    && Public_key.Compressed.equal
+                         witness_forest.elt.account_update.body.public_key
+                         Zeko_circuits_config.Inputs.zeko_l2
+                    && Token_id.equal
+                         witness_forest.elt.account_update.body.token_id
+                         Token_id.default
+                  in
+                  let is_payouts_valid =
+                    List.is_empty recipient_payout_forest.elt.calls
+                    && List.is_empty sequencer_fee_forest.elt.calls
+                    && Token_id.equal
+                         recipient_payout_forest.elt.account_update.body.token_id
+                         Token_id.default
+                    && Token_id.equal
+                         sequencer_fee_forest.elt.account_update.body.token_id
+                         Token_id.default
+                  in
+                  ( is_helper_valid && is_witness_valid && is_payouts_valid
+                  , Some helper_forest.elt.account_update.body.public_key )
               | _ ->
                   (false, None)
             in
