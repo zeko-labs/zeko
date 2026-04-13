@@ -40,6 +40,57 @@ let write_signed_multisig_updates ?output updates =
   write_json ?output
     (`List (List.map updates ~f:Deploy.Signed_multisig_update.to_yojson))
 
+let send_direct ~logger ~l1_uri ~(signer : Keypair.t) ~bodies =
+  let signature_kind = Zeko_circuits_config.t.chain_l1 in
+  let%bind nonce =
+    Gql_client.infer_nonce ~logger l1_uri
+      (Public_key.compress signer.public_key)
+    >>| Or_error.ok_exn
+  in
+  let account_updates =
+    List.map bodies ~f:(fun body ->
+        let body =
+          { body with
+            Account_update.Body.authorization_kind =
+              Account_update.Authorization_kind.Signature
+          }
+        in
+        Account_update.with_aux ~body
+          ~authorization:(Control.Poly.Signature Signature.dummy) )
+    |> Zkapp_command.Call_forest.of_account_updates
+         ~account_update_depth:(fun _ -> 0)
+    |> Utils.rehash_forest ~signature_kind
+  in
+  let command : Zkapp_command.t =
+    { fee_payer =
+        { Account_update.Fee_payer.body =
+            { public_key = Public_key.compress signer.public_key
+            ; fee = Currency.Fee.of_mina_string_exn "0.1"
+            ; valid_until = None
+            ; nonce
+            }
+        ; authorization = Signature.dummy
+        }
+    ; account_updates
+    ; memo = Signed_command_memo.empty
+    }
+  in
+  let command =
+    Utils.sign_zkapp_command ~signature_kind command [ signer ]
+    |> Zkapp_command.read_all_proofs_from_disk
+  in
+  match%map Gql_client.send_zkapp l1_uri command with
+  | Ok _ ->
+      let txn_hash =
+        Mina_transaction.Transaction_hash.hash_command (Zkapp_command command)
+      in
+      [%log info] "Successfully sent zkapp command: %s"
+        (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
+  | Error (`Failed_request err) ->
+      [%log error] "Failed request: %s" err
+  | Error (`Graphql_error err) ->
+      [%log error] "Graphql request: %s" err
+
 let generate_even_key =
   ( "generate-even-key"
   , Command.basic ~summary:"Generate a private key with an even public key"
@@ -125,6 +176,11 @@ let update_outer_verification_keys =
        and only_check =
          flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
+       and direct =
+         flag "--direct" no_arg
+           ~doc:
+             "bool Build and send the zkapp command directly instead of \
+              signing for multisig"
        in
        fun () ->
          let l1_uri = Uri.of_string l1_uri in
@@ -224,27 +280,47 @@ let update_outer_verification_keys =
                  then None
                  else Some (new_vk, kp) )
            in
-           let%map signed_updates =
-             Deferred.List.map to_update ~how:`Sequential
-               ~f:(fun (new_vk, pk) ->
-                 let kind =
-                   if
-                     Public_key.Compressed.equal pk
-                       Zeko_circuits_config.t.zeko_l1
-                   then Deploy.Multisig_update_kind.Outer
-                   else if
-                     Public_key.Compressed.equal pk
-                       Zeko_circuits_config.t.helper_token_owner_l1
-                   then Deploy.Multisig_update_kind.Bridge_token_owner_l1
-                   else bridge_holder_kind
-                 in
-                 let%map body =
+           if direct then
+             let%bind bodies =
+               Deferred.List.map to_update ~how:`Sequential
+                 ~f:(fun (new_vk, pk) ->
+                   let kind =
+                     if
+                       Public_key.Compressed.equal pk
+                         Zeko_circuits_config.t.zeko_l1
+                     then Deploy.Multisig_update_kind.Outer
+                     else if
+                       Public_key.Compressed.equal pk
+                         Zeko_circuits_config.t.helper_token_owner_l1
+                     then Deploy.Multisig_update_kind.Bridge_token_owner_l1
+                     else bridge_holder_kind
+                   in
                    Deploy.build_verification_key_multisig_update_body ~kind
-                     ~public_key:pk ~verification_key:new_vk
-                 in
-                 Deploy.sign_multisig_update ~signer ~kind ~body )
-           in
-           write_signed_multisig_updates ?output signed_updates ) )
+                     ~public_key:pk ~verification_key:new_vk )
+             in
+             send_direct ~logger ~l1_uri ~signer ~bodies
+           else
+             let%map signed_updates =
+               Deferred.List.map to_update ~how:`Sequential
+                 ~f:(fun (new_vk, pk) ->
+                   let kind =
+                     if
+                       Public_key.Compressed.equal pk
+                         Zeko_circuits_config.t.zeko_l1
+                     then Deploy.Multisig_update_kind.Outer
+                     else if
+                       Public_key.Compressed.equal pk
+                         Zeko_circuits_config.t.helper_token_owner_l1
+                     then Deploy.Multisig_update_kind.Bridge_token_owner_l1
+                     else bridge_holder_kind
+                   in
+                   let%map body =
+                     Deploy.build_verification_key_multisig_update_body ~kind
+                       ~public_key:pk ~verification_key:new_vk
+                   in
+                   Deploy.sign_multisig_update ~signer ~kind ~body )
+             in
+             write_signed_multisig_updates ?output signed_updates ) )
 
 let update_inner_verification_keys =
   ( "update-inner-verification-keys"
@@ -264,6 +340,11 @@ let update_inner_verification_keys =
        and db_path =
          flag "--db-path" (optional string)
            ~doc:"string Path to the ledger file"
+       and direct =
+         flag "--direct" no_arg
+           ~doc:
+             "bool Build and send the zkapp command directly instead of \
+              signing for multisig"
        in
        fun () ->
          let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
@@ -495,11 +576,15 @@ let update_inner_verification_keys =
                    ; acc_set = None
                    }
            in
-           let signed_update =
-             Deploy.sign_multisig_update ~signer:sender
-               ~kind:Deploy.Multisig_update_kind.Outer ~body
-           in
-           return (write_signed_multisig_updates ?output [ signed_update ]) ) )
+           if direct then
+             send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+           else
+             let signed_update =
+               Deploy.sign_multisig_update ~signer:sender
+                 ~kind:Deploy.Multisig_update_kind.Outer ~body
+             in
+             return (write_signed_multisig_updates ?output [ signed_update ]) )
+  )
 
 let update_da_key =
   ( "update-da-key"
@@ -517,6 +602,11 @@ let update_da_key =
        and only_check =
          flag "--only-check" no_arg
            ~doc:"bool Only check if the verification keys are up to date"
+       and direct =
+         flag "--direct" no_arg
+           ~doc:
+             "bool Build and send the zkapp command directly instead of \
+              signing for multisig"
        in
        fun () ->
          let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
@@ -555,7 +645,7 @@ let update_da_key =
 
          if only_check then return ()
          else
-           let%map body =
+           let%bind body =
              let open Zeko_circuits.Rollup_state in
              Deploy.build_outer_state_multisig_update_body
                ~precondition:
@@ -579,11 +669,15 @@ let update_da_key =
                    ; acc_set = None
                    }
            in
-           let signed_update =
-             Deploy.sign_multisig_update ~signer:sender
-               ~kind:Deploy.Multisig_update_kind.Outer ~body
-           in
-           write_signed_multisig_updates ?output [ signed_update ] ) )
+           if direct then
+             send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+           else
+             let signed_update =
+               Deploy.sign_multisig_update ~signer:sender
+                 ~kind:Deploy.Multisig_update_kind.Outer ~body
+             in
+             return (write_signed_multisig_updates ?output [ signed_update ]) )
+  )
 
 let update_permissions =
   ( "update-permissions"
@@ -595,12 +689,21 @@ let update_permissions =
        and permissions_file =
          flag "--permissions-file" (optional string)
            ~doc:"string Optional JSON file with Permissions.t"
+       and l1_uri =
+         flag "--l1-uri" (optional string)
+           ~doc:"string L1 URI (required with --direct)"
+       and direct =
+         flag "--direct" no_arg
+           ~doc:
+             "bool Build and send the zkapp command directly instead of \
+              signing for multisig"
        in
        fun () ->
          let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
          let signer =
            Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
          in
+         let logger = Logger.create () in
          let permissions =
            match permissions_file with
            | None ->
@@ -608,14 +711,22 @@ let update_permissions =
            | Some path ->
                load_json_file path [%of_yojson: Permissions.t]
          in
-         let%map body =
+         let%bind body =
            Deploy.build_permissions_multisig_update_payload ~permissions
          in
-         let signed_update =
-           Deploy.sign_multisig_update ~signer
-             ~kind:Deploy.Multisig_update_kind.Outer ~body:body.body
-         in
-         write_signed_multisig_updates ?output [ signed_update ] ) )
+         if direct then
+           let l1_uri =
+             Uri.of_string
+               (Option.value_exn ~message:"--l1-uri is required with --direct"
+                  l1_uri )
+           in
+           send_direct ~logger ~l1_uri ~signer ~bodies:[ body.body ]
+         else
+           let signed_update =
+             Deploy.sign_multisig_update ~signer
+               ~kind:Deploy.Multisig_update_kind.Outer ~body:body.body
+           in
+           return (write_signed_multisig_updates ?output [ signed_update ]) ) )
 
 let multisig_submit =
   ( "multisig-submit"
@@ -713,6 +824,11 @@ let set_pause =
            ~doc:"string Output signed update JSON file"
        and value =
          flag "--value" (required bool) ~doc:"bool Value to set the pause to"
+       and direct =
+         flag "--direct" no_arg
+           ~doc:
+             "bool Build and send the zkapp command directly instead of \
+              signing for multisig"
        in
        fun () ->
          let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
@@ -738,7 +854,7 @@ let set_pause =
 
          [%log info] "Current paused: %b" current_paused ;
 
-         let%map body =
+         let%bind body =
            let open Zeko_circuits in
            Deploy.build_outer_state_multisig_update_body
              ~precondition:
@@ -767,11 +883,14 @@ let set_pause =
                  ; acc_set = None
                  }
          in
-         let signed_update =
-           Deploy.sign_multisig_update ~signer:sender
-             ~kind:Deploy.Multisig_update_kind.Outer ~body
-         in
-         write_signed_multisig_updates ?output [ signed_update ] ) )
+         if direct then
+           send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+         else
+           let signed_update =
+             Deploy.sign_multisig_update ~signer:sender
+               ~kind:Deploy.Multisig_update_kind.Outer ~body
+           in
+           return (write_signed_multisig_updates ?output [ signed_update ]) ) )
 
 let migrate =
   ( "migrate"
