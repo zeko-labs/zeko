@@ -15,6 +15,12 @@ module Make_mina (Inputs : sig
 
   val withdrawal_delay : Mina_numbers.Global_slot_span.t
 
+  val bridge_proof_fee : Currency.Amount.t
+
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_fee_recipient_l2 : PC.t
+
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
@@ -129,6 +135,12 @@ module Make_custom (Inputs : sig
   val holder_account_l2 : PC.t
 
   val withdrawal_delay : Mina_numbers.Global_slot_span.t
+
+  val bridge_proof_fee : Currency.Amount.t
+
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_fee_recipient_l2 : PC.t
 
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 

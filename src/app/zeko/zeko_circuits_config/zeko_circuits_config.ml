@@ -120,6 +120,13 @@ module Inputs = struct
 
   let withdrawal_delay = t.withdrawal_delay
 
+  let bridge_proof_fee =
+    Currency.Amount.of_fee Zeko_constants.constraint_constants.account_creation_fee
+
+  let bridge_fee_recipient_l1 = t.zeko_l1
+
+  let bridge_fee_recipient_l2 = Zeko_constants.inner_public_key
+
   let holder_account_l1_permissions_enabled : Permissions.t =
     { edit_state = Proof
     ; access = None

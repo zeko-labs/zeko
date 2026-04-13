@@ -1442,6 +1442,48 @@ module Types = struct
               ]
       end
 
+      module Transferrer = struct
+        type input = Account_update.Stable.Latest.t
+
+        let arg_typ =
+          scalar "BridgeTransferrerInput"
+            ~doc:
+              "A single pre-signed account update encoded as accountUpdates JSON"
+            ~coerce:(function
+              | `String s ->
+                  Result.try_with (fun () ->
+                      let forest =
+                        Yojson.Safe.from_string s
+                        |> Mina_base.Zkapp_command.account_updates_of_json
+                        |> Mina_base.Zkapp_command.Call_forest
+                           .of_account_updates_map
+                             ~f:Account_update.of_graphql_repr
+                             ~account_update_depth:(fun au ->
+                               au.body.call_depth )
+                        |> Mina_base.Zkapp_command.Call_forest
+                           .accumulate_hashes_predicated
+                             ~signature_kind:Zeko_circuits_config.t.chain_l1
+                      in
+                      match forest with
+                      | [ tree ] when List.is_empty tree.elt.calls ->
+                          tree.elt.account_update
+                      | _ ->
+                          failwith
+                            "Expected a single account update with empty calls" )
+                  |> Result.map_error ~f:Exn.to_string
+              | _ ->
+                  Error "Expected JSON-encoded account update" )
+            ~to_json:(fun account_update ->
+              let forest =
+                Mina_base.Zkapp_command.Call_forest.cons
+                  ~signature_kind:Zeko_circuits_config.t.chain_l1
+                  account_update []
+              in
+              `String
+                (Yojson.Safe.to_string
+                @@ Mina_base.Zkapp_command.account_updates_to_json forest) )
+      end
+
       module Folder = struct
         module Ase_with_length = struct
           module Stmt = struct
@@ -1697,22 +1739,39 @@ module Types = struct
       end
 
       module Deposit_request = struct
-        type input = { deposit_params : Deposit_params.input }
+        type input =
+          { deposit_params : Deposit_params.input
+          ; transferrer : Transferrer.input
+          }
 
         let arg_typ ~proof_cache_db =
           obj "DepositRequestInput"
-            ~coerce:(fun deposit_params -> { deposit_params })
-            ~split:(fun f (x : input) -> f x.deposit_params)
+            ~coerce:(fun deposit_params transferrer ->
+              { deposit_params; transferrer } )
+            ~split:(fun f (x : input) -> f x.deposit_params x.transferrer)
             ~fields:
               [ arg "depositParams"
                   ~typ:(non_null @@ Deposit_params.arg_typ ~proof_cache_db)
+              ; arg "transferrer" ~typ:(non_null Transferrer.arg_typ)
               ]
       end
 
       module Withdrawal_request = struct
-        type input = Withdrawal_params.input
+        type input =
+          { withdrawal_params : Withdrawal_params.input
+          ; transferrer : Transferrer.input
+          }
 
-        let arg_typ ~proof_cache_db = Withdrawal_params.arg_typ ~proof_cache_db
+        let arg_typ ~proof_cache_db =
+          obj "WithdrawalRequestInput"
+            ~coerce:(fun withdrawal_params transferrer ->
+              { withdrawal_params; transferrer } )
+            ~split:(fun f (x : input) -> f x.withdrawal_params x.transferrer)
+            ~fields:
+              [ arg "withdrawalParams"
+                  ~typ:(non_null @@ Withdrawal_params.arg_typ ~proof_cache_db)
+              ; arg "transferrer" ~typ:(non_null Transferrer.arg_typ)
+              ]
       end
 
       module Finalize_deposit = struct
@@ -2233,7 +2292,7 @@ module Mutations = struct
                   @@ Types.Input.Provers.Deposit_request.arg_typ ~proof_cache_db
                   )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () { deposit_params } ->
+        ~resolve:(fun { ctx = sequencer; _ } () { deposit_params; transferrer } ->
           let ( + ) a b = Currency.Fee.add a b |> Option.value_exn in
           let account_creation_fee =
             Zeko_constants.constraint_constants.account_creation_fee
@@ -2247,7 +2306,7 @@ module Mutations = struct
               Bridge_prover.Deposit_request.f
                 ~t:Zeko_sequencer.(sequencer.bridge_prover)
                 ~logger:Zeko_sequencer.(sequencer.logger)
-                { deposit_params }
+                { deposit_params; transferrer }
             in
             don't_wait_for d ; return (Ok key) )
 
@@ -2262,12 +2321,12 @@ module Mutations = struct
                   @@ Types.Input.Provers.Withdrawal_request.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () withdrawal_params ->
+        ~resolve:(fun { ctx = sequencer; _ } () { withdrawal_params; transferrer } ->
           let key, d =
             Bridge_prover.Withdrawal_request.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)
               ~logger:Zeko_sequencer.(sequencer.logger)
-              { withdrawal_params }
+              { withdrawal_params; transferrer }
           in
           don't_wait_for d ; return (Ok key) )
 

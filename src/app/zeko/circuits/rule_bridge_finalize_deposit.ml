@@ -22,6 +22,10 @@ module Make (Inputs : sig
 
   val zeko_l2 : PC.t
 
+  val bridge_proof_fee : Currency.Amount.t
+
+  val bridge_fee_recipient_l2 : PC.t
+
   val chain_l1 : Mina_signature_kind.t
 
   val chain_l2 : Mina_signature_kind.t
@@ -157,7 +161,7 @@ struct
         public_key = base_params.recipient
       ; token_id = helper_token_id
       ; authorization_kind = authorization_signed ()
-      ; use_full_commitment = Boolean.true_
+      ; use_full_commitment = Boolean.false_
       ; may_use_token = constant May_use_token.typ Parents_own_token
       ; implicit_account_creation_fee = constant Boolean.typ false
       ; update =
@@ -223,10 +227,43 @@ struct
       ; events
       }
     in
+    let fee_balance_change =
+      Currency.Amount.Signed.Checked.of_unsigned
+        (constant Currency.Amount.typ bridge_proof_fee)
+    in
+    let* recipient_balance_change =
+      Currency.Amount.Signed.Checked.add
+        (Currency.Amount.Signed.Checked.of_unsigned base_params.amount)
+        (Currency.Amount.Signed.Checked.negate fee_balance_change)
+    in
+    let recipient_payout =
+      { default_account_update with
+        public_key = base_params.recipient
+      ; token_id = constant Token_id.typ token_id_l2
+      ; may_use_token = constant May_use_token.typ Parents_own_token
+      ; authorization_kind = constant A.typ None_given
+      ; balance_change = recipient_balance_change
+      ; implicit_account_creation_fee = constant Boolean.typ false
+      }
+    in
+    let sequencer_fee_payout =
+      { default_account_update with
+        public_key = constant PC.typ bridge_fee_recipient_l2
+      ; token_id = constant Token_id.typ token_id_l2
+      ; may_use_token = constant May_use_token.typ Parents_own_token
+      ; authorization_kind = constant A.typ None_given
+      ; balance_change = fee_balance_change
+      ; implicit_account_creation_fee = constant Boolean.typ false
+      }
+    in
     let@ () = with_label __LOC__ in
     let*| out =
       make_outputs ~chain:chain_l2 account_update
-        [ (helper_account, []); (witness_inner, []) ]
+        [ (helper_account, [])
+        ; (witness_inner, [])
+        ; (recipient_payout, [])
+        ; (sequencer_fee_payout, [])
+        ]
     in
     Compile_simple.
       { prevs = Two_prevs (verify_check_accepted, verify_ase); out }
