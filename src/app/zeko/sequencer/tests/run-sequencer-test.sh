@@ -54,7 +54,7 @@ TMP_DIR=$(mktemp -d)
 wait_for_port() {
   local port=$1
   local pid=$2
-  while ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
+  while ! nc -z localhost $port; do
     sleep 1
 
     if ! kill -0 $pid 2>/dev/null; then
