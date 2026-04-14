@@ -394,6 +394,7 @@ let
             src/app/zeko/sequencer/prover/cli.exe \
             src/app/zeko/sequencer/prover/cli_fake.exe \
             src/app/zeko/da_layer/cli.exe \
+            src/app/zeko/signer/cli.exe \
             src/app/logproc/logproc.exe \
             src/app/cli/src/mina.exe \
             src/app/batch_txn_tool/batch_txn_tool.exe \
@@ -453,6 +454,8 @@ let
           cp src/app/zeko/da_layer/cli.exe $zeko_da/bin/zeko-da
           cp src/app/zeko/sequencer/archive_relay/cli.exe $zeko_archive_relay/bin/zeko-archive-relay
           cp src/app/archive/archive.exe $zeko_archive_relay/bin/zeko-archive
+          cp src/app/zeko/signer/cli.exe $zeko/bin/zeko-signer
+          cp src/app/zeko/signer/cli.exe $zeko_da/bin/zeko-signer
           cp -R _doc/_html $out/share/doc/html
           # cp src/lib/mina_base/sample_keypairs.json $sample/share/mina
           popd

@@ -222,8 +222,8 @@ module Command_signing = struct
       match policy with
       | None ->
           Ok ()
-      | Some (policy : Policy.Zkapp.t) ->
-          (match policy.max_fee with
+      | Some (policy : Policy.Zkapp.t) -> (
+          match policy.max_fee with
           | None ->
               Ok ()
           | Some max_fee ->
@@ -235,15 +235,14 @@ module Command_signing = struct
                 Or_error.errorf "Fee %s exceeds configured maximum %s"
                   (Currency.Fee.to_string command.fee_payer.body.fee)
                   (Currency.Fee.to_string max_fee)
-              else Ok ())
+              else Ok () )
     in
     if
       not
         (Public_key.Compressed.equal public_key
-           command.fee_payer.body.public_key)
+           command.fee_payer.body.public_key )
     then
-      Or_error.errorf
-        "Signer key %s does not match the fee payer public key %s"
+      Or_error.errorf "Signer key %s does not match the fee payer public key %s"
         (Public_key.Compressed.to_base58_check public_key)
         (Public_key.Compressed.to_base58_check command.fee_payer.body.public_key)
     else
@@ -252,10 +251,7 @@ module Command_signing = struct
         Signature_lib.Schnorr.Chunked.sign ~signature_kind keypair.private_key
           (Random_oracle.Input.Chunked.field full_commitment)
       in
-      Ok
-        { command with
-          fee_payer = { command.fee_payer with authorization }
-        }
+      Ok { command with fee_payer = { command.fee_payer with authorization } }
 end
 
 module Client = struct

@@ -9,7 +9,8 @@ let run =
       (let%map_open.Command log_json = Flag.Log.json
        and log_level = Flag.Log.level
        and port =
-         flag "--port" (optional_with_default 9000 int)
+         flag "--port"
+           (optional_with_default 9000 int)
            ~doc:"int Port to listen on"
        and private_key =
          flag "--private-key" (optional string)
@@ -18,8 +19,7 @@ let run =
          flag "--allow-field-signing" no_arg
            ~doc:"Allow signing raw field elements"
        and allow_zkapp_signing =
-         flag "--allow-zkapp-signing" no_arg
-           ~doc:"Allow signing zkApp commands"
+         flag "--allow-zkapp-signing" no_arg ~doc:"Allow signing zkApp commands"
        and max_fee =
          flag "--max-fee" (optional string)
            ~doc:"string Maximum fee in mina for zkApp signing"
@@ -30,7 +30,8 @@ let run =
        fun () ->
          if (not allow_field_signing) && not allow_zkapp_signing then
            failwith
-             "At least one of --allow-field-signing or --allow-zkapp-signing must be enabled" ;
+             "At least one of --allow-field-signing or --allow-zkapp-signing \
+              must be enabled" ;
          let private_key =
            match private_key with
            | Some private_key ->
@@ -45,7 +46,8 @@ let run =
              if allow_zkapp_signing then
                Some
                  Signer_service.Policy.Zkapp.
-                   { max_fee = Option.map max_fee ~f:Currency.Fee.of_mina_string_exn
+                   { max_fee =
+                       Option.map max_fee ~f:Currency.Fee.of_mina_string_exn
                    ; max_balance_change =
                        Option.map max_balance_change
                          ~f:Currency.Amount.of_mina_string_exn
