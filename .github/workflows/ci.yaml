@@ -3,9 +3,9 @@ name: CI
 
 on:
   push:
-    
+
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
       - name: 🐹 Setup go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.19.11'
+          go-version: "1.19.11"
       - name: 🐹 Build and install capnpc-go
         run: |
           tmpdir=$(mktemp -d)
