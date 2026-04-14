@@ -3,15 +3,15 @@ name: CI
 
 on:
   push:
-    
+
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 jobs:
   build-and-test:
     name: "Build & Test"
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: warp-ubuntu-latest-x64-16x
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -21,7 +21,7 @@ jobs:
       - name: 🐹 Setup go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.19.11'
+          go-version: "1.19.11"
       - name: 🐹 Build and install capnpc-go
         run: |
           tmpdir=$(mktemp -d)
@@ -54,12 +54,21 @@ jobs:
             pkg-config zlib1g-dev \
             capnproto \
             netcat-traditional
-          git clone https://github.com/ocaml/opam-repository.git \
-            --depth 1 ./opam-repository
+          for i in 1 2 3 4 5; do
+            rm -rf ./opam-repository
+            git clone https://github.com/ocaml/opam-repository.git --depth 1 ./opam-repository && break
+            echo "clone failed, retry $i"
+            getent hosts github.com || true
+            sleep 5
+          done
           git -C ./opam-repository fetch origin 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
           git -C ./opam-repository checkout 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
           opam init --disable-sandboxing -k git -a ./opam-repository --bare
-          opam repository add --yes --all --set-default o1-labs https://github.com/o1-labs/opam-repository.git
+          for i in 1 2 3 4 5; do
+            opam repository add --yes --all --set-default o1-labs https://github.com/o1-labs/opam-repository.git && break
+            echo "opam repo add failed, retry $i"
+            sleep 5
+          done
           opam switch create "4.14.0"
           opam switch "4.14.0"
           export OPAMERRLOGLEN=20
@@ -90,5 +99,6 @@ jobs:
         run: |
           opam exec -- dune build --profile=devnet src/app/zeko/sequencer
           opam exec -- dune build --profile=devnet src/app/zeko/da_layer
+          opam exec -- dune build --profile=devnet src/app/zeko/signer
       - name: 🧪 Run sequencer tests
         run: ./src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1

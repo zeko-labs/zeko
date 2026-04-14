@@ -25,7 +25,7 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-4x
     strategy:
       matrix:
-        package: [zeko, zeko-da, zeko-archive-relay, zeko-archive]
+        package: [zeko, zeko-da, zeko-archive-relay, zeko-archive, zeko-signer]
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5

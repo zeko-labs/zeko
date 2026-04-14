@@ -1,7 +1,6 @@
 open Core_kernel
 open Async
 open Mina_base
-open Signature_lib
 open Mina_ledger
 open Zeko_circuits
 open Zeko_types
@@ -102,7 +101,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
       Gql_client.infer_state ~logger
         Executor.(executor.l1_uri)
         ~zkapp_pk
-        ~signer_pk:(Public_key.compress executor.signer.public_key)
+        ~signer_pk:(Signer_service.Signer.public_key executor.signer)
       >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
     in
     let emergency_mode =
@@ -192,7 +191,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   let command : Zkapp_command.t =
     { fee_payer =
         { Account_update.Fee_payer.body =
-            { public_key = Public_key.compress executor.signer.public_key
+            { public_key = Signer_service.Signer.public_key executor.signer
             ; fee = Currency.Fee.of_mina_int_exn 1
             ; valid_until = None
             ; nonce = Unsigned.UInt32.zero
@@ -213,7 +212,7 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
   let open Deferred.Result.Let_syntax in
   let%bind { ledger_hash; _ } =
     Gql_client.infer_state ~logger executor.l1_uri ~zkapp_pk
-      ~signer_pk:(Public_key.compress executor.signer.public_key)
+      ~signer_pk:(Signer_service.Signer.public_key executor.signer)
     >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
   in
   let rec recommit_next current_state =

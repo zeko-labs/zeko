@@ -186,6 +186,23 @@ in {
     };
   };
 
+  zeko-signer-image = dockerTools.buildLayeredImage {
+    name = "zeko-signer";
+    tag = "latest";
+    inherit created;
+    contents = [ ocamlPackages_mina.devnet.zeko (mkBaseEnv pkgs) ];
+    config = {
+      Entrypoint = [ "/bin/zeko-signer" ];
+      Env = [
+        "TZ=UTC"
+        "TZDIR=${pkgs.tzdata}/share/zoneinfo"
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+
+        "ZEKO_SIGNATURE_KIND=testnet"
+      ];
+    };
+  };
+
   mina-image-slim = dockerTools.streamLayeredImage {
     name = "mina";
     inherit created;
