@@ -242,6 +242,8 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
         [%log info] "Diff with target ledger hash %s added to the database"
           (Ledger_hash.to_decimal_string target_ledger_hash)
   in
+
+  (* 9 *)
   let%bind.Result message =
     try
       Random_oracle.hash
