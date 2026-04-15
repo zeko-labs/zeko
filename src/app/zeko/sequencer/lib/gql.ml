@@ -1448,7 +1448,8 @@ module Types = struct
         let arg_typ =
           scalar "BridgeTransferrerInput"
             ~doc:
-              "A single pre-signed account update encoded as accountUpdates JSON"
+              "A single pre-signed account update encoded as accountUpdates \
+               JSON"
             ~coerce:(function
               | `String s ->
                   Result.try_with (fun () ->
@@ -1476,12 +1477,12 @@ module Types = struct
             ~to_json:(fun account_update ->
               let forest =
                 Mina_base.Zkapp_command.Call_forest.cons
-                  ~signature_kind:Zeko_circuits_config.t.chain_l1
-                  account_update []
+                  ~signature_kind:Zeko_circuits_config.t.chain_l1 account_update
+                  []
               in
               `String
-                (Yojson.Safe.to_string
-                @@ Mina_base.Zkapp_command.account_updates_to_json forest) )
+                ( Yojson.Safe.to_string
+                @@ Mina_base.Zkapp_command.account_updates_to_json forest ) )
       end
 
       module Folder = struct
@@ -1781,21 +1782,23 @@ module Types = struct
               Bridge.Check_accepted_mina.Init.t
               * Bridge.Check_accepted_mina.Elem.t list
           ; prev_next_deposit : Unsigned.uint32
+          ; prev_nonce : Unsigned.uint32
           }
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeDepositInput"
             ~coerce:(fun ase (check_accepted_init, check_accepted_elems)
-                         prev_next_deposit ->
+                         prev_next_deposit prev_nonce ->
               let%map.Result check_accepted_elems =
                 Result.all check_accepted_elems
               in
               { ase
               ; check_accepted = (check_accepted_init, check_accepted_elems)
               ; prev_next_deposit
+              ; prev_nonce
               } )
             ~split:(fun f (x : input) ->
-              f x.ase x.check_accepted x.prev_next_deposit )
+              f x.ase x.check_accepted x.prev_next_deposit x.prev_nonce )
             ~fields:
               [ arg "ase" ~typ:(non_null Folder.Ase_with_length.arg_typ)
               ; arg "checkAccepted"
@@ -1803,6 +1806,7 @@ module Types = struct
                     ( non_null
                     @@ Folder.Check_accepted_mina.arg_typ ~proof_cache_db )
               ; arg "prevNextDeposit" ~typ:(non_null UInt32.arg_typ)
+              ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
               ]
       end
 
@@ -1881,13 +1885,14 @@ module Types = struct
           ; withdrawal_ase : Ase.With_length.Stmt.t * Field.t list
           ; prev_next_withdrawal : Unsigned.uint32
           ; withdrawal_params : Withdrawal_params.input
+          ; prev_nonce : Unsigned.uint32
           }
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeWithdrawalInput"
             ~coerce:(fun public_key commit before_commit commit_ase
                          before_withdrawal withdrawal_ase prev_next_withdrawal
-                         withdrawal_params ->
+                         withdrawal_params prev_nonce ->
               let%map.Result commit =
                 match%bind.Result commit with
                 | Commit commit ->
@@ -1907,6 +1912,7 @@ module Types = struct
               ; withdrawal_ase
               ; prev_next_withdrawal
               ; withdrawal_params
+              ; prev_nonce
               } )
             ~split:(fun f (x : input) ->
               f x.public_key (Commit x.commit)
@@ -1915,7 +1921,8 @@ module Types = struct
                 x.commit_ase
                 (Zeko_circuits.Rollup_state.Inner_action_state.raw
                    x.before_withdrawal )
-                x.withdrawal_ase x.prev_next_withdrawal x.withdrawal_params )
+                x.withdrawal_ase x.prev_next_withdrawal x.withdrawal_params
+                x.prev_nonce )
             ~fields:
               [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
               ; arg "commit"
@@ -1931,6 +1938,7 @@ module Types = struct
               ; arg "prevNextWithdrawal" ~typ:(non_null UInt32.arg_typ)
               ; arg "withdrawalParams"
                   ~typ:(non_null @@ Withdrawal_params.arg_typ ~proof_cache_db)
+              ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
               ]
       end
     end
@@ -2321,7 +2329,8 @@ module Mutations = struct
                   @@ Types.Input.Provers.Withdrawal_request.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () { withdrawal_params; transferrer } ->
+        ~resolve:(fun { ctx = sequencer; _ } ()
+                      { withdrawal_params; transferrer } ->
           let key, d =
             Bridge_prover.Withdrawal_request.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)
@@ -2346,6 +2355,7 @@ module Mutations = struct
                                    ; check_accepted =
                                        check_accepted_init, check_accepted_elems
                                    ; prev_next_deposit
+                                   ; prev_nonce
                                    } =
             return (Result.map_error witness ~f:Error.to_string_hum)
           in
@@ -2358,6 +2368,7 @@ module Mutations = struct
               ; check_accepted_init
               ; check_accepted_elems
               ; prev_next_deposit
+              ; prev_nonce
               }
           in
           don't_wait_for d ; return (Ok key) )
@@ -2385,6 +2396,7 @@ module Mutations = struct
                                        , withdrawal_ase_elems )
                                    ; prev_next_withdrawal
                                    ; withdrawal_params
+                                   ; prev_nonce
                                    } =
             return (Result.map_error witness ~f:Error.to_string_hum)
           in
@@ -2402,6 +2414,7 @@ module Mutations = struct
               ; withdrawal_ase_elems
               ; prev_next_withdrawal
               ; withdrawal_params
+              ; prev_nonce
               }
           in
           don't_wait_for d ; return (Ok key) )

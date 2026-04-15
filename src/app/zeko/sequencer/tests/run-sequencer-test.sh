@@ -2,11 +2,11 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <fake|real> <num_provers>" >&2
+  echo "Usage: $0 <fake|real> <num_provers> <agent?> <wait_for_port?>" >&2
   exit 1
 }
 
-if [ "$#" -ne 2 ]; then
+if [ "$#" -ne 4 ]; then
   usage
 fi
 
@@ -15,6 +15,14 @@ NUM_PROVERS="$2"
 PROVER_PIDS=()
 SIGNER_PIDS=()
 PROVERS=()
+
+AGENT="$3"
+if [ "$AGENT" = "true" ]; then
+  echo "Redirecting output to /tmp/sequencer_test_output.log"
+  exec > /tmp/sequencer_test_output.log 2>&1
+fi
+
+WAIT_FOR_PORT="$4"
 
 case "$MODE" in
 fake | real) ;;
@@ -52,18 +60,23 @@ export ZEKO_CIRCUITS_CONFIG=test
 TMP_DIR=$(mktemp -d)
 
 wait_for_port() {
-  local port=$1
-  local pid=$2
-  while ! nc -z localhost $port; do
-    sleep 1
+  if [ "$WAIT_FOR_PORT" = "true" ]; then
+    local port=$1
+    local pid=$2
+    while ! nc -z localhost $port; do
+      sleep 1
 
-    if ! kill -0 $pid 2>/dev/null; then
-      echo "Process for port $port failed to start"
-      exit 1
-    fi
-  done
+      if ! kill -0 $pid 2>/dev/null; then
+        echo "Process for port $port failed to start"
+        exit 1
+      fi
+    done
 
-  echo "Port $port is now open"
+    echo "Port $port is now open"
+  else
+    echo "Waiting for 2 seconds..."
+    sleep 2
+  fi
 }
 
 KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli.exe"

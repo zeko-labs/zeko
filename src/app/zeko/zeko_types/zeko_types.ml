@@ -990,6 +990,7 @@ module Bridge = struct
       ; ase : Ase_inst.serializable
       ; check_accepted : Check_accepted_mina.serializable
       ; prev_next_deposit : Checked32.t
+      ; prev_nonce : Checked32.t
       }
     [@@deriving yojson]
 
@@ -1000,6 +1001,7 @@ module Bridge = struct
          ; ase
          ; check_accepted
          ; prev_next_deposit
+         ; prev_nonce
          } :
           serializable ) ~vk_hash : t =
       { public_key
@@ -1009,6 +1011,8 @@ module Bridge = struct
       ; ase = Ase_inst.of_serializable ase
       ; check_accepted = Check_accepted_mina.of_serializable check_accepted
       ; prev_next_deposit
+      ; prev_nonce =
+          Mina_numbers.Account_nonce.of_string (Checked32.to_string prev_nonce)
       }
   end
 
@@ -1176,6 +1180,7 @@ module Bridge = struct
       ; withdrawal_ase : Ase_inner_inst.serializable
       ; prev_next_withdrawal : Checked32.t
       ; withdrawal_params : Withdrawal_params_base.serializable
+      ; prev_nonce : Checked32.t
       }
     [@@deriving yojson]
 
@@ -1190,6 +1195,7 @@ module Bridge = struct
          ; withdrawal_ase
          ; prev_next_withdrawal
          ; withdrawal_params
+         ; prev_nonce
          } :
           serializable ) ~vk_hash ~helper_token_owner_l1_vk_hash
         ~l2_holder_vk_hash : t =
@@ -1208,6 +1214,8 @@ module Bridge = struct
             ~proof_cache_db
       ; helper_token_owner_l1_vk_hash
       ; l2_holder_vk_hash
+      ; prev_nonce =
+          Mina_numbers.Account_nonce.of_string (Checked32.to_string prev_nonce)
       }
   end
 
