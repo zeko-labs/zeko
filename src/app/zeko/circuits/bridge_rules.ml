@@ -22,6 +22,8 @@ module Make_mina (Inputs : sig
   val chain_l1 : Mina_signature_kind.t
 
   val chain_l2 : Mina_signature_kind.t
+
+  val multisig_key : Multisig.t
 end)
 () =
 struct
@@ -64,6 +66,18 @@ struct
   module Rule_bridge_outer_token_owner =
     Rule_bridge_outer_token_owner.Make (Inputs)
 
+  module Rule_multisig_update_l1 = Rule_multisig_update.Make (struct
+    let chain = Inputs.chain_l1
+
+    let multisig_key = Inputs.multisig_key
+  end)
+
+  module Rule_multisig_update_l2 = Rule_multisig_update.Make (struct
+    let chain = Inputs.chain_l2
+
+    let multisig_key = Inputs.multisig_key
+  end)
+
   module System_L1_enabled =
   ( val Compile_simple.compile ~name:"bridge rules for mina l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
@@ -71,13 +85,14 @@ struct
             [ Rule_bridge_finalize_cancelled_deposit.rule
             ; Rule_bridge_finalize_withdrawal.rule
             ; Rule_bridge_disable.rule
+            ; Rule_multisig_update_l1.rule
             ]
           () )
 
   module System_L1_disabled =
   ( val Compile_simple.compile ~name:"bridge rules for mina l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:[ Rule_bridge_enable.rule ]
+          ~branches:[ Rule_bridge_enable.rule; Rule_multisig_update_l1.rule ]
           () )
 
   module System_L2 =
@@ -86,13 +101,15 @@ struct
           ~branches:
             [ Rule_bridge_finalize_deposit.rule
             ; Rule_bridge_inner_receive.rule
+            ; Rule_multisig_update_l2.rule
             ]
           () )
 
   module System_L1_token_owner =
   ( val Compile_simple.compile ~name:"bridge rules for mina l1 token owner"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:[ Rule_bridge_outer_token_owner.rule ]
+          ~branches:
+            [ Rule_bridge_outer_token_owner.rule; Rule_multisig_update_l1.rule ]
           () )
 end
 
@@ -120,6 +137,8 @@ module Make_custom (Inputs : sig
   val chain_l1 : Mina_signature_kind.t
 
   val chain_l2 : Mina_signature_kind.t
+
+  val multisig_key : Multisig.t
 end)
 () =
 struct
@@ -162,6 +181,18 @@ struct
   module Rule_bridge_outer_token_owner =
     Rule_bridge_outer_token_owner.Make (Inputs)
 
+  module Rule_multisig_update_l1 = Rule_multisig_update.Make (struct
+    let chain = Inputs.chain_l1
+
+    let multisig_key = Inputs.multisig_key
+  end)
+
+  module Rule_multisig_update_l2 = Rule_multisig_update.Make (struct
+    let chain = Inputs.chain_l2
+
+    let multisig_key = Inputs.multisig_key
+  end)
+
   module System_L1_enabled =
   ( val Compile_simple.compile ~name:"bridge rules for custom l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
@@ -169,13 +200,14 @@ struct
             [ Rule_bridge_finalize_cancelled_deposit.rule
             ; Rule_bridge_finalize_withdrawal.rule
             ; Rule_bridge_disable.rule
+            ; Rule_multisig_update_l1.rule
             ]
           () )
 
   module System_L1_disabled =
   ( val Compile_simple.compile ~name:"bridge rules for custom l1"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:[ Rule_bridge_enable.rule ]
+          ~branches:[ Rule_bridge_enable.rule; Rule_multisig_update_l1.rule ]
           () )
 
   module System_L2 =
@@ -184,12 +216,14 @@ struct
           ~branches:
             [ Rule_bridge_finalize_deposit.rule
             ; Rule_bridge_inner_receive.rule
+            ; Rule_multisig_update_l2.rule
             ]
           () )
 
   module System_L1_token_owner =
   ( val Compile_simple.compile ~name:"bridge rules for custom l1 token owner"
           ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          ~branches:[ Rule_bridge_outer_token_owner.rule ]
+          ~branches:
+            [ Rule_bridge_outer_token_owner.rule; Rule_multisig_update_l1.rule ]
           () )
 end

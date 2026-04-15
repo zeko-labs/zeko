@@ -12,6 +12,7 @@ type t =
   { chain_l1 : Mina_signature_kind.t
   ; chain_l2 : Mina_signature_kind.t
   ; max_valid_while_size : Zeko_circuits.Zeko_util.Slot.t
+  ; multisig_key : Zeko_circuits.Multisig.t
   ; holder_accounts_l1 : Public_key.Compressed.t list
   ; helper_token_owner_l1 : Public_key.Compressed.t
   ; zeko_l1 : Public_key.Compressed.t
@@ -60,6 +61,10 @@ let (t, deploy_config) : t * Deploy.t option =
       ( { chain_l1 = Testnet
         ; chain_l2 = Testnet
         ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
+        ; multisig_key =
+            { public_keys = List.map holder_accounts_l1 ~f:fst
+            ; quorum = Snark_params.Tick.Field.of_int 1
+            }
         ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
         ; helper_token_owner_l1 = fst helper_token_owner_l1
         ; zeko_l1 = fst zeko_l1
@@ -99,6 +104,8 @@ module Inputs = struct
 
   let max_sequencer_inactivity = (24 * 60 * 30 / 3) + 5 (* A month in slots *)
 
+  let multisig_key = t.multisig_key
+
   let holder_accounts_l1 = t.holder_accounts_l1
 
   let holder_account_l2 = Zeko_constants.inner_holder_key
@@ -120,7 +127,7 @@ module Inputs = struct
     ; receive = None
     ; set_delegate = Impossible
     ; set_permissions = Proof
-    ; set_verification_key = (Signature, Mina_numbers.Txn_version.current)
+    ; set_verification_key = (Proof, Mina_numbers.Txn_version.current)
     ; set_zkapp_uri = Impossible
     ; edit_action_state = Impossible
     ; set_token_symbol = Impossible
@@ -136,7 +143,7 @@ module Inputs = struct
     ; receive = None
     ; set_delegate = Impossible
     ; set_permissions = Proof
-    ; set_verification_key = (Signature, Mina_numbers.Txn_version.current)
+    ; set_verification_key = (Proof, Mina_numbers.Txn_version.current)
     ; set_zkapp_uri = Impossible
     ; edit_action_state = Impossible
     ; set_token_symbol = Impossible

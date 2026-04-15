@@ -20,6 +20,11 @@ open struct
     Quickcheck.random_value ~seed:(`Deterministic "182128381918")
       Private_key.gen
 
+  let multisig_update_kp =
+    Quickcheck.random_value ~seed:(`Deterministic "121212121212") Keypair.gen
+
+  let multisig_update_pk = Public_key.compress multisig_update_kp.public_key
+
   let da_key = Public_key.of_private_key_exn da_sk |> Public_key.compress
 
   let () = assert (not da_key.is_odd)
@@ -118,12 +123,16 @@ open struct
     Inner_rules.Make
       (struct
         let chain_l2 = Mina_signature_kind.Testnet
+
+        let multisig_key =
+          { Multisig.public_keys = [ multisig_update_pk ]; quorum = Field.one }
       end)
       ()
 
   let _inner_stmt, _inner_proof =
     let open struct
-      let Compile_simple.[ sync; action ] = Lazy.force Inner_rules_inst.provers
+      let Compile_simple.[ sync; action; _ ] =
+        Lazy.force Inner_rules_inst.provers
 
       let ase_with_length : Rule_inner_sync.Ase_inst.t =
         Rule_inner_sync.Ase_inst.make ~proof_source:ase_with_length.source
@@ -168,6 +177,9 @@ open struct
 
         let chain_l1 = Mina_signature_kind.Testnet
 
+        let multisig_key =
+          { Multisig.public_keys = [ multisig_update_pk ]; quorum = Field.one }
+
         let max_sequencer_inactivity = 128
 
         let emergency_da_public_key = point_of_string "223344"
@@ -183,7 +195,7 @@ open struct
 
   let _txn_stmt, _txn_proof =
     let open struct
-      let Compile_simple.[ commit; emergency_commit; action; _pause ] =
+      let Compile_simple.[ commit; emergency_commit; action; _pause; _ ] =
         Lazy.force Outer_rules_inst.provers
 
       (*
@@ -1412,6 +1424,11 @@ open struct
       ; point_of_string "46513"
       ]
 
+    let multisig_key =
+      { Zeko_circuits.Multisig.public_keys = [ multisig_update_pk ]
+      ; quorum = Snark_params.Tick.Field.of_int 1
+      }
+
     let holder_account_l2 = point_of_string "11111"
 
     let helper_token_owner_l1 = point_of_string "5123111"
@@ -1467,20 +1484,90 @@ open struct
 
   module Inner_rules = Inner_rules.Make (Inputs) ()
 
-  let Compile_simple.[ cancel_deposit; finalize_withdrawal; _ ] =
+  let Compile_simple.[ cancel_deposit; finalize_withdrawal; _; _ ] =
     Lazy.force Bridge.System_L1_enabled.provers
 
-  let Compile_simple.[ finalize_deposit; inner_receive ] =
+  let Compile_simple.[ finalize_deposit; inner_receive; _ ] =
     Lazy.force Bridge.System_L2.provers
 
-  let Compile_simple.[ outer_token_owner ] =
+  let Compile_simple.[ outer_token_owner; _ ] =
     Lazy.force Bridge.System_L1_token_owner.provers
 
-  let Compile_simple.[ _; _; outer_action_witness; _ ] =
+  let Compile_simple.[ _; _; outer_action_witness; _; outer_multisig_update ] =
     Lazy.force Outer_rules.provers
 
-  let Compile_simple.[ _; inner_action_witness ] =
+  let Compile_simple.[ _; inner_action_witness; _ ] =
     Lazy.force Inner_rules.provers
+
+  let () =
+    let vk_hash =
+      ( Promise.block_on_async_exn
+      @@ fun () ->
+      Compile_simple.Verification_key.of_tag (Lazy.force Outer_rules.tag) )
+      |> Compile_simple.Verification_key.hash
+    in
+    let permissions : Mina_base.Permissions.t =
+      { edit_state = Proof
+      ; send = Proof
+      ; receive = None
+      ; set_delegate = Impossible
+      ; set_permissions = Proof
+      ; set_verification_key = (Proof, Mina_numbers.Txn_version.current)
+      ; set_zkapp_uri = Impossible
+      ; edit_action_state = Impossible
+      ; set_token_symbol = Impossible
+      ; increment_nonce = Impossible
+      ; set_voting_for = Impossible
+      ; access = None
+      ; set_timing = Impossible
+      }
+    in
+    let body : Mina_base.Account_update.Body.t =
+      { Mina_base.Account_update.Body.dummy with
+        public_key = Inputs.zeko_l1
+      ; authorization_kind = Proof vk_hash
+      ; update =
+          { Mina_base.Account_update.Update.dummy with
+            permissions = Set permissions
+          }
+      ; use_full_commitment = true
+      }
+    in
+    let payload =
+      Mina_base.Zkapp_command.Digest.Account_update.create_body
+        ~signature_kind:Inputs.chain_l1 body
+    in
+    let payload = (payload :> Field.t) in
+    let signature =
+      Signature_lib.Schnorr.Chunked.sign ~signature_kind:Inputs.chain_l1
+        multisig_update_kp.private_key
+        (Random_oracle.Input.Chunked.field payload)
+    in
+    let multisig : Multisig.Witness.t =
+      { signatures =
+          [ { Multisig.Maybe_signature.public_key = multisig_update_pk
+            ; signature
+            ; is_some = true
+            }
+          ]
+      ; quorum = Field.one
+      }
+    in
+    let (_stmt, (proved_body, _digest, calls)), _proof =
+      Promise.block_on_async_exn
+      @@ fun () ->
+      outer_multisig_update { Rule_multisig_update.Witness.multisig; a = body }
+    in
+    assert (List.is_empty calls) ;
+    assert (Public_key.Compressed.equal proved_body.public_key body.public_key) ;
+    assert (
+      Mina_base.Account_update.Authorization_kind.equal
+        proved_body.authorization_kind body.authorization_kind ) ;
+    match proved_body.update.permissions with
+    | Set permissions' ->
+        assert (Mina_base.Permissions.equal permissions' permissions)
+    | Keep ->
+        failwith "multisig_update did not keep permissions update"
 
   module Deposit = struct
     let recipient = Keypair.create ()
