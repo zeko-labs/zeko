@@ -1097,8 +1097,8 @@ module Sequencer = struct
       ; da_client
       ; bridge_prover =
           Bridge_prover.create ~provers ~proof_cache_db
-            ~fee_recipient_l1:(Public_key.compress signer.public_key)
-            ~fee_recipient_l2:(Public_key.compress signer.public_key)
+            ~fee_recipient_l1:(Signer_service.Signer.public_key signer)
+            ~fee_recipient_l2:(Signer_service.Signer.public_key signer)
       ; merger
       ; merger_ctx
       ; closed = Ivar.create ()

@@ -198,9 +198,9 @@ let get_synced_outer_action_state_exn l =
 
 let sign_zkapp_command ~signature_kind (command : Zkapp_command.t)
     (signers : Keypair.t list) : Zkapp_command.t =
+  let tx_commitment = Zkapp_command.commitment command in
   let full_commitment =
-    Zkapp_command.Transaction_commitment.create_complete
-      (Zkapp_command.commitment command)
+    Zkapp_command.Transaction_commitment.create_complete tx_commitment
       ~memo_hash:(Signed_command_memo.hash command.memo)
       ~fee_payer_hash:
         (Zkapp_command.Digest.Account_update.create ~signature_kind
@@ -231,9 +231,13 @@ let sign_zkapp_command ~signature_kind (command : Zkapp_command.t)
           authorization =
             ( match tree.account_update.body.authorization_kind with
             | Signature ->
-                assert tree.account_update.body.use_full_commitment ;
+                let commitment =
+                  if tree.account_update.body.use_full_commitment then
+                    full_commitment
+                  else tx_commitment
+                in
                 Control.Poly.Signature
-                  (sign_raw tree.account_update.body.public_key full_commitment)
+                  (sign_raw tree.account_update.body.public_key commitment)
             | _ ->
                 tree.account_update.authorization )
         }
@@ -340,11 +344,7 @@ let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =
                   (Type_equal.conv proof_eq proof) ) )
         |> Account_update.read_all_proofs_from_disk
       in
-      Zkapp_command.Call_forest.cons_aux account_update
-        ~digest_account_update:(fun _ ->
-          Zkapp_command.Digest.Account_update.create ~signature_kind
-            account_update )
-        ~calls []
+      Zkapp_command.Call_forest.cons ~signature_kind ~calls account_update []
   | None ->
       let account_update =
         Account_update.with_aux
@@ -352,11 +352,7 @@ let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =
           ~authorization:Control.Poly.None_given
         |> Account_update.read_all_proofs_from_disk
       in
-      Zkapp_command.Call_forest.cons_aux account_update
-        ~digest_account_update:(fun _ ->
-          Zkapp_command.Digest.Account_update.create ~signature_kind
-            account_update )
-        ~calls []
+      Zkapp_command.Call_forest.cons ~signature_kind ~calls account_update []
 
 let is_deposit_finalization (command : User_command.t) =
   match command with
@@ -425,8 +421,8 @@ let is_deposit_finalization (command : User_command.t) =
                     List.is_empty recipient_payout_forest.elt.calls
                     && List.is_empty sequencer_fee_forest.elt.calls
                     && Token_id.equal
-                         recipient_payout_forest.elt.account_update.body.token_id
-                         Token_id.default
+                         recipient_payout_forest.elt.account_update.body
+                           .token_id Token_id.default
                     && Token_id.equal
                          sequencer_fee_forest.elt.account_update.body.token_id
                          Token_id.default

@@ -18,6 +18,8 @@ type t =
   ; zeko_l1 : Public_key.Compressed.t
   ; emergency_da_public_key : Public_key.Compressed.t
   ; withdrawal_delay : Global_slot_span.t
+  ; bridge_fee_recipient_l1 : Public_key.Compressed.t
+  ; bridge_fee_recipient_l2 : Public_key.Compressed.t
   }
 [@@deriving yojson]
 
@@ -27,6 +29,8 @@ module Deploy = struct
     ; helper_token_owner_l1 : Private_key.t
     ; zeko_l1 : Private_key.t
     ; emergency_da : Private_key.t
+    ; bridge_fee_recipient_l1 : Private_key.t
+    ; bridge_fee_recipient_l2 : Private_key.t
     }
   [@@deriving yojson]
 end
@@ -58,6 +62,12 @@ let (t, deploy_config) : t * Deploy.t option =
       let emergency_da =
         keypair_of_b58_sk "EKE9VtD6g4AgoscJdxBbFak6yfBgnQDHTpyj23CfNFT5BxL51Zin"
       in
+      let bridge_fee_recipient_l1 =
+        keypair_of_b58_sk "EKESW6sXA3MA3ugGvEoEHPd6gc9NPB9SRWzuW4VqxBqbNU3W4pFX"
+      in
+      let bridge_fee_recipient_l2 =
+        keypair_of_b58_sk "EKESW6sXA3MA3ugGvEoEHPd6gc9NPB9SRWzuW4VqxBqbNU3W4pFX"
+      in
       ( { chain_l1 = Testnet
         ; chain_l2 = Testnet
         ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
@@ -70,12 +80,16 @@ let (t, deploy_config) : t * Deploy.t option =
         ; zeko_l1 = fst zeko_l1
         ; emergency_da_public_key = fst emergency_da
         ; withdrawal_delay = Global_slot_span.of_int 5
+        ; bridge_fee_recipient_l1 = fst bridge_fee_recipient_l1
+        ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
         }
       , Some
           { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
           ; helper_token_owner_l1 = snd helper_token_owner_l1
           ; zeko_l1 = snd zeko_l1
           ; emergency_da = snd emergency_da
+          ; bridge_fee_recipient_l1 = snd bridge_fee_recipient_l1
+          ; bridge_fee_recipient_l2 = snd bridge_fee_recipient_l2
           } )
   | Some path -> (
       match Yojson.Safe.from_file path |> of_yojson with
@@ -121,11 +135,12 @@ module Inputs = struct
   let withdrawal_delay = t.withdrawal_delay
 
   let bridge_proof_fee =
-    Currency.Amount.of_fee Zeko_constants.constraint_constants.account_creation_fee
+    Currency.Amount.of_fee
+      Zeko_constants.constraint_constants.account_creation_fee
 
-  let bridge_fee_recipient_l1 = t.zeko_l1
+  let bridge_fee_recipient_l1 = t.bridge_fee_recipient_l1
 
-  let bridge_fee_recipient_l2 = Zeko_constants.inner_public_key
+  let bridge_fee_recipient_l2 = t.bridge_fee_recipient_l2
 
   let holder_account_l1_permissions_enabled : Permissions.t =
     { edit_state = Proof

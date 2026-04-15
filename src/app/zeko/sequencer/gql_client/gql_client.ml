@@ -379,6 +379,36 @@ let fetch_state_opt uri aid =
                |> List.map ~f:Field.of_string
                |> Zkapp_state.V.of_list_exn )) )
 
+let fetch_nonce_opt uri aid =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!, $tokenId: TokenId!) {
+              account(publicKey: $pk, token: $tokenId){
+                nonce
+              }
+            }
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String
+                ( Account_id.public_key aid
+                |> Signature_lib.Public_key.Compressed.to_base58_check ) )
+          ; ("tokenId", `String (Account_id.token_id aid |> Token_id.to_string))
+          ]
+    end
+  in
+  query_with_retry ~label:"fetch nonce" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "account"
+        |> to_option (fun json ->
+               member "nonce" json |> to_string |> Int.of_string
+               |> Unsigned.UInt32.of_int )) )
+
 let fetch_vk uri aid =
   let q =
     object

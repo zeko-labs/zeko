@@ -80,6 +80,7 @@ struct
       ; withdrawal_params : Withdrawal_params.t
       ; helper_token_owner_l1_vk_hash : F.t
       ; l2_holder_vk_hash : F.t
+      ; prev_nonce : Checked32.t
       }
     [@@deriving snarky]
   end
@@ -100,6 +101,7 @@ struct
                ; withdrawal_params
                ; helper_token_owner_l1_vk_hash
                ; l2_holder_vk_hash
+               ; prev_nonce
                } =
           exists Witness.typ ~compute:(V.get w)
         in
@@ -167,12 +169,17 @@ struct
           }
         in
         let@ () = with_label __LOC__ in
+        let prev_nonce =
+          Mina_numbers.Account_nonce.Checked.Unsafe.of_field
+            (Checked32.Checked.to_field prev_nonce)
+        in
         let helper_account =
           { default_account_update with
             public_key = base_params.recipient
           ; token_id = helper_token_id
           ; authorization_kind = authorization_signed ()
           ; use_full_commitment = Boolean.false_
+          ; increment_nonce = Boolean.true_
           ; may_use_token = constant May_use_token.typ Parents_own_token
           ; implicit_account_creation_fee = constant Boolean.typ false
           ; update =
@@ -194,6 +201,11 @@ struct
                         ; next_withdrawal = Some prev_next_withdrawal
                         }
                       |> var_to_precondition_fine
+                  ; nonce =
+                      Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.true_
+                        { Zkapp_precondition.Closed_interval.lower = prev_nonce
+                        ; upper = prev_nonce
+                        }
                   }
               }
           }

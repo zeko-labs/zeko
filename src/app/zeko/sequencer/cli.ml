@@ -137,6 +137,8 @@ let generate_circuits_config =
          let helper_token_owner_l1 = generate_keypair () in
          let zeko_l1 = generate_keypair () in
          let emergency_da = generate_keypair () in
+         let bridge_fee_recipient_l1 = generate_keypair () in
+         let bridge_fee_recipient_l2 = generate_keypair () in
          let t : Zeko_circuits_config.t =
            { chain_l1 = Testnet
            ; chain_l2 = Testnet
@@ -150,6 +152,8 @@ let generate_circuits_config =
            ; zeko_l1 = fst zeko_l1
            ; emergency_da_public_key = fst emergency_da
            ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
+           ; bridge_fee_recipient_l1 = fst bridge_fee_recipient_l1
+           ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
            }
          in
          let deploy_config : Zeko_circuits_config.Deploy.t =
@@ -157,6 +161,8 @@ let generate_circuits_config =
            ; helper_token_owner_l1 = snd helper_token_owner_l1
            ; zeko_l1 = snd zeko_l1
            ; emergency_da = snd emergency_da
+           ; bridge_fee_recipient_l1 = snd bridge_fee_recipient_l1
+           ; bridge_fee_recipient_l2 = snd bridge_fee_recipient_l2
            }
          in
          let circuits_config_json = Zeko_circuits_config.to_yojson t in
