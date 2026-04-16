@@ -110,22 +110,35 @@ DA3_SIGNER_PRIVATE_KEY="$(generate_even_key)"
 export ZEKO_TEST_SEQUENCER_SIGNER="127.0.0.1:8600"
 export ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY
 
-MINA_PRIVATE_KEY="$ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY" \
+run() {
+  name="$1"
+  shift
+
+  stdbuf -oL -eL "$@" \
+    > >(awk -v n="$name" '{ print "[" n "] " $0; fflush(); }') \
+    2> >(awk -v n="$name" '{ print "[" n "][ERR] " $0; fflush(); }' >&2)
+}
+
+run "sequencer-signer" \
+  env MINA_PRIVATE_KEY="$ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY" \
   "$SEQUENCER_SIGNER_BIN" run --port 8600 --allow-zkapp-signing --max-fee 10 --max-balance-change 1000000 &
 signer_seq_pid=$!
 SIGNER_PIDS+=("$signer_seq_pid")
 
-MINA_PRIVATE_KEY="$DA1_SIGNER_PRIVATE_KEY" \
+run "da1-signer" \
+  env MINA_PRIVATE_KEY="$DA1_SIGNER_PRIVATE_KEY" \
   "$DA_SIGNER_BIN" run --port 8601 --allow-field-signing &
 signer_da1_pid=$!
 SIGNER_PIDS+=("$signer_da1_pid")
 
-MINA_PRIVATE_KEY="$DA2_SIGNER_PRIVATE_KEY" \
+run "da2-signer" \
+  env MINA_PRIVATE_KEY="$DA2_SIGNER_PRIVATE_KEY" \
   "$DA_SIGNER_BIN" run --port 8602 --allow-field-signing &
 signer_da2_pid=$!
 SIGNER_PIDS+=("$signer_da2_pid")
 
-MINA_PRIVATE_KEY="$DA3_SIGNER_PRIVATE_KEY" \
+run "da3-signer" \
+  env MINA_PRIVATE_KEY="$DA3_SIGNER_PRIVATE_KEY" \
   "$DA_SIGNER_BIN" run --port 8603 --allow-field-signing &
 signer_da3_pid=$!
 SIGNER_PIDS+=("$signer_da3_pid")
@@ -135,16 +148,16 @@ wait_for_port 8601 $signer_da1_pid
 wait_for_port 8602 $signer_da2_pid
 wait_for_port 8603 $signer_da3_pid
 
-$SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet --block-period 9999999 &
+run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet --block-period 9999999 &
 l1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id testnet --db-dir "$TMP_DIR/da1_db" --signer 127.0.0.1:8601 &
+run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id testnet --db-dir "$TMP_DIR/da1_db" --signer 127.0.0.1:8601 &
 da1_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id testnet --db-dir "$TMP_DIR/da2_db" --signer 127.0.0.1:8602 &
+run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id testnet --db-dir "$TMP_DIR/da2_db" --signer 127.0.0.1:8602 &
 da2_pid=$!
 
-$SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id testnet --db-dir "$TMP_DIR/da3_db" --signer 127.0.0.1:8603 &
+run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id testnet --db-dir "$TMP_DIR/da3_db" --signer 127.0.0.1:8603 &
 da3_pid=$!
 
 # Launch provers
@@ -157,7 +170,9 @@ else
 fi
 for ((i = 0; i < NUM_PROVERS; i++)); do
   PORT=$((9990 + i))
-  ZEKO_CIRCUITS_MODE=$MODE $BIN run-server --mq-host "localhost:5672" &
+  run "prover-$i" \
+    env ZEKO_CIRCUITS_MODE=$MODE \
+    $BIN run-server --mq-host "localhost:5672" &
   PROVER_PID=$!
   PROVER_PIDS+=("$PROVER_PID")
   PROVERS+=("localhost:$PORT")
@@ -174,7 +189,11 @@ wait_for_port 8557 $da3_pid
 echo "All services started successfully"
 
 if [ "$MODE" = "fake" ]; then
-  ZEKO_CIRCUITS_MODE=$MODE  $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
+  run "sequencer-test" \
+    env ZEKO_CIRCUITS_MODE=$MODE \
+    $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
 else
-  ZEKO_CIRCUITS_MODE=$MODE $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"
+  run "sequencer-test" \
+    env ZEKO_CIRCUITS_MODE=$MODE \
+    $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"
 fi
