@@ -40,11 +40,12 @@ let write_signed_multisig_updates ?output updates =
   write_json ?output
     (`List (List.map updates ~f:Deploy.Signed_multisig_update.to_yojson))
 
-let send_direct ~logger ~l1_uri ~(signer : Keypair.t) ~bodies =
+let send_direct ~logger ~l1_uri ~(signers : Keypair.t list)
+    ~(fee_signer : Keypair.t) ~bodies =
   let signature_kind = Zeko_circuits_config.t.chain_l1 in
   let%bind nonce =
     Gql_client.infer_nonce ~logger l1_uri
-      (Public_key.compress signer.public_key)
+      (Public_key.compress fee_signer.public_key)
     >>| Or_error.ok_exn
   in
   let account_updates =
@@ -64,7 +65,7 @@ let send_direct ~logger ~l1_uri ~(signer : Keypair.t) ~bodies =
   let command : Zkapp_command.t =
     { fee_payer =
         { Account_update.Fee_payer.body =
-            { public_key = Public_key.compress signer.public_key
+            { public_key = Public_key.compress fee_signer.public_key
             ; fee = Currency.Fee.of_mina_string_exn "0.1"
             ; valid_until = None
             ; nonce
@@ -76,7 +77,7 @@ let send_direct ~logger ~l1_uri ~(signer : Keypair.t) ~bodies =
     }
   in
   let command =
-    Utils.sign_zkapp_command ~signature_kind command [ signer ]
+    Utils.sign_zkapp_command ~signature_kind command ([ fee_signer ] @ signers)
     |> Zkapp_command.read_all_proofs_from_disk
   in
   match%map Gql_client.send_zkapp l1_uri command with
@@ -314,7 +315,21 @@ let update_outer_verification_keys =
                    Deploy.build_verification_key_multisig_update_body ~kind
                      ~public_key:pk ~verification_key:new_vk )
              in
-             send_direct ~logger ~l1_uri ~signer ~bodies
+             let deploy_config =
+               Option.value_exn Zeko_circuits_config.deploy_config
+                 ~message:"Deploy config not found"
+             in
+             send_direct ~logger ~l1_uri
+               ~signers:
+                 ( [ signer
+                   ; Keypair.of_private_key_exn
+                       deploy_config.helper_token_owner_l1
+                   ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                   ; Keypair.of_private_key_exn deploy_config.emergency_da
+                   ]
+                 @ List.map deploy_config.holder_accounts_l1
+                     ~f:Keypair.of_private_key_exn )
+               ~fee_signer:signer ~bodies
            else
              let%map signed_updates =
                Deferred.List.map to_update ~how:`Sequential
@@ -594,7 +609,21 @@ let update_inner_verification_keys =
                    }
            in
            if direct then
-             send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+             let deploy_config =
+               Option.value_exn Zeko_circuits_config.deploy_config
+                 ~message:"Deploy config not found"
+             in
+             send_direct ~logger ~l1_uri
+               ~signers:
+                 ( [ sender
+                   ; Keypair.of_private_key_exn
+                       deploy_config.helper_token_owner_l1
+                   ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                   ; Keypair.of_private_key_exn deploy_config.emergency_da
+                   ]
+                 @ List.map deploy_config.holder_accounts_l1
+                     ~f:Keypair.of_private_key_exn )
+               ~fee_signer:sender ~bodies:[ body ]
            else
              let signed_update =
                Deploy.sign_multisig_update ~signer:sender
@@ -687,7 +716,21 @@ let update_da_key =
                    }
            in
            if direct then
-             send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+             let deploy_config =
+               Option.value_exn Zeko_circuits_config.deploy_config
+                 ~message:"Deploy config not found"
+             in
+             send_direct ~logger ~l1_uri
+               ~signers:
+                 ( [ sender
+                   ; Keypair.of_private_key_exn
+                       deploy_config.helper_token_owner_l1
+                   ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                   ; Keypair.of_private_key_exn deploy_config.emergency_da
+                   ]
+                 @ List.map deploy_config.holder_accounts_l1
+                     ~f:Keypair.of_private_key_exn )
+               ~fee_signer:sender ~bodies:[ body ]
            else
              let signed_update =
                Deploy.sign_multisig_update ~signer:sender
@@ -737,7 +780,21 @@ let update_permissions =
                (Option.value_exn ~message:"--l1-uri is required with --direct"
                   l1_uri )
            in
-           send_direct ~logger ~l1_uri ~signer ~bodies:[ body.body ]
+           let deploy_config =
+             Option.value_exn Zeko_circuits_config.deploy_config
+               ~message:"Deploy config not found"
+           in
+           send_direct ~logger ~l1_uri
+             ~signers:
+               ( [ signer
+                 ; Keypair.of_private_key_exn
+                     deploy_config.helper_token_owner_l1
+                 ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                 ; Keypair.of_private_key_exn deploy_config.emergency_da
+                 ]
+               @ List.map deploy_config.holder_accounts_l1
+                   ~f:Keypair.of_private_key_exn )
+             ~fee_signer:signer ~bodies:[ body.body ]
          else
            let signed_update =
              Deploy.sign_multisig_update ~signer
@@ -901,7 +958,21 @@ let set_pause =
                  }
          in
          if direct then
-           send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+           let deploy_config =
+             Option.value_exn Zeko_circuits_config.deploy_config
+               ~message:"Deploy config not found"
+           in
+           send_direct ~logger ~l1_uri
+             ~signers:
+               ( [ sender
+                 ; Keypair.of_private_key_exn
+                     deploy_config.helper_token_owner_l1
+                 ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                 ; Keypair.of_private_key_exn deploy_config.emergency_da
+                 ]
+               @ List.map deploy_config.holder_accounts_l1
+                   ~f:Keypair.of_private_key_exn )
+             ~fee_signer:sender ~bodies:[ body ]
          else
            let signed_update =
              Deploy.sign_multisig_update ~signer:sender
