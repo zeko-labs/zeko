@@ -241,9 +241,6 @@ let update_outer_verification_keys =
          and bridge_holder_enabled_vk =
            Lazy.force Bridge_inst_mina.System_L1_enabled.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
-         and bridge_holder_disabled_vk =
-           Lazy.force Bridge_inst_mina.System_L1_disabled.tag
-           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          and helper_token_owner_vk =
            Lazy.force Bridge_inst_mina.System_L1_token_owner.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
@@ -251,25 +248,9 @@ let update_outer_verification_keys =
          let outer =
            (outer_vk, fetched_outer_vk, Zeko_circuits_config.t.zeko_l1)
          in
-         let bridge_holder_kind, bridge_holder_vk =
-           let enabled_hash =
-             Compile_simple.Verification_key.hash bridge_holder_enabled_vk
-           in
-           let disabled_hash =
-             Compile_simple.Verification_key.hash bridge_holder_disabled_vk
-           in
-           if Field.equal fetched_bridge_holder_vk enabled_hash then
-             ( Deploy.Multisig_update_kind.Bridge_holder_l1_enabled
-             , bridge_holder_enabled_vk )
-           else if Field.equal fetched_bridge_holder_vk disabled_hash then
-             ( Deploy.Multisig_update_kind.Bridge_holder_l1_disabled
-             , bridge_holder_disabled_vk )
-           else
-             failwith "Current bridge holder vk is neither enabled nor disabled"
-         in
          let bridge_holders =
            List.map Zeko_circuits_config.t.holder_accounts_l1 ~f:(fun pk ->
-               (bridge_holder_vk, fetched_bridge_holder_vk, pk) )
+               (bridge_holder_enabled_vk, fetched_bridge_holder_vk, pk) )
          in
          let helper_token_owner =
            ( helper_token_owner_vk
@@ -310,7 +291,7 @@ let update_outer_verification_keys =
                        Public_key.Compressed.equal pk
                          Zeko_circuits_config.t.helper_token_owner_l1
                      then Deploy.Multisig_update_kind.Bridge_token_owner_l1
-                     else bridge_holder_kind
+                     else Deploy.Multisig_update_kind.Bridge_holder_l1_enabled
                    in
                    Deploy.build_verification_key_multisig_update_body ~kind
                      ~public_key:pk ~verification_key:new_vk )
@@ -343,7 +324,7 @@ let update_outer_verification_keys =
                        Public_key.Compressed.equal pk
                          Zeko_circuits_config.t.helper_token_owner_l1
                      then Deploy.Multisig_update_kind.Bridge_token_owner_l1
-                     else bridge_holder_kind
+                     else Deploy.Multisig_update_kind.Bridge_holder_l1_enabled
                    in
                    let%map body =
                      Deploy.build_verification_key_multisig_update_body ~kind
