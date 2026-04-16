@@ -102,6 +102,22 @@ let generate_even_key =
              ( Public_key.compress keypair.public_key
              |> Public_key.Compressed.to_base58_check ) ) ) )
 
+let construct_multisig_key =
+  ( "construct-multisig-key"
+  , Command.basic ~summary:"Construct a multisig key from a list of public keys"
+      (let%map_open.Command public_keys =
+         flag "--public-key" (listed string) ~doc:"string Public key"
+       and quorum = flag "--quorum" (required int) ~doc:"int Quorum" in
+       fun () ->
+         let public_keys =
+           List.map public_keys ~f:Public_key.Compressed.of_base58_check_exn
+         in
+         let multisig_key =
+           Zeko_circuits.Multisig.commit
+             { public_keys; quorum = Field.of_int quorum }
+         in
+         Core.printf "Multisig key: %s\n" (Field.to_string multisig_key) ) )
+
 let generate_circuits_config =
   ( "generate-circuits-config"
   , Command.basic ~summary:"Generate the circuits config and deploy config"
@@ -371,12 +387,13 @@ let update_inner_verification_keys =
            match db_path with
            | Some db_path ->
                let ledger =
-                 Ledger.Db.create ~directory_name:db_path
+                 Ledger.Db.create ~directory_name:(db_path ^ "/ledger")
                    ~depth:Zeko_constants.constraint_constants.ledger_depth ()
                  |> Ledger.of_database
                in
                let imt =
                  Indexed_merkle_tree.Db.create
+                   ~directory_name:(db_path ^ "/imt")
                    ~depth:Zeko_constants.constraint_constants.ledger_depth ()
                in
                return (ledger, imt)
@@ -916,33 +933,99 @@ let migrate =
            pool Db.migrations
          >>| Relational_db.caqti_ok_exn ~msg:"Failed to run migrations: %s" ) )
 
-let dump_ledger =
-  ( "dump-ledger"
-  , Command.basic ~summary:"Dump the ledger"
+let dump_db =
+  ( "dump-db"
+  , Command.basic ~summary:"Dump the database"
       (let%map_open.Command target =
          flag "--target" (required string) ~doc:"string Target file json"
-       and ledger_dir =
-         flag "--ledger-dir" (required string) ~doc:"string Ledger directory"
+       and db_path =
+         flag "--db-path" (required string) ~doc:"string Database path"
        in
        fun () ->
-         let out = Stdio.Out_channel.create target in
-         Stdio.Out_channel.output_string out "[" ;
+         let () =
+           (* Dump ledger *)
+           let out =
+             Stdio.Out_channel.create (Filename.concat target "ledger.json")
+           in
+           Stdio.Out_channel.output_string out "[" ;
 
-         let db =
-           Ledger.Db.create ~directory_name:ledger_dir
+           let db =
+             Ledger.Db.create ~directory_name:(db_path ^ "/ledger")
+               ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+           in
+           Ledger.Db.iteri db ~f:(fun index account ->
+               let str =
+                 Yojson.Safe.to_string
+                   ([%to_yojson: int * Account.t] (index, account))
+               in
+               Stdio.Out_channel.output_string out str ;
+               if index < Ledger.Db.num_accounts db - 1 then
+                 Stdio.Out_channel.output_string out "," ) ;
+
+           Stdio.Out_channel.output_string out "]" ;
+           Stdio.Out_channel.close out
+         in
+         let () =
+           (* Dump imt *)
+           let out =
+             Stdio.Out_channel.create (Filename.concat target "imt.json")
+           in
+           Stdio.Out_channel.output_string out "[" ;
+
+           let db =
+             Indexed_merkle_tree.Db.create ~directory_name:(db_path ^ "/imt")
+               ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+           in
+           Indexed_merkle_tree.Db.iteri db ~f:(fun index entry ->
+               let str =
+                 Yojson.Safe.to_string
+                   ([%to_yojson: int * Indexed_merkle_tree.Entry.t]
+                      (index, entry) )
+               in
+               Stdio.Out_channel.output_string out str ;
+               if index < Indexed_merkle_tree.Db.num_entries db - 1 then
+                 Stdio.Out_channel.output_string out "," ) ;
+
+           Stdio.Out_channel.output_string out "]" ;
+           Stdio.Out_channel.close out
+         in
+         () ) )
+
+let load_db =
+  ( "load-db"
+  , Command.basic ~summary:"Load the database"
+      (let%map_open.Command dump_path =
+         flag "--dump-path" (required string) ~doc:"string Dump path"
+       and db_path =
+         flag "--db-path" (required string) ~doc:"string Database path"
+       in
+       fun () ->
+         let ledger =
+           Ledger.Db.create ~directory_name:(db_path ^ "/ledger")
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+           |> Ledger.of_database
+         in
+         let imt =
+           Indexed_merkle_tree.Db.create ~directory_name:(db_path ^ "/imt")
              ~depth:Zeko_constants.constraint_constants.ledger_depth ()
          in
-         Ledger.Db.iteri db ~f:(fun index account ->
-             let str =
-               Yojson.Safe.to_string
-                 ([%to_yojson: int * Account.t] (index, account))
-             in
-             Stdio.Out_channel.output_string out str ;
-             if index < Ledger.Db.num_accounts db - 1 then
-               Stdio.Out_channel.output_string out "," ) ;
-
-         Stdio.Out_channel.output_string out "]" ;
-         Stdio.Out_channel.close out ) )
+         Yojson.Safe.from_file (Filename.concat dump_path "ledger.json")
+         |> Yojson.Safe.Util.to_list
+         |> List.map ~f:[%of_yojson: int * Account.t]
+         |> List.map ~f:(function Ok x -> x | Error e -> failwith e)
+         |> List.iter ~f:(fun (index, account) ->
+                Core.printf
+                  !"Loading account %{sexp:Public_key.Compressed.t}\n%!"
+                  account.public_key ;
+                Ledger.set_at_index_exn ledger index account ;
+                let aid = Account.identifier account in
+                let tid = Account_id.derive_token_id ~owner:aid in
+                let _witness =
+                  Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
+                in
+                () ) ;
+         Ledger.commit ledger ;
+         Core.printf "Loaded %d accounts\n%!" (Ledger.num_accounts ledger) ) )
 
 let prover_load =
   ( "prover-load"
@@ -1065,7 +1148,9 @@ let () =
     ; multisig_submit
     ; set_pause
     ; migrate
-    ; dump_ledger
+    ; dump_db
+    ; load_db
     ; prover_load
+    ; construct_multisig_key
     ]
   |> Command_unix.run
