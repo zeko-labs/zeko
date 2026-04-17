@@ -286,6 +286,14 @@ struct
             assert_equal ~label:__LOC__ Ledger_hash.typ
               emergency_da_stmt.target_ledger target_ledger
           in
+          let* () =
+            assert_equal ~label:__LOC__ Account_set.typ
+              emergency_da_stmt.source_acc_set source_acc_set
+          in
+          let* () =
+            assert_equal ~label:__LOC__ Account_set.typ
+              emergency_da_stmt.target_acc_set target_acc_set
+          in
           Checked.return None
     in
 

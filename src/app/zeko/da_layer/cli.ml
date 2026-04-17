@@ -1,6 +1,5 @@
 open Core
 open Async
-open Signature_lib
 open Cli_lib
 
 let run_node =
@@ -20,9 +19,9 @@ let run_node =
          flag "--healthcheck-port"
            (optional_with_default 8081 int)
            ~doc:"int Optional HTTP port exposing /health for simple probes"
-       and testing_mode =
-         flag "--random-sk" no_arg
-           ~doc:"Run in testing mode, the signer key will be generated randomly"
+       and signer =
+         flag "--signer" (required string)
+           ~doc:"string Signer service host:port"
        and no_migrations =
          flag "--no-migrations" no_arg ~doc:"Do not run migrations"
        and network_id =
@@ -31,16 +30,6 @@ let run_node =
            ~doc:"string Network id to use as salt for applying receipts"
        in
        fun () ->
-         let signer =
-           if testing_mode then
-             let rec create_even_signer () =
-               let signer = Keypair.create () in
-               let compressed = Public_key.compress signer.public_key in
-               if compressed.is_odd then create_even_signer () else signer
-             in
-             (create_even_signer ()).private_key |> Private_key.to_base58_check
-           else Sys.getenv_exn "MINA_PRIVATE_KEY"
-         in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
          let chain =
@@ -52,10 +41,15 @@ let run_node =
            | network_id ->
                Mina_signature_kind.Other_network network_id
          in
+         let signer = Host_and_port.of_string signer in
+         let%bind signer =
+           Signer_service.Client.create ~logger ~location:signer
+           >>| Signer_service.Signer.of_client
+         in
          let%bind () =
            Deferred.ignore_m
            @@ Da_layer.Node.create_server ~chain ~logger ~port ~db_dir
-                ~healthcheck_port ~signer_sk:signer ~no_migrations ()
+                ~healthcheck_port ~signer ~no_migrations ()
          in
          [%log info] "Server started on port %d" port ;
          Async.never () ) )

@@ -89,6 +89,8 @@ module type S = sig
 
   val merkle_root : t -> hash
 
+  val merkle_root_without_cache_exn : t -> hash
+
   val depth : t -> int
 end
 
@@ -127,11 +129,29 @@ end = struct
     | Node (h, _, _) ->
         h
 
+  let rec hash_without_cache_exn ~depth : (Hash.t, Account.t) Tree.t -> Hash.t =
+    function
+    | Account a ->
+        Account.data_hash a
+    | Hash h ->
+        h
+    | Node (h, l, r) ->
+        let h' =
+          Hash.merge ~height:depth
+            (hash_without_cache_exn ~depth:(depth - 1) l)
+            (hash_without_cache_exn ~depth:(depth - 1) r)
+        in
+        assert (Hash.equal h h') ;
+        h
+
   type index = int [@@deriving sexp, yojson]
 
   let depth { T.depth; _ } = depth
 
   let merkle_root { T.tree; _ } = hash tree
+
+  let merkle_root_without_cache_exn { T.tree; depth; _ } =
+    hash_without_cache_exn ~depth:(depth - 1) tree
 
   let add_path_impl ~replace_self tree0 path0 account =
     (* Takes height, left and right children and builds a pair of sibling nodes

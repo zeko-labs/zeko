@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# Reuses a shared opam switch cache keyed by the exported toolchain plus any
-# temporary external pin manifest entries. Each checkout keeps a local `_opam`
-# symlink pointing at the shared cache entry so identical dependency snapshots
-# can be reused across worktrees. The opam package universe is pinned to the
-# same ocaml/opam-repository commit used in CI so local resolution matches CI.
+# Reuses a shared opam switch cache keyed by the exported toolchain. Each
+# checkout keeps a local `_opam` symlink pointing at the shared cache entry so
+# identical dependency snapshots can be reused across worktrees. The opam
+# package universe is pinned to the same ocaml/opam-repository commit used in CI
+# so local resolution matches CI.
 
 set -eo pipefail
 
@@ -99,17 +99,13 @@ configure_homebrew_env() {
 # Don't do anything if we're in a nix shell
 [[ "$IN_NIX_SHELL$CI$BUILDKITE" == "" ]] || exit 0
 
-opam_repo_commit="08d8c16c16dc6b23a5278b06dff0ac6c7a217356"
+opam_repo_commit="ba1ca7509cb2617776f017673de0f2a48be67105"
 repo_cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/zeko"
 opam_repo_dir="${repo_cache_root}/opam-repository/${opam_repo_commit}"
 
 sum="$({
     printf '%s\n' "${opam_repo_commit}"
-    # Temporary workaround until nats-client and nats-client-async are
-    # published to opam. The switch/cache key must include the pin manifest
-    # while the repo still depends on GitHub pins, and the cache key must
-    # include the pinned opam repository snapshot to match CI resolution.
-    cat opam.export scripts/external-opam-pins.txt
+    cat opam.export
 } | cksum | awk '{print $1}')"
 cache_root="${repo_cache_root}/opam-switches"
 switch_dir="${cache_root}/${sum}"
@@ -158,7 +154,3 @@ if [[ ! -d "${switch_dir}" ]]; then
 fi
 
 ln -s "${switch_dir}" _opam
-
-# This existing bootstrap step also applies temporary GitHub pins for
-# nats-client and nats-client-async until those packages are published to opam.
-./scripts/pin-external-packages.sh

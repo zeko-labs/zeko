@@ -22,7 +22,7 @@ module Sequencer = struct
       ; commitment_period_sec : float
       ; db_dir : string
       ; checkpoints_dir : string option
-      ; signer : Keypair.t
+      ; signer : Signer_service.Signer.t
       ; l1_uri : Uri.t
       ; archive_uri : Uri.t
       ; deposit_delay_blocks : int
@@ -398,12 +398,30 @@ module Sequencer = struct
       Throttle.enqueue t.apply_q (fun () ->
           (* TODO: instead apply directly from prover *)
           let is_deposit_finalization = Utils.is_deposit_finalization command in
-          let command =
+          let%bind.Deferred.Result command =
             if is_deposit_finalization then
-              Utils.sign_fee_payer
-                ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-                t.config.signer command
-            else command
+              match command with
+              | Zkapp_command
+                  ( { fee_payer = { body = { public_key = fee_payer_pk; _ }; _ }
+                    ; _
+                    } as zkapp_command )
+                when Public_key.Compressed.equal fee_payer_pk
+                       (Signer_service.Signer.public_key t.config.signer) ->
+                  let signature_kind = Zeko_circuits_config.Inputs.chain_l2 in
+                  Signer_service.Signer.sign_fee_payer ~signature_kind
+                    t.config.signer
+                    (Zkapp_command.read_all_proofs_from_disk zkapp_command)
+                  >>| Result.map
+                        ~f:
+                          (Zkapp_command.write_all_proofs_to_disk
+                             ~signature_kind
+                             ~proof_cache_db:
+                               (Proof_cache_tag.create_identity_db ()) )
+                  >>| Result.map ~f:(fun zkapp_command ->
+                          User_command.Zkapp_command zkapp_command )
+              | _ ->
+                  return (Ok command)
+            else return (Ok command)
           in
 
           let%bind.Deferred.Result () =
@@ -491,7 +509,7 @@ module Sequencer = struct
           let%bind.Deferred.Result source_ledger, witnesses =
             let sequencer_pk =
               Even_PC.create_exn
-              @@ Public_key.compress t.config.signer.public_key
+              @@ Signer_service.Signer.public_key t.config.signer
             in
             return
               (Zeko_transaction_logic.apply_user_command_unchecked
@@ -586,7 +604,7 @@ module Sequencer = struct
     if Currency.Fee.(equal fee zero) then return `No_fee
     else
       let receiver_pk =
-        Even_PC.create_exn @@ Public_key.compress t.config.signer.public_key
+        Even_PC.create_exn @@ Signer_service.Signer.public_key t.config.signer
       in
       let l1_global_slot =
         Utils.Slot.global_slot ~l1_config:t.config.l1_config
@@ -595,7 +613,8 @@ module Sequencer = struct
 
       let receiver_location =
         L.location_of_account ledger
-          (Account_id.of_public_key t.config.signer.public_key)
+          (Account_id.of_public_key
+             (Signer_service.Signer.public_key_decompressed t.config.signer) )
       in
       if
         Option.is_none receiver_location
@@ -614,7 +633,10 @@ module Sequencer = struct
             (* Post transaction to the DA layer *)
             let changed_accounts =
               let account_ids =
-                [ Account_id.of_public_key t.config.signer.public_key ]
+                [ Account_id.of_public_key
+                    (Signer_service.Signer.public_key_decompressed
+                       t.config.signer )
+                ]
               in
               List.map account_ids ~f:(fun id ->
                   let index = L.index_of_account_exn ledger id in
@@ -869,7 +891,7 @@ module Sequencer = struct
     let%bind commited_ledger_hash =
       Gql_client.infer_state ~logger config.l1_uri
         ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
-        ~signer_pk:(Public_key.compress config.signer.public_key)
+        ~signer_pk:(Signer_service.Signer.public_key config.signer)
       >>| Or_error.ok_exn
       >>| Utils.value_of_zkapp_state Zeko_circuits.Rollup_state.Outer_state.typ
       >>| fun { ledger_hash; _ } -> ledger_hash
@@ -1133,8 +1155,8 @@ module Sequencer = struct
   let create ?nats_url ~logger ~max_pool_size ~commitment_period_sec ~da_config
       ~da_keys
       ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
-      ~(signer : Keypair.t) ~deposit_delay_blocks ~mq_host ~fee_modifier
-      ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
+      ~(signer : Signer_service.Signer.t) ~deposit_delay_blocks ~mq_host
+      ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
       ~commit_validity_period =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
@@ -1149,7 +1171,8 @@ module Sequencer = struct
     let%bind sync_check, (ledger, imt) =
       create_ledger ~logger ~db_dir ~checkpoints_dir
         ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1 ~l1_uri
-        ~signer_pk:signer.public_key ~archive_uri
+        ~signer_pk:(Signer_service.Signer.public_key_decompressed signer)
+        ~archive_uri
     in
     let config =
       Config.
@@ -1235,7 +1258,7 @@ module Sequencer = struct
         ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
       >>| Or_error.ok_exn
     in
-    let%bind () =
+    let () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)
     in
     let () = run_health_heartbeat t in

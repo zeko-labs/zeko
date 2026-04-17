@@ -1,19 +1,18 @@
-# Builds and tests Zeko in CI using the exported opam toolchain plus temporary
-# external package pins required by this branch.
+# Builds and tests Zeko in CI using the exported opam toolchain.
 ---
 name: CI
 
 on:
   push:
-    
+
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 jobs:
   build-and-test:
     name: "Build & Test"
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: warp-ubuntu-latest-x64-16x
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -23,7 +22,7 @@ jobs:
       - name: 🐹 Setup go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.19.11'
+          go-version: "1.19.11"
       - name: 🐹 Build and install capnpc-go
         run: |
           tmpdir=$(mktemp -d)
@@ -56,12 +55,21 @@ jobs:
             pkg-config zlib1g-dev \
             capnproto \
             netcat-traditional
-          git clone https://github.com/ocaml/opam-repository.git \
-            --depth 1 ./opam-repository
-          git -C ./opam-repository fetch origin 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
-          git -C ./opam-repository checkout 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
+          for i in 1 2 3 4 5; do
+            rm -rf ./opam-repository
+            git clone https://github.com/ocaml/opam-repository.git --depth 1 ./opam-repository && break
+            echo "clone failed, retry $i"
+            getent hosts github.com || true
+            sleep 5
+          done
+          git -C ./opam-repository fetch origin ba1ca7509cb2617776f017673de0f2a48be67105
+          git -C ./opam-repository checkout ba1ca7509cb2617776f017673de0f2a48be67105
           opam init --disable-sandboxing -k git -a ./opam-repository --bare
-          opam repository add --yes --all --set-default o1-labs https://github.com/o1-labs/opam-repository.git
+          for i in 1 2 3 4 5; do
+            opam repository add --yes --all --set-default o1-labs https://github.com/o1-labs/opam-repository.git && break
+            echo "opam repo add failed, retry $i"
+            sleep 5
+          done
           opam switch create "4.14.0"
           opam switch "4.14.0"
           export OPAMERRLOGLEN=20
@@ -72,16 +80,12 @@ jobs:
         id: opam_dependencies
         with:
           path: ~/.opam
-          key: zeko_opam_dependencies-${{ hashFiles('./opam.export', './scripts/external-opam-pins.txt', './scripts/pin-external-packages.sh') }}
+          key: zeko_opam_dependencies-${{ hashFiles('./opam.export') }}
       # Install opam dependencies
       - name: 🏗️  Install opam dependencies
         run: |
           opam switch import opam.export --yes
           eval "$(opam env)"
-          # This existing repo bootstrap script now also applies temporary
-          # GitHub pins for nats-client and nats-client-async. Once those
-          # packages are published to opam, keep this script but drop the
-          # temporary pin manifest and pin step from it.
           ./scripts/pin-external-packages.sh
           opam clean --logs -cs --quiet
       # Retrieve _build dir from cache before initiating a build
@@ -90,13 +94,14 @@ jobs:
         id: zeko_build
         with:
           path: ./_build
-          key: zeko_build-${{ hashFiles('./opam.export', './scripts/external-opam-pins.txt', './scripts/pin-external-packages.sh') }}
+          key: zeko_build-${{ hashFiles('./opam.export') }}
       # Build!
       - name: 📦 Build zeko packages
         run: |
           opam exec -- dune build --profile=devnet src/app/zeko/sequencer
           opam exec -- dune build --profile=devnet src/app/zeko/sequencer/explorer
           opam exec -- dune build --profile=devnet src/app/zeko/da_layer
+          opam exec -- dune build --profile=devnet src/app/zeko/signer
       - name: 🧪 Run sequencer tests
         run: ./src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1
       - name: 🧪 Run explorer Gherkin tests

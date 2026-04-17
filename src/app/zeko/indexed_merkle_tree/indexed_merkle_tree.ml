@@ -102,7 +102,7 @@ module Hash = struct
     end
   end]
 
-  let merge = Ledger_hash.merge
+  let merge = Stable.Latest.merge
 end
 
 module Inputs = struct
@@ -179,6 +179,10 @@ module type Database_intf = sig
   val get_entry_by_tid : t -> Token_id.t -> Entry.t option
 
   val get_path_by_tid : t -> Token_id.t -> Path.t option
+
+  val iteri : t -> f:(int -> Entry.t -> unit) -> unit
+
+  val set_at_index_exn : t -> int -> Entry.t -> unit
 end
 
 let lowest_key = Token_id.of_field Field.zero

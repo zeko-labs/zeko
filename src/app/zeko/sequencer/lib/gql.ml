@@ -2613,7 +2613,7 @@ module Queries = struct
       ~typ:(non_null Types.public_key)
       ~args:Arg.[]
       ~resolve:(fun { ctx = sequencer; _ } () ->
-        Public_key.compress sequencer.config.signer.public_key )
+        Signer_service.Signer.public_key sequencer.config.signer )
 
   module Archive = struct
     let actions =

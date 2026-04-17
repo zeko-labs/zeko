@@ -35,7 +35,7 @@ module Witness = struct
   type t = { signatures : Signatures.t; quorum : F.t } [@@deriving snarky]
 end
 
-type t = { public_keys : PC.t list; quorum : F.t }
+type t = { public_keys : PC.t list; quorum : Field.t } [@@deriving yojson]
 
 (** We save only hash to the outer state *)
 module Commitment = struct
@@ -50,6 +50,7 @@ let commit { public_keys; quorum } =
   if List.length public_keys > Zeko_constants.da_multisig_max_length then
     failwith "Public keys length exceeds the maximum length"
   else
+    let public_keys = List.sort public_keys ~compare:PC.compare in
     let padded =
       public_keys
       @ List.init
@@ -66,6 +67,16 @@ let commit { public_keys; quorum } =
 
 let of_witness_var ({ signatures; quorum; _ } : Witness.var) :
     Commitment.var Checked.t =
+  let* () =
+    let@ () = make_checked in
+    let@ () = Run.as_prover in
+    let public_keys =
+      Run.As_prover.read Signatures.typ signatures
+      |> List.map ~f:(fun { public_key; _ } -> public_key)
+    in
+    let sorted_public_keys = List.sort public_keys ~compare:PC.compare in
+    assert (List.equal PC.equal sorted_public_keys public_keys)
+  in
   foldl (Array.to_list signatures.array) ~init:quorum
     ~f:(fun acc ({ public_key; _ } : Maybe_signature.var) ->
       let@ () = make_checked in

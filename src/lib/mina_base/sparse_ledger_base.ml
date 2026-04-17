@@ -152,6 +152,7 @@ M.
   , add_path
   , add_wide_path_unsafe
   , merkle_root
+  , merkle_root_without_cache_exn
   , iteri )]
 
 let of_root ~depth (h : Ledger_hash.t) =

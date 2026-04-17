@@ -1,6 +1,5 @@
 open Core_kernel
 open Mina_base
-open Signature_lib
 module Rpc_def = Rpc
 open Async
 
@@ -8,22 +7,31 @@ let constraint_constants = Zeko_constants.constraint_constants
 
 type t =
   { db : Db.t
-  ; signer : Keypair.t
+  ; signer : Signer_service.Signer.t
   ; logger : Logger.t
   ; chain : Mina_signature_kind.t
   ; proof_cache_db : Proof_cache_tag.cache_db
   }
 
 let get_signature t ~ledger_hash =
-  let%bind.Option diff = Db.get_diff t.db ~ledger_hash in
-  let message =
-    Random_oracle.Input.Chunked.field
-    @@ Random_oracle.hash
-         ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
-         [| ledger_hash; diff.acc_set |]
-  in
-  Some
-    (Schnorr.Chunked.sign ~signature_kind:t.chain t.signer.private_key message)
+  let%bind diff = Db.Async.get_diff t.db ~ledger_hash in
+  match diff with
+  | None ->
+      return None
+  | Some diff -> (
+      let message =
+        Random_oracle.hash
+          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
+          [| ledger_hash; diff.acc_set |]
+      in
+      Signer_service.Signer.sign_field ~signature_kind:t.chain t.signer message
+      >>| function
+      | Ok signature ->
+          Some signature
+      | Error err ->
+          let logger = t.logger in
+          [%log error] "Failed to sign DA receipt: %s" (Error.to_string_hum err) ;
+          None )
 
 let get_ledger_hashes_chain t
     ({ source = source_opt; target; max_length = max_length_opt } :
@@ -67,13 +75,14 @@ let implementations t =
       ; (* Post_diff *)
         Rpc.Rpc.implement Rpc_def.Post_diff.V1.t
           (fun () { ledger_openings; acc_set_openings; diff } ->
-            match
+            match%bind
               Core.post_diff ~logger:t.logger ~proof_cache_db:t.proof_cache_db
                 ~kvdb:t.db ~network_id:t.chain ~signer:t.signer ~ledger_openings
                 ~acc_set_openings ~diff
+              |> function Error e -> Deferred.return (Error e) | Ok d -> d
             with
             | Ok signature ->
-                let pk = Public_key.compress t.signer.public_key in
+                let pk = Signer_service.Signer.public_key t.signer in
                 return (pk, signature)
             | Error e ->
                 let logger = t.logger in
@@ -104,12 +113,12 @@ let implementations t =
             |> Diff.Stable.Latest.source_ledger_hash )
       ; (* Get_signed_public_key *)
         Rpc.Rpc.implement Rpc_def.Get_signer_public_key.V1.t (fun () () ->
-            return @@ Public_key.compress @@ t.signer.public_key )
+            return @@ Signer_service.Signer.public_key t.signer )
       ; (* Get_signature *)
         Async.Rpc.Rpc.implement Rpc_def.Get_signature.V1.t (fun () query ->
-            let pk = Public_key.compress t.signer.public_key in
-            let signature = get_signature t ~ledger_hash:query in
-            return (Option.map signature ~f:(fun s -> (pk, s))) )
+            let pk = Signer_service.Signer.public_key t.signer in
+            let%map signature = get_signature t ~ledger_hash:query in
+            Option.map signature ~f:(fun s -> (pk, s)) )
       ; (* Get_ledger_hashes_chain *)
         Rpc.Rpc.implement Rpc_def.Get_ledger_hashes_chain.V1.t (fun () query ->
             get_ledger_hashes_chain t query )
@@ -211,7 +220,7 @@ let start_healthcheck_server ~logger ~port =
   in
   [%log info] "Healthcheck server started on port %d" port
 
-let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer_sk
+let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer
     ~no_migrations () =
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
@@ -219,8 +228,7 @@ let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer_sk
   let%bind db_existed = Sys.file_exists_exn db_dir in
   let t =
     { db = Db.create db_dir
-    ; signer =
-        Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn signer_sk
+    ; signer
     ; logger
     ; chain
     ; proof_cache_db = Proof_cache_tag.create_identity_db ()

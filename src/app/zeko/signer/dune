@@ -1,0 +1,35 @@
+(library
+ (name signer_service)
+ (modules signer_service)
+ (libraries
+  ;; mina ;;
+  mina_base
+  mina_ledger
+  mina_transaction
+  currency
+  signature_lib
+  snark_params
+  daemon_rpcs
+  ;; opam libraries ;;
+  core
+  core_kernel
+  async_kernel
+  async
+  cohttp
+  cohttp-async)
+ (preprocess
+  (pps ppx_jane ppx_mina)))
+
+(executable
+ (name cli)
+ (modules cli)
+ (libraries
+  signer_service
+  is_compile_simple_real_real
+  ;; mina ;;
+  cli_lib
+  ;; opam libraries ;;
+  async
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_jane ppx_mina)))

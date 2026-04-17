@@ -5,7 +5,6 @@ open Core
 open Async
 open Sequencer_lib
 open Cli_lib
-open Signature_lib
 module Graphql_cohttp_async =
   Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
     (Cohttp_async.Body)
@@ -32,15 +31,16 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     |> Mina_numbers.Global_slot_since_genesis.to_int ) ;
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
+        let%bind signer =
+          Signer_service.Client.create ~logger
+            ~location:(Host_and_port.of_string signer)
+          >>| Signer_service.Signer.of_client
+        in
         Sequencer.create ~logger ~max_pool_size ~da_config ~da_keys ~da_quorum
           ~db_dir:(Some db_dir) ~checkpoints_dir:(Some checkpoints_dir)
           ~postgres_uri ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~deposit_delay_blocks
-          ?nats_url
-          ~signer:
-            Signature_lib.(
-              Keypair.of_private_key_exn
-              @@ Private_key.of_base58_check_exn signer)
+          ?nats_url ~signer
           ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db
           ~l1_config ~commit_validity_period )
   in
@@ -127,13 +127,15 @@ let () =
        flag "--commit-validity-period"
          (optional_with_default 20 int)
          ~doc:"int Commit validity period in slots"
+     and signer =
+       flag "--signer" (required string)
+         ~doc:"string Signer service host:port"
      in
      let slot_acceptance = Time.Span.of_min slot_acceptance_m in
-     let signer = Sys.getenv_exn "MINA_PRIVATE_KEY" in
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in
      let da_keys =
        String.split ~on:',' da_keys
-       |> List.map ~f:Public_key.Compressed.of_base58_check_exn
+       |> List.map ~f:Signature_lib.Public_key.Compressed.of_base58_check_exn
      in
      let l1_uri = Uri.of_string l1_uri in
      let archive_uri = Uri.of_string archive_uri in

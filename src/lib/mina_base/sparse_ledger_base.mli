@@ -33,6 +33,8 @@ module L : Ledger_intf.S with type t = t ref and type location = int
 
 val merkle_root : t -> Ledger_hash.t
 
+val merkle_root_without_cache_exn : t -> Ledger_hash.t
+
 val depth : t -> int
 
 val get_exn : t -> int -> Account.t

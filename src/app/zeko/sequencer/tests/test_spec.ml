@@ -360,7 +360,7 @@ module Sequencer_spec = struct
     { outer_kp : Keypair.t
     ; holder_kp : Keypair.t
     ; token_holder_kp : Keypair.t
-    ; signer : Keypair.t
+    ; signer_pk : Public_key.Compressed.t
     ; ephemeral_ledger : L.t (* The ledger to test the expected outcome *)
     ; specs : Transaction_spec.t list (* Transaction specs *)
     ; sequencer : Sequencer.t Handle.valid_t
@@ -387,17 +387,25 @@ module Sequencer_spec = struct
     let token_holder_kp =
       Keypair.of_private_key_exn deploy_config.helper_token_owner_l1
     in
-    print_endline "(* Create signer *)" ;
-    let rec create_even_signer () =
-      let signer = Keypair.create () in
-      let compressed = Public_key.compress signer.public_key in
-      if compressed.is_odd then create_even_signer () else signer
+    print_endline "(* Connect signer *)" ;
+    let signer_sk =
+      Sys.getenv_exn "ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY"
+      |> Private_key.of_base58_check_exn
     in
-    let signer = create_even_signer () in
+    let signer_keypair = Keypair.of_private_key_exn signer_sk in
+    let signer =
+      run (fun () ->
+          let location =
+            Sys.getenv_exn "ZEKO_TEST_SEQUENCER_SIGNER"
+            |> Host_and_port.of_string
+          in
+          Signer_service.Client.create ~logger ~location
+          >>| Signer_service.Signer.of_client )
+    in
+    let signer_pk = Signer_service.Signer.public_key signer in
     run (fun () ->
         let%bind _res =
-          Gql_client.For_tests.create_account ~logger gql_uri
-            (Public_key.compress signer.public_key)
+          Gql_client.For_tests.create_account ~logger gql_uri signer_pk
         in
         return () ) ;
 
@@ -458,7 +466,7 @@ module Sequencer_spec = struct
     print_endline "(* Deploy zkapp *)" ;
     run (fun () ->
         let sequencer_pk =
-          Public_key.compress signer.public_key |> Even_PC.create_exn
+          signer_pk |> Even_PC.create_exn
         in
         ( print_endline
         @@ Public_key.(
@@ -471,8 +479,7 @@ module Sequencer_spec = struct
              Compressed.to_base58_check @@ compress token_holder_kp.public_key)
         ) ;
         let%bind nonce =
-          Gql_client.infer_nonce ~logger gql_uri
-            (Public_key.compress signer.public_key)
+          Gql_client.infer_nonce ~logger gql_uri signer_pk
           >>| Or_error.ok_exn
         in
         let%bind command =
@@ -482,7 +489,8 @@ module Sequencer_spec = struct
           in
           printf "Deplying with DA key: %s\n%!" (Field.to_string da_key) ;
           Deploy.deploy_command_exn
-            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+            ~signer:signer_keypair
             ~outer_kp ~holder_kp ~token_holder_kp
             ~fee:(Currency.Fee.of_mina_int_exn 1)
             ~nonce ~initial_ledger:ephemeral_ledger
@@ -517,7 +525,9 @@ module Sequencer_spec = struct
           Sequencer.create ?nats_url:None ~logger ~max_pool_size:10
             ~commitment_period_sec:0.
             ~da_config ~da_keys ~da_quorum ~db_dir ~postgres_uri ~l1_uri:gql_uri
-            ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:delay_deposit
+            ~archive_uri:gql_uri
+            ~signer
+            ~deposit_delay_blocks:delay_deposit
             ~mq_host ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
             ~l1_config ~commit_validity_period ~checkpoints_dir )
@@ -526,7 +536,7 @@ module Sequencer_spec = struct
       { outer_kp
       ; holder_kp
       ; token_holder_kp
-      ; signer
+      ; signer_pk
       ; ephemeral_ledger
       ; specs
       ; sequencer = Handle.make sequencer

@@ -2,7 +2,8 @@
  (name da_layer)
  (inline_tests)
  (libraries
-  kvdb_base
+ kvdb_base
+  signer_service
   zeko_constants
   relational_db
   indexed_merkle_tree

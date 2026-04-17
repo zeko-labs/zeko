@@ -11,11 +11,10 @@ Think of the sequencer as the conductor of an orchestra in Zeko. It plays a vita
 
 ## Build
 
-The repo-managed OCaml setup imports `opam.export` and then runs
-`./scripts/pin-external-packages.sh`, which pins `nats-client` and
-`nats-client-async` from GitHub into the switch. No `nats-ml` submodule checkout
-is required. This GitHub pin path is temporary and should be removed once both
-packages are published to opam.
+The repo-managed OCaml setup imports `opam.export`. The explorer NATS client
+dependencies are the published opam packages `nats-client` and
+`nats-client-async`; no `nats-ml` submodule checkout or GitHub opam pin is
+required.
 
 ```bash
 DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
