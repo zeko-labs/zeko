@@ -192,11 +192,11 @@ let run_scenarios () =
   let backfill_service = ref None in
   Exn.protect
     ~finally:(fun () ->
-      Option.iter !backfill_service ~f:(fun service ->
+      Option.iter backfill_service.contents ~f:(fun service ->
           run (fun () -> Explorer_backfill_service.shutdown service)) ;
-      Option.iter !sequencer ~f:(fun sequencer ->
+      Option.iter sequencer.contents ~f:(fun sequencer ->
           ignore (shutdown_sequencer sequencer : (_, Handle.invalid) Handle.t)) ;
-      Option.iter !subscriber ~f:(fun client ->
+      Option.iter subscriber.contents ~f:(fun client ->
           run (fun () -> Nats_client_async.close client)) ;
       drop_postgres ())
     ~f:(fun () ->
