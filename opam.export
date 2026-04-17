@@ -54,7 +54,7 @@ roots: [
   "utop.2.9.1"
   "websocket.2.14"
   "websocket-async.2.14"
-  "yojson.1.7.0"
+  "yojson.2.0.0"
 ]
 installed: [
   "alcotest.1.1.0"
@@ -306,7 +306,7 @@ installed: [
   "websocket.2.14"
   "websocket-async.2.14"
   "xdg.3.5.0"
-  "yojson.1.7.0"
+  "yojson.2.0.0"
   "zarith.1.7"
   "zarith_stubs_js.v0.14.1"
   "zed.3.1.0"
