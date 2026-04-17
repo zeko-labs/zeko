@@ -28,7 +28,7 @@ cleanup
 docker run --rm --name "${CONTAINER_NAME}" -p 4222:4222 -d nats:2-alpine >/dev/null
 wait_for_port 4222
 
-opam exec --switch . -- env -u DUNE_RPC dune runtest --profile=devnet \
+opam exec -- env -u DUNE_RPC dune runtest --profile=devnet \
   src/app/zeko/sequencer/explorer/tests
-NATS_URL="${NATS_URL}" opam exec --switch . -- env -u DUNE_RPC dune exec --profile=devnet \
+NATS_URL="${NATS_URL}" opam exec -- env -u DUNE_RPC dune exec --profile=devnet \
   src/app/zeko/sequencer/explorer/tests/explorer_nats_gherkin_tests.exe

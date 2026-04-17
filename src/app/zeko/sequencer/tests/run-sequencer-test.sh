@@ -46,7 +46,7 @@ SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
-opam exec --switch . -- env -u DUNE_RPC dune build \
+opam exec -- env -u DUNE_RPC dune build \
   src/app/zeko/sequencer/tests/testing_ledger/run.exe \
   src/app/zeko/da_layer/cli.exe \
   src/app/zeko/sequencer/prover/cli.exe \
