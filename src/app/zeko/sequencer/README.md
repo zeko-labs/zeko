@@ -25,9 +25,11 @@ DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
 ```bash
 dune build
 ./src/app/zeko/sequencer/tests/run-sequencer-test.sh {fake | real} <num_provers>
-opam exec -- env -u DUNE_RPC dune runtest --profile=devnet src/app/zeko/sequencer/explorer/tests
-NATS_URL="nats://127.0.0.1:4222" opam exec -- env -u DUNE_RPC dune exec --profile=devnet src/app/zeko/sequencer/explorer/tests/explorer_nats_gherkin_tests.exe
+NATS_URL="nats://127.0.0.1:4222" opam exec -- env -u DUNE_RPC dune runtest --profile=devnet src/app/zeko/sequencer/explorer/tests
 ```
+
+The explorer Gherkin suite includes NATS-backed scenarios. `NATS_URL` must be
+set and point at a running NATS server when running those tests outside CI.
 
 ## Run
 

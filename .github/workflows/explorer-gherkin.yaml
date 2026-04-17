@@ -14,6 +14,11 @@ jobs:
   explorer-gherkin:
     name: "Explorer Gherkin"
     runs-on: warp-ubuntu-latest-x64-16x
+    services:
+      nats:
+        image: nats:2-alpine
+        ports:
+          - 4222:4222
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -61,25 +66,15 @@ jobs:
             getent hosts github.com || true
             sleep 5
           done
-          git -C ./opam-repository fetch origin 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
-          git -C ./opam-repository checkout 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
-          for i in 1 2 3 4 5; do
-            rm -rf ./opam-repository-published
-            git clone https://github.com/ocaml/opam-repository.git --depth 1 ./opam-repository-published && break
-            echo "clone failed, retry $i"
-            getent hosts github.com || true
-            sleep 5
-          done
-          git -C ./opam-repository-published fetch origin ba1ca7509cb2617776f017673de0f2a48be67105
-          git -C ./opam-repository-published checkout ba1ca7509cb2617776f017673de0f2a48be67105
+          git -C ./opam-repository fetch origin ba1ca7509cb2617776f017673de0f2a48be67105
+          git -C ./opam-repository checkout ba1ca7509cb2617776f017673de0f2a48be67105
           opam init --disable-sandboxing -k git -a ./opam-repository --bare
-          opam repository add --yes --all --set-default --kind=local published ./opam-repository-published
           for i in 1 2 3 4 5; do
             opam repository add --yes --all --set-default o1-labs https://github.com/o1-labs/opam-repository.git && break
             echo "opam repo add failed, retry $i"
             sleep 5
           done
-          opam update default published o1-labs
+          opam update default o1-labs
           opam switch create "4.14.0"
           opam switch "4.14.0"
           export OPAMERRLOGLEN=20
@@ -104,12 +99,6 @@ jobs:
           key: zeko_build-${{ hashFiles('./opam.export') }}
       - name: 🧪 Run explorer Gherkin tests
         run: |
-          opam exec -- env -u DUNE_RPC dune runtest --profile=devnet \
-            src/app/zeko/sequencer/explorer/tests
-      - name: 🧪 Run explorer NATS Gherkin tests
-        run: |
-          docker run --rm --name nats-sequencer-explorer-tests \
-            -p 4222:4222 -d nats:2-alpine >/dev/null
           for i in $(seq 1 30); do
             nc -z 127.0.0.1 4222 && break
             if [ "$i" -eq 30 ]; then
@@ -119,8 +108,5 @@ jobs:
             sleep 1
           done
           NATS_URL="nats://127.0.0.1:4222" \
-            opam exec -- env -u DUNE_RPC dune exec --profile=devnet \
-            src/app/zeko/sequencer/explorer/tests/explorer_nats_gherkin_tests.exe
-      - name: 🧹 Stop NATS
-        if: always()
-        run: docker rm -f nats-sequencer-explorer-tests >/dev/null 2>&1 || true
+            opam exec -- env -u DUNE_RPC dune runtest --profile=devnet \
+            src/app/zeko/sequencer/explorer/tests
