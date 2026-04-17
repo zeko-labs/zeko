@@ -149,6 +149,13 @@ let run_backfill_scenario () =
       if not (String.equal message.subject Explorer_events.Subject.transactions)
       then
         failwithf "unexpected backfill subject: %s" message.subject () ;
+      let headers =
+        message.headers
+        |> Option.value ~default:Nats_client.Headers.empty
+        |> Nats_client.Headers.to_list
+      in
+      require_header headers ~name:"Nats-Msg-Id"
+        ~expected:(Ledger_hash.to_decimal_string target_ledger_hash) ;
       let payload = Yojson.Safe.from_string message.payload in
       assert_safe_json_equal (json_assoc_exn "kind" payload)
         (`String "genesis_replay") ;

@@ -1,6 +1,7 @@
-# Builds and tests Zeko in CI using the exported opam toolchain.
+# Runs the explorer Gherkin acceptance tests independently from the sequencer
+# integration suite so PR feedback is not blocked on the longer sequencer flow.
 ---
-name: CI
+name: Explorer Gherkin
 
 on:
   push:
@@ -10,15 +11,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: "Build & Test"
+  explorer-gherkin:
+    name: "Explorer Gherkin"
     runs-on: warp-ubuntu-latest-x64-16x
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
         with:
           submodules: recursive
-      # Prepare build environment(Go/OCaml/Rust)
       - name: 🐹 Setup go
         uses: actions/setup-go@v6
         with:
@@ -33,7 +33,6 @@ jobs:
           sudo cp capnpc-go /usr/local/bin/
           cd -
       - uses: dtolnay/rust-toolchain@stable
-      # Install OPAM and needed dependencies
       - name: 📥 Install OPAM
         run: |
           sudo apt-get update
@@ -85,33 +84,43 @@ jobs:
           opam switch "4.14.0"
           export OPAMERRLOGLEN=20
           export OPAMYES=1
-      # Retrieve .opam from cache
       - name: 🧩 Get opam dependency cache
         uses: WarpBuilds/cache@v1
         id: opam_dependencies
         with:
           path: ~/.opam
           key: zeko_opam_dependencies-${{ hashFiles('./opam.export') }}
-      # Install opam dependencies
       - name: 🏗️  Install opam dependencies
         run: |
           opam switch import opam.export --yes
           eval "$(opam env)"
           ./scripts/pin-external-packages.sh
           opam clean --logs -cs --quiet
-      # Retrieve _build dir from cache before initiating a build
       - name: 🧩 Get zeko build cache
         uses: WarpBuilds/cache@v1
         id: zeko_build
         with:
           path: ./_build
           key: zeko_build-${{ hashFiles('./opam.export') }}
-      # Build!
-      - name: 📦 Build zeko packages
+      - name: 🧪 Run explorer Gherkin tests
         run: |
-          opam exec -- dune build --profile=devnet src/app/zeko/sequencer
-          opam exec -- dune build --profile=devnet src/app/zeko/sequencer/explorer
-          opam exec -- dune build --profile=devnet src/app/zeko/da_layer
-          opam exec -- dune build --profile=devnet src/app/zeko/signer
-      - name: 🧪 Run sequencer tests
-        run: ./src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1
+          opam exec -- env -u DUNE_RPC dune runtest --profile=devnet \
+            src/app/zeko/sequencer/explorer/tests
+      - name: 🧪 Run explorer NATS Gherkin tests
+        run: |
+          docker run --rm --name nats-sequencer-explorer-tests \
+            -p 4222:4222 -d nats:2-alpine >/dev/null
+          for i in $(seq 1 30); do
+            nc -z 127.0.0.1 4222 && break
+            if [ "$i" -eq 30 ]; then
+              echo "Timed out waiting for NATS" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          NATS_URL="nats://127.0.0.1:4222" \
+            opam exec -- env -u DUNE_RPC dune exec --profile=devnet \
+            src/app/zeko/sequencer/explorer/tests/explorer_nats_gherkin_tests.exe
+      - name: 🧹 Stop NATS
+        if: always()
+        run: docker rm -f nats-sequencer-explorer-tests >/dev/null 2>&1 || true

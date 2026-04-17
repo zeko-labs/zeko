@@ -25,7 +25,8 @@ DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
 ```bash
 dune build
 ./src/app/zeko/sequencer/tests/run-sequencer-test.sh {fake | real} <num_provers>
-./src/app/zeko/sequencer/tests/run-explorer-tests.sh
+opam exec -- env -u DUNE_RPC dune runtest --profile=devnet src/app/zeko/sequencer/explorer/tests
+NATS_URL="nats://127.0.0.1:4222" opam exec -- env -u DUNE_RPC dune exec --profile=devnet src/app/zeko/sequencer/explorer/tests/explorer_nats_gherkin_tests.exe
 ```
 
 ## Run
@@ -172,9 +173,9 @@ responses as GraphQL-SSE events.
 
 The explorer-specific tests now live under
 `src/app/zeko/sequencer/explorer/tests/` and use copied `.feature` files from
-the explorer spike as the main test inventory. `run-explorer-tests.sh` runs the
-Gherkin acceptance suite first and then a separate Gherkin-backed real-NATS
-integration executable against a Docker NATS server.
+the explorer spike as the main test inventory. CI runs them in the dedicated
+Explorer Gherkin workflow, separate from the longer sequencer integration flow.
+The real-NATS scenarios expect `NATS_URL` to point at a running NATS server.
 
 ## Deploy rollup contract to L1
 

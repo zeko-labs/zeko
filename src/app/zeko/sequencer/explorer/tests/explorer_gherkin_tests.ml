@@ -127,6 +127,12 @@ let assert_basic_json_equal actual expected =
     failwithf "Expected %s but got %s" (Yojson.Basic.to_string expected)
       (Yojson.Basic.to_string actual) ()
 
+let assert_safe_json_equal actual expected =
+  if not (Yojson.Safe.equal actual expected)
+  then
+    failwithf "Expected %s but got %s" (Yojson.Safe.to_string expected)
+      (Yojson.Safe.to_string actual) ()
+
 let%test_unit "A genesis backfill marks only the first replayed diff as genesis" =
   Feature_parser.assert_scenario "backfill-api.feature"
     "A genesis backfill marks only the first replayed diff as genesis" ;
@@ -205,9 +211,10 @@ let%test_unit "The backfill health query exposes the service instance" =
     "The backfill health query exposes the service instance" ;
   let health =
     graphql_data_exn (test_service ())
-      {|query { health { instanceId startedAt } }|}
+      {|query { health { ok instanceId startedAt } }|}
       "health"
   in
+  assert_basic_json_equal (find_assoc_exn "ok" health) (`Bool true) ;
   assert_basic_json_equal (find_assoc_exn "instanceId" health)
     (`String "instance-1") ;
   [%test_eq: bool]
@@ -232,7 +239,9 @@ let%test_unit "The backfill job query returns the current job snapshot" =
   in
   assert_basic_json_equal (find_assoc_exn "id" backfill_job) (`String job.id) ;
   assert_basic_json_equal (find_assoc_exn "status" backfill_job)
-    (`String "running")
+    (`String "running") ;
+  assert_basic_json_equal (find_assoc_exn "diffsPublished" backfill_job)
+    (`Int 0)
 
 let%test_unit "Backfill progress subscriptions stream GraphQL-SSE events" =
   Feature_parser.assert_scenario "backfill-api.feature"
@@ -275,15 +284,21 @@ let%test_unit "Transaction events include the replay kind, diff payload, and NAT
   Feature_parser.assert_scenario "event-contract.feature"
     "Transaction events include the replay kind, diff payload, and NATS dedup header" ;
   let target_ledger_hash = Ledger_hash.empty_hash in
+  let diff = sample_diff () in
   let message =
     Explorer_events.build_transaction_message
       ~kind:Explorer_events.Transaction_kind.Sync_replay
-      ~target_ledger_hash ~genesis:false ~diff:(sample_diff ())
+      ~target_ledger_hash ~genesis:false ~diff
   in
   [%test_eq: string] message.subject Explorer_events.Subject.transactions ;
-  ignore (find_assoc_exn "kind" message.payload : Yojson.Safe.t) ;
-  ignore (find_assoc_exn "target_ledger_hash" message.payload : Yojson.Safe.t) ;
-  ignore (find_assoc_exn "diff" message.payload : Yojson.Safe.t) ;
+  assert_safe_json_equal (find_assoc_exn "kind" message.payload)
+    (`String "sync_replay") ;
+  assert_safe_json_equal (find_assoc_exn "target_ledger_hash" message.payload)
+    (Ledger_hash.to_yojson target_ledger_hash) ;
+  assert_safe_json_equal (find_assoc_exn "genesis" message.payload)
+    (`Bool false) ;
+  assert_safe_json_equal (find_assoc_exn "diff" message.payload)
+    (Da_layer.Diff.Stable.V3.to_yojson diff) ;
   [%test_eq: string]
     (find_header_exn message.headers "Nats-Msg-Id")
     (Ledger_hash.to_decimal_string target_ledger_hash)
@@ -298,11 +313,14 @@ let%test_unit "Finality events include status and ledger hashes" =
       ~target_ledger_hash:Ledger_hash.empty_hash
   in
   [%test_eq: string] message.subject Explorer_events.Subject.finality ;
-  ignore (find_assoc_exn "status" message.payload : Yojson.Safe.t) ;
-  ignore
-    (find_assoc_exn "source_ledger_hash" message.payload : Yojson.Safe.t) ;
-  ignore
-    (find_assoc_exn "target_ledger_hash" message.payload : Yojson.Safe.t)
+  assert_safe_json_equal (find_assoc_exn "status" message.payload)
+    (`String "proved") ;
+  assert_safe_json_equal
+    (find_assoc_exn "source_ledger_hash" message.payload)
+    (Ledger_hash.to_yojson Ledger_hash.empty_hash) ;
+  assert_safe_json_equal
+    (find_assoc_exn "target_ledger_hash" message.payload)
+    (Ledger_hash.to_yojson Ledger_hash.empty_hash)
 
 let%test_unit "Health events include the service identity and publishing state" =
   Feature_parser.assert_scenario "event-contract.feature"
@@ -314,11 +332,17 @@ let%test_unit "Health events include the service identity and publishing state" 
       ~unproved_hash:Ledger_hash.empty_hash ()
   in
   [%test_eq: string] message.subject Explorer_events.Subject.health ;
-  ignore (find_assoc_exn "service" message.payload : Yojson.Safe.t) ;
-  ignore (find_assoc_exn "instance_id" message.payload : Yojson.Safe.t) ;
-  ignore
-    (find_assoc_exn "last_published_hash" message.payload : Yojson.Safe.t) ;
-  ignore (find_assoc_exn "unproved_hash" message.payload : Yojson.Safe.t)
+  assert_safe_json_equal (find_assoc_exn "service" message.payload)
+    (`String "sequencer-nats-publisher") ;
+  assert_safe_json_equal (find_assoc_exn "instance_id" message.payload)
+    (`String "instance-1") ;
+  assert_safe_json_equal (find_assoc_exn "status" message.payload)
+    (`String "ok") ;
+  assert_safe_json_equal
+    (find_assoc_exn "last_published_hash" message.payload)
+    (Ledger_hash.to_yojson Ledger_hash.empty_hash) ;
+  assert_safe_json_equal (find_assoc_exn "unproved_hash" message.payload)
+    (Ledger_hash.to_yojson Ledger_hash.empty_hash)
 
 let%test_unit "Sync replay from genesis marks the very first diff as genesis" =
   Feature_parser.assert_scenario "sequencer-hooks.feature"
