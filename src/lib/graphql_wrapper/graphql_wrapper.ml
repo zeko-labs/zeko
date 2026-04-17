@@ -200,14 +200,13 @@ module Make (Schema : Graphql_intf.Schema) = struct
     let obj ?doc name ~fields ~coerce ~split =
       let build_obj_json = arg_obj_to_json fields [] in
       let gql_server_fields = to_ocaml_graphql_server_args fields in
+      let to_json = Json.json_of_option @@ split build_obj_json in
       let arg_typ =
         Schema.Arg.obj name ?doc ~fields:gql_server_fields ~coerce
       in
       { arg_typ
-      ; to_json = Json.json_of_option @@ split build_obj_json
-      ; to_graphql_const =
-          (fun _ ->
-            failwith "GraphQL input object default values are not supported" )
+      ; to_json
+      ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
       }
 
     let non_null (arg_typ : _ arg_typ) =

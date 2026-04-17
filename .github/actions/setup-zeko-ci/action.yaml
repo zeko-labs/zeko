@@ -1,0 +1,88 @@
+name: Setup Zeko CI
+description: Install the shared Zeko CI toolchain and restore dependency/build caches.
+inputs:
+  opam-cache-key:
+    description: Cache key for the opam switch cache.
+    required: true
+  build-cache-key:
+    description: Cache key for the dune build cache.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: 🐹 Setup go
+      uses: actions/setup-go@v6
+      with:
+        go-version: "1.19.11"
+    - name: 🐹 Build and install capnpc-go
+      shell: bash
+      run: |
+        tmpdir=$(mktemp -d)
+        cd "$tmpdir"
+        go mod init local/build
+        go get capnproto.org/go/capnp/v3@v3.0.0-alpha.5
+        go build -o capnpc-go capnproto.org/go/capnp/v3/capnpc-go
+        sudo cp capnpc-go /usr/local/bin/
+        cd -
+    - uses: dtolnay/rust-toolchain@stable
+    - name: 📥 Install OPAM
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y opam ocaml \
+          libboost-dev \
+          libboost-program-options-dev \
+          libbz2-dev \
+          libcap-dev \
+          libffi-dev \
+          libgflags-dev \
+          libgmp-dev \
+          libgmp3-dev \
+          libjemalloc-dev \
+          liblmdb-dev \
+          liblmdb0 \
+          libpq-dev \
+          libsodium-dev \
+          libssl-dev \
+          pkg-config zlib1g-dev \
+          capnproto \
+          netcat-traditional
+        for i in 1 2 3 4 5; do
+          rm -rf ./opam-repository
+          git clone https://github.com/ocaml/opam-repository.git --depth 1 ./opam-repository && break
+          echo "clone failed, retry $i"
+          getent hosts github.com || true
+          sleep 5
+        done
+        git -C ./opam-repository fetch origin ba1ca7509cb2617776f017673de0f2a48be67105
+        git -C ./opam-repository checkout ba1ca7509cb2617776f017673de0f2a48be67105
+        opam init --disable-sandboxing -k git -a ./opam-repository --bare
+        for i in 1 2 3 4 5; do
+          opam repository add --yes --all --set-default o1-labs https://github.com/o1-labs/opam-repository.git && break
+          echo "opam repo add failed, retry $i"
+          sleep 5
+        done
+        opam update default o1-labs
+        opam switch create "4.14.0"
+        opam switch "4.14.0"
+        export OPAMERRLOGLEN=20
+        export OPAMYES=1
+    - name: 🧩 Get opam dependency cache
+      uses: WarpBuilds/cache@v1
+      id: opam_dependencies
+      with:
+        path: ~/.opam
+        key: ${{ inputs.opam-cache-key }}
+    - name: 🏗️  Install opam dependencies
+      shell: bash
+      run: |
+        opam switch import opam.export --yes
+        eval "$(opam env)"
+        ./scripts/pin-external-packages.sh
+        opam clean --logs -cs --quiet
+    - name: 🧩 Get zeko build cache
+      uses: WarpBuilds/cache@v1
+      id: zeko_build
+      with:
+        path: ./_build
+        key: ${{ inputs.build-cache-key }}

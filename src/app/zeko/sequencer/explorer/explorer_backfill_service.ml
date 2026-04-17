@@ -87,6 +87,10 @@ let is_terminal = function
   | Queued | Running ->
       false
 
+let terminal_job_retention = Time.Span.of_hr 1.
+
+let backfill_interval_size = 1000
+
 let genesis_hash =
   Da_layer.Diff.empty_ledger_hash ~depth:constraint_constants.ledger_depth
 
@@ -151,6 +155,11 @@ let notify_subscribers job =
   in
   job.subscribers := if terminal then [] else subscribers
 
+let remove_subscriber job subscriber =
+  job.subscribers :=
+    List.filter !(job.subscribers) ~f:(fun subscriber' ->
+        not (phys_equal subscriber subscriber') )
+
 let update_job job ~status ?error ?started_at ?finished_at ?diffs_published () =
   job.status <- status ;
   Option.iter error ~f:(fun value -> job.error <- Some value) ;
@@ -187,6 +196,24 @@ let shutdown t =
 
 let find_job t id = Hashtbl.find t.jobs id
 
+let prune_terminal_jobs t =
+  let cutoff = Time.sub (Time.now ()) terminal_job_retention in
+  Hashtbl.filter_inplace t.jobs ~f:(fun job ->
+      (not (is_terminal job.status))
+      ||
+      match job.finished_at with
+      | None ->
+          true
+      | Some finished_at ->
+          Time.( > ) finished_at cutoff )
+
+let find_active_job_by_range t ~from_hash ~to_hash =
+  Hashtbl.data t.jobs
+  |> List.find ~f:(fun job ->
+         (not (is_terminal job.status))
+         && Ledger_hash.equal job.from_hash from_hash
+         && Ledger_hash.equal job.to_hash to_hash )
+
 let subscribe_progress t ~id =
   match find_job t id with
   | None ->
@@ -194,8 +221,11 @@ let subscribe_progress t ~id =
   | Some job ->
       let reader, writer = Pipe.create () in
       let subscriber = create_subscriber writer in
-      if not (is_terminal job.status) then
+      if not (is_terminal job.status) then (
         job.subscribers := subscriber :: !(job.subscribers) ;
+        don't_wait_for
+          ( Pipe.closed reader
+          >>| fun () -> remove_subscriber job subscriber ) ) ;
       ignore
         (enqueue_progress subscriber (progress_of_job job)
            ~terminal:(is_terminal job.status) : bool ) ;
@@ -226,70 +256,119 @@ let publish_backfill_diff t ~from_hash ~index ~target_ledger_hash diff =
   | Some client ->
       publish_message_result client message
 
+let source_hash = function
+  | `Genesis ->
+      genesis_hash
+  | `Specific ledger_hash ->
+      ledger_hash
+
+let backfill_intervals t ~source_ledger_hash ~target_ledger_hash =
+  let rec get_intervals ~target_ledger_hash =
+    let%bind.Deferred.Result chain =
+      Da_layer.Client.get_ledger_hashes_chain ~logger:t.logger
+        ~config:t.da_config ~max_length:backfill_interval_size
+        ~source_ledger_hash:(`Specific source_ledger_hash) ~target_ledger_hash
+        ()
+    in
+    match chain with
+    | [] ->
+        return (Ok [])
+    | [ last ] ->
+        return (Ok [ (source_ledger_hash, last) ])
+    | chain ->
+        let interval_source = List.hd_exn chain in
+        let interval_target = List.last_exn chain in
+        let%bind.Deferred.Result intervals =
+          get_intervals ~target_ledger_hash:interval_source
+        in
+        return (Ok ((interval_source, interval_target) :: intervals))
+  in
+  get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
+
+let publish_target t job ~current_source ~index ~target_ledger_hash =
+  let%bind.Deferred.Result diff =
+    Da_layer.Client.get_diff ~logger:t.logger ~config:t.da_config
+      ~ledger_hash:target_ledger_hash
+  in
+  if
+    not
+      (Ledger_hash.equal
+         (Da_layer.Diff.Stable.V3.source_ledger_hash diff)
+         current_source )
+  then
+    Deferred.return
+      (Error
+         (Error.of_string
+            "Backfill diff chain does not match requested ledger hash \
+             progression") )
+  else
+    match
+      publish_backfill_diff t ~from_hash:job.from_hash ~index ~target_ledger_hash
+        diff
+    with
+    | `Queued ->
+        update_job job ~status:Running
+          ~diffs_published:(job.diffs_published + 1)
+          () ;
+        Deferred.return (Ok target_ledger_hash)
+    | `Dropped ->
+        Deferred.return
+          (Error (Error.of_string "NATS publish dropped while backfilling diffs"))
+
 let run_job t job =
   let now = Time.now () in
   update_job job ~status:Running ~started_at:now () ;
   let source = source_query job.from_hash in
   don't_wait_for
     (Monitor.try_with_or_error (fun () ->
-         let source_ledger_hash =
-           match source with
-           | `Genesis ->
-               genesis_hash
-           | `Specific ledger_hash ->
-               ledger_hash
+         let source_ledger_hash = source_hash source in
+         let%bind.Deferred.Result intervals =
+           backfill_intervals t ~source_ledger_hash
+             ~target_ledger_hash:job.to_hash
          in
-         let%bind.Deferred.Result target_ledger_hashes =
-           Da_layer.Client.get_ledger_hashes_chain ~logger:t.logger
-             ~config:t.da_config ~source_ledger_hash:source
-             ~target_ledger_hash:job.to_hash ()
+         let index = ref 0 in
+         let%bind.Deferred.Result final_source =
+           Deferred.List.fold intervals ~init:(Ok source_ledger_hash)
+             ~f:(fun acc (interval_source, interval_target) ->
+               match acc with
+               | Error _ as error ->
+                   return error
+               | Ok current_source ->
+                   if not (Ledger_hash.equal current_source interval_source)
+                   then
+                     return
+                       (Error
+                          (Error.of_string
+                             "Backfill intervals do not match requested ledger \
+                              hash progression") )
+                   else
+                     let%bind.Deferred.Result target_ledger_hashes =
+                       Da_layer.Client.get_ledger_hashes_chain ~logger:t.logger
+                         ~config:t.da_config ~max_length:backfill_interval_size
+                         ~source_ledger_hash:(`Specific interval_source)
+                         ~target_ledger_hash:interval_target ()
+                     in
+                     Deferred.List.fold target_ledger_hashes
+                       ~init:(Ok interval_source)
+                       ~f:(fun acc target_ledger_hash ->
+                         match acc with
+                         | Error _ as error ->
+                             return error
+                         | Ok current_source ->
+                             let%map result =
+                               publish_target t job ~current_source ~index:!index
+                                 ~target_ledger_hash
+                             in
+                             (match result with Ok _ -> incr index | Error _ -> ()) ;
+                             result ) )
          in
-         let rec publish_targets current_source index = function
-           | [] ->
-               if Ledger_hash.equal current_source job.to_hash
-               then Deferred.return (Ok ())
-               else
-                 Deferred.return
-                   (Error
-                      (Error.of_string
-                         "Ledger hash chain ended before reaching backfill \
-                          target") )
-           | target_ledger_hash :: rest ->
-               let%bind.Deferred.Result diff =
-                 Da_layer.Client.get_diff ~logger:t.logger ~config:t.da_config
-                   ~ledger_hash:target_ledger_hash
-               in
-               if
-                 not
-                   (Ledger_hash.equal
-                      (Da_layer.Diff.Stable.V3.source_ledger_hash diff)
-                      current_source )
-               then
-                 Deferred.return
-                   (Error
-                      (Error.of_string
-                         "Backfill diff chain does not match requested ledger \
-                          hash progression") )
-               else (
-               match
-                 publish_backfill_diff t ~from_hash:job.from_hash ~index
-                   ~target_ledger_hash diff
-               with
-               | `Queued ->
-                   update_job job ~status:Running
-                     ~diffs_published:(job.diffs_published + 1)
-                     () ;
-                   publish_targets target_ledger_hash (index + 1) rest
-               | `Dropped ->
-                   Deferred.return
-                     (Error
-                        (Error.of_string
-                           "NATS publish dropped while backfilling diffs") ) )
-         in
-         let%bind.Deferred.Result () =
-           publish_targets source_ledger_hash 0 target_ledger_hashes
-         in
-         Deferred.Result.return () )
+         if Ledger_hash.equal final_source job.to_hash
+         then Deferred.Result.return ()
+         else
+           Deferred.return
+             (Error
+                (Error.of_string
+                   "Ledger hash chain ended before reaching backfill target") ) )
      >>= function
      | Ok (Ok ()) ->
          update_job job ~status:Completed ~finished_at:(Time.now ()) () ;
@@ -323,12 +402,17 @@ let register_job t job =
   job
 
 let start_backfill t ~from_hash ~to_hash =
-  let job =
-    create_job ~status:Queued ~from_hash ~to_hash ()
-  in
-  let job = register_job t job in
-  run_job t job ;
-  job
+  prune_terminal_jobs t ;
+  match find_active_job_by_range t ~from_hash ~to_hash with
+  | Some job ->
+      job
+  | None ->
+      let job =
+        create_job ~status:Queued ~from_hash ~to_hash ()
+      in
+      let job = register_job t job in
+      run_job t job ;
+      job
 
 let failed_job_snapshot_from_strings ~from_hash ~to_hash error =
   let now = Time.now () in

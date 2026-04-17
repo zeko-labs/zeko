@@ -75,7 +75,7 @@ module Sequencer = struct
       type t =
         { provers : Zeko_prover.Client.t
         ; da_client : Da_layer.Client.t
-        ; nats_client : Nats_client_async.client option
+        ; nats_sink : Explorer_events.sink
         ; executor : Executor.t
         ; config : Config.t
         ; sequencer_state : State.t
@@ -139,7 +139,7 @@ module Sequencer = struct
 
       let process
           ({ da_client
-           ; nats_client
+           ; nats_sink
            ; provers
            ; executor
            ; config
@@ -195,15 +195,8 @@ module Sequencer = struct
               in
               State.Last_committed_ledger.set sequencer_state
                 ~data:new_inner_ledger ;
-              let sink =
-                match nats_client with
-                | Some client ->
-                    Explorer_events.create_nats_sink client
-                | None ->
-                    Explorer_events.noop_sink
-              in
               let () =
-                Explorer_events.publish_finality sink ~logger
+                Explorer_events.publish_finality nats_sink ~logger
                   ~status:Explorer_events.Finality_status.Committed
                   ~source_ledger_hash ~target_ledger_hash
               in
@@ -258,6 +251,7 @@ module Sequencer = struct
     ; merger_ctx : Merger.Context.t
     ; da_client : Da_layer.Client.t
     ; nats_client : Nats_client_async.client option
+    ; nats_sink : Explorer_events.sink
     ; instance_id : string
     ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
@@ -309,24 +303,17 @@ module Sequencer = struct
       ; committed_ledger_hash = Field.zero
       }
 
-  let nats_sink = function
-    | Some client ->
-        Explorer_events.create_nats_sink client
-    | None ->
-        Explorer_events.noop_sink
-
   let publish_transaction_event t ~kind ~target_ledger_hash ~genesis ~diff =
-    Explorer_events.publish_transaction (nats_sink t.nats_client) ~kind
+    Explorer_events.publish_transaction t.nats_sink ~kind
       ~target_ledger_hash ~genesis ~diff
 
   let publish_finality_event t ~status ~source_ledger_hash ~target_ledger_hash =
-    Explorer_events.publish_finality (nats_sink t.nats_client) ~logger:t.logger
-      ~status
+    Explorer_events.publish_finality t.nats_sink ~logger:t.logger ~status
       ~source_ledger_hash ~target_ledger_hash
 
   let publish_health_event t =
     let { State_hashes.unproved_ledger_hash; _ } = get_latest_state t in
-    Explorer_events.publish_health (nats_sink t.nats_client) ~logger:t.logger
+    Explorer_events.publish_health t.nats_sink ~logger:t.logger
       ~service:"sequencer-nats-publisher" ~instance_id:t.instance_id
       ~status:"ok" ~last_published_hash:(get_root t)
       ~unproved_hash:unproved_ledger_hash ()
@@ -1204,6 +1191,13 @@ module Sequencer = struct
           let%map client = Nats_client_async.connect (Some uri) in
           Some client
     in
+    let nats_sink =
+      match nats_client with
+      | None ->
+          Explorer_events.noop_sink
+      | Some client ->
+          Explorer_events.create_nats_sink ~logger client
+    in
     let kvdb = L.Db.zeko_kvdb ledger in
     let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in
     let executor =
@@ -1215,7 +1209,7 @@ module Sequencer = struct
       Merger.Context.
         { provers
         ; da_client
-        ; nats_client
+        ; nats_sink
         ; executor
         ; config
         ; sequencer_state = kvdb
@@ -1236,6 +1230,7 @@ module Sequencer = struct
       ; config
       ; da_client
       ; nats_client
+      ; nats_sink
       ; instance_id = Uuid.to_string (Uuid_unix.create ())
       ; bridge_prover = Bridge_prover.create ~provers ~proof_cache_db
       ; merger

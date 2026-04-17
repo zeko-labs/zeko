@@ -55,10 +55,19 @@ let nats_msg_id target_ledger_hash =
 let nats_msg_id_headers target_ledger_hash =
   [ ("Nats-Msg-Id", nats_msg_id target_ledger_hash) ]
 
-let create_nats_sink client : sink =
+let create_nats_sink ?logger client : sink =
  fun { subject; headers; payload } ->
   let headers = Nats_client.Headers.of_list headers in
-  Nats_client_async.publish_json client ~subject ~headers payload
+  match
+    Nats_client_async.publish_result client ~subject ~headers
+      (Yojson.Safe.to_string payload)
+  with
+  | `Queued ->
+      ()
+  | `Dropped ->
+      Option.iter logger ~f:(fun logger ->
+          [%log warn] "Dropped explorer NATS message"
+            ~metadata:[ ("subject", `String subject) ] )
 
 let build_transaction_message ~kind ~target_ledger_hash ~genesis ~diff =
   { subject = Subject.transactions
