@@ -140,6 +140,23 @@ let target_hash_json target_ledger_hash =
 let target_hash_string target_ledger_hash =
   Ledger_hash.to_decimal_string target_ledger_hash
 
+let matching_transaction_payload
+    (message : Nats_client.Protocol.message) ~kind ~target_ledger_hash =
+  if not (String.equal message.subject Explorer_events.Subject.transactions)
+  then None
+  else
+    let payload = message_payload message in
+    match
+      ( json_assoc "kind" payload
+      , json_assoc "target_ledger_hash" payload )
+    with
+    | Some (`String actual_kind), Some target
+      when String.equal actual_kind kind
+           && Yojson.Safe.equal target (target_hash_json target_ledger_hash) ->
+        Some payload
+    | _ ->
+        None
+
 let create_sequencer_spec ~postgres_uri =
   Quickcheck.random_value
     (Sequencer_spec.gen ~logger ~number_of_transactions:1 ~postgres_uri
@@ -215,7 +232,12 @@ let run_scenarios () =
       let target_ledger_hash = apply_first_transaction sequencer_handle specs in
       let live_message =
         run (fun () ->
-            read_message "sequencer publish" live_subscription.messages)
+            read_until "sequencer publish" live_subscription.messages
+              ~f:(fun message ->
+                Option.map
+                  (matching_transaction_payload message ~kind:"user_command"
+                     ~target_ledger_hash )
+                  ~f:(fun _payload -> message)))
       in
       assert_user_command_message live_message ~target_ledger_hash ;
       let backfill_subscription =
@@ -240,15 +262,15 @@ let run_scenarios () =
         run (fun () ->
             read_until "backfill replay" backfill_subscription.messages
               ~f:(fun message ->
-                let payload = message_payload message in
-                match json_assoc "target_ledger_hash" payload with
-                | Some target
-                  when Yojson.Safe.equal target
-                         (target_hash_json target_ledger_hash) ->
+                match
+                  matching_transaction_payload message ~kind:"sync_replay"
+                    ~target_ledger_hash
+                with
+                | Some payload ->
                     require_header message ~name:"Nats-Msg-Id"
                       ~expected:(target_hash_string target_ledger_hash) ;
                     Some payload
-                | _ ->
+                | None ->
                     None))
       in
       assert_safe_json_equal (json_assoc_exn "kind" replay_payload)
