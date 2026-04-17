@@ -171,7 +171,7 @@ let assert_user_command_message
   assert_safe_json_equal (json_assoc_exn "target_ledger_hash" payload)
     (target_hash_json target_ledger_hash)
 
-let wait_for_backfill_completion job =
+let wait_for_backfill_completion (job : Explorer_backfill_service.job) =
   let rec go remaining =
     if remaining <= 0 then failwith "backfill job did not complete" ;
     if Explorer_backfill_service.is_terminal job.status
