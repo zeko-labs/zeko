@@ -67,8 +67,10 @@ fi
 opam exec -- env -u DUNE_RPC dune build \
   src/app/zeko/sequencer/tests/testing_ledger/run.exe \
   src/app/zeko/da_layer/cli.exe \
+  src/app/zeko/sequencer/cli.exe \
   src/app/zeko/sequencer/prover/cli.exe \
   src/app/zeko/sequencer/prover/cli_fake.exe \
+  src/app/zeko/signer/cli.exe \
   "$TEST_DUNE_TARGET"
 
 export ZEKO_SIGNATURE_KIND=testnet

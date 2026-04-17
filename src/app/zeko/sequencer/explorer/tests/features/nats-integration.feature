@@ -13,3 +13,8 @@ Feature: Explorer NATS Integration
     Then a subscriber receives it on "zeko.l2.transactions"
     And the payload kind is "genesis_replay"
     And the payload marks genesis as true
+
+  Scenario: JetStream deduplicates transaction publishes by Nats-Msg-Id
+    Given a running NATS server with JetStream enabled
+    When the same transaction event is published twice with the same "Nats-Msg-Id"
+    Then the JetStream stream stores one transaction message

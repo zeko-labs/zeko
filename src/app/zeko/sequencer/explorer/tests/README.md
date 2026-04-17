@@ -43,7 +43,9 @@ File:
 This is a standalone Async executable because it connects to a real NATS server.
 It checks that the shared explorer publisher paths produce messages that a real
 subscriber receives with the expected subject, payload, and `Nats-Msg-Id`
-header.
+header. It also checks the Zeko JetStream stream contract by publishing the
+same transaction message twice with the same `Nats-Msg-Id` and asserting the
+stream stores one message.
 
 Run it separately with:
 
@@ -62,7 +64,7 @@ NATS_URL="nats://127.0.0.1:4222" \
 ```
 
 The `Explorer Gherkin` CI workflow uses this full-suite command and provides
-NATS through a GitHub Actions service container.
+NATS through a GitHub Actions service container with JetStream enabled.
 
 ## Adding Coverage
 
@@ -71,7 +73,7 @@ implementation steps. Add one scenario per behavior.
 
 Use in-process scenarios for deterministic behavior that does not need external
 infrastructure. Use broker-backed scenarios when the behavior depends on NATS
-delivery, subjects, or headers.
+delivery, subjects, headers, or JetStream storage semantics.
 
 ## Process-level E2E Scenarios
 
