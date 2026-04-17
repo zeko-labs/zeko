@@ -40,6 +40,24 @@ module Make (Schema : Graphql_intf.Schema) = struct
     }
 
   module Arg = struct
+    let rec const_value_of_json : Yojson.Basic.t -> Graphql_parser.const_value =
+      function
+      | `Null ->
+          `Null
+      | `Int i ->
+          `Int i
+      | `Float f ->
+          `Float f
+      | `String s ->
+          `String s
+      | `Bool b ->
+          `Bool b
+      | `List xs ->
+          `List (List.map const_value_of_json xs)
+      | `Assoc fields ->
+          `Assoc
+            (List.map (fun (name, value) -> (name, const_value_of_json value)) fields)
+
     (** wrapper around the [Arg.arg_typ] type *)
     type ('obj_arg, 'a) arg_typ =
       { arg_typ : 'obj_arg Schema.Arg.arg_typ; to_json : 'a -> Yojson.Basic.t }
@@ -124,7 +142,8 @@ module Make (Schema : Graphql_intf.Schema) = struct
           Schema.Arg.(graphql_arg :: to_ocaml_graphql_server_args t)
       | DefaultArg { name; doc; typ; default } :: t ->
           let graphql_arg =
-            Schema.Arg.arg' ?doc name ~typ:typ.arg_typ ~default
+            Schema.Arg.arg' ?doc name ~typ:typ.arg_typ
+              ~default:(const_value_of_json (typ.to_json default))
           in
           Schema.Arg.(graphql_arg :: to_ocaml_graphql_server_args t)
 
@@ -287,7 +306,8 @@ module Make (Schema : Graphql_intf.Schema) = struct
 
   (** The [Propagated] module contains the parts of the Schema we do not modify *)
   module Propagated = struct
-    let obj = Schema.obj
+    let obj ?doc name ~fields =
+      Schema.fix (fun r -> r.obj ?doc name ~fields)
 
     let schema = Schema.schema
 
