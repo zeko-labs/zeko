@@ -3080,7 +3080,7 @@ module Input = struct
   module RosettaTransaction = struct
     type input = Yojson.Basic.t
 
-    let to_json (command : Signed_command.t) =
+    let to_default_json (command : Signed_command.t) =
       let public_key pk = `Pk (Public_key.Compressed.to_base58_check pk) in
       let token_id token = `Token_id (Token_id.to_string token) in
       let valid_until =
@@ -3129,12 +3129,13 @@ module Input = struct
       |> Or_error.ok_exn |> Yojson.Safe.to_basic
 
     let arg_typ =
-      Schema.Arg.scalar "RosettaTransaction"
+      Schema.Arg.scalar_with_default_to_json "RosettaTransaction"
         ~doc:"A transaction encoded in the Rosetta format"
         ~coerce:(fun graphql_json ->
           Rosetta_lib.Transaction.to_mina_signed (Utils.to_yojson graphql_json)
           |> Result.map_error ~f:Error.to_string_hum )
-        ~to_json
+        ~to_json:(Fn.id : input -> input)
+        ~to_default_json
   end
 
   module AddAccountInput = struct

@@ -157,12 +157,17 @@ module Make (Schema : Graphql_intf.Schema) = struct
       ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
       }
 
-    let scalar ?doc name ~coerce ~to_json =
+    let scalar_with_default_to_json ?doc name ~coerce ~to_json ~to_default_json =
       let to_json = Json.json_of_option to_json in
+      let to_default_json = Json.json_of_option to_default_json in
       { arg_typ = Schema.Arg.scalar ?doc name ~coerce
       ; to_json
-      ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
+      ; to_graphql_const = (fun x -> const_value_of_json (to_default_json x))
       }
+
+    let scalar ?doc name ~coerce ~to_json =
+      scalar_with_default_to_json ?doc name ~coerce ~to_json
+        ~to_default_json:to_json
 
     let string =
       let to_json = Json.json_of_option (function s -> `String s) in

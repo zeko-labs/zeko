@@ -2077,6 +2077,7 @@ module Types = struct
 
       let t : ('context, t option) typ =
         obj "ActionOutput" ~fields:
+          (
             let open Archive.Account_update_actions in
             [ field "blockInfo" ~typ:BlockInfo.t
                 ~args:Arg.[]
@@ -2094,7 +2095,7 @@ module Types = struct
                 ~resolve:(fun _ v ->
                   List.map v.actions ~f:(fun x ->
                       (x, v.account_update_id, v.transaction_info) ) )
-            ]
+            ] )
     end
 
     module EventOutput = struct
@@ -2102,6 +2103,7 @@ module Types = struct
 
       let t : ('context, t option) typ =
         obj "EventOutput" ~fields:
+          (
             let open Archive.Account_update_events in
             [ field "blockInfo" ~typ:BlockInfo.t
                 ~args:Arg.[]
@@ -2111,7 +2113,7 @@ module Types = struct
                 ~args:Arg.[]
                 ~resolve:(fun _ v ->
                   List.map v.events ~f:(fun x -> (x, v.transaction_info)) )
-            ]
+            ] )
     end
   end
 end
