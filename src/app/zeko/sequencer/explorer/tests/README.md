@@ -9,14 +9,14 @@ and, where needed, a real NATS server.
 
 There are two harnesses for now.
 
-### Pure Gherkin harness
+### Contract Gherkin harness
 
 File:
 
 - `explorer_gherkin_tests.ml`
 
-This is an inline-test library. It checks behavior that does not require an
-external process:
+This is an inline-test library. It checks explorer contracts that do not
+require an external process:
 
 - explorer event payload and header contracts
 - backfill GraphQL schema behavior
@@ -29,10 +29,10 @@ Run it directly with:
 opam exec -- env -u DUNE_RPC dune runtest --profile=devnet src/app/zeko/sequencer/explorer/tests
 ```
 
-This command also runs the NATS harness if `NATS_URL` is present, because the
-tests directory wires both harnesses into the Dune `runtest` alias.
+This command also runs the NATS integration harness when the tests directory
+wires both harnesses into the Dune `runtest` alias.
 
-### NATS Gherkin harness
+### NATS Integration Gherkin harness
 
 File:
 
@@ -67,13 +67,13 @@ NATS through a GitHub Actions service container.
 Keep scenarios declarative: describe the explorer behavior, not the OCaml
 implementation steps. Add one scenario per behavior.
 
-Use the pure harness for deterministic module-level behavior that does not need
-external infrastructure. Use the NATS harness when the behavior depends on NATS
-delivery, subjects, or headers.
+Use the contract harness for deterministic module-level behavior that does not
+need external infrastructure. Use the NATS integration harness when the behavior
+depends on NATS delivery, subjects, or headers.
 
 Process-level end-to-end coverage should be added as a third, slower Gherkin
-harness rather than folded into the fast pure harness. That harness should boot
-real services and assert behavior from the outside:
+harness rather than folded into the fast contract harness. That harness should
+boot real services and assert behavior from the outside:
 
 - start the sequencer with `--nats-url`, submit a transaction through the
   sequencer API, and assert a NATS subscriber receives `zeko.l2.transactions`
