@@ -58,7 +58,7 @@ module Types = struct
       let consensus_configuration :
           ('context, Consensus.Configuration.t option) typ =
         let open Consensus.Configuration in
-        obj "ConsensusConfiguration" ~fields:(fun _ ->
+        obj "ConsensusConfiguration" ~fields:
             [ field "epochDuration" ~typ:(non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.epoch_duration)
@@ -71,9 +71,9 @@ module Types = struct
             ; field "slotDuration" ~typ:(non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.slot_duration)
-            ] )
+            ]
       in
-      obj "DaemonStatus" ~fields:(fun _ ->
+      obj "DaemonStatus" ~fields:
           [ field "chainId" ~typ:(non_null string)
               ~args:Arg.[]
               ~resolve:(fun _ v -> v.chain_id)
@@ -81,13 +81,13 @@ module Types = struct
               ~typ:(non_null consensus_configuration)
               ~args:Arg.[]
               ~resolve:(fun _ v -> v.consensus_configuration)
-          ] )
+          ]
   end
 
   let merkle_path_element :
       (_, [ `Left of Zkapp_basic.F.t | `Right of Zkapp_basic.F.t ] option) typ =
     let field_elem = Mina_base_graphql.Graphql_scalars.FieldElem.typ () in
-    obj "MerklePathElement" ~fields:(fun _ ->
+    obj "MerklePathElement" ~fields:
         [ field "left" ~typ:field_elem
             ~args:Arg.[]
             ~resolve:(fun _ x ->
@@ -96,10 +96,10 @@ module Types = struct
             ~args:Arg.[]
             ~resolve:(fun _ x ->
               match x with `Left _ -> None | `Right h -> Some h )
-        ] )
+        ]
 
   let account_timing : (Zeko_sequencer.t, Account_timing.t option) typ =
-    obj "AccountTiming" ~fields:(fun _ ->
+    obj "AccountTiming" ~fields:
         [ field "initialMinimumBalance" ~typ:balance
             ~doc:"The initial minimum balance for a time-locked account"
             ~args:Arg.[]
@@ -145,10 +145,10 @@ module Types = struct
                   None
               | Timed timing_info ->
                   Some timing_info.vesting_increment )
-        ] )
+        ]
 
   let genesis_constants =
-    obj "GenesisConstants" ~fields:(fun _ ->
+    obj "GenesisConstants" ~fields:
         [ field "accountCreationFee" ~typ:(non_null fee)
             ~doc:"The fee charged to create a new account"
             ~args:Arg.[]
@@ -162,7 +162,7 @@ module Types = struct
             ~args:Arg.[]
             ~resolve:(fun _ () ->
               Time.now () |> Time.to_string_iso8601_basic ~zone:Time.Zone.utc )
-        ] )
+        ]
 
   module AccountObj = struct
     module AnnotatedBalance = struct
@@ -200,7 +200,7 @@ module Types = struct
           ~doc:
             "A total balance annotated with the amount that is currently \
              unknown with the invariant unknown <= total, as well as the \
-             currently liquid and locked balances." ~fields:(fun _ ->
+             currently liquid and locked balances." ~fields:
             [ field "total" ~typ:(non_null balance)
                 ~doc:"The amount of MINA owned by the account"
                 ~args:Arg.[]
@@ -258,7 +258,7 @@ module Types = struct
                 ~resolve:(fun _ (b : t) ->
                   Option.map b.breadcrumb ~f:(fun crumb ->
                       Transition_frontier.Breadcrumb.state_hash crumb ) )
-            ] )
+            ]
     end
 
     module Partial_account = struct
@@ -398,7 +398,7 @@ module Types = struct
           ]
 
     let set_verification_key_perm =
-      obj "VerificationKeyPermission" ~fields:(fun _ ->
+      obj "VerificationKeyPermission" ~fields:
           [ field "auth" ~typ:(non_null auth_required)
               ~doc:
                 "Authorization required to set the verification key of the \
@@ -409,10 +409,10 @@ module Types = struct
               ~args:Arg.[]
               ~resolve:(fun _ (_, version) ->
                 Mina_numbers.Txn_version.to_string version )
-          ] )
+          ]
 
     let account_permissions =
-      obj "AccountPermissions" ~fields:(fun _ ->
+      obj "AccountPermissions" ~fields:
           [ field "editState" ~typ:(non_null auth_required)
               ~doc:"Authorization required to edit zkApp state"
               ~args:Arg.[]
@@ -482,11 +482,11 @@ module Types = struct
               ~args:Arg.[]
               ~resolve:(fun _ permission ->
                 permission.Permissions.Poly.set_timing )
-          ] )
+          ]
 
     let account_vk =
       obj "AccountVerificationKeyWithHash" ~doc:"Verification key with hash"
-        ~fields:(fun _ ->
+        ~fields:
           [ field "verificationKey" ~doc:"verification key in Base64 format"
               ~typ:
                 ( non_null
@@ -499,12 +499,12 @@ module Types = struct
                 @@ Pickles_graphql.Graphql_scalars.VerificationKeyHash.typ () )
               ~args:Arg.[]
               ~resolve:(fun _ (vk : _ With_hash.t) -> vk.hash)
-          ] )
+          ]
 
     let rec account =
       lazy
         (obj "Account" ~doc:"An account record according to the daemon"
-           ~fields:(fun _ ->
+           ~fields:
              [ field "publicKey" ~typ:(non_null public_key)
                  ~doc:"The public identity of the account"
                  ~args:Arg.[]
@@ -692,7 +692,7 @@ module Types = struct
                  ~typ:(list (non_null merkle_path_element))
                  ~args:Arg.[]
                  ~resolve:(fun _ _ -> None)
-             ] ) )
+             ]  )
 
     let account = Lazy.force account
   end
@@ -705,7 +705,7 @@ module Types = struct
     [@@warning "-37"]
 
     let failure_reasons =
-      obj "ZkappCommandFailureReason" ~fields:(fun _ ->
+      obj "ZkappCommandFailureReason" ~fields:
           [ field "index" ~typ:(Graphql_basic_scalars.Index.typ ())
               ~args:[] ~doc:"List index of the account update that failed"
               ~resolve:(fun _ (index, _) -> Some index)
@@ -719,7 +719,7 @@ module Types = struct
                 "Failure reason for the account update or any nested zkapp \
                  command"
               ~resolve:(fun _ (_, failures) -> failures)
-          ] )
+          ]
   end
 
   module User_command = struct
@@ -745,7 +745,7 @@ module Types = struct
           option )
         typ =
       interface "UserCommand" ~doc:"Common interface for user commands"
-        ~fields:(fun _ ->
+        ~fields:
           [ abstract_field "id" ~typ:(non_null transaction_id) ~args:[]
           ; abstract_field "hash" ~typ:(non_null transaction_hash) ~args:[]
           ; abstract_field "kind" ~typ:(non_null kind) ~args:[]
@@ -805,7 +805,7 @@ module Types = struct
                 (Mina_base_graphql.Graphql_scalars.TransactionStatusFailure.typ
                    () )
               ~args:[] ~doc:"null is no failure, reason for failure otherwise."
-          ] )
+          ]
 
     module With_status = struct
       type 'a t = { data : 'a; status : Command_status.t }
@@ -944,7 +944,7 @@ module Types = struct
       ]
 
     let payment =
-      obj "UserCommandPayment" ~fields:(fun _ -> user_command_shared_fields)
+      obj "UserCommandPayment" ~fields:user_command_shared_fields
 
     let mk_payment = add_type user_command_interface payment
 
@@ -971,7 +971,7 @@ module Types = struct
           (Zeko_sequencer.t, Zkapp_command.Stable.Latest.t) typ =
         Obj.magic x
       in
-      obj "ZkappCommandResult" ~fields:(fun _ ->
+      obj "ZkappCommandResult" ~fields:
           [ field_no_status "id"
               ~doc:"A Base64 string representing the zkApp command"
               ~typ:(non_null transaction_id) ~args:[]
@@ -999,13 +999,13 @@ module Types = struct
                       (List.map
                          (Transaction_status.Failure.Collection.to_display
                             failures ) ~f:(fun f -> Some f) ) )
-          ] )
+          ]
   end
 
   module State_hashes = struct
     let t : (Zeko_sequencer.t, Zeko_sequencer.State_hashes.t option) typ =
       let open Snark_params.Tick in
-      obj "StateHashes" ~fields:(fun _ ->
+      obj "StateHashes" ~fields:
           [ field "provedLedgerHash" ~typ:(non_null string)
               ~doc:"Ledger hash of latest proved state"
               ~args:Arg.[]
@@ -1024,7 +1024,7 @@ module Types = struct
               ~resolve:(fun _ t ->
                 Field.to_string
                   Zeko_sequencer.State_hashes.(t.committed_ledger_hash) )
-          ] )
+          ]
   end
 
   module Circuits_config = struct
@@ -1050,7 +1050,7 @@ module Types = struct
           s
 
     let t : (Zeko_sequencer.t, t option) typ =
-      obj "ZekoCircuitsConfig" ~fields:(fun _ ->
+      obj "ZekoCircuitsConfig" ~fields:
           [ field "zekoL1" ~typ:(non_null public_key)
               ~args:Arg.[]
               ~resolve:(fun _ t -> t.zeko_l1)
@@ -1082,34 +1082,34 @@ module Types = struct
           ; field "outerActionDelay" ~typ:(non_null int)
               ~args:Arg.[]
               ~resolve:(fun _ t -> t.outer_action_delay)
-          ] )
+          ]
   end
 
   module Payload = struct
     let send_payment =
-      obj "SendPaymentPayload" ~fields:(fun _ ->
+      obj "SendPaymentPayload" ~fields:
           [ field "payment"
               ~typ:(non_null User_command.user_command)
               ~doc:"Payment that was sent"
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
-          ] )
+          ]
 
     let send_zkapp =
-      obj "SendZkappPayload" ~fields:(fun _ ->
+      obj "SendZkappPayload" ~fields:
           [ field "zkapp"
               ~typ:(non_null Zkapp_command.zkapp_command)
               ~doc:"zkApp transaction that was sent"
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
-          ] )
+          ]
 
     let proof_key =
-      obj "ProofKeyPayload" ~fields:(fun _ ->
+      obj "ProofKeyPayload" ~fields:
           [ field "key" ~typ:(non_null string) ~doc:"Key for querying the proof"
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
-          ] )
+          ]
   end
 
   module Input = struct
@@ -1929,7 +1929,7 @@ module Types = struct
 
       let t : ('context, t option) typ =
         let open Archive.Block_info in
-        obj "BlockInfo" ~fields:(fun _ ->
+        obj "BlockInfo" ~fields:
             [ field "height" ~typ:(non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.height)
@@ -1957,7 +1957,7 @@ module Types = struct
             ; field "distanceFromMaxBlockHeight" ~typ:(non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.distance_from_max_block_height)
-            ] )
+            ]
     end
 
     module TransactionInfo = struct
@@ -1965,7 +1965,7 @@ module Types = struct
 
       let t : ('context, t option) typ =
         let open Archive.Transaction_info in
-        obj "TransactionInfo" ~fields:(fun _ ->
+        obj "TransactionInfo" ~fields:
             [ field "status" ~typ:(non_null string)
                 ~args:Arg.[]
                 ~resolve:(fun _ v ->
@@ -1991,7 +1991,7 @@ module Types = struct
                 ~typ:(non_null @@ list @@ non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.zkapp_account_update_ids)
-            ] )
+            ]
     end
 
     module StupidActionState = struct
@@ -1999,7 +1999,7 @@ module Types = struct
 
       (* Who thought it would be better to not use array like normal node, but rather enumerate fields by word *)
       let t : ('context, t option) typ =
-        obj "ActionStates" ~fields:(fun _ ->
+        obj "ActionStates" ~fields:
             [ field "actionStateOne" ~typ:string
                 ~args:Arg.[]
                 ~resolve:(fun _ action_state ->
@@ -2030,14 +2030,14 @@ module Types = struct
                   Option.map
                     (Pickles_types.Vector.nth action_state 4)
                     ~f:Snark_params.Tick.Field.to_string )
-            ] )
+            ]
     end
 
     module ActionData = struct
       type t = Archive.Action.t * int * Archive.Transaction_info.t option
 
       let t : ('context, t option) typ =
-        obj "ActionData" ~fields:(fun _ ->
+        obj "ActionData" ~fields:
             [ field "accountUpdateId" ~typ:(non_null string)
                 ~args:Arg.[]
                 ~resolve:(fun _ (_, account_update_id, _) ->
@@ -2051,14 +2051,14 @@ module Types = struct
             ; field "transactionInfo" ~typ:TransactionInfo.t
                 ~args:Arg.[]
                 ~resolve:(fun _ (_, _, transaction_info) -> transaction_info)
-            ] )
+            ]
     end
 
     module EventData = struct
       type t = Archive.Event.t * Archive.Transaction_info.t option
 
       let t : ('context, t option) typ =
-        obj "EventData" ~fields:(fun _ ->
+        obj "EventData" ~fields:
             [ field "data"
                 ~typ:(non_null @@ list @@ non_null string)
                 ~args:Arg.[]
@@ -2068,14 +2068,14 @@ module Types = struct
             ; field "transactionInfo" ~typ:TransactionInfo.t
                 ~args:Arg.[]
                 ~resolve:(fun _ (_, transaction_info) -> transaction_info)
-            ] )
+            ]
     end
 
     module ActionOutput = struct
       type t = Archive.Account_update_actions.t
 
       let t : ('context, t option) typ =
-        obj "ActionOutput" ~fields:(fun _ ->
+        obj "ActionOutput" ~fields:
             let open Archive.Account_update_actions in
             [ field "blockInfo" ~typ:BlockInfo.t
                 ~args:Arg.[]
@@ -2093,14 +2093,14 @@ module Types = struct
                 ~resolve:(fun _ v ->
                   List.map v.actions ~f:(fun x ->
                       (x, v.account_update_id, v.transaction_info) ) )
-            ] )
+            ]
     end
 
     module EventOutput = struct
       type t = Archive.Account_update_events.t
 
       let t : ('context, t option) typ =
-        obj "EventOutput" ~fields:(fun _ ->
+        obj "EventOutput" ~fields:
             let open Archive.Account_update_events in
             [ field "blockInfo" ~typ:BlockInfo.t
                 ~args:Arg.[]
@@ -2110,7 +2110,7 @@ module Types = struct
                 ~args:Arg.[]
                 ~resolve:(fun _ v ->
                   List.map v.events ~f:(fun x -> (x, v.transaction_info)) )
-            ] )
+            ]
     end
   end
 end

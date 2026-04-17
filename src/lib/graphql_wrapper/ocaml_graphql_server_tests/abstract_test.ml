@@ -11,25 +11,25 @@ let fido : dog = { name = "Fido"; puppies = 2 }
 
 let cat =
   Schema.(
-    obj "Cat" ~fields:(fun _ ->
+    obj "Cat" ~fields:
         [ field "name" ~typ:(non_null string)
             ~args:Arg.[]
             ~resolve:(fun _ (cat : cat) -> cat.name)
         ; field "kittens" ~typ:(non_null int)
             ~args:Arg.[]
             ~resolve:(fun _ (cat : cat) -> cat.kittens)
-        ] ))
+        ] )
 
 let dog =
   Schema.(
-    obj "Dog" ~fields:(fun _ ->
+    obj "Dog" ~fields:
         [ field "name" ~typ:(non_null string)
             ~args:Arg.[]
             ~resolve:(fun _ (dog : dog) -> dog.name)
         ; field "puppies" ~typ:(non_null int)
             ~args:Arg.[]
             ~resolve:(fun _ (dog : dog) -> dog.puppies)
-        ] ))
+        ] )
 
 let pet : (unit, [ `pet ]) Schema.abstract_typ = Schema.union "Pet"
 
@@ -39,8 +39,8 @@ let dog_as_pet = Schema.add_type pet dog
 
 let named : (unit, [ `named ]) Schema.abstract_typ =
   Schema.(
-    interface "Named" ~fields:(fun _ ->
-        [ abstract_field "name" ~typ:(non_null string) ~args:Arg.[] ] ))
+    interface "Named" ~fields:
+        [ abstract_field "name" ~typ:(non_null string) ~args:Arg.[] ] )
 
 let cat_as_named = Schema.add_type named cat
 
