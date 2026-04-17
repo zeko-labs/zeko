@@ -100,12 +100,12 @@ let read_until label reader ~f =
   in
   go 20
 
-let headers message =
+let headers (message : Nats_client.Protocol.message) =
   message.headers
   |> Option.value ~default:Nats_client.Headers.empty
   |> Nats_client.Headers.to_list
 
-let require_header message ~name ~expected =
+let require_header (message : Nats_client.Protocol.message) ~name ~expected =
   match List.Assoc.find (headers message) ~equal:String.equal name with
   | Some value when String.equal value expected ->
       ()
@@ -125,7 +125,8 @@ let json_assoc_exn key json =
   Option.value_exn (json_assoc key json)
     ~message:(sprintf "missing JSON field %s" key)
 
-let message_payload message = Yojson.Safe.from_string message.payload
+let message_payload (message : Nats_client.Protocol.message) =
+  Yojson.Safe.from_string message.payload
 
 let assert_safe_json_equal actual expected =
   if not (Yojson.Safe.equal actual expected)
@@ -155,7 +156,8 @@ let apply_first_transaction sequencer specs =
       Sequencer.apply_user_command !sequencer command >>| Or_error.ok_exn) ;
   Sequencer.get_root !sequencer
 
-let assert_user_command_message message ~target_ledger_hash =
+let assert_user_command_message
+    (message : Nats_client.Protocol.message) ~target_ledger_hash =
   if
     not
       (String.equal message.subject Explorer_events.Subject.transactions)
