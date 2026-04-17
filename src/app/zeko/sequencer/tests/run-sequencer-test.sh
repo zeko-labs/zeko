@@ -2,16 +2,17 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <fake|real> <num_provers>" >&2
+  echo "Usage: $0 <fake|real> <num_provers> [explorer-e2e]" >&2
   exit 1
 }
 
-if [ "$#" -ne 2 ]; then
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
   usage
 fi
 
 MODE="$1"
 NUM_PROVERS="$2"
+TEST_TARGET="${3:-sequencer}"
 PROVER_PIDS=()
 SIGNER_PIDS=()
 PROVERS=()
@@ -28,6 +29,14 @@ if ! [[ "$NUM_PROVERS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Error: second argument must be a positive integer" >&2
   usage
 fi
+
+case "$TEST_TARGET" in
+sequencer | explorer-e2e) ;;
+*)
+  echo "Error: optional third argument must be 'explorer-e2e'" >&2
+  usage
+  ;;
+esac
 
 cleanup() {
   local exit_status=$1
@@ -46,13 +55,21 @@ SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
+if [ "$TEST_TARGET" = "explorer-e2e" ]; then
+  TEST_DUNE_TARGET="src/app/zeko/sequencer/explorer/tests/explorer_e2e_gherkin_tests.exe"
+else
+  TEST_DUNE_TARGET="src/app/zeko/sequencer/tests/sequencer_test.exe"
+  if [ "$MODE" = "fake" ]; then
+    TEST_DUNE_TARGET="src/app/zeko/sequencer/tests/sequencer_test_fake.exe"
+  fi
+fi
+
 opam exec -- env -u DUNE_RPC dune build \
   src/app/zeko/sequencer/tests/testing_ledger/run.exe \
   src/app/zeko/da_layer/cli.exe \
   src/app/zeko/sequencer/prover/cli.exe \
   src/app/zeko/sequencer/prover/cli_fake.exe \
-  src/app/zeko/sequencer/tests/sequencer_test.exe \
-  src/app/zeko/sequencer/tests/sequencer_test_fake.exe
+  "$TEST_DUNE_TARGET"
 
 export ZEKO_SIGNATURE_KIND=testnet
 export ZEKO_CIRCUITS_CONFIG=test
@@ -168,7 +185,9 @@ wait_for_port 8557 $da3_pid
 
 echo "All services started successfully"
 
-if [ "$MODE" = "fake" ]; then
+if [ "$TEST_TARGET" = "explorer-e2e" ]; then
+  ZEKO_CIRCUITS_MODE=$MODE "$SEQUENCER_BUILD_ROOT/explorer/tests/explorer_e2e_gherkin_tests.exe"
+elif [ "$MODE" = "fake" ]; then
   ZEKO_CIRCUITS_MODE=$MODE  $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
 else
   ZEKO_CIRCUITS_MODE=$MODE $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"

@@ -369,7 +369,7 @@ module Sequencer_spec = struct
     ; l1_config : Utils.Slot.l1_config
     }
 
-  let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir
+  let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir ?nats_url
       ?checkpoints_dir ?(commit_validity_period = Global_slot_span.of_int 10)
       ~logger ~postgres_uri ~gql_uri ~da_config ~da_keys ~da_quorum ~mq_host
       ~slot_acceptance () =
@@ -522,7 +522,7 @@ module Sequencer_spec = struct
 
     let sequencer =
         run (fun () ->
-          Sequencer.create ?nats_url:None ~logger ~max_pool_size:10
+          Sequencer.create ?nats_url ~logger ~max_pool_size:10
             ~commitment_period_sec:0.
             ~da_config ~da_keys ~da_quorum ~db_dir ~postgres_uri ~l1_uri:gql_uri
             ~archive_uri:gql_uri
