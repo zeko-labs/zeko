@@ -62,25 +62,14 @@ jobs:
             getent hosts github.com || true
             sleep 5
           done
-          git -C ./opam-repository fetch origin 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
-          git -C ./opam-repository checkout 08d8c16c16dc6b23a5278b06dff0ac6c7a217356
-          for i in 1 2 3 4 5; do
-            rm -rf ./opam-repository-published
-            git clone https://github.com/ocaml/opam-repository.git --depth 1 ./opam-repository-published && break
-            echo "clone failed, retry $i"
-            getent hosts github.com || true
-            sleep 5
-          done
-          git -C ./opam-repository-published fetch origin ba1ca7509cb2617776f017673de0f2a48be67105
-          git -C ./opam-repository-published checkout ba1ca7509cb2617776f017673de0f2a48be67105
+          git -C ./opam-repository fetch origin ba1ca7509cb2617776f017673de0f2a48be67105
+          git -C ./opam-repository checkout ba1ca7509cb2617776f017673de0f2a48be67105
           opam init --disable-sandboxing -k git -a ./opam-repository --bare
-          opam repository add --yes --all --kind=local published ./opam-repository-published
           for i in 1 2 3 4 5; do
             opam repository add --yes --all --set-default o1-labs https://github.com/o1-labs/opam-repository.git && break
             echo "opam repo add failed, retry $i"
             sleep 5
           done
-          opam update default published o1-labs
           opam switch create "4.14.0"
           opam switch "4.14.0"
           export OPAMERRLOGLEN=20

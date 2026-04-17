@@ -3,8 +3,8 @@
 # Reuses a shared opam switch cache keyed by the exported toolchain. Each
 # checkout keeps a local `_opam` symlink pointing at the shared cache entry so
 # identical dependency snapshots can be reused across worktrees. The opam
-# package universe is pinned to the same ocaml/opam-repository commits used in
-# CI so local resolution matches CI.
+# package universe is pinned to the same ocaml/opam-repository commit used in CI
+# so local resolution matches CI.
 
 set -eo pipefail
 
@@ -99,15 +99,12 @@ configure_homebrew_env() {
 # Don't do anything if we're in a nix shell
 [[ "$IN_NIX_SHELL$CI$BUILDKITE" == "" ]] || exit 0
 
-opam_repo_commit="08d8c16c16dc6b23a5278b06dff0ac6c7a217356"
-published_opam_repo_commit="ba1ca7509cb2617776f017673de0f2a48be67105"
+opam_repo_commit="ba1ca7509cb2617776f017673de0f2a48be67105"
 repo_cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/zeko"
 opam_repo_dir="${repo_cache_root}/opam-repository/${opam_repo_commit}"
-published_opam_repo_dir="${repo_cache_root}/opam-repository/${published_opam_repo_commit}"
 
 sum="$({
     printf '%s\n' "${opam_repo_commit}"
-    printf '%s\n' "${published_opam_repo_commit}"
     cat opam.export
 } | cksum | awk '{print $1}')"
 cache_root="${repo_cache_root}/opam-switches"
@@ -138,16 +135,6 @@ if [[ ! -d "${switch_dir}" ]]; then
     git -C "${opam_repo_dir}" fetch origin "${opam_repo_commit}" --depth 1
     git -C "${opam_repo_dir}" checkout --detach "${opam_repo_commit}"
 
-    mkdir -p "$(dirname "${published_opam_repo_dir}")"
-    if [[ ! -d "${published_opam_repo_dir}/.git" ]]; then
-        git clone https://github.com/ocaml/opam-repository.git --depth 1 \
-            "${published_opam_repo_dir}"
-    fi
-    git -C "${published_opam_repo_dir}" fetch origin \
-        "${published_opam_repo_commit}" --depth 1
-    git -C "${published_opam_repo_dir}" checkout --detach \
-        "${published_opam_repo_commit}"
-
     if opam repository list --all --short | grep -qx default; then
         opam repository set-url --kind=local default "${opam_repo_dir}"
         opam repository add --yes --all --set-default default
@@ -156,20 +143,11 @@ if [[ ! -d "${switch_dir}" ]]; then
             "${opam_repo_dir}"
     fi
 
-    if opam repository list --all --short | grep -qx published; then
-        opam repository set-url --kind=local published \
-            "${published_opam_repo_dir}"
-        opam repository add --yes --all published
-    else
-        opam repository add --yes --all --kind=local published \
-            "${published_opam_repo_dir}"
-    fi
-
     # We add o1-labs opam repository and make it default selection
     # (if it's repeated, it's a no-op).
     opam repository add --yes --all --set-default o1-labs \
          https://github.com/o1-labs/opam-repository.git
-    opam update default published o1-labs
+    opam update default o1-labs
     opam switch import -y --assume-depexts --switch . opam.export
     mkdir -p "${cache_root}"
     mv _opam "${switch_dir}"
