@@ -304,15 +304,38 @@ module Sequencer = struct
       }
 
   let publish_transaction_event t ~kind ~target_ledger_hash ~genesis ~diff =
+    let logger = t.logger in
+    [%log debug]
+      "Publishing explorer transaction event: subject=%s kind=%s \
+       target_ledger_hash=%s genesis=%b"
+      Explorer_events.Subject.transactions
+      (Explorer_events.Transaction_kind.to_string kind)
+      (Ledger_hash.to_decimal_string target_ledger_hash)
+      genesis ;
     Explorer_events.publish_transaction t.nats_sink ~kind
       ~target_ledger_hash ~genesis ~diff
 
   let publish_finality_event t ~status ~source_ledger_hash ~target_ledger_hash =
+    let logger = t.logger in
+    [%log debug]
+      "Publishing explorer finality event: subject=%s status=%s \
+       source_ledger_hash=%s target_ledger_hash=%s"
+      Explorer_events.Subject.finality
+      (Explorer_events.Finality_status.to_string status)
+      (Ledger_hash.to_decimal_string source_ledger_hash)
+      (Ledger_hash.to_decimal_string target_ledger_hash) ;
     Explorer_events.publish_finality t.nats_sink ~logger:t.logger ~status
       ~source_ledger_hash ~target_ledger_hash
 
   let publish_health_event t =
+    let logger = t.logger in
     let { State_hashes.unproved_ledger_hash; _ } = get_latest_state t in
+    [%log debug]
+      "Publishing explorer health event: subject=%s service=%s \
+       last_published_hash=%s unproved_hash=%s"
+      Explorer_events.Subject.health "sequencer-nats-publisher"
+      (Ledger_hash.to_decimal_string (get_root t))
+      (Ledger_hash.to_decimal_string unproved_ledger_hash) ;
     Explorer_events.publish_health t.nats_sink ~logger:t.logger
       ~service:"sequencer-nats-publisher" ~instance_id:t.instance_id
       ~status:"ok" ~last_published_hash:(get_root t)

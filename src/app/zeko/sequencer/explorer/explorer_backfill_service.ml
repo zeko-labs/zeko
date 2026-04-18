@@ -179,6 +179,8 @@ let source_query from_hash =
 
 let create ~logger ~da_config ~nats_url =
   let%map nats_client = Nats_client_async.connect (Some nats_url) in
+  [%log debug] "Explorer backfill service connected to NATS: url=%s"
+    (Uri.to_string nats_url) ;
   { logger
   ; da_config
   ; nats_client = Some nats_client
@@ -192,6 +194,9 @@ let shutdown t =
   | None ->
       Deferred.unit
   | Some client ->
+      let logger = t.logger in
+      [%log debug] "Shutting down explorer backfill NATS client: instance_id=%s"
+        t.instance_id ;
       Nats_client_async.close client
 
 let find_job t id = Hashtbl.find t.jobs id
@@ -244,17 +249,36 @@ let publish_message_result client ({ subject; headers; payload } :
     (Yojson.Safe.to_string payload)
 
 let publish_backfill_diff t ~from_hash ~index ~target_ledger_hash diff =
+  let logger = t.logger in
   let genesis = is_genesis_hash from_hash && Int.equal index 0 in
+  let kind = backfill_kind ~from_hash ~index in
+  [%log debug]
+    "Publishing explorer backfill transaction event: subject=%s kind=%s \
+     from_hash=%s target_ledger_hash=%s index=%d genesis=%b"
+    Explorer_events.Subject.transactions
+    (Explorer_events.Transaction_kind.to_string kind)
+    (Ledger_hash.to_decimal_string from_hash)
+    (Ledger_hash.to_decimal_string target_ledger_hash)
+    index genesis ;
   let message =
     Explorer_events.build_transaction_message
-      ~kind:(backfill_kind ~from_hash ~index)
-      ~target_ledger_hash ~genesis ~diff
+      ~kind ~target_ledger_hash ~genesis ~diff
   in
   match t.nats_client with
   | None ->
+      [%log debug]
+        "Dropped explorer backfill transaction event: no NATS client \
+         target_ledger_hash=%s"
+        (Ledger_hash.to_decimal_string target_ledger_hash) ;
       `Dropped
   | Some client ->
-      publish_message_result client message
+      let result = publish_message_result client message in
+      [%log debug]
+        "Explorer backfill transaction event publish result: \
+         target_ledger_hash=%s result=%s"
+        (Ledger_hash.to_decimal_string target_ledger_hash)
+        (Format.asprintf "%a" Nats_client_async.pp_publish_result result) ;
+      result
 
 let source_hash = function
   | `Genesis ->
@@ -286,6 +310,14 @@ let backfill_intervals t ~source_ledger_hash ~target_ledger_hash =
   get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
 
 let publish_target t job ~current_source ~index ~target_ledger_hash =
+  let logger = t.logger in
+  [%log debug]
+    "Backfill fetching diff before explorer publish: job_id=%s \
+     current_source=%s target_ledger_hash=%s index=%d"
+    job.id
+    (Ledger_hash.to_decimal_string current_source)
+    (Ledger_hash.to_decimal_string target_ledger_hash)
+    index ;
   let%bind.Deferred.Result diff =
     Da_layer.Client.get_diff ~logger:t.logger ~config:t.da_config
       ~ledger_hash:target_ledger_hash
@@ -310,13 +342,30 @@ let publish_target t job ~current_source ~index ~target_ledger_hash =
         update_job job ~status:Running
           ~diffs_published:(job.diffs_published + 1)
           () ;
+        [%log debug]
+          "Backfill queued explorer transaction event: job_id=%s \
+           target_ledger_hash=%s diffs_published=%d"
+          job.id
+          (Ledger_hash.to_decimal_string target_ledger_hash)
+          job.diffs_published ;
         Deferred.return (Ok target_ledger_hash)
     | `Dropped ->
+        [%log debug]
+          "Backfill failed to queue explorer transaction event: job_id=%s \
+           target_ledger_hash=%s"
+          job.id
+          (Ledger_hash.to_decimal_string target_ledger_hash) ;
         Deferred.return
           (Error (Error.of_string "NATS publish dropped while backfilling diffs"))
 
 let run_job t job =
+  let logger = t.logger in
   let now = Time.now () in
+  [%log debug]
+    "Starting explorer backfill job: job_id=%s from_hash=%s to_hash=%s"
+    job.id
+    (Ledger_hash.to_decimal_string job.from_hash)
+    (Ledger_hash.to_decimal_string job.to_hash) ;
   update_job job ~status:Running ~started_at:now () ;
   let source = source_query job.from_hash in
   don't_wait_for
@@ -371,9 +420,15 @@ let run_job t job =
                    "Ledger hash chain ended before reaching backfill target") ) )
      >>= function
      | Ok (Ok ()) ->
+         [%log debug]
+           "Completed explorer backfill job: job_id=%s diffs_published=%d"
+           job.id job.diffs_published ;
          update_job job ~status:Completed ~finished_at:(Time.now ()) () ;
          Deferred.unit
      | Ok (Error error) | Error error ->
+         [%log debug]
+           "Failed explorer backfill job: job_id=%s error=%s"
+           job.id (Error.to_string_hum error) ;
          update_job job ~status:Failed ~finished_at:(Time.now ())
            ~error:(Error.to_string_hum error) () ;
          Deferred.unit )
@@ -397,14 +452,26 @@ let create_job ?error ?started_at ?finished_at ~status ~from_hash ~to_hash () =
   }
 
 let register_job t job =
+  let logger = t.logger in
   Hashtbl.set t.jobs ~key:job.id ~data:job ;
+  [%log debug]
+    "Registered explorer backfill job: job_id=%s from_hash=%s to_hash=%s"
+    job.id
+    (Ledger_hash.to_decimal_string job.from_hash)
+    (Ledger_hash.to_decimal_string job.to_hash) ;
   notify_subscribers job ;
   job
 
 let start_backfill t ~from_hash ~to_hash =
+  let logger = t.logger in
   prune_terminal_jobs t ;
   match find_active_job_by_range t ~from_hash ~to_hash with
   | Some job ->
+      [%log debug]
+        "Reusing active explorer backfill job: job_id=%s from_hash=%s to_hash=%s"
+        job.id
+        (Ledger_hash.to_decimal_string from_hash)
+        (Ledger_hash.to_decimal_string to_hash) ;
       job
   | None ->
       let job =
