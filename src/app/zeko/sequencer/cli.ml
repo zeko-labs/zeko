@@ -1189,6 +1189,99 @@ let prover_load =
          in
          print_endline "Done ✅" ) )
 
+let sync_ledger =
+  ( "sync-ledger"
+  , Command.async ~summary:"Sync the ledger"
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and da_node = flag "--da-node" (required string) ~doc:"string DA node"
+       and ledger_path =
+         flag "--ledger-path" (required string) ~doc:"string Ledger path"
+       and target_ledger_hash =
+         flag "--target-ledger-hash" (required string)
+           ~doc:"string Target ledger hash"
+       and output_path =
+         flag "--output-path" (required string) ~doc:"string Output path"
+       in
+       fun () ->
+         let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
+
+         let da_config = Da_layer.Client.Config.of_string_list [ da_node ] in
+
+         [%log info] "Creating ledger" ;
+         let ledger =
+           let ledger =
+             Ledger.Db.create ~directory_name:ledger_path
+               ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+           in
+           Ledger.Db.create_checkpoint ledger
+             ~directory_name:(output_path ^ "/ledger") ()
+         in
+         let%bind () =
+           Da_layer.Client.iter_diffs ~logger ~config:da_config
+             ~depth:Zeko_constants.constraint_constants.ledger_depth
+             ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root ledger))
+             ~target_ledger_hash:
+               (Ledger_hash.of_decimal_string target_ledger_hash)
+             ()
+             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+               assert (
+                 Ledger_hash.equal
+                   (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
+                   (Ledger.Db.merkle_root ledger) ) ;
+               [%log info]
+                 "Applying diff with source ledger hash %s, progress: %.0f%%"
+                 (Ledger_hash.to_decimal_string
+                    (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) )
+                 ( Float.of_int current_chunk /. Float.of_int chunks_length
+                 *. 100.0 ) ;
+
+               let mask = Ledger.of_database ledger in
+               let changed_accounts =
+                 Da_layer.Diff.Stable.Latest.changed_accounts diff
+                 |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+               in
+               List.iter changed_accounts ~f:(fun (index, account) ->
+                   Ledger.set_at_index_exn mask index account ) ;
+               Ledger.Mask.Attached.commit mask ;
+
+               let () =
+                 match
+                   Da_layer.Diff.Stable.Latest.command_with_action_step_flags
+                     diff
+                 with
+                 | Some (Zkapp_command command, _) ->
+                     Sequencer.apply_events_and_actions ledger
+                       (Archive.create ~kvdb:(Ledger.Db.zeko_kvdb ledger))
+                       (Zkapp_command.write_all_proofs_to_disk
+                          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                          ~proof_cache_db:
+                            (Proof_cache_tag.create_identity_db ())
+                          command )
+                     |> Or_error.ok_exn
+                 | _ ->
+                     ( (* No events nor actions to add *) )
+               in
+
+               return () )
+           >>| Or_error.ok_exn
+         in
+         [%log info] "Synced ledger" ;
+
+         [%log info] "Creating IMT" ;
+         let tids =
+           Ledger.Db.to_list_sequential ledger
+           |> List.map ~f:Account.identifier
+           |> List.map ~f:(fun aid -> Account_id.derive_token_id ~owner:aid)
+         in
+         let _imt, _witnesses =
+           Indexed_merkle_tree.Db.create_of_entries_exn
+             ~depth:Zeko_constants.constraint_constants.ledger_depth tids
+         in
+         [%log info] "Created IMT" ;
+         return () ) )
+
 let () =
   Command.group ~summary:"Sequencer CLI"
     [ generate_even_key
@@ -1204,5 +1297,6 @@ let () =
     ; load_db
     ; prover_load
     ; construct_multisig_key
+    ; sync_ledger
     ]
   |> Command_unix.run
