@@ -1270,14 +1270,22 @@ let sync_ledger =
          [%log info] "Synced ledger" ;
 
          [%log info] "Creating IMT" ;
-         let tids =
-           Ledger.Db.to_list_sequential ledger
-           |> List.map ~f:Account.identifier
-           |> List.map ~f:(fun aid -> Account_id.derive_token_id ~owner:aid)
+         let imt =
+           Indexed_merkle_tree.Db.create
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
          in
-         let _imt, _witnesses =
-           Indexed_merkle_tree.Db.create_of_entries_exn
-             ~depth:Zeko_constants.constraint_constants.ledger_depth tids
+         let l = Ledger.Db.num_accounts ledger in
+         let () =
+           Ledger.Db.iteri ledger ~f:(fun index account ->
+               let progress = Float.of_int index /. Float.of_int l *. 100.0 in
+               if index mod 200 = 0 then
+                 [%log info] "Progress: %.2f%%\t%d/%d" progress index l ;
+               let aid = Account.identifier account in
+               let tid = Account_id.derive_token_id ~owner:aid in
+               let _witness =
+                 Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
+               in
+               () )
          in
          [%log info] "Created IMT" ;
          return () ) )
