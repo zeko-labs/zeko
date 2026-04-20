@@ -40,7 +40,29 @@ fi
 cleanup() {
   local exit_status=$1
   echo "Cleaning up..."
-  kill ${l1_pid:-} ${da1_pid:-} ${da2_pid:-} ${da3_pid:-} "${PROVER_PIDS[@]}" "${SIGNER_PIDS[@]}" 2>/dev/null
+  local -a service_pids=(
+    "${l1_pid:-}"
+    "${da1_pid:-}"
+    "${da2_pid:-}"
+    "${da3_pid:-}"
+    "${PROVER_PIDS[@]}"
+    "${SIGNER_PIDS[@]}"
+  )
+
+  trap - SIGINT SIGTERM EXIT
+
+  for pid in "${service_pids[@]}"; do
+    [ -n "$pid" ] || continue
+    kill_process_tree TERM "$pid"
+  done
+
+  sleep 1
+
+  for pid in "${service_pids[@]}"; do
+    [ -n "$pid" ] || continue
+    kill_process_tree KILL "$pid"
+  done
+
   rm -rf "$TMP_DIR"
   docker rm -f pg-sequencer 2>/dev/null
   docker rm -f rabbitmq-sequencer 2>/dev/null
@@ -58,6 +80,24 @@ export ZEKO_SIGNATURE_KIND=testnet
 export ZEKO_CIRCUITS_CONFIG=test
 
 TMP_DIR=$(mktemp -d)
+
+list_child_pids() {
+  local parent_pid="$1"
+  ps -axo pid=,ppid= | awk -v parent="$parent_pid" '$2 == parent { print $1 }'
+}
+
+kill_process_tree() {
+  local signal="$1"
+  local pid="$2"
+  local child_pid
+
+  while read -r child_pid; do
+    [ -n "$child_pid" ] || continue
+    kill_process_tree "$signal" "$child_pid"
+  done < <(list_child_pids "$pid")
+
+  kill "-$signal" "$pid" 2>/dev/null || true
+}
 
 wait_for_port() {
   if [ "$WAIT_FOR_PORT" = "true" ]; then
@@ -111,12 +151,17 @@ export ZEKO_TEST_SEQUENCER_SIGNER="127.0.0.1:8600"
 export ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY
 
 run() {
-  name="$1"
+  local name="$1"
   shift
 
-  stdbuf -oL -eL "$@" \
-    > >(awk -v n="$name" '{ print "[" n "] " $0; fflush(); }') \
-    2> >(awk -v n="$name" '{ print "[" n "][ERR] " $0; fflush(); }' >&2)
+  bash -c '
+    name="$1"
+    shift
+
+    exec stdbuf -oL -eL "$@" \
+      > >(awk -v n="$name" '"'"'{ print "[" n "] " $0; fflush(); }'"'"') \
+      2> >(awk -v n="$name" '"'"'{ print "[" n "][ERR] " $0; fflush(); }'"'"' >&2)
+  ' bash "$name" "$@"
 }
 
 run "sequencer-signer" \

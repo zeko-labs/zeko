@@ -22,6 +22,21 @@ let time ?fake_proving_time ~logger label (d : 'a Deferred.t) =
     (Time.Span.to_string_hum @@ Time.diff stop start) ;
   return x
 
+(* let run_and_check (input : 'input) out_typ
+     (main :
+          'input V.t
+       -> ('a, _) Compile_simple.main_return Snark_params.Tick.Checked.t ) =
+   let open Snark_params.Tick in
+   Snark_params.Tick.run_and_check_exn
+   @@
+   let open Checked in
+   exists Typ.unit ~compute:(fun _ -> ())
+   >>= fun () ->
+   main (V.return input)
+   >>| fun { out; _ } ->
+   let open As_prover in
+   read out_typ out >>= fun out -> return out *)
+
 module Make_folder (System : sig
   module Stmt : sig
     type t [@@deriving yojson]

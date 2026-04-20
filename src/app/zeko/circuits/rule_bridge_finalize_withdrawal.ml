@@ -81,6 +81,7 @@ struct
       ; helper_token_owner_l1_vk_hash : F.t
       ; l2_holder_vk_hash : F.t
       ; prev_nonce : Checked32.t
+      ; helper_account_new : Boolean.t
       }
     [@@deriving snarky]
   end
@@ -102,6 +103,7 @@ struct
                ; helper_token_owner_l1_vk_hash
                ; l2_holder_vk_hash
                ; prev_nonce
+               ; helper_account_new
                } =
           exists Witness.typ ~compute:(V.get w)
         in
@@ -195,7 +197,10 @@ struct
               { default_account_update.preconditions with
                 account =
                   { default_account_update.preconditions.account with
-                    state =
+                    is_new =
+                      Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.true_
+                        helper_account_new
+                  ; state =
                       Outer_user_state.fine
                         { next_cancelled_deposit = None
                         ; next_withdrawal = Some prev_next_withdrawal
@@ -272,14 +277,25 @@ struct
           ; events
           }
         in
-        let fee_balance_change =
-          Currency.Amount.Signed.Checked.of_unsigned
-            (constant Currency.Amount.typ bridge_proof_fee)
-        in
-        let* recipient_balance_change =
-          Currency.Amount.Signed.Checked.add
-            (Currency.Amount.Signed.Checked.of_unsigned base_params.amount)
-            (Currency.Amount.Signed.Checked.negate fee_balance_change)
+        let bridge_proof_fee = constant Currency.Amount.typ bridge_proof_fee in
+        let* recipient_payout =
+          let* recipient_payout, `Underflow underflow =
+            Currency.Amount.Checked.sub_flagged base_params.amount
+              bridge_proof_fee
+          in
+          let* () = Boolean.Assert.is_true (Boolean.not underflow) in
+          let account_creation_fee =
+            constant Currency.Amount.typ
+              (Currency.Amount.of_fee
+                 Zeko_constants.constraint_constants.account_creation_fee )
+          in
+          let* paid_for_helper_account_creation, `Underflow underflow =
+            Currency.Amount.Checked.sub_flagged recipient_payout
+              account_creation_fee
+          in
+          let* () = Boolean.Assert.is_true (Boolean.not underflow) in
+          if_ ~typ:Currency.Amount.typ helper_account_new
+            ~then_:paid_for_helper_account_creation ~else_:recipient_payout
         in
         let recipient_payout =
           { default_account_update with
@@ -287,8 +303,9 @@ struct
           ; token_id = constant Token_id.typ token_id_l1
           ; may_use_token = constant May_use_token.typ Parents_own_token
           ; authorization_kind = constant A.typ None_given
-          ; balance_change = recipient_balance_change
-          ; implicit_account_creation_fee = constant Boolean.typ false
+          ; balance_change =
+              Currency.Amount.Signed.Checked.of_unsigned recipient_payout
+          ; implicit_account_creation_fee = constant Boolean.typ true
           }
         in
         let sequencer_fee_payout =
@@ -297,8 +314,9 @@ struct
           ; token_id = constant Token_id.typ token_id_l1
           ; may_use_token = constant May_use_token.typ Parents_own_token
           ; authorization_kind = constant A.typ None_given
-          ; balance_change = fee_balance_change
-          ; implicit_account_creation_fee = constant Boolean.typ false
+          ; balance_change =
+              Currency.Amount.Signed.Checked.of_unsigned bridge_proof_fee
+          ; implicit_account_creation_fee = constant Boolean.typ true
           }
         in
         let@ () = with_label __LOC__ in

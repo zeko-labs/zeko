@@ -135,8 +135,10 @@ module Inputs = struct
   let withdrawal_delay = t.withdrawal_delay
 
   let bridge_proof_fee =
-    Currency.Amount.of_fee
-      Zeko_constants.constraint_constants.account_creation_fee
+    Currency.Amount.(
+      of_fee Zeko_constants.constraint_constants.account_creation_fee
+      + of_fee Zeko_constants.constraint_constants.account_creation_fee)
+    |> Option.value_exn
 
   let bridge_fee_recipient_l1 = t.bridge_fee_recipient_l1
 
