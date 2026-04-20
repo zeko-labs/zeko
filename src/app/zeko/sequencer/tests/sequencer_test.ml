@@ -811,8 +811,15 @@ let () =
                     @@ Option.value_exn
                          (Currency.Amount.add deposit_params.amount
                             bridge_proof_fee ))
-              ; use_full_commitment = true
+              ; use_full_commitment = false
+              ; increment_nonce = true
               ; authorization_kind = Signature
+              ; preconditions =
+                  { Account_update.Preconditions.accept with
+                    account =
+                      Zkapp_precondition.Account.nonce
+                        (Account.Nonce.succ nonce)
+                  }
               }
             ~authorization:(Control.Poly.Signature Signature.dummy)
         in
@@ -1100,6 +1107,7 @@ let () =
                  ; check_accepted_elems = snd check_accepted
                  ; prev_next_deposit
                  ; prev_nonce
+                 ; helper_account_new = Option.is_none helper_account
                  } ))
           >>| Or_error.ok_exn
         in
@@ -1428,8 +1436,15 @@ let () =
                     @@ Option.value_exn
                          (Currency.Amount.add withdrawal_params.amount
                             bridge_proof_fee ))
-              ; use_full_commitment = true
+              ; use_full_commitment = false
               ; authorization_kind = Signature
+              ; increment_nonce = true
+              ; preconditions =
+                  { Account_update.Preconditions.accept with
+                    account =
+                      Zkapp_precondition.Account.nonce
+                        (Account.Nonce.succ nonce)
+                  }
               }
             ~authorization:(Control.Poly.Signature Signature.dummy)
         in
@@ -1722,6 +1737,7 @@ let () =
                      Option.value prev_next_withdrawal ~default:UInt32.zero
                  ; withdrawal_params
                  ; prev_nonce
+                 ; helper_account_new = Option.is_none prev_next_withdrawal
                  } ))
           >>| Or_error.ok_exn
         in

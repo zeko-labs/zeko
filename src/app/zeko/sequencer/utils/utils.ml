@@ -354,100 +354,72 @@ let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =
       in
       Zkapp_command.Call_forest.cons ~signature_kind ~calls account_update []
 
+module Forest_shape = struct
+  (** add more fields if needed *)
+  type field =
+    | Calls of field list list
+    | Public_key of Public_key.Compressed.t
+    | Token_id of Token_id.t
+
+  let rec check_tree
+      ({ account_update = au; calls; _ } as tree :
+        (Account_update.t, _, _) Zkapp_command.Call_forest.Tree.t ) = function
+    | [] ->
+        true
+    | Public_key pk :: rest ->
+        Public_key.Compressed.equal au.body.public_key pk
+        && check_tree tree rest
+    | Token_id token_id :: rest ->
+        Token_id.equal au.body.token_id token_id && check_tree tree rest
+    | Calls calls_spec :: rest -> (
+        match List.zip calls calls_spec with
+        | List.Or_unequal_lengths.Unequal_lengths ->
+            false
+        | List.Or_unequal_lengths.Ok l ->
+            List.map l ~f:(fun (tree, spec) ->
+                check_tree (With_stack_hash.elt tree) spec )
+            |> List.for_all ~f:Fn.id
+            && check_tree tree rest )
+
+  let matches (forest : (Account_update.t, _, _) Zkapp_command.Call_forest.t)
+      (spec : field list list) =
+    match List.zip forest spec with
+    | List.Or_unequal_lengths.Unequal_lengths ->
+        false
+    | List.Or_unequal_lengths.Ok l ->
+        List.map l ~f:(fun (tree, spec) ->
+            check_tree (With_stack_hash.elt tree) spec )
+        |> List.for_all ~f:Fn.id
+end
+
 let is_deposit_finalization (command : User_command.t) =
+  let open Forest_shape in
+  let holder_token_id =
+    Account_id.derive_token_id
+      ~owner:
+        ( Account_id.of_public_key
+        @@ Public_key.decompress_exn
+             Zeko_circuits_config.Inputs.holder_account_l2 )
+  in
   match command with
   | Signed_command _ ->
       false
-  | Zkapp_command command -> (
-      match command.account_updates with
-      | [ transferrer_forest; deposit_forest ] ->
-          let is_valid_deposit_forest, recipient =
-            let l2_holder_au = deposit_forest.elt.account_update in
-            let is_holder_au_valid =
-              Public_key.Compressed.equal l2_holder_au.body.public_key
-                Zeko_circuits_config.Inputs.holder_account_l2
-            in
-            let are_children_valid, recipient =
-              match deposit_forest.elt.calls with
-              | [ helper_forest; witness_forest ] ->
-                  let is_helper_valid =
-                    List.is_empty helper_forest.elt.calls
-                    && Token_id.equal
-                         helper_forest.elt.account_update.body.token_id
-                         (Account_id.derive_token_id
-                            ~owner:
-                              ( Account_id.of_public_key
-                              @@ Public_key.decompress_exn
-                                   Zeko_circuits_config.Inputs.holder_account_l2
-                              ) )
-                  in
-                  let is_witness_valid =
-                    List.is_empty witness_forest.elt.calls
-                    && Public_key.Compressed.equal
-                         witness_forest.elt.account_update.body.public_key
-                         Zeko_circuits_config.Inputs.zeko_l2
-                    && Token_id.equal
-                         witness_forest.elt.account_update.body.token_id
-                         Token_id.default
-                  in
-                  ( is_helper_valid && is_witness_valid
-                  , Some helper_forest.elt.account_update.body.public_key )
-              | [ helper_forest
-                ; witness_forest
-                ; recipient_payout_forest
-                ; sequencer_fee_forest
-                ] ->
-                  let is_helper_valid =
-                    List.is_empty helper_forest.elt.calls
-                    && Token_id.equal
-                         helper_forest.elt.account_update.body.token_id
-                         (Account_id.derive_token_id
-                            ~owner:
-                              ( Account_id.of_public_key
-                              @@ Public_key.decompress_exn
-                                   Zeko_circuits_config.Inputs.holder_account_l2
-                              ) )
-                  in
-                  let is_witness_valid =
-                    List.is_empty witness_forest.elt.calls
-                    && Public_key.Compressed.equal
-                         witness_forest.elt.account_update.body.public_key
-                         Zeko_circuits_config.Inputs.zeko_l2
-                    && Token_id.equal
-                         witness_forest.elt.account_update.body.token_id
-                         Token_id.default
-                  in
-                  let is_payouts_valid =
-                    List.is_empty recipient_payout_forest.elt.calls
-                    && List.is_empty sequencer_fee_forest.elt.calls
-                    && Token_id.equal
-                         recipient_payout_forest.elt.account_update.body
-                           .token_id Token_id.default
-                    && Token_id.equal
-                         sequencer_fee_forest.elt.account_update.body.token_id
-                         Token_id.default
-                  in
-                  ( is_helper_valid && is_witness_valid && is_payouts_valid
-                  , Some helper_forest.elt.account_update.body.public_key )
-              | _ ->
-                  (false, None)
-            in
-            (is_holder_au_valid && are_children_valid, recipient)
-          in
-          let is_valid_transferrer =
-            List.is_empty transferrer_forest.elt.calls
-            && Option.value ~default:false
-                 (Option.map recipient
-                    ~f:
-                      (Public_key.Compressed.equal
-                         transferrer_forest.elt.account_update.body.public_key ) )
-            && Token_id.equal
-                 transferrer_forest.elt.account_update.body.token_id
-                 Token_id.default
-          in
-          is_valid_deposit_forest && is_valid_transferrer
-      | _ ->
-          false )
+  | Zkapp_command command ->
+      matches command.account_updates
+        [ [ Public_key Zeko_circuits_config.Inputs.holder_account_l2
+          ; Token_id Token_id.default
+          ; Calls
+              [ [ Token_id holder_token_id ]
+              ; [ Public_key Zeko_circuits_config.Inputs.zeko_l2
+                ; Token_id Token_id.default
+                ]
+              ; [ Token_id Token_id.default ]
+              ; [ Public_key Zeko_circuits_config.Inputs.bridge_fee_recipient_l2
+                ; Token_id Token_id.default
+                ]
+              ]
+          ]
+        ]
 
 let sign_fee_payer ~signature_kind (sequencer_signer : Keypair.t)
     (command : User_command.t) : User_command.t =

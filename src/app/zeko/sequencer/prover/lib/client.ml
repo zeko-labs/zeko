@@ -511,7 +511,8 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
     ~(check_accepted :
        Bridge.Check_accepted_mina.Init.t
        * Field.t
-       * Bridge.Check_accepted_mina.Elem.t list ) ~prev_next_deposit ~prev_nonce =
+       * Bridge.Check_accepted_mina.Elem.t list ) ~prev_next_deposit ~prev_nonce
+    ~helper_account_new =
   let%bind.Deferred.Result ase =
     let ase_source, ase_elms = ase in
     let%map.Deferred.Result proof, target, excess =
@@ -557,6 +558,7 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
            ; check_accepted
            ; prev_next_deposit
            ; prev_nonce
+           ; helper_account_new
            } ))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
@@ -674,7 +676,7 @@ let inner_receive t witness =
 
 let finalize_withdrawal t ~public_key ~may_use_token ~outer_authorization_kind
     ~commit ~before_commit ~commit_ase ~before_withdrawal ~withdrawal_ase
-    ~prev_next_withdrawal ~withdrawal_params ~prev_nonce =
+    ~prev_next_withdrawal ~withdrawal_params ~prev_nonce ~helper_account_new =
   let%bind.Deferred.Result commit_ase =
     let source, elems = commit_ase in
     let%map.Deferred.Result proof, target, excess =
@@ -710,6 +712,7 @@ let finalize_withdrawal t ~public_key ~may_use_token ~outer_authorization_kind
            ; prev_next_withdrawal
            ; withdrawal_params
            ; prev_nonce
+           ; helper_account_new
            } ))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->

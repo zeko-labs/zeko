@@ -318,6 +318,7 @@ module Finalize_deposit = struct
     ; check_accepted_init : Bridge_inst_mina.Check_accepted.Definition.Init.t
     ; prev_next_deposit : Zeko_util.Checked32.t
     ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
     }
   [@@deriving snarky]
 
@@ -326,6 +327,7 @@ module Finalize_deposit = struct
     ; check_accepted_init : Bridge_inst_mina.Check_accepted.Definition.Init.t
     ; prev_next_deposit : Zeko_util.Checked32.t
     ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
     ; ase_elems : Field.t list
     ; check_accepted_elems :
         Bridge_inst_mina.Check_accepted.Definition.Elem.t list
@@ -336,6 +338,7 @@ module Finalize_deposit = struct
        ; check_accepted_init
        ; prev_next_deposit
        ; prev_nonce
+       ; helper_account_new
        ; ase_elems
        ; check_accepted_elems
        } :
@@ -346,7 +349,12 @@ module Finalize_deposit = struct
     in
     let t =
       typ.value_to_fields
-        { ase_source; check_accepted_init; prev_next_deposit; prev_nonce }
+        { ase_source
+        ; check_accepted_init
+        ; prev_next_deposit
+        ; prev_nonce
+        ; helper_account_new
+        }
       |> fst
     in
     let ase_elems = Array.of_list ase_elems in
@@ -368,6 +376,7 @@ module Finalize_deposit = struct
        ; check_accepted_elems
        ; prev_next_deposit
        ; prev_nonce
+       ; helper_account_new
        } as request :
         t_ ) =
     let key = key request in
@@ -395,7 +404,7 @@ module Finalize_deposit = struct
                     ~ase:(ase_source, ase_elems)
                     ~check_accepted:
                       (check_accepted_init, deposit_hash, check_accepted_elems)
-                    ~prev_next_deposit ~prev_nonce
+                    ~prev_next_deposit ~prev_nonce ~helper_account_new
                 with
                 | Error e ->
                     Error.raise e
@@ -611,6 +620,7 @@ module Finalize_withdrawal = struct
     ; prev_next_withdrawal : Zeko_util.Checked32.t
     ; withdrawal_params : Bridge_state.Withdrawal_params_base.t
     ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
     }
   [@@deriving snarky]
 
@@ -624,6 +634,7 @@ module Finalize_withdrawal = struct
     ; prev_next_withdrawal : Zeko_util.Checked32.t
     ; withdrawal_params : Bridge_state.Withdrawal_params_base.t
     ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
     ; commit_ase_elems : Field.t list
     ; withdrawal_ase_elems : Field.t list
     }
@@ -638,6 +649,7 @@ module Finalize_withdrawal = struct
        ; prev_next_withdrawal
        ; withdrawal_params
        ; prev_nonce
+       ; helper_account_new
        ; commit_ase_elems
        ; withdrawal_ase_elems
        } :
@@ -654,6 +666,7 @@ module Finalize_withdrawal = struct
         ; prev_next_withdrawal
         ; withdrawal_params
         ; prev_nonce
+        ; helper_account_new
         }
       |> fst
     in
@@ -677,6 +690,7 @@ module Finalize_withdrawal = struct
        ; prev_next_withdrawal
        ; withdrawal_params
        ; prev_nonce
+       ; helper_account_new
        } as request :
         t_ ) =
     let key = key request in
@@ -698,7 +712,7 @@ module Finalize_withdrawal = struct
                       ~before_withdrawal
                       ~withdrawal_ase:
                         (withdrawal_ase_source, withdrawal_ase_elems)
-                      ~prev_next_withdrawal ~prev_nonce
+                      ~prev_next_withdrawal ~prev_nonce ~helper_account_new
                       ~withdrawal_params:
                         (Bridge.Finalize_withdrawal.Withdrawal_params_base
                          .to_serializable withdrawal_params )
