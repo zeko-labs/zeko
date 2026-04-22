@@ -172,13 +172,13 @@ module Sequencer = struct
               in
               let%bind command =
                 Committer.prove_commit ~logger ~proof_cache_db ~provers
-                  ~executor ~archive
+                  ~executor ~l1_uri:config.l1_uri ~archive
                   ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
                   ~archive_uri:config.archive_uri ~l1_config:config.l1_config
                   ~commit_validity_period:config.commit_validity_period
                   commit_witness
               in
-              let%bind () =
+              let%bind _hash =
                 Executor.send_zkapp_command ~logger executor command
               in
               State.Last_committed_ledger.set sequencer_state
@@ -1068,8 +1068,8 @@ module Sequencer = struct
     let kvdb = L.Db.zeko_kvdb ledger in
     let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in
     let executor =
-      Executor.create ~l1_uri:config.l1_uri
-        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ~kvdb ()
+      Executor.create ~kind:(`L1 config.l1_uri)
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ()
     in
     let archive = Archive.create ~kvdb in
     let merger_ctx =
@@ -1115,7 +1115,8 @@ module Sequencer = struct
     let%bind () =
       Committer.recommit_all ~logger ~proof_cache_db
         ~provers:t.bridge_prover.provers ~executor:t.merger_ctx.executor
-        ~archive ~db_pool ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+        ~l1_uri:config.l1_uri ~archive ~db_pool
+        ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
       >>| Or_error.ok_exn
     in

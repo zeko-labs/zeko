@@ -87,9 +87,40 @@ let transferrer_key ~signature_kind:_ transferrer =
   [%sexp_of: Account_update.Stable.Latest.t] transferrer |> Sexp.to_string
 
 let validate_transferrer ~expected_amount transferrer =
+  (* TODO *)
   let _ = expected_amount in
   let _ = transferrer in
   Ok ()
+
+let execute_request t ~logger ~(executor : Executor.t) (key, d) =
+  let%bind () = d in
+  Proofs_memory.get t.proofs_memory key
+  |> Option.value_exn |> snd
+  |> function
+  | `Pending ->
+      failwith "unreachable"
+  | `Done (Error e) ->
+      return (Error e)
+  | `Done (Ok forest) ->
+      let command : Zkapp_command.t =
+        { fee_payer =
+            Account_update.Fee_payer.make
+              ~body:
+                { public_key = Signer_service.Signer.public_key executor.signer
+                ; fee = Currency.Fee.zero
+                ; valid_until = None
+                ; nonce = Account.Nonce.zero
+                }
+              ~authorization:Signature.dummy
+        ; account_updates =
+            Zkapp_command.Call_forest.map forest
+              ~f:
+                (Account_update.write_all_proofs_to_disk
+                   ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
+        ; memo = Signed_command_memo.empty
+        }
+      in
+      Executor.send_zkapp_command ~logger executor command
 
 module Deposit_request = struct
   type t =
