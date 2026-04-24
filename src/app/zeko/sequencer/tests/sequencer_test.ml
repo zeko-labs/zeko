@@ -1381,12 +1381,25 @@ let () =
               ; increment_nonce = true
               ; preconditions =
                   { Account_update.Preconditions.accept with
-                    account =
-                      Zkapp_precondition.Account.nonce
-                        (Account.Nonce.succ nonce)
+                    account = Zkapp_precondition.Account.nonce nonce
                   }
               }
             ~authorization:(Control.Poly.Signature Signature.dummy)
+        in
+        let _forest, `Commitment tx_commitment =
+          Bridge_prover.Withdrawal_request.precompute_commitments
+            !sequencer.bridge_prover
+            { withdrawal_params; transferrer = transferrer_update }
+          |> Or_error.ok_exn
+        in
+        let transferrer_update =
+          Account_update.with_no_aux ~body:transferrer_update.body
+            ~authorization:
+              (Control.Poly.Signature
+                 (Signature_lib.Schnorr.Chunked.sign
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                    signer.private_key
+                    (Random_oracle.Input.Chunked.field tx_commitment) ) )
         in
         Bridge_prover.(
           execute_request ~logger ~executor:l2_executor !sequencer.bridge_prover
@@ -1599,26 +1612,40 @@ let () =
           | None ->
               UInt32.zero
         in
+        let witness : Bridge_prover.Finalize_withdrawal.t_ =
+          { public_key =
+              List.hd_exn Zeko_circuits_config.Inputs.holder_accounts_l1
+          ; commit = last_commit
+          ; before_commit =
+              C.Rollup_state.Outer_action_state.unsafe_value_of_field
+                before_last_commit
+          ; commit_ase_source = fst commit_ase
+          ; commit_ase_elems = snd commit_ase
+          ; before_withdrawal
+          ; withdrawal_ase_source = fst withdrawal_ase
+          ; withdrawal_ase_elems = snd withdrawal_ase
+          ; prev_next_withdrawal =
+              Option.value prev_next_withdrawal ~default:UInt32.zero
+          ; withdrawal_params
+          ; prev_nonce
+          ; helper_account_new = Option.is_none prev_next_withdrawal
+          }
+        in
+        let _forest, `Commitment commitment =
+          Bridge_prover.Finalize_withdrawal.precompute_commitments
+            !sequencer.bridge_prover witness
+          |> Or_error.ok_exn
+        in
+        let helper_account_signature =
+          Signature_lib.Schnorr.Chunked.sign
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+            signer.private_key
+            (Random_oracle.Input.Chunked.field commitment)
+        in
         Bridge_prover.(
-          execute_request ~logger ~executor:l2_executor !sequencer.bridge_prover
-            (Finalize_withdrawal.f ~t:!sequencer.bridge_prover ~logger
-               { public_key =
-                   List.hd_exn Zeko_circuits_config.Inputs.holder_accounts_l1
-               ; commit = last_commit
-               ; before_commit =
-                   C.Rollup_state.Outer_action_state.unsafe_value_of_field
-                     before_last_commit
-               ; commit_ase_source = fst commit_ase
-               ; commit_ase_elems = snd commit_ase
-               ; before_withdrawal
-               ; withdrawal_ase_source = fst withdrawal_ase
-               ; withdrawal_ase_elems = snd withdrawal_ase
-               ; prev_next_withdrawal =
-                   Option.value prev_next_withdrawal ~default:UInt32.zero
-               ; withdrawal_params
-               ; prev_nonce
-               ; helper_account_new = Option.is_none prev_next_withdrawal
-               } ))
+          execute_request ~logger ~executor:l1_executor !sequencer.bridge_prover
+            (Finalize_withdrawal.f ~t:!sequencer.bridge_prover ~logger witness
+               helper_account_signature ))
         >>| Or_error.ok_exn
       in
 

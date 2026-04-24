@@ -1897,13 +1897,15 @@ module Types = struct
           ; withdrawal_params : Withdrawal_params.input
           ; prev_nonce : Unsigned.uint32
           ; helper_account_new : bool
+          ; helper_account_signature : Signature.t
           }
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeWithdrawalInput"
             ~coerce:(fun public_key commit before_commit commit_ase
                          before_withdrawal withdrawal_ase prev_next_withdrawal
-                         withdrawal_params prev_nonce helper_account_new ->
+                         withdrawal_params prev_nonce helper_account_new
+                         helper_account_signature ->
               let%map.Result commit =
                 match%bind.Result commit with
                 | Commit commit ->
@@ -1925,6 +1927,8 @@ module Types = struct
               ; withdrawal_params
               ; prev_nonce
               ; helper_account_new
+              ; helper_account_signature =
+                  Result.ok_or_failwith helper_account_signature
               } )
             ~split:(fun f (x : input) ->
               f x.public_key (Commit x.commit)
@@ -1934,7 +1938,8 @@ module Types = struct
                 (Zeko_circuits.Rollup_state.Inner_action_state.raw
                    x.before_withdrawal )
                 x.withdrawal_ase x.prev_next_withdrawal x.withdrawal_params
-                x.prev_nonce x.helper_account_new )
+                x.prev_nonce x.helper_account_new
+                (Raw x.helper_account_signature) )
             ~fields:
               [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
               ; arg "commit"
@@ -1952,6 +1957,8 @@ module Types = struct
                   ~typ:(non_null @@ Withdrawal_params.arg_typ ~proof_cache_db)
               ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
               ; arg "helperAccountNew" ~typ:(non_null bool)
+              ; arg "helperAccountSignature"
+                  ~typ:(non_null SignatureInput.arg_typ)
               ]
       end
     end
@@ -2415,6 +2422,7 @@ module Mutations = struct
                                    ; withdrawal_params
                                    ; prev_nonce
                                    ; helper_account_new
+                                   ; helper_account_signature
                                    } =
             return (Result.map_error witness ~f:Error.to_string_hum)
           in
@@ -2435,6 +2443,7 @@ module Mutations = struct
               ; prev_nonce
               ; helper_account_new
               }
+              helper_account_signature
           in
           don't_wait_for d ; return (Ok key) )
 
