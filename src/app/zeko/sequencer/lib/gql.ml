@@ -1784,12 +1784,14 @@ module Types = struct
           ; prev_next_deposit : Unsigned.uint32
           ; prev_nonce : Unsigned.uint32
           ; helper_account_new : bool
+          ; helper_account_signature : Signature.t
           }
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeDepositInput"
             ~coerce:(fun ase (check_accepted_init, check_accepted_elems)
-                         prev_next_deposit prev_nonce helper_account_new ->
+                         prev_next_deposit prev_nonce helper_account_new
+                         helper_account_signature ->
               let%map.Result check_accepted_elems =
                 Result.all check_accepted_elems
               in
@@ -1798,10 +1800,12 @@ module Types = struct
               ; prev_next_deposit
               ; prev_nonce
               ; helper_account_new
+              ; helper_account_signature =
+                  Result.ok_or_failwith helper_account_signature
               } )
             ~split:(fun f (x : input) ->
               f x.ase x.check_accepted x.prev_next_deposit x.prev_nonce
-                x.helper_account_new )
+                x.helper_account_new (Raw x.helper_account_signature) )
             ~fields:
               [ arg "ase" ~typ:(non_null Folder.Ase_with_length.arg_typ)
               ; arg "checkAccepted"
@@ -1811,6 +1815,8 @@ module Types = struct
               ; arg "prevNextDeposit" ~typ:(non_null UInt32.arg_typ)
               ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
               ; arg "helperAccountNew" ~typ:(non_null bool)
+              ; arg "helperAccountSignature"
+                  ~typ:(non_null SignatureInput.arg_typ)
               ]
       end
 
@@ -2364,6 +2370,7 @@ module Mutations = struct
                                    ; prev_next_deposit
                                    ; prev_nonce
                                    ; helper_account_new
+                                   ; helper_account_signature
                                    } =
             return (Result.map_error witness ~f:Error.to_string_hum)
           in
@@ -2379,6 +2386,7 @@ module Mutations = struct
               ; prev_nonce
               ; helper_account_new
               }
+              helper_account_signature
           in
           don't_wait_for d ; return (Ok key) )
 

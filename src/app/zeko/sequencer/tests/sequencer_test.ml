@@ -791,7 +791,7 @@ let () =
       let submit_deposit (signer : Keypair.t)
           (deposit_params : C.Bridge_state.Deposit_params_base.t) =
         let%bind nonce =
-          Gql_client.fetch_nonce ~logger gql_uri
+          Gql_client.infer_nonce ~logger gql_uri
             (Signature_lib.Public_key.compress signer.public_key)
           >>| Or_error.ok_exn
         in
@@ -812,12 +812,25 @@ let () =
               ; authorization_kind = Signature
               ; preconditions =
                   { Account_update.Preconditions.accept with
-                    account =
-                      Zkapp_precondition.Account.nonce
-                        (Account.Nonce.succ nonce)
+                    account = Zkapp_precondition.Account.nonce nonce
                   }
               }
             ~authorization:(Control.Poly.Signature Signature.dummy)
+        in
+        let _forest, `Commitment tx_commitment =
+          Bridge_prover.Deposit_request.precompute_commitments
+            !sequencer.bridge_prover
+            { deposit_params; transferrer = transferrer_update }
+          |> Or_error.ok_exn
+        in
+        let transferrer_update =
+          Account_update.with_no_aux ~body:transferrer_update.body
+            ~authorization:
+              (Control.Poly.Signature
+                 (Signature_lib.Schnorr.Chunked.sign
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                    signer.private_key
+                    (Random_oracle.Input.Chunked.field tx_commitment) ) )
         in
         Bridge_prover.(
           execute_request ~logger ~executor:l1_executor !sequencer.bridge_prover
@@ -1049,17 +1062,31 @@ let () =
                  UInt32.of_string
                    (Mina_numbers.Account_nonce.to_string acc.nonce) ) )
         in
+        let witness : Bridge_prover.Finalize_deposit.t_ =
+          { ase_source = fst ase
+          ; ase_elems = snd ase
+          ; check_accepted_init = fst check_accepted
+          ; check_accepted_elems = snd check_accepted
+          ; prev_next_deposit
+          ; prev_nonce
+          ; helper_account_new = Option.is_none helper_account
+          }
+        in
+        let _forest, `Commitment commitment =
+          Bridge_prover.Finalize_deposit.precompute_commitments
+            !sequencer.bridge_prover witness
+          |> Or_error.ok_exn
+        in
+        let helper_account_signature =
+          Signature_lib.Schnorr.Chunked.sign
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+            signer.private_key
+            (Random_oracle.Input.Chunked.field commitment)
+        in
         Bridge_prover.(
           execute_request ~logger ~executor:l2_executor !sequencer.bridge_prover
-            (Finalize_deposit.f ~t:!sequencer.bridge_prover ~logger
-               { ase_source = fst ase
-               ; ase_elems = snd ase
-               ; check_accepted_init = fst check_accepted
-               ; check_accepted_elems = snd check_accepted
-               ; prev_next_deposit
-               ; prev_nonce
-               ; helper_account_new = Option.is_none helper_account
-               } ))
+            (Finalize_deposit.f ~t:!sequencer.bridge_prover ~logger witness
+               helper_account_signature ))
         >>| Or_error.ok_exn
       in
 
