@@ -2,7 +2,7 @@
  (name sequencer_lib)
  (inline_tests)
  (libraries
- is_compile_simple_real
+  is_compile_simple_real
   signer_service
   kvdb_base
   da_layer

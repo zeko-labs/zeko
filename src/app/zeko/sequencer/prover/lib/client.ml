@@ -731,3 +731,13 @@ let outer_token_owner t witness =
       Error (Error.of_string err)
   | _ ->
       failwith "Unexpected response from prover"
+
+let verification_keys t =
+  send t Prover.Input.Verification_keys
+  >>| function
+  | Prover.Output.Verification_keys vk ->
+      Ok vk
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"

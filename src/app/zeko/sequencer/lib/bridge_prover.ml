@@ -70,14 +70,19 @@ type t =
   ; proof_cache_db : Proof_cache_tag.cache_db
   ; fee_recipient_l1 : Public_key.Compressed.t
   ; fee_recipient_l2 : Public_key.Compressed.t
+  ; verification_keys : Zeko_prover.Prover.Verification_key_hashes.t
   }
 
 let create ~provers ~proof_cache_db ~fee_recipient_l1 ~fee_recipient_l2 =
+  let%map verification_keys =
+    Zeko_prover.Client.verification_keys provers >>| Or_error.ok_exn
+  in
   { proofs_memory = Proofs_memory.create ~lifetime:Float.(60. * 20.)
   ; provers
   ; proof_cache_db
   ; fee_recipient_l1
   ; fee_recipient_l2
+  ; verification_keys
   }
 
 let wrap_with_transferrer ~signature_kind transferrer calls =
@@ -91,6 +96,34 @@ let validate_transferrer ~expected_amount transferrer =
   let _ = expected_amount in
   let _ = transferrer in
   Ok ()
+
+let run_and_check_exn (input : 'input) out_typ
+    (main :
+         'input V.t
+      -> ('a, _) Compile_simple.main_return Snark_params.Tick.Checked.t ) =
+  Snark_params.Tick.run_and_check_exn
+    (let%bind.Checked () = exists Typ.unit ~compute:(fun _ -> ()) in
+     let%map.Checked { out; _ } = main (V.return input) in
+     As_prover.read out_typ out )
+
+let fold ~(init_fn : 'init_var -> 'stmt_var Checked.t)
+    ~(step_fn : 'elm_var -> 'stmt_var -> 'stmt_var Checked.t)
+    ~(init_typ : ('init_var, 'init_val) Typ.typ)
+    ~(stmt_typ : ('stmt_var, 'stmt_val) Typ.typ)
+    ~(elm_typ : ('elm_var, 'elm_val) Typ.typ) (init : 'init_val)
+    (elms : 'elm_val list) =
+  Snark_params.Tick.run_and_check_exn
+    (let%bind.Checked init = exists init_typ ~compute:(fun _ -> init) in
+     let%bind.Checked stmt = init_fn init in
+     let%bind.Checked elms =
+       exists
+         (Typ.list ~length:(List.length elms) elm_typ)
+         ~compute:(fun _ -> elms)
+     in
+     let%map.Checked stmt =
+       Zeko_util.foldl elms ~init:stmt ~f:(fun acc elm -> step_fn elm acc)
+     in
+     As_prover.read stmt_typ stmt )
 
 let execute_request t ~logger ~(executor : Executor.t) (key, d) =
   let%bind () = d in
@@ -107,7 +140,7 @@ let execute_request t ~logger ~(executor : Executor.t) (key, d) =
             Account_update.Fee_payer.make
               ~body:
                 { public_key = Signer_service.Signer.public_key executor.signer
-                ; fee = Currency.Fee.zero
+                ; fee = Currency.Fee.of_mina_string_exn "0.1"
                 ; valid_until = None
                 ; nonce = Account.Nonce.zero
                 }
@@ -133,6 +166,98 @@ module Deposit_request = struct
     [@@deriving snarky]
   end
 
+  let make_witness t (deposit_params : Bridge_state.Deposit_params_base.t) :
+      Bridge.Outer_action_witness.serializable =
+    let receive_forest =
+      let user_children =
+        Zkapp_command.Call_forest.map deposit_params.children
+          ~f:Account_update.read_all_proofs_from_disk
+      in
+      Zkapp_command.Call_forest.cons
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+        ( Account_update.with_aux
+            ~body:
+              { Mina_base.Account_update.Body.dummy with
+                use_full_commitment = true
+              ; public_key = deposit_params.holder_account_l1
+              ; balance_change =
+                  Currency.Amount.Signed.(of_unsigned deposit_params.amount)
+              ; may_use_token = Parents_own_token
+              ; authorization_kind = None_given
+              }
+            ~authorization:Control.Poly.None_given
+        |> Account_update.read_all_proofs_from_disk )
+        user_children
+    in
+    let fee_payout_forest =
+      Zkapp_command.Call_forest.cons
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+        ( Account_update.with_aux
+            ~body:
+              { Mina_base.Account_update.Body.dummy with
+                public_key = t.fee_recipient_l1
+              ; balance_change =
+                  Currency.Amount.Signed.of_unsigned
+                    Zeko_circuits_config.Inputs.bridge_proof_fee
+              ; authorization_kind = None_given
+              ; use_full_commitment = false
+              }
+            ~authorization:Control.Poly.None_given
+        |> Account_update.read_all_proofs_from_disk )
+        []
+    in
+    { public_key = Zeko_circuits_config.Inputs.zeko_l1
+    ; witness =
+        { aux =
+            Utils.value_to_hash ~init:Zeko_constants.deposit_salt
+              Zeko_circuits.Bridge_state.Deposit_params_base.typ deposit_params
+        ; children = receive_forest @ fee_payout_forest
+        ; slot_range = Slot_range.infinite
+        }
+    }
+
+  let precompute_commitments t ({ deposit_params; transferrer } : t) =
+    let witness =
+      Bridge.Outer_action_witness.of_serializable
+        ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
+        ~vk_hash:t.verification_keys.outer_rules
+        (make_witness t deposit_params)
+    in
+    try
+      let _stmt, (body, _, calls) =
+        run_and_check_exn witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Outer_rules_inst.Rule_action_witness_inst.main
+      in
+      let account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                body
+            | None ->
+                (* To make the fake tests work *)
+                { body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      let forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~calls
+          account_update []
+        |> Zkapp_command.Call_forest.map
+             ~f:Account_update.read_all_proofs_from_disk
+        |> wrap_with_transferrer
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 transferrer
+        |> Utils.rehash_forest
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+      in
+      let tx_commitment =
+        Zkapp_command.Transaction_commitment.create
+          ~account_updates_hash:(Zkapp_command.Call_forest.hash forest)
+      in
+      Ok (forest, `Commitment tx_commitment)
+    with exn -> Error (Error.of_exn exn)
+
   let key t =
     let (Typ typ) = Key.typ in
     typ.value_to_fields t |> fst
@@ -141,10 +266,6 @@ module Deposit_request = struct
     |> Field.to_string
 
   let f ~t ~logger ({ deposit_params; transferrer } : t) =
-    let bridge_fee = Zeko_circuits_config.Inputs.bridge_proof_fee in
-    let expected_amount =
-      Currency.Amount.add deposit_params.amount bridge_fee |> Option.value_exn
-    in
     let key =
       key { deposit_params }
       ^ ":"
@@ -155,6 +276,11 @@ module Deposit_request = struct
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
             try_with (fun () ->
+                let expected_amount =
+                  Currency.Amount.add deposit_params.amount
+                    Zeko_circuits_config.Inputs.bridge_proof_fee
+                  |> Option.value_exn
+                in
                 let%bind () =
                   match validate_transferrer ~expected_amount transferrer with
                   | Ok () ->
@@ -162,57 +288,9 @@ module Deposit_request = struct
                   | Error e ->
                       Error.raise e
                 in
-                let receive_forest =
-                  let user_children =
-                    Zkapp_command.Call_forest.map deposit_params.children
-                      ~f:Account_update.read_all_proofs_from_disk
-                  in
-                  Zkapp_command.Call_forest.cons
-                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-                    ( Account_update.with_aux
-                        ~body:
-                          { Mina_base.Account_update.Body.dummy with
-                            use_full_commitment = true
-                          ; public_key = deposit_params.holder_account_l1
-                          ; balance_change =
-                              Currency.Amount.Signed.(
-                                of_unsigned deposit_params.amount)
-                          ; may_use_token = Parents_own_token
-                          ; authorization_kind = None_given
-                          }
-                        ~authorization:Control.Poly.None_given
-                    |> Account_update.read_all_proofs_from_disk )
-                    user_children
-                in
-                let fee_payout_forest =
-                  Zkapp_command.Call_forest.cons
-                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-                    ( Account_update.with_aux
-                        ~body:
-                          { Mina_base.Account_update.Body.dummy with
-                            public_key = t.fee_recipient_l1
-                          ; balance_change =
-                              Currency.Amount.Signed.of_unsigned bridge_fee
-                          ; authorization_kind = None_given
-                          ; use_full_commitment = false
-                          }
-                        ~authorization:Control.Poly.None_given
-                    |> Account_update.read_all_proofs_from_disk )
-                    []
-                in
+                let witness = make_witness t deposit_params in
                 match%map
-                  Zeko_prover.Client.outer_action_witness t.provers
-                    { public_key = Zeko_circuits_config.Inputs.zeko_l1
-                    ; witness =
-                        { aux =
-                            Utils.value_to_hash
-                              ~init:Zeko_constants.deposit_salt
-                              Zeko_circuits.Bridge_state.Deposit_params_base.typ
-                              deposit_params
-                        ; children = receive_forest @ fee_payout_forest
-                        ; slot_range = Slot_range.infinite
-                        }
-                    }
+                  Zeko_prover.Client.outer_action_witness t.provers witness
                 with
                 | Error e ->
                     Error.raise e
@@ -364,6 +442,113 @@ module Finalize_deposit = struct
         Bridge_inst_mina.Check_accepted.Definition.Elem.t list
     }
 
+  let precompute_commitments t
+      ({ ase_source
+       ; ase_elems
+       ; check_accepted_init
+       ; check_accepted_elems
+       ; prev_next_deposit
+       ; prev_nonce
+       ; helper_account_new
+       } :
+        t_ ) =
+    let deposit, check_accepted_elems =
+      (List.hd_exn check_accepted_elems, List.tl_exn check_accepted_elems)
+    in
+    let deposit_hash =
+      Zkapp_account.Actions_impl.hash [ Utils.actions_of_outer_action deposit ]
+    in
+    let ase =
+      let target =
+        fold
+          ~init_fn:(Ase.M_with_length.init ~check:None)
+          ~step_fn:Ase.M_with_length.step ~init_typ:Ase.M_with_length.Init.typ
+          ~stmt_typ:Ase.M_with_length.Stmt.typ ~elm_typ:F.typ ase_source
+          ase_elems
+      in
+      Bridge_inst_mina.Rule_bridge_finalize_deposit.Ase_inst.make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:ase_source ~proof_target:target ase_source []
+    in
+    let check_accepted =
+      let source : Bridge.Check_accepted_mina.Stmt.t =
+        { params = check_accepted_init.params
+        ; action_state =
+            Zkapp_account.Actions_impl.push_hash
+              (Rollup_state.Outer_action_state.raw
+                 check_accepted_init.original_action_state )
+              deposit_hash
+            |> Rollup_state.Outer_action_state.unsafe_value_of_field
+        ; deposit_index = check_accepted_init.deposit_index
+        ; n_steps = Zeko_util.Checked32.zero
+        ; is_rejected = false
+        ; is_accepted = false
+        }
+      in
+      let target =
+        fold
+          ~init_fn:(Bridge_inst_mina.Check_accepted.Definition.init ~check:None)
+          ~step_fn:Bridge_inst_mina.Check_accepted.Definition.step
+          ~init_typ:Bridge_inst_mina.Check_accepted.Definition.Init.typ
+          ~stmt_typ:Bridge_inst_mina.Check_accepted.Definition.Stmt.typ
+          ~elm_typ:Bridge_inst_mina.Check_accepted.Definition.Elem.typ
+          check_accepted_init check_accepted_elems
+      in
+      Bridge_inst_mina.Rule_bridge_finalize_deposit.Check_accepted_inst.make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:source ~proof_target:target check_accepted_init []
+    in
+    let witness : Bridge.Finalize_deposit.t =
+      { vk_hash = t.verification_keys.bridge_mina_l2
+      ; public_key = Zeko_circuits_config.Inputs.holder_account_l2
+      ; may_use_token =
+          Bridge_inst_mina.Rule_bridge_finalize_deposit.May_use_token.No
+      ; inner_authorization_kind =
+          Zeko_circuits.Rule_bridge_finalize_deposit.A.None_given
+      ; ase
+      ; check_accepted
+      ; prev_next_deposit
+      ; prev_nonce
+      ; helper_account_new
+      }
+    in
+    try
+      let _stmt, (body, _, calls) =
+        run_and_check_exn witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Bridge_inst_mina.Rule_bridge_finalize_deposit.main
+      in
+      let account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                body
+            | None ->
+                (* To make the fake tests work *)
+                { body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      let forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~calls
+          account_update []
+        |> Zkapp_command.Call_forest.map
+             ~f:Account_update.read_all_proofs_from_disk
+        |> Utils.rehash_forest
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+      in
+      let tx_commitment =
+        Zkapp_command.Transaction_commitment.create
+          ~account_updates_hash:(Zkapp_command.Call_forest.hash forest)
+      in
+      Ok (forest, `Commitment tx_commitment)
+    with exn -> Error (Error.of_exn exn)
+
   let key
       ({ ase_source
        ; check_accepted_init
@@ -409,7 +594,7 @@ module Finalize_deposit = struct
        ; prev_nonce
        ; helper_account_new
        } as request :
-        t_ ) =
+        t_ ) (helper_account_signature : Signature.t) =
     let key = key request in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
@@ -440,6 +625,21 @@ module Finalize_deposit = struct
                 | Error e ->
                     Error.raise e
                 | Ok ((body, _, calls), proof) ->
+                    (* Attach helper account signature *)
+                    let calls =
+                      match calls with
+                      | helper_account :: remaining_calls ->
+                          Zkapp_command.Call_forest.cons
+                            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                            ~calls:helper_account.elt.calls
+                            { helper_account.elt.account_update with
+                              authorization =
+                                Control.Poly.Signature helper_account_signature
+                            }
+                            remaining_calls
+                      | _ ->
+                          failwith "shouldn't be reachable"
+                    in
                     Utils.attach_proof_to_forest
                       ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                       ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof

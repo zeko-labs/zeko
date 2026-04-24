@@ -538,7 +538,9 @@ module Sequencer_spec = struct
             { infer_nonce = Sequencer.infer_nonce sequencer
             ; apply_user_command = Sequencer.apply_user_command sequencer
             } )
-        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~signer ()
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+        ~signer:(Signer_service.Signer.of_keypair (funded_accounts.(0) |> fst))
+        ()
     in
     Quickcheck.Generator.return
       { outer_kp
