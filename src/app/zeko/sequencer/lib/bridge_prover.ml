@@ -322,6 +322,109 @@ module Withdrawal_request = struct
     [@@deriving snarky]
   end
 
+  let make_witness t (withdrawal_params : Bridge_state.Withdrawal_params_base.t)
+      : Bridge.Inner_action_witness.serializable =
+    let inner_receive_witness =
+      Bridge.Inner_receive.of_serializable
+        ~vk_hash:t.verification_keys.bridge_mina_l2
+        { public_key = Zeko_circuits_config.Inputs.holder_account_l2
+        ; amount = withdrawal_params.amount
+        }
+    in
+    let _stmt, (inner_receive_body, _, inner_receive_calls) =
+      run_and_check_exn inner_receive_witness
+        Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+        Bridge_inst_mina.Rule_bridge_inner_receive.main
+    in
+    let inner_receive_forest =
+      Zkapp_command.Call_forest.cons
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+        ~calls:inner_receive_calls
+        (Account_update.with_aux
+           ~body:
+             ( match Is_compile_simple_real.is_compile_simple_real with
+             | Some _ ->
+                 inner_receive_body
+             | None ->
+                 { inner_receive_body with authorization_kind = None_given } )
+           ~authorization:Control.Poly.None_given )
+        []
+      |> Zkapp_command.Call_forest.map
+           ~f:Account_update.read_all_proofs_from_disk
+    in
+    let fee_payout_forest =
+      Zkapp_command.Call_forest.cons
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+        ( Account_update.with_aux
+            ~body:
+              { Mina_base.Account_update.Body.dummy with
+                public_key = t.fee_recipient_l2
+              ; balance_change =
+                  Currency.Amount.Signed.of_unsigned
+                    Zeko_circuits_config.Inputs.bridge_proof_fee
+              ; authorization_kind = None_given
+              ; use_full_commitment = false
+              }
+            ~authorization:Control.Poly.None_given
+        |> Account_update.read_all_proofs_from_disk )
+        []
+    in
+    let user_children =
+      Zkapp_command.Call_forest.map withdrawal_params.children
+        ~f:Account_update.read_all_proofs_from_disk
+    in
+    { public_key = Zeko_circuits_config.Inputs.inner_public_key
+    ; witness =
+        { aux =
+            Utils.value_to_hash ~init:Zeko_constants.withdrawal_salt
+              Zeko_circuits.Bridge_state.Withdrawal_params_base.typ
+              withdrawal_params
+        ; children = inner_receive_forest @ fee_payout_forest @ user_children
+        }
+    }
+
+  let precompute_commitments t ({ withdrawal_params; transferrer } : t) =
+    let witness =
+      Bridge.Inner_action_witness.of_serializable
+        ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
+        ~vk_hash:t.verification_keys.inner_rules
+        (make_witness t withdrawal_params)
+    in
+    try
+      let _stmt, (body, _, calls) =
+        run_and_check_exn witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Inner_rules_inst.Rule_inner_action_witness_inst.main
+      in
+      let account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                body
+            | None ->
+                (* To make the fake tests work *)
+                { body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      let forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~calls
+          account_update []
+        |> Zkapp_command.Call_forest.map
+             ~f:Account_update.read_all_proofs_from_disk
+        |> wrap_with_transferrer
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 transferrer
+        |> Utils.rehash_forest
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+      in
+      let tx_commitment =
+        Zkapp_command.Transaction_commitment.create
+          ~account_updates_hash:(Zkapp_command.Call_forest.hash forest)
+      in
+      Ok (forest, `Commitment tx_commitment)
+    with exn -> Error (Error.of_exn exn)
+
   let key t =
     let (Typ typ) = Key.typ in
     typ.value_to_fields t |> fst
@@ -352,55 +455,9 @@ module Withdrawal_request = struct
                   | Error e ->
                       Error.raise e
                 in
-                let%bind inner_receive_forest =
-                  match%map
-                    Zeko_prover.Client.inner_receive t.provers
-                      { public_key =
-                          Zeko_circuits_config.Inputs.holder_account_l2
-                      ; amount = withdrawal_params.amount
-                      }
-                  with
-                  | Error e ->
-                      Error.raise e
-                  | Ok ((body, _, calls), proof) ->
-                      Utils.attach_proof_to_forest
-                        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-                        ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
-                in
-                let user_children =
-                  Zkapp_command.Call_forest.map withdrawal_params.children
-                    ~f:Account_update.read_all_proofs_from_disk
-                in
-                let fee_payout_forest =
-                  Zkapp_command.Call_forest.cons
-                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-                    ( Account_update.with_aux
-                        ~body:
-                          { Mina_base.Account_update.Body.dummy with
-                            public_key = t.fee_recipient_l2
-                          ; balance_change =
-                              Currency.Amount.Signed.of_unsigned bridge_fee
-                          ; authorization_kind = None_given
-                          ; use_full_commitment = false
-                          }
-                        ~authorization:Control.Poly.None_given
-                    |> Account_update.read_all_proofs_from_disk )
-                    []
-                in
+                let witness = make_witness t withdrawal_params in
                 match%map
-                  Zeko_prover.Client.inner_action_witness t.provers
-                    { public_key = Zeko_circuits_config.Inputs.inner_public_key
-                    ; witness =
-                        { aux =
-                            Utils.value_to_hash
-                              ~init:Zeko_constants.withdrawal_salt
-                              Zeko_circuits.Bridge_state.Withdrawal_params_base
-                              .typ withdrawal_params
-                        ; children =
-                            inner_receive_forest @ fee_payout_forest
-                            @ user_children
-                        }
-                    }
+                  Zeko_prover.Client.inner_action_witness t.provers witness
                 with
                 | Error e ->
                     Error.raise e
@@ -870,6 +927,158 @@ module Finalize_withdrawal = struct
     ; withdrawal_ase_elems : Field.t list
     }
 
+  let precompute_commitments t
+      ({ public_key
+       ; commit
+       ; before_commit
+       ; commit_ase_source
+       ; commit_ase_elems
+       ; before_withdrawal
+       ; withdrawal_ase_source
+       ; withdrawal_ase_elems
+       ; prev_next_withdrawal
+       ; withdrawal_params
+       ; prev_nonce
+       ; helper_account_new
+       } :
+        t_ ) =
+    let commit_ase =
+      let target =
+        fold
+          ~init_fn:(Ase.M_without_length.init ~check:None)
+          ~step_fn:Ase.M_without_length.step
+          ~init_typ:Ase.M_without_length.Init.typ
+          ~stmt_typ:Ase.M_without_length.Stmt.typ ~elm_typ:F.typ
+          commit_ase_source commit_ase_elems
+      in
+      Bridge_inst_mina.Rule_bridge_finalize_withdrawal.Ase_outer_inst.make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:commit_ase_source ~proof_target:target commit_ase_source
+        []
+    in
+    let withdrawal_ase =
+      let target =
+        fold
+          ~init_fn:(Ase.M_with_length.init ~check:None)
+          ~step_fn:Ase.M_with_length.step ~init_typ:Ase.M_with_length.Init.typ
+          ~stmt_typ:Ase.M_with_length.Stmt.typ ~elm_typ:F.typ
+          withdrawal_ase_source withdrawal_ase_elems
+      in
+      Bridge_inst_mina.Rule_bridge_finalize_withdrawal.Ase_inner_inst.make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:withdrawal_ase_source ~proof_target:target
+        withdrawal_ase_source []
+    in
+    let witness : Bridge.Finalize_withdrawal.t =
+      { vk_hash = t.verification_keys.bridge_mina_l1
+      ; public_key
+      ; may_use_token =
+          Bridge_inst_mina.Rule_bridge_finalize_withdrawal.May_use_token.No
+      ; outer_authorization_kind =
+          Zeko_circuits.Rule_bridge_finalize_withdrawal.A.None_given
+      ; commit
+      ; before_commit
+      ; commit_ase
+      ; before_withdrawal
+      ; withdrawal_ase
+      ; prev_next_withdrawal
+      ; withdrawal_params
+      ; helper_token_owner_l1_vk_hash =
+          t.verification_keys.bridge_mina_token_owner
+      ; l2_holder_vk_hash = t.verification_keys.bridge_mina_l2
+      ; prev_nonce
+      ; helper_account_new
+      }
+    in
+    try
+      let _stmt, (body, _, calls) =
+        run_and_check_exn witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Bridge_inst_mina.Rule_bridge_finalize_withdrawal.main
+      in
+      let helper_account, witness_outer, remaining_calls =
+        match calls with
+        | { elt =
+              { account_update = _helper_token_owner
+              ; calls =
+                  [ { elt = { account_update = helper_account; calls = []; _ }
+                    ; _
+                    }
+                  ]
+              ; _
+              }
+          ; _
+          }
+          :: { elt = { account_update = witness_outer; calls = []; _ }; _ }
+             :: remaining_calls ->
+            (helper_account, witness_outer, remaining_calls)
+        | _ ->
+            failwith
+              "finalize_withdrawal precompute: invalid helper/witness layout"
+      in
+      let helper_witness =
+        Bridge.Outer_token_owner.of_serializable
+          ~vk_hash:t.verification_keys.bridge_mina_token_owner
+          { public_key = Zeko_circuits_config.Inputs.helper_token_owner_l1
+          ; a = helper_account.body
+          }
+      in
+      let _helper_stmt, (helper_body, _, helper_calls) =
+        run_and_check_exn helper_witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Bridge_inst_mina.Rule_bridge_outer_token_owner.main
+      in
+      let helper_account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                helper_body
+            | None ->
+                { helper_body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      let helper_forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+          ~calls:helper_calls helper_account_update []
+      in
+      let witness_forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 witness_outer []
+      in
+      let account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                body
+            | None ->
+                (* To make the fake tests work *)
+                { body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      let forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+          ~calls:(helper_forest @ witness_forest @ remaining_calls)
+          account_update []
+        |> Zkapp_command.Call_forest.map
+             ~f:Account_update.read_all_proofs_from_disk
+        |> Utils.rehash_forest
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+      in
+      let tx_commitment =
+        Zkapp_command.Transaction_commitment.create
+          ~account_updates_hash:(Zkapp_command.Call_forest.hash forest)
+      in
+      Ok (forest, `Commitment tx_commitment)
+    with exn -> Error (Error.of_exn exn)
+
   let key
       ({ public_key
        ; commit
@@ -923,7 +1132,7 @@ module Finalize_withdrawal = struct
        ; prev_nonce
        ; helper_account_new
        } as request :
-        t_ ) =
+        t_ ) (helper_account_signature : Signature.t) =
     let key = key request in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
@@ -996,6 +1205,23 @@ module Finalize_withdrawal = struct
                   | Error e ->
                       Error.raise e
                   | Ok ((body, _, calls), proof) ->
+                      (* Attach helper account signature *)
+                      let calls =
+                        match calls with
+                        | helper_account :: remaining_calls ->
+                            Zkapp_command.Call_forest.cons
+                              ~signature_kind:
+                                Zeko_circuits_config.Inputs.chain_l1
+                              ~calls:helper_account.elt.calls
+                              { helper_account.elt.account_update with
+                                authorization =
+                                  Control.Poly.Signature
+                                    helper_account_signature
+                              }
+                              remaining_calls
+                        | _ ->
+                            failwith "shouldn't be reachable"
+                      in
                       Utils.attach_proof_to_forest
                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
                         ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
