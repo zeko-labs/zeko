@@ -307,7 +307,7 @@ let deploy_token_owner_exn ~signature_kind ~(signer : Keypair.t)
     ~(token_owner_kp : Keypair.t) ~(fee : Currency.Fee.t)
     ~(nonce : Account.Nonce.t) ~(account_creation_fee : Currency.Fee.t) () =
   let%map _, _, `Token_owner token_owner_update =
-    L.with_ephemeral_ledger ~depth:35 ~f:(fun ledger ->
+    L.with_ledger ~depth:35 ~f:(fun ledger ->
         let%bind `Inner inner_account, `Holder holder_account =
           Z.Inner.initial_accounts ()
         in
