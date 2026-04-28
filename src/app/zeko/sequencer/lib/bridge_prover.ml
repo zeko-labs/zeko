@@ -16,12 +16,13 @@ module Proofs_memory = struct
         ( string
         , float
           * [ `Pending
-            | `Done of
+            | `Proved of
               ( Account_update.Stable.V1.t
               , Zkapp_command.Digest.Account_update.t
               , Zkapp_command.Digest.Forest.t )
               Zkapp_command.Call_forest.t
-              Or_error.t ] )
+              Or_error.t
+            | `Executed of Mina_transaction.Transaction_hash.t Or_error.t ] )
         Hashtbl.t
     ; queue : (string * float) Queue.t
     ; lifetime : float
@@ -61,7 +62,7 @@ module Proofs_memory = struct
     else
       let () = add t key `Pending in
       let%map result = f () in
-      add t key (`Done result)
+      add t key (`Proved result)
 end
 
 type t =
@@ -132,9 +133,11 @@ let execute_request t ~logger ~(executor : Executor.t) (key, d) =
   |> function
   | `Pending ->
       failwith "unreachable"
-  | `Done (Error e) ->
+  | `Proved (Error e) ->
       return (Error e)
-  | `Done (Ok forest) ->
+  | `Executed _ ->
+      failwith "Already executed"
+  | `Proved (Ok forest) ->
       let command : Zkapp_command.t =
         { fee_payer =
             Account_update.Fee_payer.make
@@ -153,7 +156,9 @@ let execute_request t ~logger ~(executor : Executor.t) (key, d) =
         ; memo = Signed_command_memo.empty
         }
       in
-      Executor.send_zkapp_command ~logger executor command
+      let%map result = Executor.send_zkapp_command ~logger executor command in
+      Proofs_memory.add t.proofs_memory key (`Executed result) ;
+      result
 
 module Deposit_request = struct
   type t =
@@ -1250,4 +1255,5 @@ let prove t prover =
   let%map () = d in
   Proofs_memory.get t.proofs_memory key
   |> Option.value_exn |> snd
-  |> function `Pending -> failwith "unreachable" | `Done x -> x
+  |> function
+  | `Pending | `Executed _ -> failwith "unreachable" | `Proved x -> x
