@@ -206,11 +206,14 @@ module Z = struct
                      Pickles.Side_loaded.Verification_key.dummy ) )
         ; permissions =
             Set
-              ( if
-                (* see #286 *)
-                Option.is_some Is_compile_simple_real.is_compile_simple_real
-              then proof_permissions
-              else none_permissions )
+              { ( if
+                  (* see #286 *)
+                  Option.is_some Is_compile_simple_real.is_compile_simple_real
+                then proof_permissions
+                else none_permissions )
+                with
+                access = Signature
+              }
         }
       in
       ( `Outer outer_update
@@ -227,6 +230,138 @@ module Z = struct
       unsafe_deploy ~ledger_hash:(L.merkle_root l)
   end
 end
+
+let deploy_holder_exn ~signature_kind ~(signer : Keypair.t)
+    ~(holder_kp : Keypair.t) ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)
+    ~(account_creation_fee : Currency.Fee.t) () =
+  let%map _, `Holder holder_update, _ =
+    Z.Outer.deploy_exn
+      ~pause_key:
+        ( Public_key.compress
+            (Zeko_types.Even_PC.generate_even_signer ()).public_key
+        |> Zeko_types.Even_PC.create_exn )
+      ~sequencer:
+        ( Public_key.compress
+            (Zeko_types.Even_PC.generate_even_signer ()).public_key
+        |> Zeko_types.Even_PC.create_exn )
+      ~da_key:Field.zero ~acc_set:Account_set.dummy
+      (L.create_ephemeral ~depth:35 ())
+      ()
+  in
+  let holder_au =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Public_key.compress holder_kp.public_key
+        ; implicit_account_creation_fee = false
+        ; update = holder_update
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+  in
+  let sender_update =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Public_key.compress signer.public_key
+        ; balance_change =
+            Currency.Amount.(
+              of_fee account_creation_fee |> Signed.of_unsigned |> Signed.negate)
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+  in
+  let call_forest =
+    Zkapp_command.Call_forest.accumulate_hashes
+      ~hash_account_update:
+        (Zkapp_command.Call_forest.Digest.Account_update.create ~signature_kind)
+    @@ Zkapp_command.Call_forest.of_account_updates
+         ~account_update_depth:(fun _ -> 0)
+         [ holder_au; sender_update ]
+  in
+  let command : Zkapp_command.t =
+    { fee_payer =
+        { Account_update.Fee_payer.body =
+            { public_key = Public_key.compress signer.public_key
+            ; fee
+            ; valid_until = None
+            ; nonce
+            }
+        ; authorization = Signature.dummy
+        }
+    ; account_updates = call_forest
+    ; memo = Signed_command_memo.empty
+    }
+  in
+  Utils.sign_zkapp_command ~signature_kind command [ holder_kp; signer ]
+
+let deploy_token_owner_exn ~signature_kind ~(signer : Keypair.t)
+    ~(token_owner_kp : Keypair.t) ~(fee : Currency.Fee.t)
+    ~(nonce : Account.Nonce.t) ~(account_creation_fee : Currency.Fee.t) () =
+  let%map _, _, `Token_owner token_owner_update =
+    Z.Outer.deploy_exn
+      ~pause_key:
+        ( Public_key.compress
+            (Zeko_types.Even_PC.generate_even_signer ()).public_key
+        |> Zeko_types.Even_PC.create_exn )
+      ~sequencer:
+        ( Public_key.compress
+            (Zeko_types.Even_PC.generate_even_signer ()).public_key
+        |> Zeko_types.Even_PC.create_exn )
+      ~da_key:Field.zero ~acc_set:Account_set.dummy
+      (L.create_ephemeral ~depth:35 ())
+      ()
+  in
+  let token_owner_au =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Public_key.compress token_owner_kp.public_key
+        ; implicit_account_creation_fee = false
+        ; update = token_owner_update
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+  in
+  let sender_update =
+    Account_update.with_aux
+      ~body:
+        { Body.dummy with
+          public_key = Public_key.compress signer.public_key
+        ; balance_change =
+            Currency.Amount.(
+              of_fee account_creation_fee |> Signed.of_unsigned |> Signed.negate)
+        ; use_full_commitment = true
+        ; authorization_kind = Signature
+        }
+      ~authorization:(Control.Poly.Signature Signature.dummy)
+  in
+  let call_forest =
+    Zkapp_command.Call_forest.accumulate_hashes
+      ~hash_account_update:
+        (Zkapp_command.Call_forest.Digest.Account_update.create ~signature_kind)
+    @@ Zkapp_command.Call_forest.of_account_updates
+         ~account_update_depth:(fun _ -> 0)
+         [ token_owner_au; sender_update ]
+  in
+  let command : Zkapp_command.t =
+    { fee_payer =
+        { Account_update.Fee_payer.body =
+            { public_key = Public_key.compress signer.public_key
+            ; fee
+            ; valid_until = None
+            ; nonce
+            }
+        ; authorization = Signature.dummy
+        }
+    ; account_updates = call_forest
+    ; memo = Signed_command_memo.empty
+    }
+  in
+  Utils.sign_zkapp_command ~signature_kind command [ token_owner_kp; signer ]
 
 let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
     ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~(outer_kp : Keypair.t)
