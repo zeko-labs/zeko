@@ -1047,6 +1047,9 @@ module Types = struct
       ; chain_l2 : Mina_signature_kind.t
       ; withdrawal_delay : int
       ; outer_action_delay : int
+      ; bridge_fee_recipient_l1 : Public_key.Compressed.t
+      ; bridge_fee_recipient_l2 : Public_key.Compressed.t
+      ; bridge_proof_fee : Currency.Amount.t
       }
 
     let signature_kind_to_string = function
@@ -1090,6 +1093,15 @@ module Types = struct
           ; field "outerActionDelay" ~typ:(non_null int)
               ~args:Arg.[]
               ~resolve:(fun _ t -> t.outer_action_delay)
+          ; field "bridgeFeeRecipientL1" ~typ:(non_null public_key)
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.bridge_fee_recipient_l1)
+          ; field "bridgeFeeRecipientL2" ~typ:(non_null public_key)
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.bridge_fee_recipient_l2)
+          ; field "bridgeProofFee" ~typ:(non_null amount)
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.bridge_proof_fee)
           ] )
   end
 
@@ -2757,6 +2769,9 @@ module Queries = struct
         ; outer_action_delay =
             Mina_numbers.Global_slot_span.to_int
               sequencer.config.commit_validity_period
+        ; bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+        ; bridge_fee_recipient_l2 = Inputs.bridge_fee_recipient_l2
+        ; bridge_proof_fee = Inputs.bridge_proof_fee
         } )
 
   let sequencer_pk =
