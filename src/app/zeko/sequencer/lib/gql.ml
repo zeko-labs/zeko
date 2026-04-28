@@ -2672,8 +2672,8 @@ module Queries = struct
       ~typ:(non_null Types.genesis_constants)
       ~resolve:(fun _ () -> ())
 
-  let proved_forest =
-    io_field "provedForest" ~doc:"Query proved forest in a JSON format"
+  let proving_result =
+    io_field "provingResult" ~doc:"Query proving result in a JSON format"
       ~typ:string
       ~args:Arg.[ arg "key" ~typ:(non_null string) ]
       ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () key ->
@@ -2809,7 +2809,7 @@ module Queries = struct
     ; accounts_for_pk
     ; token_accounts
     ; genesis_constants
-    ; proved_forest
+    ; proving_result
     ; state_hashes
     ; token_owner
     ; network_id
