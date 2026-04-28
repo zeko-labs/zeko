@@ -69,15 +69,11 @@ let send_direct ~logger ~l1_uri ~(signers : Keypair.t list)
             ; fee = Currency.Fee.of_mina_string_exn "0.1"
             ; valid_until = None
             ; nonce
-            }
         ; authorization = Signature.dummy
-        }
-    ; account_updates
-    ; memo = Signed_command_memo.empty
     }
   in
   let command =
-    Utils.sign_zkapp_command ~signature_kind command ([ fee_signer ] @ signers)
+    Utils.sign_zkapp_command ~signature_kind command ( fee_signer :: signers)
     |> Zkapp_command.read_all_proofs_from_disk
   in
   match%map Gql_client.send_zkapp l1_uri command with
@@ -483,9 +479,9 @@ let update_inner_verification_keys =
            Lazy.force Bridge_inst_mina.System_L2.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          in
-         (* let deploy_config =
-              Option.value_exn Zeko_circuits_config.deploy_config
-            in *)
+         let deploy_config =
+           Option.value_exn Zeko_circuits_config.deploy_config
+         in
          let inner =
            ( inner_vk
            , fetched_inner_vk
