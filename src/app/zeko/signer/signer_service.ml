@@ -130,7 +130,7 @@ module Command_signing = struct
     | None ->
         Ok ()
     | Some max_balance_change ->
-        Zkapp_command.all_account_updates_list command
+        Zkapp_command.account_updates_list command
         |> List.filter ~f:(fun account_update ->
                Public_key.Compressed.equal public_key
                  account_update.body.public_key
