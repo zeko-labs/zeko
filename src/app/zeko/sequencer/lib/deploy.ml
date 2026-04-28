@@ -235,18 +235,24 @@ let deploy_holder_exn ~signature_kind ~(signer : Keypair.t)
     ~(holder_kp : Keypair.t) ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)
     ~(account_creation_fee : Currency.Fee.t) () =
   let%map _, `Holder holder_update, _ =
-    Z.Outer.deploy_exn
-      ~pause_key:
-        ( Public_key.compress
-            (Zeko_types.Even_PC.generate_even_signer ()).public_key
-        |> Zeko_types.Even_PC.create_exn )
-      ~sequencer:
-        ( Public_key.compress
-            (Zeko_types.Even_PC.generate_even_signer ()).public_key
-        |> Zeko_types.Even_PC.create_exn )
-      ~da_key:Field.zero ~acc_set:Account_set.dummy
-      (L.create_ephemeral ~depth:35 ())
-      ()
+    L.with_ephemeral_ledger ~depth:35 ~f:(fun ledger ->
+        let%bind `Inner inner_account, `Holder holder_account =
+          Z.Inner.initial_accounts ()
+        in
+        List.iter [ inner_account; holder_account ] ~f:(fun acc ->
+            L.create_new_account_exn ledger
+              (Account_id.create acc.public_key acc.token_id)
+              acc ) ;
+        Z.Outer.deploy_exn
+          ~pause_key:
+            ( Public_key.compress
+                (Zeko_types.Even_PC.generate_even_signer ()).public_key
+            |> Zeko_types.Even_PC.create_exn )
+          ~sequencer:
+            ( Public_key.compress
+                (Zeko_types.Even_PC.generate_even_signer ()).public_key
+            |> Zeko_types.Even_PC.create_exn )
+          ~da_key:Field.zero ~acc_set:Account_set.dummy ledger () )
   in
   let holder_au =
     Account_update.with_aux
@@ -301,18 +307,24 @@ let deploy_token_owner_exn ~signature_kind ~(signer : Keypair.t)
     ~(token_owner_kp : Keypair.t) ~(fee : Currency.Fee.t)
     ~(nonce : Account.Nonce.t) ~(account_creation_fee : Currency.Fee.t) () =
   let%map _, _, `Token_owner token_owner_update =
-    Z.Outer.deploy_exn
-      ~pause_key:
-        ( Public_key.compress
-            (Zeko_types.Even_PC.generate_even_signer ()).public_key
-        |> Zeko_types.Even_PC.create_exn )
-      ~sequencer:
-        ( Public_key.compress
-            (Zeko_types.Even_PC.generate_even_signer ()).public_key
-        |> Zeko_types.Even_PC.create_exn )
-      ~da_key:Field.zero ~acc_set:Account_set.dummy
-      (L.create_ephemeral ~depth:35 ())
-      ()
+    L.with_ephemeral_ledger ~depth:35 ~f:(fun ledger ->
+        let%bind `Inner inner_account, `Holder holder_account =
+          Z.Inner.initial_accounts ()
+        in
+        List.iter [ inner_account; holder_account ] ~f:(fun acc ->
+            L.create_new_account_exn ledger
+              (Account_id.create acc.public_key acc.token_id)
+              acc ) ;
+        Z.Outer.deploy_exn
+          ~pause_key:
+            ( Public_key.compress
+                (Zeko_types.Even_PC.generate_even_signer ()).public_key
+            |> Zeko_types.Even_PC.create_exn )
+          ~sequencer:
+            ( Public_key.compress
+                (Zeko_types.Even_PC.generate_even_signer ()).public_key
+            |> Zeko_types.Even_PC.create_exn )
+          ~da_key:Field.zero ~acc_set:Account_set.dummy ledger () )
   in
   let token_owner_au =
     Account_update.with_aux
