@@ -69,20 +69,16 @@ type t =
   { proofs_memory : Proofs_memory.t
   ; provers : Zeko_prover.Client.t
   ; proof_cache_db : Proof_cache_tag.cache_db
-  ; fee_recipient_l1 : Public_key.Compressed.t
-  ; fee_recipient_l2 : Public_key.Compressed.t
   ; verification_keys : Zeko_prover.Prover.Verification_key_hashes.t
   }
 
-let create ~provers ~proof_cache_db ~fee_recipient_l1 ~fee_recipient_l2 =
+let create ~provers ~proof_cache_db =
   let%map verification_keys =
     Zeko_prover.Client.verification_keys provers >>| Or_error.ok_exn
   in
   { proofs_memory = Proofs_memory.create ~lifetime:Float.(60. * 20.)
   ; provers
   ; proof_cache_db
-  ; fee_recipient_l1
-  ; fee_recipient_l2
   ; verification_keys
   }
 
@@ -126,7 +122,7 @@ let fold ~(init_fn : 'init_var -> 'stmt_var Checked.t)
      in
      As_prover.read stmt_typ stmt )
 
-let execute_request t ~logger ~(executor : Executor.t) (key, d) =
+let execute_request ?label t ~logger ~(executor : Executor.t) (key, d) =
   let%bind () = d in
   Proofs_memory.get t.proofs_memory key
   |> Option.value_exn |> snd
@@ -156,6 +152,14 @@ let execute_request t ~logger ~(executor : Executor.t) (key, d) =
         ; memo = Signed_command_memo.empty
         }
       in
+      let () =
+        match label with
+        | None ->
+            ()
+        | Some label ->
+            printf "%s: %s\n%!" label
+              (Yojson.Safe.to_string (Zkapp_command.to_yojson command))
+      in
       let%map result = Executor.send_zkapp_command ~logger executor command in
       Proofs_memory.add t.proofs_memory key (`Executed result) ;
       result
@@ -171,7 +175,7 @@ module Deposit_request = struct
     [@@deriving snarky]
   end
 
-  let make_witness t (deposit_params : Bridge_state.Deposit_params_base.t) :
+  let make_witness (deposit_params : Bridge_state.Deposit_params_base.t) :
       Bridge.Outer_action_witness.serializable =
     let receive_forest =
       let user_children =
@@ -200,7 +204,7 @@ module Deposit_request = struct
         ( Account_update.with_aux
             ~body:
               { Mina_base.Account_update.Body.dummy with
-                public_key = t.fee_recipient_l1
+                public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l1
               ; balance_change =
                   Currency.Amount.Signed.of_unsigned
                     Zeko_circuits_config.Inputs.bridge_proof_fee
@@ -226,7 +230,7 @@ module Deposit_request = struct
       Bridge.Outer_action_witness.of_serializable
         ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
         ~vk_hash:t.verification_keys.outer_rules
-        (make_witness t deposit_params)
+        (make_witness deposit_params)
     in
     try
       let _stmt, (body, _, calls) =
@@ -293,7 +297,7 @@ module Deposit_request = struct
                   | Error e ->
                       Error.raise e
                 in
-                let witness = make_witness t deposit_params in
+                let witness = make_witness deposit_params in
                 match%map
                   Zeko_prover.Client.outer_action_witness t.provers witness
                 with
@@ -363,7 +367,7 @@ module Withdrawal_request = struct
         ( Account_update.with_aux
             ~body:
               { Mina_base.Account_update.Body.dummy with
-                public_key = t.fee_recipient_l2
+                public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l2
               ; balance_change =
                   Currency.Amount.Signed.of_unsigned
                     Zeko_circuits_config.Inputs.bridge_proof_fee
