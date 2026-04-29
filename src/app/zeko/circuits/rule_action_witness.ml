@@ -20,6 +20,20 @@ struct
       exists ~compute:(V.get w) Witness.typ
     in
     let* actions = Outer_action.witness_to_actions_var witness in
+    let* () =
+      let open Mina_base in
+      let@ () = make_checked in
+      let@ () = Run.as_prover in
+      let children =
+        Run.As_prover.read Zkapp_call_forest.typ witness.children
+      in
+      let hash = Zkapp_command.Call_forest.hash children in
+      Core.printf "children: %s\n"
+        ( Yojson.Safe.to_string @@ Zkapp_command.account_updates_to_json
+        @@ Zkapp_command.Call_forest.map children
+             ~f:Account_update.read_all_proofs_from_disk ) ;
+      Core.printf !"Hash: %{sexp: Field.t}\n" (hash :> Field.t)
+    in
     let valid_while = Slot_range.Checked.to_valid_while witness.slot_range in
     let* status_flags_precondition =
       Outer_state.Status_flags.of_bools_var ~paused:Boolean.false_
