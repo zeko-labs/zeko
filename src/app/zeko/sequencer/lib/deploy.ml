@@ -59,14 +59,11 @@ module Z = struct
           public_key = Zeko_constants.inner_public_key
         ; balance = Currency.Balance.max_int
         ; permissions =
-            { ( if
-                (* see #286 *)
-                Option.is_some Is_compile_simple_real.is_compile_simple_real
-              then proof_permissions
-              else none_permissions )
-              with
-              access = Permissions.Auth_required.None
-            }
+            ( if
+              (* see #286 *)
+              Option.is_some Is_compile_simple_real.is_compile_simple_real
+            then { proof_permissions with access = None }
+            else none_permissions )
         ; zkapp =
             Some
               { Zkapp_account.default with
@@ -150,14 +147,11 @@ module Z = struct
                      Pickles.Side_loaded.Verification_key.dummy ) )
         ; permissions =
             Set
-              { ( if
-                  (* see #286 *)
-                  Option.is_some Is_compile_simple_real.is_compile_simple_real
-                then proof_permissions
-                else none_permissions )
-                with
-                access = None
-              }
+              ( if
+                (* see #286 *)
+                Option.is_some Is_compile_simple_real.is_compile_simple_real
+              then { proof_permissions with access = None }
+              else none_permissions )
         }
       in
       let%bind holder_vk =
@@ -178,14 +172,11 @@ module Z = struct
                      Pickles.Side_loaded.Verification_key.dummy ) )
         ; permissions =
             Set
-              { ( if
-                  (* see #286 *)
-                  Option.is_some Is_compile_simple_real.is_compile_simple_real
-                then proof_permissions
-                else none_permissions )
-                with
-                access = None
-              }
+              ( if
+                (* see #286 *)
+                Option.is_some Is_compile_simple_real.is_compile_simple_real
+              then { proof_permissions with access = None }
+              else none_permissions )
         }
       in
       let%map token_owner_vk =
@@ -206,14 +197,11 @@ module Z = struct
                      Pickles.Side_loaded.Verification_key.dummy ) )
         ; permissions =
             Set
-              { ( if
-                  (* see #286 *)
-                  Option.is_some Is_compile_simple_real.is_compile_simple_real
-                then proof_permissions
-                else none_permissions )
-                with
-                access = Signature
-              }
+              ( if
+                (* see #286 *)
+                Option.is_some Is_compile_simple_real.is_compile_simple_real
+              then { proof_permissions with access = Either }
+              else none_permissions )
         }
       in
       ( `Outer outer_update
