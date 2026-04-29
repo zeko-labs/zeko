@@ -833,7 +833,8 @@ let () =
                     (Random_oracle.Input.Chunked.field tx_commitment) ) )
         in
         Bridge_prover.(
-          execute_request ~logger ~executor:l1_executor !sequencer.bridge_prover
+          execute_request ~label:"SubmitDeposit" ~logger ~executor:l1_executor
+            !sequencer.bridge_prover
             (Deposit_request.f ~t:!sequencer.bridge_prover ~logger
                { deposit_params; transferrer = transferrer_update } ))
         >>| Or_error.ok_exn
@@ -1084,7 +1085,8 @@ let () =
             (Random_oracle.Input.Chunked.field commitment)
         in
         Bridge_prover.(
-          execute_request ~logger ~executor:l2_executor !sequencer.bridge_prover
+          execute_request ~label:"FinalizeDeposit" ~logger ~executor:l2_executor
+            !sequencer.bridge_prover
             (Finalize_deposit.f ~t:!sequencer.bridge_prover ~logger witness
                helper_account_signature ))
         >>| Or_error.ok_exn
@@ -1402,7 +1404,8 @@ let () =
                     (Random_oracle.Input.Chunked.field tx_commitment) ) )
         in
         Bridge_prover.(
-          execute_request ~logger ~executor:l2_executor !sequencer.bridge_prover
+          execute_request ~label:"SubmitWithdrawal" ~logger
+            ~executor:l2_executor !sequencer.bridge_prover
             (Withdrawal_request.f ~t:!sequencer.bridge_prover ~logger
                { withdrawal_params; transferrer = transferrer_update } ))
         >>| Or_error.ok_exn
@@ -1643,7 +1646,8 @@ let () =
             (Random_oracle.Input.Chunked.field commitment)
         in
         Bridge_prover.(
-          execute_request ~logger ~executor:l1_executor !sequencer.bridge_prover
+          execute_request ~label:"FinalizeWithdrawal" ~logger
+            ~executor:l1_executor !sequencer.bridge_prover
             (Finalize_withdrawal.f ~t:!sequencer.bridge_prover ~logger witness
                helper_account_signature ))
         >>| Or_error.ok_exn

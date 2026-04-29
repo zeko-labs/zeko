@@ -1086,11 +1086,8 @@ module Sequencer = struct
         }
     in
     let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
-    let%bind bridge_prover =
-      Bridge_prover.create ~provers ~proof_cache_db
-        ~fee_recipient_l1:(Signer_service.Signer.public_key signer)
-        ~fee_recipient_l2:(Signer_service.Signer.public_key signer)
-    in
+    let%bind bridge_prover = Bridge_prover.create ~provers ~proof_cache_db in
+
     let t =
       { ledger
       ; imt
