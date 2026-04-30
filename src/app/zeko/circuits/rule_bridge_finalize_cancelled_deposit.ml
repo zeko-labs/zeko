@@ -22,6 +22,10 @@ module Make (Inputs : sig
 
   val chain_l1 : Mina_signature_kind.t
 
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_proof_fee : Currency.Amount.t
+
   module Deposit_params : Bridge_state.DEPOSIT_PARAMS
 
   module Check_accepted :
@@ -35,6 +39,10 @@ module Make (Inputs : sig
             module Deposit_params = Deposit_params
 
             let chain_l1 = chain_l1
+
+            let bridge_fee_recipient_l1 = bridge_fee_recipient_l1
+
+            let bridge_proof_fee = bridge_proof_fee
           end)
           ()
 end)

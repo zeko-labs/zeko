@@ -204,12 +204,13 @@ module Deposit_request = struct
         ( Account_update.with_aux
             ~body:
               { Mina_base.Account_update.Body.dummy with
-                public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l1
+                use_full_commitment = true
+              ; public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l1
               ; balance_change =
                   Currency.Amount.Signed.of_unsigned
                     Zeko_circuits_config.Inputs.bridge_proof_fee
+              ; may_use_token = Parents_own_token
               ; authorization_kind = None_given
-              ; use_full_commitment = false
               }
             ~authorization:Control.Poly.None_given
         |> Account_update.read_all_proofs_from_disk )
@@ -220,7 +221,10 @@ module Deposit_request = struct
         { aux =
             Utils.value_to_hash ~init:Zeko_constants.deposit_salt
               Zeko_circuits.Bridge_state.Deposit_params_base.typ deposit_params
-        ; children = receive_forest @ fee_payout_forest
+        ; children =
+            Utils.rehash_forest
+              ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+              (receive_forest @ fee_payout_forest)
         ; slot_range = Slot_range.infinite
         }
     }
