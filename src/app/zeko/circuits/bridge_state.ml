@@ -313,7 +313,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
 
 let withdrawal_action (type withdrawal_params_var) ~chain_l2
     ~(holder_account_l2 : PC.t) ~(token_owner_l2 : Account_id.t option)
-    ~l2_holder_vk_hash
+    ~l2_holder_vk_hash ~bridge_fee_recipient_l2 ~bridge_proof_fee
     (module Withdrawal_params : WITHDRAWAL_PARAMS
       with type var = withdrawal_params_var ) (params : Withdrawal_params.var) :
     Rollup_state.Inner_action.var Checked.t =
@@ -343,6 +343,18 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
             } )
     }
   in
+  let fee_payout =
+    { default_account_update with
+      public_key = bridge_fee_recipient_l2
+    ; token_id = constant Token_id.typ Token_id.default
+    ; balance_change =
+        Currency.Amount.Signed.Checked.of_unsigned bridge_proof_fee
+    ; may_use_token =
+        constant Account_update.May_use_token.typ Parents_own_token
+    ; authorization_kind =
+        constant Account_update.Authorization_kind.typ None_given
+    }
+  in
   let a', (children : Calls.t) =
     match token_owner_l2 with
     | None ->
@@ -365,7 +377,8 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
         , (a, []) :: Raw custom_params.nested_children )
   in
   let* children' =
-    Calls.hash ~chain:chain_l2 ((a', children) :: Raw base_params.children)
+    Calls.hash ~chain:chain_l2
+      ((a', children) :: (fee_payout, []) :: Raw base_params.children)
   in
   let hash_prefix = Zeko_constants.withdrawal_salt in
   let* aux = var_to_hash ~init:hash_prefix Withdrawal_params.typ params in

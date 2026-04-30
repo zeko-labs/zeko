@@ -178,10 +178,6 @@ module Deposit_request = struct
   let make_witness (deposit_params : Bridge_state.Deposit_params_base.t) :
       Bridge.Outer_action_witness.serializable =
     let receive_forest =
-      let user_children =
-        Zkapp_command.Call_forest.map deposit_params.children
-          ~f:Account_update.read_all_proofs_from_disk
-      in
       Zkapp_command.Call_forest.cons
         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
         ( Account_update.with_aux
@@ -196,7 +192,7 @@ module Deposit_request = struct
               }
             ~authorization:Control.Poly.None_given
         |> Account_update.read_all_proofs_from_disk )
-        user_children
+        []
     in
     let fee_payout_forest =
       Zkapp_command.Call_forest.cons
@@ -371,20 +367,17 @@ module Withdrawal_request = struct
         ( Account_update.with_aux
             ~body:
               { Mina_base.Account_update.Body.dummy with
-                public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l2
+                use_full_commitment = true
+              ; public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l2
               ; balance_change =
                   Currency.Amount.Signed.of_unsigned
                     Zeko_circuits_config.Inputs.bridge_proof_fee
+              ; may_use_token = Parents_own_token
               ; authorization_kind = None_given
-              ; use_full_commitment = false
               }
             ~authorization:Control.Poly.None_given
         |> Account_update.read_all_proofs_from_disk )
         []
-    in
-    let user_children =
-      Zkapp_command.Call_forest.map withdrawal_params.children
-        ~f:Account_update.read_all_proofs_from_disk
     in
     { public_key = Zeko_circuits_config.Inputs.inner_public_key
     ; witness =
@@ -392,7 +385,10 @@ module Withdrawal_request = struct
             Utils.value_to_hash ~init:Zeko_constants.withdrawal_salt
               Zeko_circuits.Bridge_state.Withdrawal_params_base.typ
               withdrawal_params
-        ; children = inner_receive_forest @ fee_payout_forest @ user_children
+        ; children =
+            Utils.rehash_forest
+              ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+              (inner_receive_forest @ fee_payout_forest)
         }
     }
 

@@ -30,6 +30,8 @@ module Make (Inputs : sig
 
   val bridge_fee_recipient_l1 : PC.t
 
+  val bridge_fee_recipient_l2 : PC.t
+
   val chain_l1 : Mina_signature_kind.t
 
   val chain_l2 : Mina_signature_kind.t
@@ -126,6 +128,8 @@ struct
           let* action =
             withdrawal_action ~chain_l2 ~holder_account_l2 ~token_owner_l2
               ~l2_holder_vk_hash
+              ~bridge_fee_recipient_l2:(constant PC.typ bridge_fee_recipient_l2)
+              ~bridge_proof_fee:(constant Currency.Amount.typ bridge_proof_fee)
               (module Withdrawal_params)
               withdrawal_params
           in
