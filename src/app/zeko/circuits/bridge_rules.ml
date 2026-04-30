@@ -43,6 +43,10 @@ struct
         let chain_l1 = Inputs.chain_l1
 
         module Deposit_params = Deposit_params_base
+
+        let bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+
+        let bridge_proof_fee = Inputs.bridge_proof_fee
       end)
       ()
 
@@ -164,6 +168,10 @@ struct
         let chain_l1 = Inputs.chain_l1
 
         module Deposit_params = Deposit_params_custom
+
+        let bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+
+        let bridge_proof_fee = Inputs.bridge_proof_fee
       end)
       ()
 
