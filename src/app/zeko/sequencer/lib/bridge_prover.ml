@@ -622,12 +622,12 @@ module Finalize_deposit = struct
       in
       let forest =
         Zkapp_command.Call_forest.cons
-          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~calls
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~calls
           account_update []
         |> Zkapp_command.Call_forest.map
              ~f:Account_update.read_all_proofs_from_disk
         |> Utils.rehash_forest
-             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
       in
       let tx_commitment =
         Zkapp_command.Transaction_commitment.create
@@ -645,7 +645,7 @@ module Finalize_deposit = struct
        ; ase_elems
        ; check_accepted_elems
        } :
-        t_ ) =
+        t_ ) (helper_account_signature : Signature.t) =
     let (Typ typ) = typ in
     let (Typ check_accepted_elems_typ) =
       Bridge_inst_mina.Check_accepted.Definition.Elem.typ
@@ -666,8 +666,10 @@ module Finalize_deposit = struct
           check_accepted_elems_typ.value_to_fields x |> fst |> Array.to_list )
       |> List.join |> List.to_array
     in
+    let r, _s = helper_account_signature in
     Array.append t ase_elems
     |> Array.append check_accepted_elems
+    |> Array.append [| r |]
     |> Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
@@ -682,7 +684,7 @@ module Finalize_deposit = struct
        ; helper_account_new
        } as request :
         t_ ) (helper_account_signature : Signature.t) =
-    let key = key request in
+    let key = key request helper_account_signature in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
