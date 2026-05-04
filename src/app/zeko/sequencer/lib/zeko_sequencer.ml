@@ -429,7 +429,9 @@ module Sequencer = struct
                 in
                 Core.printf "full_commitment: %s\n"
                   (Field.to_string full_commitment) ;
-                Core.printf "commitment: %s\n" (Field.to_string commitment)
+                Core.printf "commitment: %s\n" (Field.to_string commitment) ;
+                Core.printf "command: %s\n"
+                  (Zkapp_command.to_yojson command |> Yojson.Safe.to_string)
           in
 
           let%bind.Deferred.Result () =
