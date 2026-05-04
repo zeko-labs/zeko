@@ -20,6 +20,7 @@ type t =
   ; withdrawal_delay : Global_slot_span.t
   ; bridge_fee_recipient_l1 : Public_key.Compressed.t
   ; bridge_fee_recipient_l2 : Public_key.Compressed.t
+  ; outer_account_creation_fee : Currency.Fee.t
   }
 [@@deriving yojson]
 
@@ -82,6 +83,8 @@ let (t, deploy_config) : t * Deploy.t option =
         ; withdrawal_delay = Global_slot_span.of_int 5
         ; bridge_fee_recipient_l1 = fst bridge_fee_recipient_l1
         ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
+        ; outer_account_creation_fee =
+            Zeko_constants.constraint_constants.account_creation_fee
         }
       , Some
           { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
@@ -143,6 +146,8 @@ module Inputs = struct
   let bridge_fee_recipient_l1 = t.bridge_fee_recipient_l1
 
   let bridge_fee_recipient_l2 = t.bridge_fee_recipient_l2
+
+  let outer_account_creation_fee = t.outer_account_creation_fee
 
   let holder_account_l1_permissions_enabled : Permissions.t =
     { edit_state = Proof
