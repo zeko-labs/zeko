@@ -85,9 +85,6 @@ let create ~provers ~proof_cache_db =
 let wrap_with_transferrer ~signature_kind transferrer calls =
   Zkapp_command.Call_forest.cons ~signature_kind transferrer calls
 
-let transferrer_key ~signature_kind:_ transferrer =
-  [%sexp_of: Account_update.Stable.Latest.t] transferrer |> Sexp.to_string
-
 let validate_transferrer ~expected_amount transferrer =
   (* TODO *)
   let _ = expected_amount in
@@ -267,20 +264,29 @@ module Deposit_request = struct
       Ok (forest, `Commitment tx_commitment)
     with exn -> Error (Error.of_exn exn)
 
-  let key t =
+  let key t (transferrer : Account_update.Stable.V1.t) =
+    let transferrer_hash =
+      Account_update.digest ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+        transferrer
+    in
+    let auth =
+      match transferrer.authorization with
+      | Control.Poly.Signature s ->
+          Signature.to_base58_check s
+      | Control.Poly.Proof _ ->
+          "Proof"
+      | Control.Poly.None_given ->
+          "None_given"
+    in
     let (Typ typ) = Key.typ in
     typ.value_to_fields t |> fst
+    |> Array.append [| transferrer_hash |]
     |> Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
-    |> Field.to_string
+    |> Field.to_string |> ( ^ ) ":" |> ( ^ ) auth
 
   let f ~t ~logger ({ deposit_params; transferrer } : t) =
-    let key =
-      key { deposit_params }
-      ^ ":"
-      ^ transferrer_key ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-          transferrer
-    in
+    let key = key { deposit_params } transferrer in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
@@ -438,12 +444,26 @@ module Withdrawal_request = struct
       Ok (forest, `Commitment tx_commitment)
     with exn -> Error (Error.of_exn exn)
 
-  let key t =
+  let key t (transferrer : Account_update.Stable.V1.t) =
+    let transferrer_hash =
+      Account_update.digest ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+        transferrer
+    in
+    let auth =
+      match transferrer.authorization with
+      | Control.Poly.Signature s ->
+          Signature.to_base58_check s
+      | Control.Poly.Proof _ ->
+          "Proof"
+      | Control.Poly.None_given ->
+          "None_given"
+    in
     let (Typ typ) = Key.typ in
     typ.value_to_fields t |> fst
+    |> Array.append [| transferrer_hash |]
     |> Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
-    |> Field.to_string
+    |> Field.to_string |> ( ^ ) ":" |> ( ^ ) auth
 
   let f ~t ~logger ({ withdrawal_params; transferrer } : t) =
     let bridge_fee = Zeko_circuits_config.Inputs.bridge_proof_fee in
@@ -451,12 +471,7 @@ module Withdrawal_request = struct
       Currency.Amount.add withdrawal_params.amount bridge_fee
       |> Option.value_exn
     in
-    let key =
-      key { withdrawal_params }
-      ^ ":"
-      ^ transferrer_key ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-          transferrer
-    in
+    let key = key { withdrawal_params } transferrer in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
@@ -1125,7 +1140,7 @@ module Finalize_withdrawal = struct
        ; commit_ase_elems
        ; withdrawal_ase_elems
        } :
-        t_ ) =
+        t_ ) (helper_account_signature : Signature.t) =
     let (Typ typ) = typ in
     let t =
       typ.value_to_fields
@@ -1144,8 +1159,10 @@ module Finalize_withdrawal = struct
     in
     let commit_ase_elems = Array.of_list commit_ase_elems in
     let withdrawal_ase_elems = Array.of_list withdrawal_ase_elems in
+    let r, _s = helper_account_signature in
     Array.append t commit_ase_elems
     |> Array.append withdrawal_ase_elems
+    |> Array.append [| r |]
     |> Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
@@ -1165,7 +1182,7 @@ module Finalize_withdrawal = struct
        ; helper_account_new
        } as request :
         t_ ) (helper_account_signature : Signature.t) =
-    let key = key request in
+    let key = key request helper_account_signature in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
