@@ -32,6 +32,8 @@ module Make (Inputs : sig
 
   val bridge_fee_recipient_l2 : PC.t
 
+  val outer_account_creation_fee : Currency.Fee.t
+
   val chain_l1 : Mina_signature_kind.t
 
   val chain_l2 : Mina_signature_kind.t
@@ -290,8 +292,7 @@ struct
           let* () = Boolean.Assert.is_true (Boolean.not underflow) in
           let account_creation_fee =
             constant Currency.Amount.typ
-              (Currency.Amount.of_fee
-                 Zeko_constants.constraint_constants.account_creation_fee )
+              (Currency.Amount.of_fee outer_account_creation_fee)
           in
           let* paid_for_helper_account_creation, `Underflow underflow =
             Currency.Amount.Checked.sub_flagged recipient_payout

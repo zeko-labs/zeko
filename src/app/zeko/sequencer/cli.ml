@@ -151,6 +151,7 @@ let generate_circuits_config =
            ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
            ; bridge_fee_recipient_l1 = fst bridge_fee_recipient_l1
            ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
+           ; outer_account_creation_fee = Currency.Fee.of_mina_string_exn "1"
            }
          in
          let deploy_config : Zeko_circuits_config.Deploy.t =

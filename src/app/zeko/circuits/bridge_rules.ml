@@ -21,6 +21,8 @@ module Make_mina (Inputs : sig
 
   val bridge_fee_recipient_l2 : PC.t
 
+  val outer_account_creation_fee : Currency.Fee.t
+
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
@@ -145,6 +147,8 @@ module Make_custom (Inputs : sig
   val bridge_fee_recipient_l1 : PC.t
 
   val bridge_fee_recipient_l2 : PC.t
+
+  val outer_account_creation_fee : Currency.Fee.t
 
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
