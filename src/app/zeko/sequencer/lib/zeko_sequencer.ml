@@ -418,6 +418,20 @@ module Sequencer = struct
 
           let l = L.of_database t.ledger in
 
+          let () =
+            match command with
+            | Signed_command _ ->
+                ()
+            | Zkapp_command command ->
+                let commitment, full_commitment =
+                  Zkapp_command.get_transaction_commitments
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 command
+                in
+                Core.printf "full_commitment: %s\n"
+                  (Field.to_string full_commitment) ;
+                Core.printf "commitment: %s\n" (Field.to_string commitment)
+          in
+
           let%bind.Deferred.Result () =
             if skip_validity_check then return (Ok ())
             else
