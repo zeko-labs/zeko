@@ -1146,23 +1146,7 @@ let () =
           let target_ledger_hash = get_root !sequencer in
           [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
 
-      let cancel_deposit ~fee (signer : Keypair.t) deposit_params =
-        let%bind nonce =
-          Gql_client.fetch_nonce ~logger gql_uri
-            (Signature_lib.Public_key.compress signer.public_key)
-          >>| Or_error.ok_exn
-        in
-        let fee_payer =
-          Account_update.Fee_payer.
-            { body =
-                { public_key = Public_key.compress signer.public_key
-                ; fee = Currency.Fee.of_mina_int_exn fee
-                ; valid_until = None
-                ; nonce = Account.Nonce.of_uint32 nonce
-                }
-            ; authorization = Signature.dummy
-            }
-        in
+      let cancel_deposit (signer : Keypair.t) deposit_params =
         let%bind actions =
           Gql_client.fetch_actions ~logger gql_uri
             (Public_key.compress outer_kp.public_key)
@@ -1251,16 +1235,16 @@ let () =
                    [ Utils.actions_of_outer_action action ]
                    |> Zkapp_account.Actions_impl.hash ) )
         in
+        let helper_aid =
+          Account_id.create
+            (Public_key.compress signer.public_key)
+            (Account_id.derive_token_id
+               ~owner:
+                 (Account_id.of_public_key
+                    (Public_key.decompress_exn
+                       Zeko_circuits_config.Inputs.helper_token_owner_l1 ) ) )
+        in
         let%bind prev_next_cancelled_deposit =
-          let helper_aid =
-            Account_id.create
-              (Public_key.compress signer.public_key)
-              (Account_id.derive_token_id
-                 ~owner:
-                   (Account_id.of_public_key
-                      (Public_key.decompress_exn
-                         Zeko_circuits_config.Inputs.helper_token_owner_l1 ) ) )
-          in
           match%map
             Gql_client.fetch_state_opt ~logger gql_uri helper_aid
             >>| Or_error.ok_exn
@@ -1270,71 +1254,54 @@ let () =
           | None ->
               None
         in
-        let%map transfer_forest =
-          Bridge_prover.(
-            prove !sequencer.bridge_prover
-              (Finalize_cancelled_deposit.f ~logger
-                 { public_key =
-                     List.hd_exn Zeko_circuits_config.Inputs.holder_accounts_l1
-                 ; commit = nearest_commit
-                 ; before_commit =
-                     C.Rollup_state.Outer_action_state.unsafe_value_of_field
-                       before_nearest_commit_action_state
-                 ; commit_ase_source = fst commit_ase
-                 ; commit_ase_elems = snd commit_ase
-                 ; sync_ase_source = fst sync_ase
-                 ; sync_ase_elems = snd sync_ase
-                 ; check_accepted_init = fst check_accepted
-                 ; check_accepted_elems = snd check_accepted
-                 ; check_accepted_ase_source = fst check_accepted_ase
-                 ; check_accepted_ase_elems = snd check_accepted_ase
-                 ; prev_next_cancelled_deposit =
-                     Option.value prev_next_cancelled_deposit
-                       ~default:UInt32.zero
-                 } ))
-          >>| Or_error.ok_exn
+        let%bind prev_nonce =
+          match%map
+            Gql_client.fetch_nonce_opt ~logger gql_uri helper_aid
+            >>| Or_error.ok_exn
+          with
+          | Some nonce ->
+              nonce
+          | None ->
+              UInt32.zero
         in
-        let transferrer_update =
-          Account_update.with_no_aux
-            ~body:
-              { Account_update.Body.dummy with
-                public_key = Public_key.compress signer.public_key
-              ; balance_change =
-                  (let account_creation_fee =
-                     if Option.is_some prev_next_cancelled_deposit then
-                       Currency.Amount.zero
-                     else
-                       constraint_constants.account_creation_fee
-                       |> Currency.Amount.of_fee
-                   in
-                   Currency.Amount.(
-                     Signed.of_unsigned
-                     @@ Option.value_exn
-                          ~message:"Amount insufficient to create 2 accounts"
-                     @@ sub deposit_params.amount account_creation_fee) )
-              ; implicit_account_creation_fee = false
-              ; use_full_commitment = true
-              ; authorization_kind = None_given
-              }
-            ~authorization:Control.Poly.None_given
-        in
-        let transfer_cmd : Zkapp_command.t =
-          { fee_payer
-          ; account_updates =
-              Zkapp_command.Call_forest.cons
-                ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-                transferrer_update transfer_forest
-              |> Zkapp_command.Call_forest.map
-                   ~f:(Account_update.write_all_proofs_to_disk ~proof_cache_db)
-              |> Utils.rehash_forest
-                   ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-          ; memo = Signed_command_memo.empty
+        let witness : Bridge_prover.Finalize_cancelled_deposit.t_ =
+          { public_key =
+              List.hd_exn Zeko_circuits_config.Inputs.holder_accounts_l1
+          ; commit = nearest_commit
+          ; before_commit =
+              C.Rollup_state.Outer_action_state.unsafe_value_of_field
+                before_nearest_commit_action_state
+          ; commit_ase_source = fst commit_ase
+          ; commit_ase_elems = snd commit_ase
+          ; sync_ase_source = fst sync_ase
+          ; sync_ase_elems = snd sync_ase
+          ; check_accepted_init = fst check_accepted
+          ; check_accepted_elems = snd check_accepted
+          ; check_accepted_ase_source = fst check_accepted_ase
+          ; check_accepted_ase_elems = snd check_accepted_ase
+          ; prev_next_cancelled_deposit =
+              Option.value prev_next_cancelled_deposit ~default:UInt32.zero
+          ; prev_nonce
+          ; helper_account_new = Option.is_none prev_next_cancelled_deposit
           }
         in
-        Utils.sign_zkapp_command
-          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 transfer_cmd
-          [ signer ]
-        |> Zkapp_command.read_all_proofs_from_disk
+        let _forest, `Commitment commitment =
+          Bridge_prover.Finalize_cancelled_deposit.precompute_commitments
+            !sequencer.bridge_prover witness
+          |> Or_error.ok_exn
+        in
+        let helper_account_signature =
+          Signature_lib.Schnorr.Chunked.sign
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+            signer.private_key
+            (Random_oracle.Input.Chunked.field commitment)
+        in
+        Bridge_prover.(
+          execute_request ~label:"FinalizeCancelledDeposit" ~logger
+            ~executor:l1_executor !sequencer.bridge_prover
+            (Finalize_cancelled_deposit.f ~t:!sequencer.bridge_prover ~logger
+               witness helper_account_signature ))
+        >>| Or_error.ok_exn
       in
       print_endline "(* Cancel timeouted deposits 7-9 *)" ;
       run (fun () ->
@@ -1342,17 +1309,13 @@ let () =
             Deferred.List.iteri timeout_deposits
               ~f:(fun i (signer, deposit_params) ->
                 printf "(* Canceling deposit %d *)\n%!" i ;
-                let%bind command =
-                  cancel_deposit ~fee:1 signer deposit_params
-                in
-                let%bind _ = Gql_client.send_zkapp gql_uri command in
+                let%bind hash = cancel_deposit signer deposit_params in
                 let%bind _created =
                   Gql_client.For_tests.create_new_block ~logger gql_uri
                 in
                 let%map status =
                   Gql_client.For_tests.get_zkapp_command_status ~logger gql_uri
-                    (Mina_transaction.Transaction_hash.hash_command
-                       (Zkapp_command command) )
+                    hash
                 in
                 [%test_eq: string list list option] status None )
           in

@@ -1852,13 +1852,17 @@ module Types = struct
               * Bridge.Check_accepted_mina.Elem.t list
           ; check_accepted_ase : Ase.With_length.Stmt.t * Field.t list
           ; prev_next_cancelled_deposit : Unsigned.uint32
+          ; prev_nonce : Unsigned.uint32
+          ; helper_account_new : bool
+          ; helper_account_signature : Signature.t
           }
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeCancelledDepositInput"
             ~coerce:(fun public_key commit before_commit commit_ase sync_ase
                          (check_accepted_init, check_accepted_elems)
-                         check_accepted_ase prev_next_cancelled_deposit ->
+                         check_accepted_ase prev_next_cancelled_deposit
+                         prev_nonce helper_account_new helper_account_signature ->
               let%bind.Result check_accepted_elems =
                 Result.all check_accepted_elems
               in
@@ -1879,13 +1883,18 @@ module Types = struct
               ; check_accepted = (check_accepted_init, check_accepted_elems)
               ; check_accepted_ase
               ; prev_next_cancelled_deposit
+              ; prev_nonce
+              ; helper_account_new
+              ; helper_account_signature =
+                  Result.ok_or_failwith helper_account_signature
               } )
             ~split:(fun f (x : input) ->
               f x.public_key (Commit x.commit)
                 (Zeko_circuits.Rollup_state.Outer_action_state.raw
                    x.before_commit )
                 x.commit_ase x.sync_ase x.check_accepted x.check_accepted_ase
-                x.prev_next_cancelled_deposit )
+                x.prev_next_cancelled_deposit x.prev_nonce x.helper_account_new
+                (Raw x.helper_account_signature) )
             ~fields:
               [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
               ; arg "commit"
@@ -1902,6 +1911,10 @@ module Types = struct
               ; arg "checkAcceptedAse"
                   ~typ:(non_null Folder.Ase_with_length.arg_typ)
               ; arg "prevNextCancelledDeposit" ~typ:(non_null UInt32.arg_typ)
+              ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
+              ; arg "helperAccountNew" ~typ:(non_null bool)
+              ; arg "helperAccountSignature"
+                  ~typ:(non_null SignatureInput.arg_typ)
               ]
       end
 
@@ -2507,7 +2520,7 @@ module Mutations = struct
                   @@ Types.Input.Provers.Finalize_cancelled_deposit.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = { sequencer; _ }; _ } () witness ->
+        ~resolve:(fun { ctx = { sequencer; l1_executor; _ }; _ } () witness ->
           let%bind.Deferred.Result { public_key
                                    ; commit
                                    ; before_commit
@@ -2520,9 +2533,14 @@ module Mutations = struct
                                        ( check_accepted_ase_source
                                        , check_accepted_ase_elems )
                                    ; prev_next_cancelled_deposit
+                                   ; prev_nonce
+                                   ; helper_account_new
+                                   ; helper_account_signature
                                    } =
             return (Result.map_error witness ~f:Error.to_string_hum)
           in
+          let logger = Zeko_sequencer.(sequencer.logger) in
+          let t = Zeko_sequencer.(sequencer.bridge_prover) in
           let key, d =
             Bridge_prover.Finalize_cancelled_deposit.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)
@@ -2539,7 +2557,15 @@ module Mutations = struct
               ; check_accepted_ase_source
               ; check_accepted_ase_elems
               ; prev_next_cancelled_deposit
+              ; prev_nonce
+              ; helper_account_new
               }
+              helper_account_signature
+          in
+          let d =
+            Bridge_prover.execute_request t ~logger ~executor:l1_executor
+              (key, d)
+            >>| ignore
           in
           don't_wait_for d ; return (Ok key) )
 
