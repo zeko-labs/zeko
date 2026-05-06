@@ -577,7 +577,7 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
        * Field.t
        * Bridge.Check_accepted_mina.Elem.t list )
     ~(check_accepted_ase : Ase.With_length.Stmt.t * Field.t list)
-    ~prev_next_cancelled_deposit =
+    ~prev_next_cancelled_deposit ~prev_nonce ~helper_account_new =
   let%bind.Deferred.Result commit_ase =
     let ase_source, ase_elms = commit_ase in
     let%map.Deferred.Result proof, target, excess =
@@ -655,6 +655,8 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
            ; verify_two_outer_ases
            ; verify_check_accepted_and_ase
            ; prev_next_cancelled_deposit
+           ; prev_nonce
+           ; helper_account_new
            } ))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->

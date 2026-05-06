@@ -1079,6 +1079,8 @@ module Bridge = struct
       ; verify_check_accepted_and_ase :
           Verify_check_accepted_and_ase.serializable
       ; prev_next_cancelled_deposit : Checked32.t
+      ; prev_nonce : Checked32.t
+      ; helper_account_new : bool
       }
     [@@deriving yojson]
 
@@ -1091,6 +1093,8 @@ module Bridge = struct
          ; verify_two_outer_ases
          ; verify_check_accepted_and_ase
          ; prev_next_cancelled_deposit
+         ; prev_nonce
+         ; helper_account_new
          } :
           serializable ) ~vk_hash ~helper_token_owner_l1_vk_hash : t =
       { public_key
@@ -1106,6 +1110,9 @@ module Bridge = struct
             verify_check_accepted_and_ase
       ; prev_next_cancelled_deposit
       ; helper_token_owner_l1_vk_hash
+      ; prev_nonce =
+          Mina_numbers.Account_nonce.of_string (Checked32.to_string prev_nonce)
+      ; helper_account_new
       }
   end
 

@@ -769,6 +769,8 @@ module Finalize_cancelled_deposit = struct
     ; check_accepted_init : Bridge_inst_mina.Check_accepted.Definition.Init.t
     ; check_accepted_ase_source : Ase.With_length.Stmt.t
     ; prev_next_cancelled_deposit : Zeko_util.Checked32.t
+    ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
     }
   [@@deriving snarky]
 
@@ -781,12 +783,259 @@ module Finalize_cancelled_deposit = struct
     ; check_accepted_init : Bridge_inst_mina.Check_accepted.Definition.Init.t
     ; check_accepted_ase_source : Ase.With_length.Stmt.t
     ; prev_next_cancelled_deposit : Zeko_util.Checked32.t
+    ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
     ; commit_ase_elems : Field.t list
     ; sync_ase_elems : Field.t list
     ; check_accepted_elems :
         Bridge_inst_mina.Check_accepted.Definition.Elem.t list
     ; check_accepted_ase_elems : Field.t list
     }
+
+  let precompute_commitments t
+      ({ public_key
+       ; commit
+       ; before_commit
+       ; commit_ase_source
+       ; sync_ase_source
+       ; check_accepted_init
+       ; check_accepted_ase_source
+       ; prev_next_cancelled_deposit
+       ; commit_ase_elems
+       ; sync_ase_elems
+       ; check_accepted_elems
+       ; check_accepted_ase_elems
+       ; prev_nonce
+       ; helper_account_new
+       } :
+        t_ ) =
+    let deposit, check_accepted_elems =
+      (List.hd_exn check_accepted_elems, List.tl_exn check_accepted_elems)
+    in
+    let deposit_hash =
+      Zkapp_account.Actions_impl.hash [ Utils.actions_of_outer_action deposit ]
+    in
+    let commit_ase =
+      let target =
+        fold
+          ~init_fn:(Ase.M_without_length.init ~check:None)
+          ~step_fn:Ase.M_without_length.step
+          ~init_typ:Ase.M_without_length.Init.typ
+          ~stmt_typ:Ase.M_without_length.Stmt.typ ~elm_typ:F.typ
+          commit_ase_source commit_ase_elems
+      in
+      Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit.Ase_outer_inst
+      .make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:commit_ase_source ~proof_target:target commit_ase_source
+        []
+    in
+    let sync_ase =
+      let target =
+        fold
+          ~init_fn:(Ase.M_with_length.init ~check:None)
+          ~step_fn:Ase.M_with_length.step ~init_typ:Ase.M_with_length.Init.typ
+          ~stmt_typ:Ase.M_with_length.Stmt.typ ~elm_typ:F.typ sync_ase_source
+          sync_ase_elems
+      in
+      Bridge.Finalize_cancelled_deposit.Ase_outer_with_length_inst.make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:sync_ase_source ~proof_target:target sync_ase_source []
+    in
+    let check_accepted =
+      let source : Bridge.Check_accepted_mina.Stmt.t =
+        { params = check_accepted_init.params
+        ; action_state =
+            Zkapp_account.Actions_impl.push_hash
+              (Rollup_state.Outer_action_state.raw
+                 check_accepted_init.original_action_state )
+              deposit_hash
+            |> Rollup_state.Outer_action_state.unsafe_value_of_field
+        ; deposit_index = check_accepted_init.deposit_index
+        ; n_steps = Zeko_util.Checked32.zero
+        ; is_rejected = false
+        ; is_accepted = false
+        }
+      in
+      let target =
+        fold
+          ~init_fn:(Bridge_inst_mina.Check_accepted.Definition.init ~check:None)
+          ~step_fn:Bridge_inst_mina.Check_accepted.Definition.step
+          ~init_typ:Bridge_inst_mina.Check_accepted.Definition.Init.typ
+          ~stmt_typ:Bridge_inst_mina.Check_accepted.Definition.Stmt.typ
+          ~elm_typ:Bridge_inst_mina.Check_accepted.Definition.Elem.typ
+          check_accepted_init check_accepted_elems
+      in
+      Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+      .Check_accepted_inst
+      .make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:source ~proof_target:target check_accepted_init []
+    in
+    let check_accepted_ase =
+      let target =
+        fold
+          ~init_fn:(Ase.M_with_length.init ~check:None)
+          ~step_fn:Ase.M_with_length.step ~init_typ:Ase.M_with_length.Init.typ
+          ~stmt_typ:Ase.M_with_length.Stmt.typ ~elm_typ:F.typ
+          check_accepted_ase_source check_accepted_ase_elems
+      in
+      Bridge.Finalize_cancelled_deposit.Ase_outer_with_length_inst.make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:check_accepted_ase_source ~proof_target:target
+        check_accepted_ase_source []
+    in
+    let verify_two_outer_ases =
+      run_and_check_exn (commit_ase, sync_ase)
+        Typ.(
+          Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit.Ase_outer_inst
+          .Stmt
+          .typ
+          * Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+            .Ase_outer_with_length_inst
+            .Stmt
+            .typ)
+        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+        .Verify_two_outer_ases
+        .main
+      |> Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+         .Verify_two_outer_ases
+         .make_unchecked
+           ~proof:
+             (Compile_simple.Proof.of_pickles
+                Pickles_types.Nat.(
+                  Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+    in
+    let verify_check_accepted_and_ase =
+      run_and_check_exn
+        (check_accepted, check_accepted_ase)
+        Typ.(
+          Bridge_inst_mina.Check_accepted.Definition.Stmt.typ
+          * Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+            .Ase_outer_with_length_inst
+            .Stmt
+            .typ)
+        Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+        .Verify_check_accepted_and_ase
+        .main
+      |> Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
+         .Verify_check_accepted_and_ase
+         .make_unchecked
+           ~proof:
+             (Compile_simple.Proof.of_pickles
+                Pickles_types.Nat.(
+                  Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+    in
+    let witness : Bridge.Finalize_cancelled_deposit.t =
+      { vk_hash = t.verification_keys.bridge_mina_l1
+      ; helper_token_owner_l1_vk_hash =
+          t.verification_keys.bridge_mina_token_owner
+      ; public_key
+      ; may_use_token =
+          Bridge_inst_mina.Rule_bridge_finalize_withdrawal.May_use_token.No
+      ; outer_authorization_kind =
+          Zeko_circuits.Rule_bridge_finalize_withdrawal.A.None_given
+      ; commit
+      ; before_commit_ase = before_commit
+      ; verify_two_outer_ases
+      ; verify_check_accepted_and_ase
+      ; prev_next_cancelled_deposit
+      ; prev_nonce
+      ; helper_account_new
+      }
+    in
+    try
+      let _stmt, (body, _, calls) =
+        run_and_check_exn witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit.main
+      in
+      let helper_account, witness_outer, remaining_calls =
+        match calls with
+        | { elt =
+              { account_update = _helper_token_owner
+              ; calls =
+                  [ { elt = { account_update = helper_account; calls = []; _ }
+                    ; _
+                    }
+                  ]
+              ; _
+              }
+          ; _
+          }
+          :: { elt = { account_update = witness_outer; calls = []; _ }; _ }
+             :: remaining_calls ->
+            (helper_account, witness_outer, remaining_calls)
+        | _ ->
+            failwith
+              "finalize_withdrawal precompute: invalid helper/witness layout"
+      in
+      let helper_witness =
+        Bridge.Outer_token_owner.of_serializable
+          ~vk_hash:t.verification_keys.bridge_mina_token_owner
+          { public_key = Zeko_circuits_config.Inputs.helper_token_owner_l1
+          ; a = helper_account.body
+          }
+      in
+      let _helper_stmt, (helper_body, _, helper_calls) =
+        run_and_check_exn helper_witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Bridge_inst_mina.Rule_bridge_outer_token_owner.main
+      in
+      let helper_account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                helper_body
+            | None ->
+                { helper_body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      let helper_forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+          ~calls:helper_calls helper_account_update []
+      in
+      let witness_forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 witness_outer []
+      in
+      let account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                body
+            | None ->
+                (* To make the fake tests work *)
+                { body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      let forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+          ~calls:(helper_forest @ witness_forest @ remaining_calls)
+          account_update []
+        |> Zkapp_command.Call_forest.map
+             ~f:Account_update.read_all_proofs_from_disk
+        |> Utils.rehash_forest
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+      in
+      let tx_commitment =
+        Zkapp_command.Transaction_commitment.create
+          ~account_updates_hash:(Zkapp_command.Call_forest.hash forest)
+      in
+      Ok (forest, `Commitment tx_commitment)
+    with exn -> Error (Error.of_exn exn)
 
   let key
       ({ public_key
@@ -801,8 +1050,10 @@ module Finalize_cancelled_deposit = struct
        ; sync_ase_elems
        ; check_accepted_elems = _
        ; check_accepted_ase_elems
+       ; prev_nonce
+       ; helper_account_new
        } :
-        t_ ) =
+        t_ ) (helper_account_signature : Signature.t) =
     let (Typ typ) = typ in
     let t =
       typ.value_to_fields
@@ -814,15 +1065,19 @@ module Finalize_cancelled_deposit = struct
         ; check_accepted_init
         ; check_accepted_ase_source
         ; prev_next_cancelled_deposit
+        ; prev_nonce
+        ; helper_account_new
         }
       |> fst
     in
     let commit_ase_elems = Array.of_list commit_ase_elems in
     let sync_ase_elems = Array.of_list sync_ase_elems in
     let check_accepted_ase_elems = Array.of_list check_accepted_ase_elems in
+    let r, _s = helper_account_signature in
     Array.append t commit_ase_elems
     |> Array.append sync_ase_elems
     |> Array.append check_accepted_ase_elems
+    |> Array.append [| r |]
     |> Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
@@ -840,9 +1095,11 @@ module Finalize_cancelled_deposit = struct
        ; sync_ase_elems
        ; check_accepted_elems
        ; check_accepted_ase_elems
+       ; prev_nonce
+       ; helper_account_new
        } as request :
-        t_ ) =
-    let key = key request in
+        t_ ) (helper_account_signature : Signature.t) =
+    let key = key request helper_account_signature in
     ( key
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
@@ -873,35 +1130,36 @@ module Finalize_cancelled_deposit = struct
                         (check_accepted_init, deposit_hash, check_accepted_elems)
                       ~check_accepted_ase:
                         (check_accepted_ase_source, check_accepted_ase_elems)
-                      ~prev_next_cancelled_deposit
+                      ~prev_next_cancelled_deposit ~prev_nonce
+                      ~helper_account_new
                   with
                   | Error e ->
                       Error.raise e
                   | Ok x ->
                       x
                 in
-                let (_, helper_account), witness_outer =
+                let helper_account, witness_outer, remaining_calls =
                   match calls with
-                  | [ { elt =
-                          { account_update = helper_token_owner
-                          ; calls =
-                              [ { elt =
-                                    { account_update = helper_account
-                                    ; calls = []
-                                    ; _
-                                    }
-                                ; _
-                                }
-                              ]
-                          ; _
-                          }
-                      ; _
-                      }
-                    ; { elt = { account_update = witness_outer; calls = []; _ }
-                      ; _
-                      }
-                    ] ->
-                      ((helper_token_owner, helper_account), witness_outer)
+                  | { elt =
+                        { account_update = _helper_token_owner
+                        ; calls =
+                            [ { elt =
+                                  { account_update = helper_account
+                                  ; calls = []
+                                  ; _
+                                  }
+                              ; _
+                              }
+                            ]
+                        ; _
+                        }
+                    ; _
+                    }
+                    :: { elt = { account_update = witness_outer; calls = []; _ }
+                       ; _
+                       }
+                       :: remaining_calls ->
+                      (helper_account, witness_outer, remaining_calls)
                   | _ ->
                       failwith
                         "cancel_deposit calls: no helper token owner or \
@@ -923,11 +1181,30 @@ module Finalize_cancelled_deposit = struct
                   | Error e ->
                       Error.raise e
                   | Ok ((body, _, calls), proof) ->
+                      (* Attach helper account signature *)
+                      let calls =
+                        match calls with
+                        | helper_account :: remaining_calls ->
+                            Zkapp_command.Call_forest.cons
+                              ~signature_kind:
+                                Zeko_circuits_config.Inputs.chain_l1
+                              ~calls:helper_account.elt.calls
+                              { helper_account.elt.account_update with
+                                authorization =
+                                  Control.Poly.Signature
+                                    helper_account_signature
+                              }
+                              remaining_calls
+                        | _ ->
+                            failwith "shouldn't be reachable"
+                      in
                       Utils.attach_proof_to_forest
                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
                         ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
                 in
-                let children = helper_forest @ witness_forest in
+                let children =
+                  helper_forest @ witness_forest @ remaining_calls
+                in
                 Utils.attach_proof_to_forest
                   ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
                   ~proof_cache_db:t.proof_cache_db ~body:cancelled_deposit_body
