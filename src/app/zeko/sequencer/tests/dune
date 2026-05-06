@@ -51,3 +51,17 @@
  (preprocess
   (pps ppx_let ppx_jane ppx_mina))
  (modules imt_benchmark))
+
+(executable
+ (name preverify_test)
+ (libraries
+  sequencer_lib
+  is_compile_simple_real_real
+  consensus
+  staged_ledger_diff
+  genesis_ledger
+  mina_state
+  cli_lib)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina))
+ (modules preverify_test))
