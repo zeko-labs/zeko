@@ -527,6 +527,12 @@ module Sequencer_spec = struct
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
             ~l1_config ~commit_validity_period ~checkpoints_dir )
     in
+    (* The L2 executor below uses [funded_accounts.(0)] as its signer (since
+       the sequencer's own signer has no balance on L2 in this test setup).
+       Tell the sequencer to use the same key when preverifying L2 commands so
+       preverify reflects what the executor will actually submit. *)
+    Sequencer.set_l2_fee_payer_pk sequencer
+      (Public_key.compress (fst funded_accounts.(0)).public_key) ;
     let l1_executor =
       Executor.create ~kind:(`L1 gql_uri)
         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ()

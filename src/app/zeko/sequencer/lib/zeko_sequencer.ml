@@ -238,7 +238,10 @@ module Sequencer = struct
     ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
+    ; l2_fee_payer_pk : Public_key.Compressed.t ref
     }
+
+  let set_l2_fee_payer_pk t pk = t.l2_fee_payer_pk := pk
 
   let shutdown t =
     let logger = t.logger in
@@ -1043,6 +1046,13 @@ module Sequencer = struct
       ~(signer : Signer_service.Signer.t) ~deposit_delay_blocks ~mq_host
       ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
       ~commit_validity_period =
+    (* [l2_fee_payer_pk] holds the public key used as fee payer when the bridge
+       prover runs preverify against the L2 ledger. Defaults to the sequencer's
+       signer (matching production); tests can override via
+       [set_l2_fee_payer_pk] when their L2 executor uses a different account. *)
+    let l2_fee_payer_pk =
+      ref (Signer_service.Signer.public_key signer)
+    in
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let db_dir =
@@ -1102,7 +1112,82 @@ module Sequencer = struct
         }
     in
     let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
-    let%bind bridge_prover = Bridge_prover.create ~provers ~proof_cache_db in
+    let preverify_l2 =
+      let consensus_constants =
+        let protocol_constants : Genesis_constants.Protocol.t =
+          { k = 1
+          ; slots_per_epoch = 1000
+          ; slots_per_sub_window = 1
+          ; grace_period_slots = 1
+          ; delta = 1
+          ; genesis_state_timestamp = Int64.one
+          }
+        in
+        Consensus.Constants.create ~constraint_constants ~protocol_constants
+      in
+      let compile_time_genesis =
+        Mina_state.Genesis_protocol_state.t
+          ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+          ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+          ~constraint_constants ~consensus_constants
+          ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+      in
+      let state_view_template =
+        Mina_state.Protocol_state.Body.view compile_time_genesis.data.body
+      in
+      fun forest ->
+        let mask = L.of_database ledger in
+        let signer_pk = !l2_fee_payer_pk in
+        let signer_aid = Account_id.create signer_pk Token_id.default in
+        let nonce =
+          match L.location_of_account mask signer_aid with
+          | Some loc ->
+              ( L.get mask loc
+              |> Option.value_exn ~message:"signer account missing" )
+                .nonce
+          | None ->
+              Account.Nonce.zero
+        in
+        let fee_payer : Account_update.Fee_payer.t =
+          { body =
+              { public_key = signer_pk
+              ; fee = Currency.Fee.of_mina_string_exn "0.1"
+              ; valid_until = None
+              ; nonce
+              }
+          ; authorization = Signature.dummy
+          }
+        in
+        let command : Zkapp_command.t =
+          { fee_payer
+          ; account_updates =
+              Zkapp_command.Call_forest.map forest
+                ~f:
+                  (Account_update.write_all_proofs_to_disk
+                     ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
+          ; memo = Signed_command_memo.empty
+          }
+        in
+        let global_slot = Utils.Slot.global_slot ~l1_config in
+        let state_view : Zkapp_precondition.Protocol_state.View.t =
+          { state_view_template with
+            global_slot_since_genesis = global_slot
+          }
+        in
+        let get_account aid =
+          let acc =
+            let%bind.Option loc = L.location_of_account mask aid in
+            L.get mask loc
+          in
+          Async_kernel.Deferred.Or_error.return acc
+        in
+        Zeko_transaction_logic.preverify_user_command ~get_account
+          ~constraint_constants ~global_slot ~state_view
+          (User_command.Zkapp_command command)
+    in
+    let%bind bridge_prover =
+      Bridge_prover.create ~provers ~proof_cache_db ~preverify_l2
+    in
 
     let t =
       { ledger
@@ -1118,6 +1203,7 @@ module Sequencer = struct
       ; merger_ctx
       ; closed = Ivar.create ()
       ; apply_q = Sequencer.create ()
+      ; l2_fee_payer_pk
       }
     in
     let%bind () =
