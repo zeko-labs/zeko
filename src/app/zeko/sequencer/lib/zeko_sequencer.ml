@@ -238,10 +238,7 @@ module Sequencer = struct
     ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
-    ; l2_fee_payer_pk : Public_key.Compressed.t ref
     }
-
-  let set_l2_fee_payer_pk t pk = t.l2_fee_payer_pk := pk
 
   let shutdown t =
     let logger = t.logger in
@@ -1046,13 +1043,6 @@ module Sequencer = struct
       ~(signer : Signer_service.Signer.t) ~deposit_delay_blocks ~mq_host
       ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
       ~commit_validity_period =
-    (* [l2_fee_payer_pk] holds the public key used as fee payer when the bridge
-       prover runs preverify against the L2 ledger. Defaults to the sequencer's
-       signer (matching production); tests can override via
-       [set_l2_fee_payer_pk] when their L2 executor uses a different account. *)
-    let l2_fee_payer_pk =
-      ref (Signer_service.Signer.public_key signer)
-    in
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let db_dir =
@@ -1154,7 +1144,7 @@ module Sequencer = struct
     in
     let preverify_l2 forest =
       let mask = L.of_database ledger in
-      let signer_pk = !l2_fee_payer_pk in
+      let signer_pk = Signer_service.Signer.public_key signer in
       let signer_aid = Account_id.create signer_pk Token_id.default in
       let nonce =
         match L.location_of_account mask signer_aid with
@@ -1168,9 +1158,7 @@ module Sequencer = struct
       let command = make_command ~fee_payer_pk:signer_pk ~nonce forest in
       let global_slot = Utils.Slot.global_slot ~l1_config in
       let state_view : Zkapp_precondition.Protocol_state.View.t =
-        { state_view_template with
-          global_slot_since_genesis = global_slot
-        }
+        { state_view_template with global_slot_since_genesis = global_slot }
       in
       let get_account aid =
         let acc =
@@ -1182,6 +1170,20 @@ module Sequencer = struct
       Zeko_transaction_logic.preverify_user_command ~get_account
         ~constraint_constants ~global_slot ~state_view
         (User_command.Zkapp_command command)
+    in
+    (* The other constraint_constants (ledger_depth, transaction_capacity, …)
+       are block-production related and don't affect [apply_user_command], so
+       we can reuse [Zeko_constants.constraint_constants] for those. The one
+       field that matters here is [account_creation_fee], which differs by
+       network — fetch it from the L1 daemon. *)
+    let%bind l1_account_creation_fee =
+      Gql_client.fetch_account_creation_fee ~logger config.l1_uri
+      >>| Or_error.ok_exn
+    in
+    let l1_constraint_constants =
+      { constraint_constants with
+        account_creation_fee = l1_account_creation_fee
+      }
     in
     let preverify_l1 forest =
       let signer_pk = Signer_service.Signer.public_key signer in
@@ -1195,18 +1197,17 @@ module Sequencer = struct
       let command = make_command ~fee_payer_pk:signer_pk ~nonce forest in
       let global_slot = Utils.Slot.global_slot ~l1_config in
       let state_view : Zkapp_precondition.Protocol_state.View.t =
-        { state_view_template with
-          global_slot_since_genesis = global_slot
-        }
+        { state_view_template with global_slot_since_genesis = global_slot }
       in
-      let get_account aid = Gql_client.fetch_account ~logger config.l1_uri aid in
+      let get_account aid =
+        Gql_client.fetch_account ~logger config.l1_uri aid
+      in
       Zeko_transaction_logic.preverify_user_command ~get_account
-        ~constraint_constants ~global_slot ~state_view
+        ~constraint_constants:l1_constraint_constants ~global_slot ~state_view
         (User_command.Zkapp_command command)
     in
     let%bind bridge_prover =
-      Bridge_prover.create ~provers ~proof_cache_db ~preverify_l1
-        ~preverify_l2
+      Bridge_prover.create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2
     in
 
     let t =
@@ -1223,7 +1224,6 @@ module Sequencer = struct
       ; merger_ctx
       ; closed = Ivar.create ()
       ; apply_q = Sequencer.create ()
-      ; l2_fee_payer_pk
       }
     in
     let%bind () =

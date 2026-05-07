@@ -422,11 +422,22 @@ module Sequencer_spec = struct
     let `Inner inner_account, `Holder holder_account =
       run Deploy.Z.Inner.initial_accounts
     in
+    (* Pre-fund the sequencer's signer on L2 so the bridge prover's
+       preverify_l2 (which uses the signer as fee payer) can debit a real
+       account when simulating commands. *)
+    let signer_l2_account =
+      let aid = Account_id.create signer_pk Token_id.default in
+      ( aid
+      , Account.create aid
+          (Currency.Balance.of_uint64
+             (Unsigned.UInt64.of_int64 (Int64.of_float (1000. *. 1e8))) ) )
+    in
     let genesis_accounts =
       ( Account_id.create inner_account.public_key inner_account.token_id
       , inner_account )
       :: ( Account_id.create holder_account.public_key holder_account.token_id
          , holder_account )
+      :: signer_l2_account
       :: ( Array.concat [ init_ledger; funded_accounts ]
          |> Array.map ~f:(fun (keypair, balance) ->
                 let pk = Signature_lib.Public_key.compress keypair.public_key in
@@ -527,12 +538,6 @@ module Sequencer_spec = struct
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
             ~l1_config ~commit_validity_period ~checkpoints_dir )
     in
-    (* The L2 executor below uses [funded_accounts.(0)] as its signer (since
-       the sequencer's own signer has no balance on L2 in this test setup).
-       Tell the sequencer to use the same key when preverifying L2 commands so
-       preverify reflects what the executor will actually submit. *)
-    Sequencer.set_l2_fee_payer_pk sequencer
-      (Public_key.compress (fst funded_accounts.(0)).public_key) ;
     let l1_executor =
       Executor.create ~kind:(`L1 gql_uri)
         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ()
@@ -544,9 +549,7 @@ module Sequencer_spec = struct
             { infer_nonce = Sequencer.infer_nonce sequencer
             ; apply_user_command = Sequencer.apply_user_command sequencer
             } )
-        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-        ~signer:(Signer_service.Signer.of_keypair (funded_accounts.(0) |> fst))
-        ()
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~signer ()
     in
     Quickcheck.Generator.return
       { outer_kp
