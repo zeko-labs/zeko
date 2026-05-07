@@ -794,6 +794,27 @@ let fetch_best_chain ?(max_length = 10) uri =
         |> map (member "stateHash")
         |> to_list |> List.map ~f:to_string) )
 
+let fetch_account_creation_fee uri =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query {
+              genesisConstants {
+                accountCreationFee
+              }
+            }
+          |}
+
+      method variables = `Assoc []
+    end
+  in
+  query_with_retry ~label:"fetch account creation fee" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "genesisConstants" |> member "accountCreationFee"
+        |> to_string |> Currency.Fee.of_string) )
+
 let fetch_genesis_timestamp uri =
   let q =
     object
