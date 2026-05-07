@@ -102,21 +102,19 @@ let create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2 =
     splices [helper_account_signature] into the right account update so
     preverify sees the same authorization the executor will eventually
     submit. *)
-let attach_nested_helper_signature ~signature_kind
-    (forest : precomputed_forest) helper_signature : precomputed_forest =
+let attach_nested_helper_signature ~signature_kind (forest : precomputed_forest)
+    helper_signature : precomputed_forest =
   match forest with
-  | [ ({ elt =
-           ( { calls =
-                 ( { elt =
-                       ( { calls = helper_tree :: helper_rest; _ } as
-                       hto_elt )
-                   ; _
-                   } as hto_tree )
-                 :: action_rest
-             ; _
-             } as top_elt )
-       ; _
-       } as top_tree )
+  | [ ( { elt =
+            { calls =
+                ( { elt = { calls = helper_tree :: helper_rest; _ } as hto_elt
+                  ; _
+                  } as hto_tree )
+                :: action_rest
+            ; _
+            } as top_elt
+        ; _
+        } as top_tree )
     ] ->
       let new_inner_calls =
         Zkapp_command.Call_forest.cons ~signature_kind
@@ -157,11 +155,38 @@ let verify_signature ~signature_kind ~tx_commitment ~public_key signature =
 let wrap_with_transferrer ~signature_kind transferrer calls =
   Zkapp_command.Call_forest.cons ~signature_kind transferrer calls
 
-let validate_transferrer ~expected_amount transferrer =
-  (* TODO *)
-  let _ = expected_amount in
-  let _ = transferrer in
-  Ok ()
+(* The transferrer is the user-supplied account update wrapped at the top of
+   submitDeposit/submitWithdrawal forests. Reject anything that isn't a
+   plain default-token transfer of [-(amount + bridge_fee)] from the user's
+   account, signed with a constant-nonce precondition and no children. *)
+let validate_transferrer ~expected_amount
+    (transferrer : Account_update.Stable.Latest.t) =
+  let proof_cache_db = Proof_cache_tag.create_identity_db () in
+  let transferrer =
+    Account_update.write_all_proofs_to_disk ~proof_cache_db transferrer
+  in
+  let forest =
+    Zkapp_command.Call_forest.cons (* signature_kind does not matter here *)
+      ~signature_kind:Mina_signature_kind.t_DEPRECATED transferrer []
+  in
+  let expected_balance_change =
+    Currency.Amount.Signed.(negate (of_unsigned expected_amount))
+  in
+  let spec : Utils.Forest_shape.field list list =
+    [ [ Token_id Token_id.default
+      ; Balance_change expected_balance_change
+      ; Increment_nonce true
+      ; Use_full_commitment false
+      ; Authorization_kind Signature
+      ; Preconditions_constant_nonce_only
+      ; Calls []
+      ]
+    ]
+  in
+  if Utils.Forest_shape.matches forest spec then Ok ()
+  else
+    Or_error.error_string
+      "validate_transferrer: account update does not match expected shape"
 
 let run_and_check_exn (input : 'input) out_typ
     (main :
@@ -392,9 +417,7 @@ module Deposit_request = struct
                   | _ ->
                       failwith "Deposit_request: transferrer must be signed"
                 in
-                let%bind () =
-                  t.preverify_l1 forest >>| Or_error.ok_exn
-                in
+                let%bind () = t.preverify_l1 forest >>| Or_error.ok_exn in
                 let witness = make_witness deposit_params in
                 match%map
                   Zeko_prover.Client.outer_action_witness t.provers witness
@@ -1299,12 +1322,10 @@ module Finalize_cancelled_deposit = struct
                 in
                 let forest =
                   attach_nested_helper_signature
-                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-                    forest helper_account_signature
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 forest
+                    helper_account_signature
                 in
-                let%bind () =
-                  t.preverify_l1 forest >>| Or_error.ok_exn
-                in
+                let%bind () = t.preverify_l1 forest >>| Or_error.ok_exn in
                 let%bind ( (cancelled_deposit_body, _, calls)
                          , cancelled_deposit_proof ) =
                   let deposit, check_accepted_elems =
@@ -1706,12 +1727,10 @@ module Finalize_withdrawal = struct
                 in
                 let forest =
                   attach_nested_helper_signature
-                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-                    forest helper_account_signature
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 forest
+                    helper_account_signature
                 in
-                let%bind () =
-                  t.preverify_l1 forest >>| Or_error.ok_exn
-                in
+                let%bind () = t.preverify_l1 forest >>| Or_error.ok_exn in
                 let%bind (withdrawal_body, _, calls), withdrawal_proof =
                   match%map
                     Zeko_prover.Client.finalize_withdrawal t.provers ~public_key
