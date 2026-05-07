@@ -360,6 +360,15 @@ module Forest_shape = struct
     | Calls of field list list
     | Public_key of Public_key.Compressed.t
     | Token_id of Token_id.t
+    | Balance_change of Currency.Amount.Signed.t
+    | Increment_nonce of bool
+    | Use_full_commitment of bool
+    | Authorization_kind of Account_update.Authorization_kind.t
+        (** [Preconditions_constant_nonce_only] passes when the AU has no
+            preconditions other than a single equality nonce check
+            (nonce = Check { lower = n; upper = n } for some n), network is
+            [accept] and valid_while is [Ignore]. *)
+    | Preconditions_constant_nonce_only
 
   let rec check_tree
       ({ account_update = au; calls; _ } as tree :
@@ -371,6 +380,27 @@ module Forest_shape = struct
         && check_tree tree rest
     | Token_id token_id :: rest ->
         Token_id.equal au.body.token_id token_id && check_tree tree rest
+    | Balance_change bc :: rest ->
+        Currency.Amount.Signed.equal au.body.balance_change bc
+        && check_tree tree rest
+    | Increment_nonce b :: rest ->
+        Bool.equal au.body.increment_nonce b && check_tree tree rest
+    | Use_full_commitment b :: rest ->
+        Bool.equal au.body.use_full_commitment b && check_tree tree rest
+    | Authorization_kind kind :: rest ->
+        Account_update.Authorization_kind.equal au.body.authorization_kind
+          kind
+        && check_tree tree rest
+    | Preconditions_constant_nonce_only :: rest ->
+        let { Account_update.Preconditions.network; account; valid_while } =
+          au.body.preconditions
+        in
+        Zkapp_precondition.Protocol_state.(equal network accept)
+        && Zkapp_basic.Or_ignore.equal
+             (fun _ _ -> true)
+             valid_while Zkapp_basic.Or_ignore.Ignore
+        && Zkapp_precondition.Account.is_nonce account
+        && check_tree tree rest
     | Calls calls_spec :: rest -> (
         match List.zip calls calls_spec with
         | List.Or_unequal_lengths.Unequal_lengths ->
