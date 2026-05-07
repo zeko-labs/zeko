@@ -10,6 +10,46 @@ These accounts are separate from the outer and inner account of the rollup.
 We will thus refer to this new pair of accounts as the token outer and inner accounts.
 For disambiguation purposes, the ones for the rollup are prefixed with rollup.
 
+## Bridge proof fee
+
+The sequencer is the party that ultimately spends compute proving the
+finalize/cancel transactions. To pay it for that work, every bridging
+request bakes a fixed `bridge_proof_fee` into the transaction so that
+the sequencer's `bridge_fee_recipient` accounts collect a fee whether the
+request is a deposit, a withdrawal, or a cancelled deposit.
+
+The fee is enforced inside the circuits, not by the sequencer's choice,
+so a malicious sequencer cannot redirect the funds:
+
+- On submitDeposit/submitWithdrawal, the deposit/withdrawal action that the
+  user signs already carries a sibling account update
+  paying `bridge_proof_fee` to `bridge_fee_recipient_l1` (deposit) or
+  `bridge_fee_recipient_l2` (withdrawal). The user's transferrer must
+  cover `amount + bridge_proof_fee`.
+- On the finalize\* actions, the action update on the holder/zeko account
+  has two additional child account updates appended to its calls: one paying
+  `(amount - bridge_proof_fee)` (or, if the helper account is new, also minus
+  the helper's account creation fee) to the recipient, and one paying
+  `bridge_proof_fee` to the bridge fee recipient.
+
+Because the user pays `amount + bridge_proof_fee` on submit but only
+receives `(amount - bridge_proof_fee)` on finalize, the sequencer's
+`bridge_fee_recipient` ends up with `2 × bridge_proof_fee` per completed
+bridging request — one half collected at submit time, one half at
+finalize time.
+
+### Pre-signing the helper account update
+
+Finalize transactions go through the sequencer, but the user authorizes
+the helper account update with their own signature (replay-protected by
+incrementing the helper's nonce). To make pre-signing safe — i.e. signing
+before knowing who pays the fee_payer fee — the helper update sets
+`use_full_commitment = false`. That way the user's signature commits only
+to the account-updates hash, not to the memo/fee_payer hash, so the
+sequencer can wrap the proven forest in any fee-payer of its own without
+invalidating the signature. Replay is prevented by the constant-nonce
+precondition + `increment_nonce = true` on the helper update.
+
 ## Deposits
 
 Deposits are made by posting an action on the rollup outer account,
@@ -18,6 +58,11 @@ The user specifies an upper bound (slot) after which point if not
 processed, the deposit will timeout and the funds will be recoverible.
 The action will be a Witness action that witnesses the deposit to the
 token outer account.
+
+The `Witness` action also includes a sibling fee-payout account update
+that sends `bridge_proof_fee` to `bridge_fee_recipient_l1` from the
+parent's token. This is what compensates the sequencer for proving and
+posting the corresponding finalize-deposit transaction later.
 
 As explained above, on commit, the sequencer will also post an action on the
 rollup outer account that details what kind of commit we made, along with the
@@ -40,18 +85,35 @@ After this, the index is updated to be the index of the new deposit.
 Notably, it is possible to "skip" a deposit erroneously, but it is on the user
 not to do this accidentally.
 
+The helper account update is signed by the user with the partial
+transaction commitment (`use_full_commitment = false`), increments its own
+nonce, and pins down its old nonce via a constant-nonce precondition. This
+way the user can pre-sign the update without knowing the fee_payer, and the
+nonce increment plus precondition keeps the signature single-use.
+
 In this process we must match on the rollup outer action state as stored
 in the inner account. This value can change, and cause the preconditions
 to fail, but this is of no worry since failed transactions are feeless on Zeko.
 
 The funds are then minted or sent by the token inner account,
-depending on what kind of token it is.
+depending on what kind of token it is. They're not sent to a recipient of
+the sequencer's choosing — the finalize circuit hardcodes two sibling
+account updates inside the action update: one for the recipient (for
+`amount - bridge_proof_fee`, minus another `account_creation_fee` if the
+helper account is new) and one for the bridge fee recipient (for
+`bridge_proof_fee`). Because both are children of the action update with
+no authorization of their own, they ride along with the proof and the
+sequencer can't redirect or skip them.
 
 ## Withdrawals
 
 To do withdrawals, we similarly post an action on the rollup inner action state.
 We use the Witness action to show that we've either burned or sent the tokens
-back to the token inner account.
+back to the token inner account. As with deposits, the `Witness` action also
+includes a sibling fee-payout account update paying `bridge_proof_fee` to
+`bridge_fee_recipient_l2` (from the parent's token) so the sequencer is
+compensated for the corresponding finalize-withdrawal transaction it'll
+post on L1 later.
 
 To withdraw, a constant number of slots must have roughly passed since the
 withdrawal was added. We figure out when a withdrawal was processed
@@ -70,7 +132,16 @@ FIXME: fix #177.
 As in the deposit case, we need to prevent double spends, thus similarly,
 we have helper accounts on the outside too.
 As with deposits, the helper account keeps track of the index of the last withdrawal
-processed.
+processed. The helper update is signed with `use_full_commitment = false`
+and `increment_nonce = true`, with a constant-nonce precondition, so the
+user can pre-sign without knowing the fee_payer and replays are blocked.
+
+The finalize-withdrawal circuit also appends two sibling payout account
+updates to the action update: one to the recipient for
+`amount - bridge_proof_fee` (or further minus `outer_account_creation_fee`
+if the helper account is new), and one to `bridge_fee_recipient_l1` for
+`bridge_proof_fee`. Same as in the deposit case, these are determined by
+the proof and not by the sequencer.
 We also have to consider emergency changes.
 The rollup inner action state might "roll back" and procede in another direction
 due to this, and this is why we store the inner action state in the outer
@@ -95,6 +166,14 @@ We use the same helper account as for withdrawals,
 thus the helper account on the outside keeps track of two indices,
 one for the index of the last withdrawal processed, and
 one for the index of the last cancelled deposit processed.
+
+The same fee-payout treatment applies as in the withdrawal case: the
+helper signature uses the partial commitment (with constant-nonce
+precondition + `increment_nonce`), and the finalize-cancelled-deposit
+circuit appends a recipient payout (`amount - bridge_proof_fee`, minus
+`outer_account_creation_fee` if the helper is new) and a fixed
+`bridge_proof_fee` payout to `bridge_fee_recipient_l1` as siblings of the
+action update.
 
 ## Governance (separate)
 
