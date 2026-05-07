@@ -1621,6 +1621,12 @@ let () =
           let%bind _shifted =
             Gql_client.For_tests.shift_slots ~logger gql_uri 200
           in
+          (* Keep the sequencer's slot view in sync with the testing-ledger's
+             shifted slot, so preverify_l1 simulates against the same slot the
+             actual L1 transaction will see (otherwise time-based
+             preconditions like [valid_while] on finalize_withdrawal trip). *)
+          Utils.Slot.For_tests.add_to_global_slot :=
+            Stdlib.( ! ) Utils.Slot.For_tests.add_to_global_slot + 200 ;
           let%bind () =
             Deferred.List.iteri withdrawals
               ~f:(fun i (signer, withdrawal_params) ->

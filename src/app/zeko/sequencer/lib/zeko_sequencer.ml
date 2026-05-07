@@ -1112,7 +1112,7 @@ module Sequencer = struct
         }
     in
     let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
-    let preverify_l2 =
+    let state_view_template =
       let consensus_constants =
         let protocol_constants : Genesis_constants.Protocol.t =
           { k = 1
@@ -1132,61 +1132,81 @@ module Sequencer = struct
           ~constraint_constants ~consensus_constants
           ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
       in
-      let state_view_template =
-        Mina_state.Protocol_state.Body.view compile_time_genesis.data.body
-      in
-      fun forest ->
-        let mask = L.of_database ledger in
-        let signer_pk = !l2_fee_payer_pk in
-        let signer_aid = Account_id.create signer_pk Token_id.default in
-        let nonce =
-          match L.location_of_account mask signer_aid with
-          | Some loc ->
-              ( L.get mask loc
-              |> Option.value_exn ~message:"signer account missing" )
-                .nonce
-          | None ->
-              Account.Nonce.zero
-        in
-        let fee_payer : Account_update.Fee_payer.t =
+      Mina_state.Protocol_state.Body.view compile_time_genesis.data.body
+    in
+    let make_command ~fee_payer_pk ~nonce forest : Zkapp_command.t =
+      { fee_payer =
           { body =
-              { public_key = signer_pk
+              { public_key = fee_payer_pk
               ; fee = Currency.Fee.of_mina_string_exn "0.1"
               ; valid_until = None
               ; nonce
               }
           ; authorization = Signature.dummy
           }
+      ; account_updates =
+          Zkapp_command.Call_forest.map forest
+            ~f:
+              (Account_update.write_all_proofs_to_disk
+                 ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
+      ; memo = Signed_command_memo.empty
+      }
+    in
+    let preverify_l2 forest =
+      let mask = L.of_database ledger in
+      let signer_pk = !l2_fee_payer_pk in
+      let signer_aid = Account_id.create signer_pk Token_id.default in
+      let nonce =
+        match L.location_of_account mask signer_aid with
+        | Some loc ->
+            ( L.get mask loc
+            |> Option.value_exn ~message:"signer account missing" )
+              .nonce
+        | None ->
+            Account.Nonce.zero
+      in
+      let command = make_command ~fee_payer_pk:signer_pk ~nonce forest in
+      let global_slot = Utils.Slot.global_slot ~l1_config in
+      let state_view : Zkapp_precondition.Protocol_state.View.t =
+        { state_view_template with
+          global_slot_since_genesis = global_slot
+        }
+      in
+      let get_account aid =
+        let acc =
+          let%bind.Option loc = L.location_of_account mask aid in
+          L.get mask loc
         in
-        let command : Zkapp_command.t =
-          { fee_payer
-          ; account_updates =
-              Zkapp_command.Call_forest.map forest
-                ~f:
-                  (Account_update.write_all_proofs_to_disk
-                     ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
-          ; memo = Signed_command_memo.empty
-          }
-        in
-        let global_slot = Utils.Slot.global_slot ~l1_config in
-        let state_view : Zkapp_precondition.Protocol_state.View.t =
-          { state_view_template with
-            global_slot_since_genesis = global_slot
-          }
-        in
-        let get_account aid =
-          let acc =
-            let%bind.Option loc = L.location_of_account mask aid in
-            L.get mask loc
-          in
-          Async_kernel.Deferred.Or_error.return acc
-        in
-        Zeko_transaction_logic.preverify_user_command ~get_account
-          ~constraint_constants ~global_slot ~state_view
-          (User_command.Zkapp_command command)
+        Async_kernel.Deferred.Or_error.return acc
+      in
+      Zeko_transaction_logic.preverify_user_command ~get_account
+        ~constraint_constants ~global_slot ~state_view
+        (User_command.Zkapp_command command)
+    in
+    let preverify_l1 forest =
+      let signer_pk = Signer_service.Signer.public_key signer in
+      (* preverify simulates the command against the *committed* L1 state, so
+         use [fetch_nonce] (committed nonce) rather than [infer_nonce] (which
+         includes pooled commands and would advance past the on-chain nonce
+         the simulated fee payer is checked against). *)
+      let%bind.Deferred.Or_error nonce =
+        Gql_client.fetch_nonce ~logger config.l1_uri signer_pk
+      in
+      let command = make_command ~fee_payer_pk:signer_pk ~nonce forest in
+      let global_slot = Utils.Slot.global_slot ~l1_config in
+      let state_view : Zkapp_precondition.Protocol_state.View.t =
+        { state_view_template with
+          global_slot_since_genesis = global_slot
+        }
+      in
+      let get_account aid = Gql_client.fetch_account ~logger config.l1_uri aid in
+      Zeko_transaction_logic.preverify_user_command ~get_account
+        ~constraint_constants ~global_slot ~state_view
+        (User_command.Zkapp_command command)
     in
     let%bind bridge_prover =
-      Bridge_prover.create ~provers ~proof_cache_db ~preverify_l2
+      Bridge_prover.create ~provers ~proof_cache_db ~preverify_l1
+        ~preverify_l2
     in
 
     let t =

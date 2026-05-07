@@ -65,20 +65,24 @@ module Proofs_memory = struct
       add t key (`Proved result)
 end
 
+type precomputed_forest =
+  ( Account_update.Stable.V1.t
+  , Zkapp_command.Digest.Account_update.t
+  , Zkapp_command.Digest.Forest.t )
+  Zkapp_command.Call_forest.t
+
+type preverify_fn = precomputed_forest -> unit Deferred.Or_error.t
+
 type t =
   { proofs_memory : Proofs_memory.t
   ; provers : Zeko_prover.Client.t
   ; proof_cache_db : Proof_cache_tag.cache_db
   ; verification_keys : Zeko_prover.Prover.Verification_key_hashes.t
-  ; preverify_l2 :
-         ( Account_update.Stable.V1.t
-         , Zkapp_command.Digest.Account_update.t
-         , Zkapp_command.Digest.Forest.t )
-         Zkapp_command.Call_forest.t
-      -> unit Deferred.Or_error.t
+  ; preverify_l1 : preverify_fn
+  ; preverify_l2 : preverify_fn
   }
 
-let create ~provers ~proof_cache_db ~preverify_l2 =
+let create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2 =
   let%map verification_keys =
     Zeko_prover.Client.verification_keys provers >>| Or_error.ok_exn
   in
@@ -86,8 +90,53 @@ let create ~provers ~proof_cache_db ~preverify_l2 =
   ; provers
   ; proof_cache_db
   ; verification_keys
+  ; preverify_l1
   ; preverify_l2
   }
+
+(** For [Finalize_cancelled_deposit] and [Finalize_withdrawal] the helper
+    account update lives at [forest[0].calls[0].calls[0]] (nested inside the
+    helper_token_owner). [precompute_commitments] returns it with
+    [authorization = None_given], so the unchecked apply path's
+    is_signed/signature_verifies assertion would trip during preverify. This
+    splices [helper_account_signature] into the right account update so
+    preverify sees the same authorization the executor will eventually
+    submit. *)
+let attach_nested_helper_signature ~signature_kind
+    (forest : precomputed_forest) helper_signature : precomputed_forest =
+  match forest with
+  | [ ({ elt =
+           ( { calls =
+                 ( { elt =
+                       ( { calls = helper_tree :: helper_rest; _ } as
+                       hto_elt )
+                   ; _
+                   } as hto_tree )
+                 :: action_rest
+             ; _
+             } as top_elt )
+       ; _
+       } as top_tree )
+    ] ->
+      let new_inner_calls =
+        Zkapp_command.Call_forest.cons ~signature_kind
+          ~calls:helper_tree.elt.calls
+          { helper_tree.elt.account_update with
+            authorization = Control.Poly.Signature helper_signature
+          }
+          helper_rest
+      in
+      let new_hto_tree =
+        { hto_tree with elt = { hto_elt with calls = new_inner_calls } }
+      in
+      let new_top =
+        { top_tree with
+          elt = { top_elt with calls = new_hto_tree :: action_rest }
+        }
+      in
+      [ new_top ] |> Utils.rehash_forest ~signature_kind
+  | _ ->
+      failwith "attach_nested_helper_signature: unexpected forest layout"
 
 (** Verify a Schnorr signature against the partial transaction commitment. The
     signing public key is taken to be that of the supplied account update. Used
@@ -326,9 +375,9 @@ module Deposit_request = struct
                   | Error e ->
                       Error.raise e
                 in
-                (* Verify the transferrer signature against the precomputed
-                   commitment before spending compute on the proof. *)
-                let _forest, `Commitment commitment =
+                (* Verify the transferrer signature and preverify the command
+                   on L1 before spending compute on the proof. *)
+                let forest, `Commitment commitment =
                   precompute_commitments t { deposit_params; transferrer }
                   |> Or_error.ok_exn
                 in
@@ -342,6 +391,9 @@ module Deposit_request = struct
                       |> Or_error.ok_exn
                   | _ ->
                       failwith "Deposit_request: transferrer must be signed"
+                in
+                let%bind () =
+                  t.preverify_l1 forest >>| Or_error.ok_exn
                 in
                 let witness = make_witness deposit_params in
                 match%map
@@ -1206,9 +1258,8 @@ module Finalize_cancelled_deposit = struct
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
             try_with (fun () ->
-                (* Verify the helper-account signature against the precomputed
-                   commitment before spending compute on the proof. This action
-                   targets L1, so we don't preverify here. *)
+                (* Verify the helper-account signature and preverify the
+                   command on L1 before spending compute on the proof. *)
                 let forest, `Commitment commitment =
                   precompute_commitments t request |> Or_error.ok_exn
                 in
@@ -1245,6 +1296,14 @@ module Finalize_cancelled_deposit = struct
                     ~tx_commitment:commitment ~public_key:helper_pk
                     helper_account_signature
                   |> Or_error.ok_exn
+                in
+                let forest =
+                  attach_nested_helper_signature
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                    forest helper_account_signature
+                in
+                let%bind () =
+                  t.preverify_l1 forest >>| Or_error.ok_exn
                 in
                 let%bind ( (cancelled_deposit_body, _, calls)
                          , cancelled_deposit_proof ) =
@@ -1606,9 +1665,8 @@ module Finalize_withdrawal = struct
     , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
           let%map result =
             try_with (fun () ->
-                (* Verify the helper-account signature against the precomputed
-                   commitment before spending compute on the proof. This action
-                   targets L1, so we don't preverify here. *)
+                (* Verify the helper-account signature and preverify the
+                   command on L1 before spending compute on the proof. *)
                 let forest, `Commitment commitment =
                   precompute_commitments t request |> Or_error.ok_exn
                 in
@@ -1645,6 +1703,14 @@ module Finalize_withdrawal = struct
                     ~tx_commitment:commitment ~public_key:helper_pk
                     helper_account_signature
                   |> Or_error.ok_exn
+                in
+                let forest =
+                  attach_nested_helper_signature
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                    forest helper_account_signature
+                in
+                let%bind () =
+                  t.preverify_l1 forest >>| Or_error.ok_exn
                 in
                 let%bind (withdrawal_body, _, calls), withdrawal_proof =
                   match%map
