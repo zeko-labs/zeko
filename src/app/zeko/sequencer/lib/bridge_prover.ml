@@ -86,7 +86,7 @@ let create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2 =
   let%map verification_keys =
     Zeko_prover.Client.verification_keys provers >>| Or_error.ok_exn
   in
-  { proofs_memory = Proofs_memory.create ~lifetime:Float.(60. * 20.)
+  { proofs_memory = Proofs_memory.create ~lifetime:Float.(60. * 60.)
   ; provers
   ; proof_cache_db
   ; verification_keys
