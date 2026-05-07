@@ -1125,6 +1125,19 @@ module Sequencer = struct
       Mina_state.Protocol_state.Body.view compile_time_genesis.data.body
     in
     let make_command ~fee_payer_pk ~nonce forest : Zkapp_command.t =
+      let proof_cache_db = Proof_cache_tag.create_identity_db () in
+      let attach_dummy_proof_to_proof_aus (au : Account_update.Stable.Latest.t)
+          : Account_update.Stable.Latest.t =
+        match Account_update.Poly.body au with
+        | { authorization_kind = Proof _; _ } ->
+            { au with
+              authorization =
+                Control.Poly.Proof
+                  (Lazy.force Mina_base.Proof.transaction_dummy)
+            }
+        | _ ->
+            au
+      in
       { fee_payer =
           { body =
               { public_key = fee_payer_pk
@@ -1135,10 +1148,9 @@ module Sequencer = struct
           ; authorization = Signature.dummy
           }
       ; account_updates =
-          Zkapp_command.Call_forest.map forest
-            ~f:
-              (Account_update.write_all_proofs_to_disk
-                 ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
+          Zkapp_command.Call_forest.map forest ~f:(fun au ->
+              attach_dummy_proof_to_proof_aus au
+              |> Account_update.write_all_proofs_to_disk ~proof_cache_db )
       ; memo = Signed_command_memo.empty
       }
     in
