@@ -222,11 +222,11 @@ let execute_request ?label t ~logger ~(executor : Executor.t) (key, d) =
   |> Option.value_exn |> snd
   |> function
   | `Pending ->
-      failwith "unreachable"
+      return (Error (Error.of_string "Should not be reachable"))
   | `Proved (Error e) ->
       return (Error e)
   | `Executed _ ->
-      failwith "Already executed"
+      return (Error (Error.of_string "Already executed"))
   | `Proved (Ok forest) ->
       let command : Zkapp_command.t =
         { fee_payer =
