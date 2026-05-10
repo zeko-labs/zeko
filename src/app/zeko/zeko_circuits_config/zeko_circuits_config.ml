@@ -69,8 +69,8 @@ let (t, deploy_config) : t * Deploy.t option =
       let bridge_fee_recipient_l2 =
         keypair_of_b58_sk "EKESW6sXA3MA3ugGvEoEHPd6gc9NPB9SRWzuW4VqxBqbNU3W4pFX"
       in
-      ( { chain_l1 = Testnet
-        ; chain_l2 = Testnet
+      ( { chain_l1 = Mainnet
+        ; chain_l2 = Other_network "zeko-testnet"
         ; max_valid_while_size = Zeko_circuits.Zeko_util.Slot.max_value
         ; multisig_key =
             { public_keys = List.map holder_accounts_l1 ~f:fst

@@ -853,7 +853,7 @@ module Finalize_deposit = struct
                 let helper_pk = helper.elt.account_update.body.public_key in
                 let () =
                   verify_signature
-                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                    ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                     ~tx_commitment:commitment ~public_key:helper_pk
                     helper_account_signature
                   |> Or_error.ok_exn

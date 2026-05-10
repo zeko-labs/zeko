@@ -76,7 +76,7 @@ SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
-export ZEKO_SIGNATURE_KIND=testnet
+export ZEKO_SIGNATURE_KIND=zeko-testnet
 export ZEKO_CIRCUITS_CONFIG=test
 
 TMP_DIR=$(mktemp -d)
@@ -193,16 +193,16 @@ wait_for_port 8601 $signer_da1_pid
 wait_for_port 8602 $signer_da2_pid
 wait_for_port 8603 $signer_da3_pid
 
-run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id testnet --block-period 9999999 &
+run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id mainnet --block-period 9999999 &
 l1_pid=$!
 
-run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id testnet --db-dir "$TMP_DIR/da1_db" --signer 127.0.0.1:8601 &
+run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" --signer 127.0.0.1:8601 &
 da1_pid=$!
 
-run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id testnet --db-dir "$TMP_DIR/da2_db" --signer 127.0.0.1:8602 &
+run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id zeko-testnet --db-dir "$TMP_DIR/da2_db" --signer 127.0.0.1:8602 &
 da2_pid=$!
 
-run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id testnet --db-dir "$TMP_DIR/da3_db" --signer 127.0.0.1:8603 &
+run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id zeko-testnet --db-dir "$TMP_DIR/da3_db" --signer 127.0.0.1:8603 &
 da3_pid=$!
 
 # Launch provers

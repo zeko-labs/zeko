@@ -1080,7 +1080,7 @@ let () =
         in
         let helper_account_signature =
           Signature_lib.Schnorr.Chunked.sign
-            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
             signer.private_key
             (Random_oracle.Input.Chunked.field commitment)
         in
