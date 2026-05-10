@@ -88,10 +88,10 @@ let of_witness_var ({ signatures; quorum; _ } : Witness.var) :
         ~init:(Hash_prefix_create.salt Zeko_constants.multisig_salt)
         (Random_oracle.Checked.pack_input input) )
 
-let check ~signature_kind ({ signatures; quorum = _ } : Witness.var) payload =
+let check ~signature_kind ({ signatures; quorum } : Witness.var) payload =
   let payload = Random_oracle.Input.Chunked.field payload in
   let@ () = with_label __LOC__ in
-  let* _valid_signatures_count =
+  let* valid_signatures_count =
     foldl
       (Array.to_list signatures.array)
       ~init:Field.(Var.constant zero)
@@ -113,7 +113,6 @@ let check ~signature_kind ({ signatures; quorum = _ } : Witness.var) payload =
           ~else_:acc )
   in
   let@ () = with_label __LOC__ in
-  Checked.return ()
-(* Comparison_gadget.assert_greater_than_full valid_signatures_count
-   (* sub 1 to do the >= *)
-   Field.Var.(sub quorum (constant Field.one)) *)
+  Comparison_gadget.assert_greater_than_full valid_signatures_count
+    (* sub 1 to do the >= *)
+    Field.Var.(sub quorum (constant Field.one))

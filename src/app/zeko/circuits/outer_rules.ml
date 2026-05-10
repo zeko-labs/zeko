@@ -5,6 +5,8 @@ module Make (Inputs : sig
 
   val chain_l1 : Mina_signature_kind.t
 
+  val chain_l2 : Mina_signature_kind.t
+
   val multisig_key : Multisig.t
 
   val max_sequencer_inactivity : int
