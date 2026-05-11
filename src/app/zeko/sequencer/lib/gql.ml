@@ -2276,8 +2276,8 @@ module Mutations = struct
               in
               match
                 Signed_command.create_with_signature_checked
-                  ~signature_kind:Mina_signature_kind.Testnet signature from
-                  payload
+                  ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 signature
+                  from payload
               with
               | Some command ->
                   return (Ok command)
