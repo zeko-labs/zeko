@@ -243,18 +243,21 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
       in
 
       print_endline "(* Deploy contract *)" ;
-      match%bind
+      match%map
         Gql_client.send_zkapp l1_uri
           (Zkapp_command.read_all_proofs_from_disk command)
       with
       | Ok _ ->
-          Deferred.unit
+          let txn_hash =
+            Mina_transaction.Transaction_hash.hash_command
+              (Zkapp_command (Zkapp_command.read_all_proofs_from_disk command))
+          in
+          [%log info] "Successfully sent zkapp command: %s"
+            (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
       | Error (`Failed_request err) ->
-          eprintf "Failed request: %s\n%!" err ;
-          Deferred.unit
+          [%log error] "Failed request: %s" err
       | Error (`Graphql_error err) ->
-          eprintf "Graphql error: %s\n%!" err ;
-          Deferred.unit )
+          [%log error] "Graphql error: %s" err )
 
 let deploy_all =
   ( "deploy-all"
