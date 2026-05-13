@@ -93,6 +93,34 @@ wait_for_port() {
   echo "Port $port is now open"
 }
 
+wait_for_queue_consumers() {
+  local queue=$1
+  local expected_consumers=$2
+  local timeout_seconds=${3:-300}
+
+  for _ in $(seq 1 "$timeout_seconds"); do
+    if docker exec rabbitmq-sequencer rabbitmqctl -q list_queues name consumers \
+      | awk -v queue="$queue" -v expected="$expected_consumers" \
+          '$1 == queue && $2 >= expected { found = 1 } END { exit found ? 0 : 1 }'; then
+      echo "Queue $queue has at least $expected_consumers consumers"
+      return
+    fi
+
+    for pid in "${PROVER_PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "Prover process $pid exited before registering as a queue consumer"
+        exit 1
+      fi
+    done
+
+    sleep 1
+  done
+
+  echo "Timed out waiting for $expected_consumers consumers on queue $queue"
+  docker logs rabbitmq-sequencer || true
+  exit 1
+}
+
 KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli.exe"
 
 generate_even_key() {
@@ -184,6 +212,7 @@ wait_for_port 8080 $l1_pid
 wait_for_port 8555 $da1_pid
 wait_for_port 8556 $da2_pid
 wait_for_port 8557 $da3_pid
+wait_for_queue_consumers sequencer.jobs "$NUM_PROVERS"
 
 echo "All services started successfully"
 
