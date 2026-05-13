@@ -271,13 +271,12 @@ let%test_unit "Backfill progress subscriptions stream GraphQL-SSE events" =
     Explorer_backfill_sse.complete_event
 
 let%test_unit
-    "Transaction events include the replay kind, diff payload, and NATS dedup \
-     header" =
+    "Transaction events expose diff fields and NATS dedup header" =
   Feature_parser.assert_scenario "event-contract.feature"
-    "Transaction events include the replay kind, diff payload, and NATS dedup \
-     header" ;
+    "Transaction events expose diff fields and NATS dedup header" ;
   let target_ledger_hash = Ledger_hash.empty_hash in
   let diff = sample_diff () in
+  let diff_json = Da_layer.Diff.Stable.V3.to_yojson diff in
   let message =
     Explorer_events.build_transaction_message
       ~kind:Explorer_events.Transaction_kind.Sync_replay ~target_ledger_hash
@@ -290,18 +289,25 @@ let%test_unit
   assert_safe_json_equal
     (find_assoc_exn "target_ledger_hash" message.payload)
     (Ledger_hash.to_yojson target_ledger_hash) ;
+  assert_safe_json_equal
+    (find_assoc_exn "source_ledger_hash" message.payload)
+    (find_assoc_exn "source_ledger_hash" diff_json) ;
+  assert_safe_json_equal
+    (find_assoc_exn "changed_accounts" message.payload)
+    (`List []) ;
+  assert_safe_json_equal (find_assoc_exn "command" message.payload) `Null ;
   assert_safe_json_equal (find_assoc_exn "genesis" message.payload) (`Bool false) ;
   assert_safe_json_equal
     (find_assoc_exn "diff" message.payload)
-    (Da_layer.Diff.Stable.V3.to_yojson diff) ;
+    diff_json ;
   [%test_eq: string]
     (find_header_exn message.headers "Nats-Msg-Id")
     (Ledger_hash.to_decimal_string target_ledger_hash)
 
 let%test_unit
-    "Finality events include status, ledger hashes, and NATS dedup header" =
+    "Finality events include level, ledger hashes, and NATS dedup header" =
   Feature_parser.assert_scenario "event-contract.feature"
-    "Finality events include status, ledger hashes, and NATS dedup header" ;
+    "Finality events include level, ledger hashes, and NATS dedup header" ;
   let target_ledger_hash = Ledger_hash.empty_hash in
   let message =
     Explorer_events.build_finality_message ~logger:(Logger.create ())
@@ -310,8 +316,11 @@ let%test_unit
   in
   [%test_eq: string] message.subject Explorer_events.Subject.finality ;
   assert_safe_json_equal
-    (find_assoc_exn "status" message.payload)
+    (find_assoc_exn "level" message.payload)
     (`String "proved") ;
+  assert_safe_json_equal
+    (find_assoc_exn "ledger_hash" message.payload)
+    (Ledger_hash.to_yojson target_ledger_hash) ;
   assert_safe_json_equal
     (find_assoc_exn "source_ledger_hash" message.payload)
     (Ledger_hash.to_yojson Ledger_hash.empty_hash) ;

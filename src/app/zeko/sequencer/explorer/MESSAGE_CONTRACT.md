@@ -3,18 +3,21 @@
 This document is the Zeko-owned contract for explorer-facing NATS/JetStream
 publishing from the sequencer and backfill service.
 
-## Stream
+## Streams
 
-- Stream name: `ZEKO_L2`
-- Subjects:
-  - `zeko.l2.transactions`
-  - `zeko.l2.finality`
-  - `zeko.health`
-- Duplicate window: 120 seconds
-- Storage: file
-- Retention: limits
+- Stream name: `zeko-l2`
+  - Subjects: `zeko.l2.>`
+  - Duplicate window: 120 seconds
+  - Max age: 90 days
+  - Storage: file
+  - Retention: limits
+- Stream name: `zeko-health`
+  - Subjects: `zeko.health`
+  - Max messages: 1000
+  - Storage: file
+  - Retention: limits
 
-Sequencer startup best-effort ensures the stream exists with these subjects when
+Sequencer startup best-effort ensures the streams exist with these subjects when
 `--nats-url` is configured. If NATS is not configured, sequencer publishing is a
 no-op. If NATS is configured but unavailable, the sequencer logs a warning and
 explorer publishing remains disabled rather than crashing.
@@ -42,7 +45,22 @@ Payload:
 ```json
 {
   "kind": "user_command | fee_transfer | sync_replay | genesis_replay",
+  "source_ledger_hash": "<Ledger_hash.to_yojson source_ledger_hash>",
   "target_ledger_hash": "<Ledger_hash.to_yojson target_ledger_hash>",
+  "timestamp": "<Block_time.to_yojson timestamp>",
+  "acc_set": "<Field.to_yojson acc_set>",
+  "command": {
+    "type": "signed_command | zkapp_command",
+    "raw": "<User_command.to_yojson command>",
+    "action_step_flags": [true]
+  },
+  "changed_accounts": [
+    {
+      "index": 0,
+      "account": "<Account.to_yojson account>"
+    }
+  ],
+  "command_with_action_step_flags": "<raw DA diff command field>",
   "genesis": false,
   "diff": {
     "...": "Da_layer.Diff.Stable.V3.to_yojson diff"
@@ -53,8 +71,18 @@ Payload:
 Fields:
 
 - `kind`: why this diff is being published.
+- `source_ledger_hash`: source ledger hash encoded with
+  `Ledger_hash.to_yojson`.
 - `target_ledger_hash`: target ledger hash encoded with
   `Ledger_hash.to_yojson`.
+- `timestamp`: diff timestamp encoded with `Block_time.to_yojson`.
+- `acc_set`: account-set root from the DA diff.
+- `command`: normalized command envelope. `null` for fee transfers and diffs
+  without a command.
+- `changed_accounts`: post-state accounts affected by the diff, normalized as
+  `{index, account}` objects.
+- `command_with_action_step_flags`: raw DA-layer command field, retained for
+  consumers that need the exact OCaml-derived encoding.
 - `genesis`: `true` when replaying the first diff from the genesis source hash.
 - `diff`: DA-layer diff encoded with `Da_layer.Diff.Stable.V3.to_yojson`.
 
@@ -78,6 +106,8 @@ Payload:
 ```json
 {
   "status": "proved | committed",
+  "level": "proved | committed",
+  "ledger_hash": "<Ledger_hash.to_yojson target_ledger_hash>",
   "source_ledger_hash": "<Ledger_hash.to_yojson source_ledger_hash>",
   "target_ledger_hash": "<Ledger_hash.to_yojson target_ledger_hash>",
   "timestamp": "<Block_time.to_yojson timestamp>"
@@ -86,7 +116,10 @@ Payload:
 
 Fields:
 
-- `status`: finality state for the target ledger hash.
+- `level`: finality state for the target ledger hash.
+- `ledger_hash`: target ledger hash encoded with `Ledger_hash.to_yojson`.
+- `status`: alias of `level`, retained for compatibility with existing
+  Zeko-side consumers.
 - `source_ledger_hash`: source ledger hash encoded with
   `Ledger_hash.to_yojson`.
 - `target_ledger_hash`: target ledger hash encoded with

@@ -34,30 +34,62 @@ module Subject = struct
 end
 
 module Jetstream = struct
-  let stream_name = "ZEKO_L2"
+  type stream =
+    { name : string
+    ; subjects : string list
+    ; max_msgs : int
+    ; max_age_ns : int
+    ; duplicate_window_ns : int option
+    }
 
   let duplicate_window_ns = 120_000_000_000
 
-  let subjects = [ Subject.transactions; Subject.finality; Subject.health ]
+  let l2_stream =
+    { name = "zeko-l2"
+    ; subjects = [ "zeko.l2.>" ]
+    ; max_msgs = -1
+    ; max_age_ns = 7_776_000_000_000_000
+    ; duplicate_window_ns = Some duplicate_window_ns
+    }
 
-  let stream_config =
+  let health_stream =
+    { name = "zeko-health"
+    ; subjects = [ Subject.health ]
+    ; max_msgs = 1_000
+    ; max_age_ns = 0
+    ; duplicate_window_ns = None
+    }
+
+  let streams = [ l2_stream; health_stream ]
+
+  let stream_name = l2_stream.name
+
+  let stream_config stream =
+    let duplicate_window =
+      match stream.duplicate_window_ns with
+      | None ->
+          []
+      | Some duplicate_window_ns ->
+          [ ("duplicate_window", `Int duplicate_window_ns) ]
+    in
     `Assoc
-      [ ("name", `String stream_name)
+      ( [ ("name", `String stream.name)
       ; ( "subjects"
-        , `List (List.map subjects ~f:(fun subject -> `String subject)) )
+        , `List (List.map stream.subjects ~f:(fun subject -> `String subject))
+        )
       ; ("retention", `String "limits")
       ; ("storage", `String "file")
       ; ("discard", `String "old")
-      ; ("max_msgs", `Int (-1))
+      ; ("max_msgs", `Int stream.max_msgs)
       ; ("max_bytes", `Int (-1))
-      ; ("max_age", `Int 0)
+      ; ("max_age", `Int stream.max_age_ns)
       ; ("max_msgs_per_subject", `Int (-1))
       ; ("max_msg_size", `Int (-1))
       ; ("num_replicas", `Int 1)
-      ; ("duplicate_window", `Int duplicate_window_ns)
-      ]
+        ]
+      @ duplicate_window )
 
-  let api_subject operation =
+  let api_subject ?(stream_name = stream_name) operation =
     sprintf "$JS.API.STREAM.%s.%s" operation stream_name
 end
 
@@ -104,9 +136,10 @@ let create_nats_sink ?logger client : sink =
 
 let jetstream_request_timeout = Time_ns.Span.of_sec 5.
 
-let warn_jetstream ~logger message ~metadata =
+let warn_jetstream ?(stream_name = Jetstream.stream_name) ~logger message
+    ~metadata =
   [%log warn] "%s" message
-    ~metadata:(("stream", `String Jetstream.stream_name) :: metadata)
+    ~metadata:(("stream", `String stream_name) :: metadata)
 
 let response_error json =
   match json with
@@ -141,8 +174,8 @@ let is_stream_not_found fields =
        (response_error_int fields "code")
        ~default:false ~f:(Int.equal 404)
 
-let jetstream_request client ~operation payload =
-  let subject = Jetstream.api_subject operation in
+let jetstream_request client ~stream_name ~operation payload =
+  let subject = Jetstream.api_subject ~stream_name operation in
   Nats_client_async.request client ~subject ~timeout:jetstream_request_timeout
     (Yojson.Safe.to_string payload)
 
@@ -163,8 +196,9 @@ let jetstream_response_result ~operation response =
           Or_error.errorf "JetStream stream %s failed: %s" operation
             description )
 
-let create_or_update_jetstream_stream_result client ~operation =
-  jetstream_request client ~operation Jetstream.stream_config
+let create_or_update_jetstream_stream_result client stream ~operation =
+  jetstream_request client ~stream_name:stream.Jetstream.name ~operation
+    (Jetstream.stream_config stream)
   >>| function
   | Error error ->
       Error
@@ -173,9 +207,12 @@ let create_or_update_jetstream_stream_result client ~operation =
   | Ok response ->
       jetstream_response_result ~operation response
 
-let ensure_jetstream_stream_result client =
+let ensure_jetstream_stream_result_one client stream =
   let open Deferred.Let_syntax in
-  let%bind info = jetstream_request client ~operation:"INFO" (`Assoc []) in
+  let%bind info =
+    jetstream_request client ~stream_name:stream.Jetstream.name
+      ~operation:"INFO" (`Assoc [])
+  in
   match info with
   | Error error ->
       return (Error (Error.tag error ~tag:"JetStream stream INFO request failed"))
@@ -189,7 +226,7 @@ let ensure_jetstream_stream_result client =
       | Ok json -> (
           match response_error json with
           | Some fields when is_stream_not_found fields ->
-              create_or_update_jetstream_stream_result client
+              create_or_update_jetstream_stream_result client stream
                 ~operation:"CREATE"
           | Some fields ->
               let description =
@@ -201,8 +238,22 @@ let ensure_jetstream_stream_result client =
                 (Or_error.errorf "JetStream stream INFO failed: %s"
                    description )
           | None ->
-              create_or_update_jetstream_stream_result client
+              create_or_update_jetstream_stream_result client stream
                 ~operation:"UPDATE" ) )
+
+let ensure_jetstream_stream_result client =
+  let rec go = function
+    | [] ->
+        Deferred.return (Ok ())
+    | stream :: streams -> (
+        let%bind result = ensure_jetstream_stream_result_one client stream in
+        match result with
+        | Error _ as error ->
+            Deferred.return error
+        | Ok () ->
+            go streams )
+  in
+  go Jetstream.streams
 
 let ensure_jetstream_stream ~logger client =
   ensure_jetstream_stream_result client >>| function
@@ -300,15 +351,67 @@ let connect_and_ensure_jetstream_strict ?timeout ~logger uri =
           Error.tag error ~tag:"Could not configure JetStream" )
       |> Result.map ~f:(fun () -> client)
 
+let assoc_field_exn fields name =
+  List.Assoc.find_exn fields name ~equal:String.equal
+
+let transaction_command_payload command_with_action_step_flags =
+  match command_with_action_step_flags with
+  | None ->
+      `Null
+  | Some (command, action_step_flags) ->
+      let command_type, command_json =
+        match command with
+        | User_command.Signed_command command ->
+            ("signed_command", Signed_command.Stable.V2.to_yojson command)
+        | User_command.Zkapp_command command ->
+            ("zkapp_command", Zkapp_command.Stable.V1.to_yojson command)
+      in
+      `Assoc
+        [ ("type", `String command_type)
+        ; ("raw", command_json)
+        ; ( "action_step_flags"
+          , `List (List.map action_step_flags ~f:(fun flag -> `Bool flag))
+          )
+        ]
+
+let changed_accounts_payload changed_accounts =
+  `List
+    (List.map changed_accounts ~f:(fun (index, account) ->
+         `Assoc
+           [ ("index", `Int index)
+           ; ("account", Account.Stable.V2.to_yojson account)
+           ] ) )
+
 let build_transaction_message ~kind ~target_ledger_hash ~genesis ~diff =
+  let diff_json = Da_layer.Diff.Stable.V3.to_yojson diff in
+  let diff_fields =
+    match diff_json with
+    | `Assoc fields ->
+        fields
+    | _ ->
+        []
+  in
+  let command_with_action_step_flags =
+    Da_layer.Diff.Stable.V3.command_with_action_step_flags diff
+  in
   { subject = Subject.transactions
   ; headers = nats_msg_id_headers target_ledger_hash
   ; payload =
       `Assoc
         [ ("kind", `String (Transaction_kind.to_string kind))
+        ; ("source_ledger_hash", assoc_field_exn diff_fields "source_ledger_hash")
         ; ("target_ledger_hash", Ledger_hash.to_yojson target_ledger_hash)
+        ; ("timestamp", assoc_field_exn diff_fields "timestamp")
+        ; ("acc_set", assoc_field_exn diff_fields "acc_set")
+        ; ( "command"
+          , transaction_command_payload command_with_action_step_flags )
+        ; ( "changed_accounts"
+          , changed_accounts_payload
+              (Da_layer.Diff.Stable.V3.changed_accounts diff) )
+        ; ( "command_with_action_step_flags"
+          , assoc_field_exn diff_fields "command_with_action_step_flags" )
         ; ("genesis", `Bool genesis)
-        ; ("diff", Da_layer.Diff.Stable.V3.to_yojson diff)
+        ; ("diff", diff_json)
         ]
   }
 
@@ -322,6 +425,8 @@ let build_finality_message ~logger ~status ~source_ledger_hash
   ; payload =
       `Assoc
         [ ("status", `String (Finality_status.to_string status))
+        ; ("level", `String (Finality_status.to_string status))
+        ; ("ledger_hash", Ledger_hash.to_yojson target_ledger_hash)
         ; ("source_ledger_hash", Ledger_hash.to_yojson source_ledger_hash)
         ; ("target_ledger_hash", Ledger_hash.to_yojson target_ledger_hash)
         ; ("timestamp", timestamp_json ~logger)

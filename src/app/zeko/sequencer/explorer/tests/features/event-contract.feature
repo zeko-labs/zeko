@@ -1,21 +1,23 @@
 Feature: Explorer Event Contract
 
-  Scenario: Transaction events include the replay kind, diff payload, and NATS dedup header
+  Scenario: Transaction events expose diff fields and NATS dedup header
     Given a transaction diff prepared for explorer publishing
     When the transaction event message is built
     Then the subject is "zeko.l2.transactions"
     And the payload includes "kind"
+    And the payload includes "source_ledger_hash"
     And the payload includes "target_ledger_hash"
-    And the payload includes "diff"
+    And the payload includes "changed_accounts"
+    And the payload includes "command"
     And the headers include "Nats-Msg-Id"
 
-  Scenario: Finality events include status, ledger hashes, and NATS dedup header
+  Scenario: Finality events include level, ledger hashes, and NATS dedup header
     Given a finality transition prepared for explorer publishing
     When the finality event message is built
     Then the subject is "zeko.l2.finality"
-    And the payload includes "status"
+    And the payload includes "level"
+    And the payload includes "ledger_hash"
     And the payload includes "source_ledger_hash"
-    And the payload includes "target_ledger_hash"
     And the headers include "Nats-Msg-Id"
 
   Scenario: Health events include the service identity and publishing state
