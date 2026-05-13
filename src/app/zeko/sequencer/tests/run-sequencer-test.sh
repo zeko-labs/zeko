@@ -136,7 +136,7 @@ docker run --rm --name pg-sequencer \
 
 docker run -d --name rabbitmq-sequencer \
   -p 5672:5672 \
-  rabbitmq:latest
+  rabbitmq:3.13.7
 
 wait_for_port 5433 $$
 wait_for_port 5672 $$
