@@ -64,11 +64,6 @@ runs:
         done
         opam switch create "4.14.0"
         opam switch "4.14.0"
-        for i in 1 2 3 4 5; do
-          opam repository add --yes opam-current https://github.com/ocaml/opam-repository.git && break
-          echo "opam current repo add failed, retry $i"
-          sleep 5
-        done
         export OPAMERRLOGLEN=20
         export OPAMYES=1
     - name: 🧩 Get opam dependency cache
@@ -80,6 +75,11 @@ runs:
     - name: 🏗️  Install opam dependencies
       shell: bash
       run: |
+        opam switch "4.14.0"
+        opam repository remove --yes opam-current || true
+        nats_client_source="https://github.com/hebilicious/nats-ml/releases/download/v0.0.10/nats-client-0.0.10.tbz"
+        opam pin add --yes --no-action nats-client.0.0.10 "$nats_client_source"
+        opam pin add --yes --no-action nats-client-async.0.0.10 "$nats_client_source"
         opam switch import opam.export --yes
         eval "$(opam env)"
         ./scripts/pin-external-packages.sh
