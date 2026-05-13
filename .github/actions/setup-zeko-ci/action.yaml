@@ -62,7 +62,11 @@ runs:
           echo "opam repo add failed, retry $i"
           sleep 5
         done
-        opam repository add --yes --all nats-overlay ./.github/opam-overlays/nats
+        for i in 1 2 3 4 5; do
+          opam repository add --yes --all opam-current https://github.com/ocaml/opam-repository.git && break
+          echo "opam current repo add failed, retry $i"
+          sleep 5
+        done
         opam switch create "4.14.0"
         opam switch "4.14.0"
         export OPAMERRLOGLEN=20
