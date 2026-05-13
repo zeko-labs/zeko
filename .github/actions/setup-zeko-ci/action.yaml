@@ -76,8 +76,8 @@ runs:
       shell: bash
       run: |
         opam switch "4.14.0"
-        opam repository remove --yes opam-current || true
-        opam repository remove --yes nats-client-packages || true
+        opam repository remove --yes --all opam-current || true
+        opam repository remove --yes --all nats-client-packages || true
         opam pin remove --yes nats-client nats-client-async || true
         nats_opam_repo="$(mktemp -d)"
         mkdir -p \
