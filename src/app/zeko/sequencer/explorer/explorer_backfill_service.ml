@@ -178,9 +178,19 @@ let source_query from_hash =
   else `Specific from_hash
 
 let create ~logger ~da_config ~nats_url =
-  let%map nats_client = Nats_client_async.connect (Some nats_url) in
-  [%log debug] "Explorer backfill service connected to NATS: url=%s"
-    (Uri.to_string nats_url) ;
+  let%map nats_client =
+    Explorer_events.connect_and_ensure_jetstream_strict ~logger nats_url
+  in
+  let nats_client =
+    match nats_client with
+    | Ok client ->
+        [%log debug] "Explorer backfill service connected to NATS: url=%s"
+          (Uri.to_string nats_url) ;
+        client
+    | Error error ->
+        failwithf "Explorer backfill service requires JetStream: %s"
+          (Error.to_string_hum error) ()
+  in
   { logger
   ; da_config
   ; nats_client = Some nats_client
@@ -280,6 +290,28 @@ let publish_backfill_diff t ~from_hash ~index ~target_ledger_hash diff =
         (Format.asprintf "%a" Nats_client_async.pp_publish_result result) ;
       result
 
+let handle_backfill_publish_result t job ~target_ledger_hash result =
+  let logger = t.logger in
+  match result with
+  | `Queued ->
+      update_job job ~status:Running
+        ~diffs_published:(job.diffs_published + 1)
+        () ;
+      [%log debug]
+        "Backfill queued explorer transaction event: job_id=%s \
+         target_ledger_hash=%s diffs_published=%d"
+        job.id
+        (Ledger_hash.to_decimal_string target_ledger_hash)
+        job.diffs_published ;
+      Ok target_ledger_hash
+  | `Dropped ->
+      [%log debug]
+        "Backfill failed to queue explorer transaction event: job_id=%s \
+         target_ledger_hash=%s"
+        job.id
+        (Ledger_hash.to_decimal_string target_ledger_hash) ;
+      Error (Error.of_string "NATS publish dropped while backfilling diffs")
+
 let source_hash = function
   | `Genesis ->
       genesis_hash
@@ -334,29 +366,10 @@ let publish_target t job ~current_source ~index ~target_ledger_hash =
             "Backfill diff chain does not match requested ledger hash \
              progression") )
   else
-    match
-      publish_backfill_diff t ~from_hash:job.from_hash ~index ~target_ledger_hash
-        diff
-    with
-    | `Queued ->
-        update_job job ~status:Running
-          ~diffs_published:(job.diffs_published + 1)
-          () ;
-        [%log debug]
-          "Backfill queued explorer transaction event: job_id=%s \
-           target_ledger_hash=%s diffs_published=%d"
-          job.id
-          (Ledger_hash.to_decimal_string target_ledger_hash)
-          job.diffs_published ;
-        Deferred.return (Ok target_ledger_hash)
-    | `Dropped ->
-        [%log debug]
-          "Backfill failed to queue explorer transaction event: job_id=%s \
-           target_ledger_hash=%s"
-          job.id
-          (Ledger_hash.to_decimal_string target_ledger_hash) ;
-        Deferred.return
-          (Error (Error.of_string "NATS publish dropped while backfilling diffs"))
+    publish_backfill_diff t ~from_hash:job.from_hash ~index ~target_ledger_hash
+      diff
+    |> handle_backfill_publish_result t job ~target_ledger_hash
+    |> Deferred.return
 
 let run_job t job =
   let logger = t.logger in

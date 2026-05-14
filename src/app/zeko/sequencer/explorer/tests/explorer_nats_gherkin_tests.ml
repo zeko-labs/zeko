@@ -64,6 +64,66 @@ let assert_safe_json_equal actual expected =
     failwithf "Expected %s but got %s" (Yojson.Safe.to_string expected)
       (Yojson.Safe.to_string actual) ()
 
+let json_int_exn = function
+  | `Int value ->
+      value
+  | `Intlit value ->
+      Int.of_string value
+  | json ->
+      failwithf "expected JSON integer, got %s" (Yojson.Safe.to_string json) ()
+
+let json_bool_exn = function
+  | `Bool value ->
+      value
+  | json ->
+      failwithf "expected JSON boolean, got %s" (Yojson.Safe.to_string json) ()
+
+let require_no_jetstream_error label json =
+  match json with
+  | `Assoc fields -> (
+      match List.Assoc.find fields "error" ~equal:String.equal with
+      | None ->
+          ()
+      | Some error ->
+          failwithf "%s returned JetStream error: %s" label
+            (Yojson.Safe.to_string error)
+            () )
+  | _ ->
+      failwithf "%s returned non-object JSON: %s" label
+        (Yojson.Safe.to_string json)
+        ()
+
+let jetstream_request_json label client ~operation payload =
+  let subject = Explorer_events.Jetstream.api_subject operation in
+  Nats_client_async.request client ~subject ~timeout:(Time_ns.Span.of_sec 5.)
+    (Yojson.Safe.to_string payload)
+  >>| fun response ->
+  let response = expect_ok label response in
+  let json = Yojson.Safe.from_string response in
+  require_no_jetstream_error label json ;
+  json
+
+let purge_jetstream_stream client =
+  jetstream_request_json "purge stream" client ~operation:"PURGE" (`Assoc [])
+  >>| ignore
+
+let jetstream_message_count client =
+  jetstream_request_json "stream info" client ~operation:"INFO" (`Assoc [])
+  >>| fun info ->
+  json_assoc_exn "messages" (json_assoc_exn "state" info) |> json_int_exn
+
+let publish_jetstream_message label client
+    ({ Explorer_events.subject; headers; payload } : Explorer_events.message) =
+  let headers = Nats_client.Headers.of_list headers in
+  Nats_client_async.request client ~subject ~headers
+    ~timeout:(Time_ns.Span.of_sec 5.)
+    (Yojson.Safe.to_string payload)
+  >>| fun response ->
+  let response = expect_ok label response in
+  let json = Yojson.Safe.from_string response in
+  require_no_jetstream_error label json ;
+  json
+
 let sample_diff ?(source_ledger_hash = Ledger_hash.empty_hash) () =
   Explorer_events.build_live_diff ~logger:(Logger.create ())
     ~diff:
@@ -161,9 +221,41 @@ let run_backfill_scenario () =
         (`String "genesis_replay") ;
       assert_safe_json_equal (json_assoc_exn "genesis" payload) (`Bool true) )
 
+let run_jetstream_dedupe_scenario () =
+  Feature_parser.assert_scenario "nats-integration.feature"
+    "JetStream deduplicates transaction publishes by Nats-Msg-Id" ;
+  with_clients (fun ~subscriber:_ ~actor ->
+      let logger = Logger.create () in
+      let%bind () = Explorer_events.ensure_jetstream_stream ~logger actor in
+      let%bind () = purge_jetstream_stream actor in
+      let target_ledger_hash = Ledger_hash.empty_hash in
+      let message =
+        Explorer_events.build_transaction_message
+          ~kind:Explorer_events.Transaction_kind.User_command
+          ~target_ledger_hash ~genesis:false ~diff:(sample_diff ())
+      in
+      let%bind first_ack =
+        publish_jetstream_message "first duplicate publish" actor message
+      in
+      let%bind second_ack =
+        publish_jetstream_message "second duplicate publish" actor message
+      in
+      assert_safe_json_equal
+        (json_assoc_exn "stream" first_ack)
+        (`String Explorer_events.Jetstream.stream_name) ;
+      assert_safe_json_equal
+        (json_assoc_exn "stream" second_ack)
+        (`String Explorer_events.Jetstream.stream_name) ;
+      if not (json_bool_exn (json_assoc_exn "duplicate" second_ack)) then
+        failwith "expected the second JetStream publish to be a duplicate" ;
+      let%map messages = jetstream_message_count actor in
+      if not (Int.equal messages 1) then
+        failwithf "expected one stored JetStream message, got %d" messages () )
+
 let main () =
   let%bind () = run_live_transaction_scenario () in
   let%bind () = run_backfill_scenario () in
+  let%bind () = run_jetstream_dedupe_scenario () in
   printf "explorer NATS Gherkin integration scenarios passed against %s\n"
     (Uri.to_string (url ())) ;
   return ()

@@ -17,6 +17,7 @@ jobs:
     services:
       nats:
         image: nats:2-alpine
+        command: -js
         ports:
           - 4222:4222
     steps:
@@ -26,6 +27,7 @@ jobs:
           submodules: recursive
       - name: 🧰 Setup Zeko CI
         uses: ./.github/actions/setup-zeko-ci
+        timeout-minutes: 20
         with:
           opam-cache-key: zeko_opam_dependencies-${{ hashFiles('./opam.export') }}
           build-cache-key: zeko_build-${{ hashFiles('./opam.export') }}

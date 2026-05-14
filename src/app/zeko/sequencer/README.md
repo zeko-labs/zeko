@@ -29,7 +29,9 @@ NATS_URL="nats://127.0.0.1:4222" opam exec -- env -u DUNE_RPC dune runtest --pro
 ```
 
 The explorer Gherkin suite includes NATS-backed scenarios. `NATS_URL` must be
-set and point at a running NATS server when running those tests outside CI.
+set and point at a running NATS server with JetStream enabled when running
+those tests outside CI. The message contract is documented in
+`src/app/zeko/sequencer/explorer/MESSAGE_CONTRACT.md`.
 
 ## Run
 
@@ -85,6 +87,10 @@ transaction message includes `Nats-Msg-Id: <target_ledger_hash>`.
 - `target_ledger_hash`
 - `timestamp`
 
+Every finality message includes
+`Nats-Msg-Id: finality-<status>-<target_ledger_hash>`, for example
+`finality-proved-...` or `finality-committed-...`.
+
 `zeko.health` carries:
 
 - `service`
@@ -93,6 +99,12 @@ transaction message includes `Nats-Msg-Id: <target_ledger_hash>`.
 - `last_published_hash`
 - `unproved_hash`
 - `timestamp`
+
+When NATS is configured, the sequencer startup path best-effort configures the
+Zeko-owned JetStream stream `ZEKO_L2` for `zeko.l2.transactions`,
+`zeko.l2.finality`, and `zeko.health`. If NATS is down or JetStream setup fails,
+startup logs a warning and explorer publishing stays disabled or drops messages
+rather than crashing the sequencer.
 
 Run help to see the options:
 
@@ -128,7 +140,9 @@ the same port.
 
 The backfill GraphQL HTTP endpoint stays on `/graphql`.
 The service requires `--nats-url` because each backfill republishes historical
-diffs into NATS.
+diffs into NATS. Unlike the live sequencer publisher, the standalone backfill
+service fails startup when it cannot connect to JetStream, and a dropped publish
+marks the backfill job as failed.
 
 Available GraphQL operations:
 
@@ -177,7 +191,8 @@ The explorer-specific tests now live under
 `src/app/zeko/sequencer/explorer/tests/` and use copied `.feature` files from
 the explorer spike as the main test inventory. CI runs them in the dedicated
 Explorer Gherkin workflow, separate from the longer sequencer integration flow.
-The real-NATS scenarios expect `NATS_URL` to point at a running NATS server.
+The real-NATS scenarios expect `NATS_URL` to point at a running NATS server
+with JetStream enabled.
 
 ## Deploy rollup contract to L1
 

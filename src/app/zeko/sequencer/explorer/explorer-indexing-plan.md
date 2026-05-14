@@ -76,21 +76,26 @@ Fields:
   - `fee_transfer`
   - `sync_replay`
   - `genesis_replay`
+- `source_ledger_hash`
 - `target_ledger_hash`
+- `timestamp`
+- `acc_set`
+- `command`
+- `changed_accounts`
+- `command_with_action_step_flags`
 - `genesis`
 - `diff`
 
-`diff` fields:
-
-- `source_ledger_hash`
-- `changed_accounts`
-- `command_with_action_step_flags`
-- `timestamp`
-- `acc_set`
-
 Encoding rules:
 
-- `diff` uses the existing JSON shape derived from `Da_layer.Diff.Stable.V3`.
+- `source_ledger_hash`, `timestamp`, `acc_set`, and
+  `command_with_action_step_flags` come from the JSON shape derived from
+  `Da_layer.Diff.Stable.V3`.
+- `command` is a normalized envelope with `type`, `raw`, and
+  `action_step_flags`, or `null` when the diff has no command.
+- `changed_accounts` is normalized to `{index, account}` objects.
+- `diff` retains the existing JSON shape derived from
+  `Da_layer.Diff.Stable.V3`.
 - `target_ledger_hash` is the post-diff ledger hash passed to `Da_layer.Client.enqueue_diff`.
 - `genesis` matches the flag passed to `Da_layer.Client.enqueue_diff`.
 
@@ -98,17 +103,20 @@ Encoding rules:
 
 Fields:
 
-- `status`
+- `level`
   - `proved`
   - `committed`
+- `ledger_hash`
 - `source_ledger_hash`
 - `target_ledger_hash`
+- `status`
 - `timestamp`
 
 Encoding rules:
 
 - `proved` is emitted from the successful committer result.
 - `committed` is emitted after `State.Last_committed_ledger.set`.
+- `status` is retained as an alias of `level`.
 
 ### `zeko.health` schema
 

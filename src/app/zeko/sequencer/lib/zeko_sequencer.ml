@@ -1211,8 +1211,7 @@ module Sequencer = struct
       | None ->
           return None
       | Some uri ->
-          let%map client = Nats_client_async.connect (Some uri) in
-          Some client
+          Explorer_events.connect_and_ensure_jetstream ~logger uri
     in
     let nats_sink =
       match nats_client with
