@@ -200,6 +200,18 @@ module Input = struct
           .serializable )
     | Outer_commit of Outer_commit.Witness.serializable
     | Bridge of Bridge.t
+    | Verification_keys
+  [@@deriving yojson]
+end
+
+module Verification_key_hashes = struct
+  type t =
+    { outer_rules : F.t
+    ; inner_rules : F.t
+    ; bridge_mina_l1 : F.t
+    ; bridge_mina_token_owner : F.t
+    ; bridge_mina_l2 : F.t
+    }
   [@@deriving yojson]
 end
 
@@ -233,6 +245,7 @@ module Output = struct
           , Zkapp_command.Digest.Forest.t )
           Zkapp_command.Call_forest.t )
         * Compile_simple.Proof.t
+    | Verification_keys of Verification_key_hashes.t
   [@@deriving yojson]
 end
 
@@ -580,6 +593,34 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
               (Zkapp_command.Call_forest.map
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
+  | Verification_keys ->
+      let%bind outer_rules =
+        Compile_simple.Verification_key.of_tag (Lazy.force Outer_rules_inst.tag)
+        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+      and inner_rules =
+        Compile_simple.Verification_key.of_tag (Lazy.force Inner_rules_inst.tag)
+        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+      and bridge_mina_l1 =
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_mina.System_L1_enabled.tag)
+        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+      and bridge_mina_token_owner =
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_mina.System_L1_token_owner.tag)
+        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+      and bridge_mina_l2 =
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_mina.System_L2.tag)
+        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+      in
+      return
+        (Output.Verification_keys
+           { outer_rules
+           ; inner_rules
+           ; bridge_mina_l1
+           ; bridge_mina_token_owner
+           ; bridge_mina_l2
+           } )
 
 let run ?fake_proving_time ~logger ~mq_host () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in

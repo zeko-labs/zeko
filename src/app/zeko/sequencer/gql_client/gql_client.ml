@@ -379,6 +379,36 @@ let fetch_state_opt uri aid =
                |> List.map ~f:Field.of_string
                |> Zkapp_state.V.of_list_exn )) )
 
+let fetch_nonce_opt uri aid =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!, $tokenId: TokenId!) {
+              account(publicKey: $pk, token: $tokenId){
+                nonce
+              }
+            }
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String
+                ( Account_id.public_key aid
+                |> Signature_lib.Public_key.Compressed.to_base58_check ) )
+          ; ("tokenId", `String (Account_id.token_id aid |> Token_id.to_string))
+          ]
+    end
+  in
+  query_with_retry ~label:"fetch nonce" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "account"
+        |> to_option (fun json ->
+               member "nonce" json |> to_string |> Int.of_string
+               |> Unsigned.UInt32.of_int )) )
+
 let fetch_vk uri aid =
   let q =
     object
@@ -409,6 +439,256 @@ let fetch_vk uri aid =
         result |> member "account" |> member "verificationKey"
         |> member "verificationKey" |> to_string
         |> Side_loaded_verification_key.of_base64 |> Or_error.ok_exn) )
+
+let parse_auth_required = function
+  | "None" ->
+      Permissions.Auth_required.None
+  | "Either" ->
+      Either
+  | "Proof" ->
+      Proof
+  | "Signature" ->
+      Signature
+  | "Impossible" ->
+      Impossible
+  | s ->
+      failwithf "fetch_account: unknown AccountAuthRequired %s" s ()
+
+let parse_permissions json =
+  let open Yojson.Safe.Util in
+  let auth field = parse_auth_required (member field json |> to_string) in
+  let svk =
+    let svk = member "setVerificationKey" json in
+    ( parse_auth_required (member "auth" svk |> to_string)
+    , Mina_numbers.Txn_version.of_string (member "txnVersion" svk |> to_string)
+    )
+  in
+  Permissions.Poly.
+    { edit_state = auth "editState"
+    ; access = auth "access"
+    ; send = auth "send"
+    ; receive = auth "receive"
+    ; set_delegate = auth "setDelegate"
+    ; set_permissions = auth "setPermissions"
+    ; set_verification_key = svk
+    ; set_zkapp_uri = auth "setZkappUri"
+    ; edit_action_state = auth "editActionState"
+    ; set_token_symbol = auth "setTokenSymbol"
+    ; increment_nonce = auth "incrementNonce"
+    ; set_voting_for = auth "setVotingFor"
+    ; set_timing = auth "setTiming"
+    }
+
+(* GraphQL exposes the timing fields flatly. They are all null on an Untimed
+   account; on a Timed account they are all set. We use [cliffTime] as the
+   discriminator. *)
+let parse_timing json : Account_timing.t =
+  let open Yojson.Safe.Util in
+  match member "cliffTime" json with
+  | `Null ->
+      Untimed
+  | _ ->
+      (* Mina graphql's Balance/Amount scalars serialize via the type's
+         [to_string], which for [Currency.*] is [Unsigned.to_string] — raw
+         nanomina as a decimal string ("1000000000000"). Parse as such, not as
+         a mina-formatted decimal. *)
+      let initial_minimum_balance =
+        member "initialMinimumBalance" json
+        |> to_string |> Currency.Balance.of_string
+      in
+      let cliff_time =
+        member "cliffTime" json
+        |> to_string |> Mina_numbers.Global_slot_since_genesis.of_string
+      in
+      let cliff_amount =
+        member "cliffAmount" json |> to_string |> Currency.Amount.of_string
+      in
+      let vesting_period =
+        member "vestingPeriod" json
+        |> to_string |> Mina_numbers.Global_slot_span.of_string
+      in
+      let vesting_increment =
+        member "vestingIncrement" json |> to_string |> Currency.Amount.of_string
+      in
+      Timed
+        { initial_minimum_balance
+        ; cliff_time
+        ; cliff_amount
+        ; vesting_period
+        ; vesting_increment
+        }
+
+let parse_zkapp ~logger json : Zkapp_account.t option =
+  let open Yojson.Safe.Util in
+  match member "zkappUri" json with
+  | `Null ->
+      None
+  | _ ->
+      let app_state =
+        member "zkappState" json |> to_list |> List.map ~f:to_string
+        |> List.map ~f:Field.of_string
+        |> Zkapp_state.V.of_list_exn
+      in
+      let action_state =
+        match
+          member "actionState" json |> to_list |> List.map ~f:to_string
+          |> List.map ~f:Field.of_string
+        with
+        | [ a; b; c; d; e ] ->
+            Pickles_types.Vector.[ a; b; c; d; e ]
+        | _ ->
+            failwith "fetch_account: actionState must have 5 elements"
+      in
+      let verification_key =
+        match member "verificationKey" json with
+        | `Null ->
+            None
+        | vk ->
+            let data =
+              member "verificationKey" vk
+              |> to_string |> Side_loaded_verification_key.of_base64
+              |> Or_error.ok_exn
+            in
+            let hash =
+              member "hash" vk |> to_string |> Field.of_string
+            in
+            Some { With_hash.data; hash }
+      in
+      let proved_state = member "provedState" json |> to_bool in
+      let zkapp_uri = member "zkappUri" json |> to_string in
+      ignore logger ;
+      Some
+        { Zkapp_account.default with
+          app_state
+        ; verification_key
+        ; action_state
+        ; proved_state
+        ; zkapp_uri
+        }
+
+let fetch_account ~logger uri (aid : Account_id.t) :
+    Account.t option Deferred.Or_error.t =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query ($pk: PublicKey!, $tokenId: TokenId!) {
+              account(publicKey: $pk, token: $tokenId) {
+                publicKey
+                tokenId
+                tokenSymbol
+                balance { total }
+                nonce
+                receiptChainHash
+                delegate
+                votingFor
+                timing {
+                  initialMinimumBalance
+                  cliffTime
+                  cliffAmount
+                  vestingPeriod
+                  vestingIncrement
+                }
+                permissions {
+                  editState
+                  access
+                  send
+                  receive
+                  setDelegate
+                  setPermissions
+                  setVerificationKey { auth txnVersion }
+                  setZkappUri
+                  editActionState
+                  setTokenSymbol
+                  incrementNonce
+                  setVotingFor
+                  setTiming
+                }
+                zkappState
+                zkappUri
+                actionState
+                verificationKey { verificationKey hash }
+                provedState
+              }
+            }
+          |}
+
+      method variables =
+        `Assoc
+          [ ( "pk"
+            , `String
+                ( Account_id.public_key aid
+                |> Signature_lib.Public_key.Compressed.to_base58_check ) )
+          ; ("tokenId", `String (Account_id.token_id aid |> Token_id.to_string))
+          ]
+    end
+  in
+  query_with_retry ~label:"fetch account" ~logger q uri ~f:(fun result ->
+      let open Yojson.Safe.Util in
+      match member "account" result with
+      | `Null ->
+          None
+      | json ->
+          let public_key =
+            member "publicKey" json
+            |> to_string
+            |> Signature_lib.Public_key.Compressed.of_base58_check_exn
+          in
+          let token_id =
+            member "tokenId" json |> to_string |> Token_id.of_string
+          in
+          let token_symbol =
+            member "tokenSymbol" json |> to_string
+          in
+          let balance =
+            (* See note above on Balance/Amount scalar serialization. *)
+            member "balance" json |> member "total" |> to_string
+            |> Currency.Balance.of_string
+          in
+          let nonce =
+            member "nonce" json |> to_string |> Account.Nonce.of_string
+          in
+          let receipt_chain_hash =
+            member "receiptChainHash" json |> to_string
+            |> Receipt.Chain_hash.of_base58_check_exn
+          in
+          let delegate =
+            match member "delegate" json with
+            | `Null ->
+                None
+            | d ->
+                Some
+                  ( to_string d
+                  |> Signature_lib.Public_key.Compressed.of_base58_check_exn )
+          in
+          let voting_for =
+            (* Mina graphql declares both [receiptChainHash] and [votingFor]
+               as the [chain_hash] scalar (see [mina_graphql/types.ml]). The
+               encoding uses [Receipt.Chain_hash]'s version byte (0x0C), even
+               though [Account.t.voting_for] is a [State_hash.t]. Both share
+               the same underlying [Field.t], so we round-trip through it. *)
+            member "votingFor" json |> to_string
+            |> Receipt.Chain_hash.of_base58_check_exn
+            |> Receipt.Chain_hash.to_field |> State_hash.of_hash
+          in
+          let timing = parse_timing (member "timing" json) in
+          let permissions = parse_permissions (member "permissions" json) in
+          let zkapp = parse_zkapp ~logger json in
+          Some
+            (Account.of_poly
+               { public_key
+               ; token_id
+               ; token_symbol
+               ; balance
+               ; nonce
+               ; receipt_chain_hash
+               ; delegate
+               ; voting_for
+               ; timing
+               ; permissions
+               ; zkapp
+               } ) )
 
 let infer_state ~logger uri ~zkapp_pk ~signer_pk =
   let%map.Deferred.Result committed_state =
@@ -513,6 +793,27 @@ let fetch_best_chain ?(max_length = 10) uri =
         result |> member "bestChain"
         |> map (member "stateHash")
         |> to_list |> List.map ~f:to_string) )
+
+let fetch_account_creation_fee uri =
+  let q =
+    object
+      method query =
+        String.substr_replace_all ~pattern:"\n" ~with_:" "
+          {|
+            query {
+              genesisConstants {
+                accountCreationFee
+              }
+            }
+          |}
+
+      method variables = `Assoc []
+    end
+  in
+  query_with_retry ~label:"fetch account creation fee" q uri ~f:(fun result ->
+      Yojson.Safe.Util.(
+        result |> member "genesisConstants" |> member "accountCreationFee"
+        |> to_string |> Currency.Fee.of_string) )
 
 let fetch_genesis_timestamp uri =
   let q =

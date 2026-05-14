@@ -29,13 +29,14 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
   [%log info] "Current slot: %d"
     ( Utils.Slot.global_slot ~l1_config
     |> Mina_numbers.Global_slot_since_genesis.to_int ) ;
+  let signer =
+    Thread_safe.block_on_async_exn (fun () ->
+        Signer_service.Client.create ~logger
+          ~location:(Host_and_port.of_string signer)
+        >>| Signer_service.Signer.of_client )
+  in
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
-        let%bind signer =
-          Signer_service.Client.create ~logger
-            ~location:(Host_and_port.of_string signer)
-          >>| Signer_service.Signer.of_client
-        in
         Sequencer.create ~logger ~max_pool_size ~da_config ~da_keys ~da_quorum
           ~db_dir:(Some db_dir) ~checkpoints_dir:(Some checkpoints_dir)
           ~postgres_uri ~l1_uri ~archive_uri
@@ -47,9 +48,24 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
 
   Sequencer.run_committer sequencer ;
 
+  let l2_executor =
+    Executor.create
+      ~kind:
+        (`L2
+          { infer_nonce = Sequencer.infer_nonce sequencer
+          ; apply_user_command = Sequencer.apply_user_command sequencer
+          } )
+      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~signer ()
+  in
+
   let graphql_callback =
     Graphql_cohttp_async.make_callback
-      (fun ~with_seq_no:_ _req -> sequencer)
+      (fun ~with_seq_no:_ _req ->
+        Gql.Context.
+          { sequencer
+          ; l1_executor = sequencer.merger_ctx.executor
+          ; l2_executor
+          } )
       (Gql.schema ~proof_cache_db)
   in
   let () =
@@ -128,8 +144,7 @@ let () =
          (optional_with_default 20 int)
          ~doc:"int Commit validity period in slots"
      and signer =
-       flag "--signer" (required string)
-         ~doc:"string Signer service host:port"
+       flag "--signer" (required string) ~doc:"string Signer service host:port"
      in
      let slot_acceptance = Time.Span.of_min slot_acceptance_m in
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in

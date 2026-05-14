@@ -32,4 +32,4 @@ jobs:
           opam exec -- dune build --profile=devnet src/app/zeko/da_layer
           opam exec -- dune build --profile=devnet src/app/zeko/signer
       - name: 🧪 Run sequencer tests
-        run: ./src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1
+        run: ./src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1 false true

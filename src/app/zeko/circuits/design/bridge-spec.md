@@ -11,6 +11,7 @@ define the circuit for the verification keys for the L1-side of the bridge contr
 Likewise, the ones for `account_id_l2` define the circuit for the L2-side.
 
 Things to consider:
+
 - State of rollup can arbitrarily change potentially through governance.
 - How much historical data do you need to prove a deposit?
 
@@ -33,6 +34,31 @@ NB: We don't require that user actions are only done in the enabled period.
 This wouldn't improve security, and would increase circuit size and complexity.
 OTOH, users should not use an L1 account/bank which is soon to become disabled.
 
+## Bridge proof fee
+
+Each bridging request pays a fixed `bridge_proof_fee` to the sequencer's
+`bridge_fee_recipient_{l1,l2}` accounts. The fee is paid in two halves so
+that the sequencer is compensated regardless of whether the request
+completes:
+
+- On submitDeposit / submitWithdrawal, the `Witness` action carries a
+  sibling `(bridge_fee_recipient, default_token, +bridge_proof_fee,
+Parents_own_token)` account update. The user's transferrer must cover
+  `amount + bridge_proof_fee`.
+- On finalize\* (deposit / cancelled deposit / withdrawal), the action
+  update on the holder/zeko account has two extra child account updates
+  appended: a recipient payout for `amount - bridge_proof_fee` (further
+  minus `account_creation_fee` / `outer_account_creation_fee` if the
+  helper account is new) and a fixed `bridge_proof_fee` payout to the
+  bridge fee recipient. Both use `may_use_token = Parents_own_token` and
+  have no authorization, so the sequencer cannot redirect them.
+
+The helper account update on finalize* is signed by the user with the
+*partial\* transaction commitment (`use_full_commitment = false`) so the
+user can pre-sign before the sequencer attaches the fee_payer.
+Single-use is enforced by `increment_nonce = true` together with the
+constant-nonce precondition on the helper account.
+
 ```ocaml
 val helper_token_owner_l1 : Public_key.t
 val public_key_l2 : Public_key.t
@@ -40,6 +66,10 @@ val token_id_l1 : Token_id.t
 val token_id_l2 : Token_id.t
 val holder_accounts_l1 : Public_key.t list
 val window_size : nat
+val bridge_proof_fee : nat
+val bridge_fee_recipient_l1 : Public_key.t
+val bridge_fee_recipient_l2 : Public_key.t
+val outer_account_creation_fee : Currency.Fee.t
 let helper_token_id_l1 = Account_id.create helper_token_owner_l1 Token_id.default
 
 let account_id_l2 = Account_id.create public_key_l2 token_id_l2
@@ -98,7 +128,16 @@ let deposit_action (params : deposit_params) : outer_action =
       ; children = a :: params.nested_children
       }
   in
-  let children = a' :: params.children in
+  (* Fee paid to the sequencer for proving the corresponding finalize. *)
+  let fee_payout =
+    { public_key = bridge_fee_recipient_l1
+    ; token_id = Token_id.default
+    ; balance_change = bridge_proof_fee
+    ; may_use_token = Parents_own_token
+    ; authorization_kind = None_given
+    }
+  in
+  let children = a' :: fee_payout :: params.children in
   Witness { aux = params.deposit ; children ; valid_while = infinite_valid_while }
 
 type withdrawal_params =
@@ -130,7 +169,16 @@ let withdraw_action
       ; children = a :: params.nested_children
       }
   in
-  let children = a' :: params.children in
+  (* Fee paid to the sequencer for proving the corresponding finalize. *)
+  let fee_payout =
+    { public_key = bridge_fee_recipient_l2
+    ; token_id = Token_id.default
+    ; balance_change = bridge_proof_fee
+    ; may_use_token = Parents_own_token
+    ; authorization_kind = None_given
+    }
+  in
+  let children = a' :: fee_payout :: params.children in
   Witness { aux = params.withdrawal ; children }
 
 
@@ -167,6 +215,8 @@ let do_finalize_deposit
   ~actions_after_deposit
   ~action_state_before_deposit
   ~prev_next_deposit
+  ~prev_nonce
+  ~helper_account_new
   ~may_use_token
   ~inner_authorization_kind
   ~deposit_index
@@ -182,6 +232,14 @@ let do_finalize_deposit
   let outer_action_state_length =
     List.length actions_after_deposit + 1 + deposit_index
   in
+  (* The user receives the deposit amount minus the bridge fee, and pays the
+     helper account creation fee out of their share if their helper account
+     is new. The bridge fee recipient is fixed by the circuit, so the
+     sequencer can't redirect funds. *)
+  let recipient_payout_amount =
+    deposit.amount - bridge_proof_fee
+    - if helper_account_new then account_creation_fee else 0
+  in
   { account_id = account_id_l2
   ; balance_change = -deposit.amount
   ; may_use_token
@@ -190,13 +248,19 @@ let do_finalize_deposit
     [ { public_key = deposit.recipient
       ; token_id = account_id_l2
       ; authorization_kind = Signature
-      ; use_full_commitment = true
+        (* Signature is on the partial commitment so the user can pre-sign
+           without knowing the fee_payer. Replays are prevented by
+           [increment_nonce] + the constant-nonce precondition below. *)
+      ; use_full_commitment = false
+      ; increment_nonce = true
       ; may_use_token = Parents_own_token
       ; app_state =
         { next_deposit = deposit_index + 1
         }
       ; preconditions =
-        { app_state =
+        { is_new = helper_account_new
+        ; nonce = { lower = prev_nonce ; upper = prev_nonce }
+        ; app_state =
           { next_deposit = prev_next_deposit
           }
         }
@@ -204,6 +268,20 @@ let do_finalize_deposit
     ; { public_key = inner_pk
       ; preconditions = { app_state = { outer_action_state ; outer_action_state_length } }
       ; authorization_kind = inner_authorization_kind
+      }
+    ; { public_key = deposit.recipient
+      ; token_id = token_id_l2
+      ; balance_change = recipient_payout_amount
+      ; may_use_token = Parents_own_token
+      ; authorization_kind = None_given
+      ; implicit_account_creation_fee = true
+      }
+    ; { public_key = bridge_fee_recipient_l2
+      ; token_id = token_id_l2
+      ; balance_change = bridge_proof_fee
+      ; may_use_token = Parents_own_token
+      ; authorization_kind = None_given
+      ; implicit_account_creation_fee = true
       }
     ]
   }
@@ -214,14 +292,14 @@ let do_finalize_deposit
   We do this by showing that there is a historical action state after
   which our deposit comes, and after which there are actions that reject it
   before accepting it.
-  
+
   We then update the stored next_cancelled_deposit index as done in the other cases.
-  
+
   The challenge lies in that we need to prove that the deposit index is correct,
   since we're counting from the beginning, and not from the end.
   We need to know that there indeed was that many actions before our deposit,
   but we would like to prevent having to count back to the dawn of our rollup.
-  
+
   We instead find a commit in the past to use its synchronization point to skip
   most of the history.
   We count from the synchronization point to the current outer action state to
@@ -233,6 +311,8 @@ let do_finalize_cancelled_deposit
   ~actions_after_deposit
   ~action_state_before_deposit
   ~prev_next_cancelled_deposit
+  ~prev_nonce
+  ~helper_account_new
   ~outer_authorization_kind
   ~deposit_index
   ~may_use_token
@@ -262,6 +342,10 @@ let do_finalize_cancelled_deposit
     List.length actions_after_synchronization + commit.synchronized_outer_action_state_length
   in
   assert outer_action_state_length = outer_action_state_length' ;
+  let recipient_payout_amount =
+    deposit.amount - bridge_proof_fee
+    - if helper_account_new then outer_account_creation_fee else 0
+  in
   { account_id = deposit_params.holder_account_l1
   ; balance_change = -deposit.amount
   ; may_use_token
@@ -273,13 +357,16 @@ let do_finalize_cancelled_deposit
         [ { public_key = deposit.recipient
           ; token_id = helper_token_id_l1
           ; authorization_kind = Signature
-          ; use_full_commitment = true
+          ; use_full_commitment = false
+          ; increment_nonce = true
           ; may_use_token = Parents_own_token
           ; app_state =
             { next_cancelled_deposit = deposit_index + 1
             }
           ; preconditions =
-            { app_state =
+            { is_new = helper_account_new
+            ; nonce = { lower = prev_nonce ; upper = prev_nonce }
+            ; app_state =
               { next_cancelled_deposit = prev_next_deposit
               }
             }
@@ -294,6 +381,20 @@ let do_finalize_cancelled_deposit
           }
         }
       ; authorization_kind = outer_authorization_kind
+      }
+    ; { public_key = deposit.recipient
+      ; token_id = token_id_l1
+      ; balance_change = recipient_payout_amount
+      ; may_use_token = Parents_own_token
+      ; authorization_kind = None_given
+      ; implicit_account_creation_fee = true
+      }
+    ; { public_key = bridge_fee_recipient_l1
+      ; token_id = token_id_l1
+      ; balance_change = bridge_proof_fee
+      ; may_use_token = Parents_own_token
+      ; authorization_kind = None_given
+      ; implicit_account_creation_fee = true
       }
     ]
   }
@@ -307,6 +408,8 @@ let do_finalize_cancelled_deposit_simple
   ~deposit_params
   ~actions_after_deposit
   ~prev_next_cancelled_deposit
+  ~prev_nonce
+  ~helper_account_new
   ~outer_authorization_kind
   ~may_use_token
   =
@@ -316,6 +419,10 @@ let do_finalize_cancelled_deposit_simple
   assert prev_next_cancelled_deposit <= deposit_index ;
   let outer_action_state =
     List.append actions_after_deposit (deposit_action deposit_params :: action_state_before_deposit)
+  in
+  let recipient_payout_amount =
+    deposit.amount - bridge_proof_fee
+    - if helper_account_new then outer_account_creation_fee else 0
   in
   { account_id = deposit_params.holder_account_l1
   ; balance_change = -deposit.amount
@@ -328,13 +435,16 @@ let do_finalize_cancelled_deposit_simple
         [ { public_key = deposit.recipient
           ; token_id = helper_token_id_l1
           ; authorization_kind = Signature
-          ; use_full_commitment = true
+          ; use_full_commitment = false
+          ; increment_nonce = true
           ; may_use_token = Parents_own_token
           ; app_state =
             { next_cancelled_deposit = deposit_index + 1
             }
           ; preconditions =
-            { app_state =
+            { is_new = helper_account_new
+            ; nonce = { lower = prev_nonce ; upper = prev_nonce }
+            ; app_state =
               { next_cancelled_deposit = prev_next_deposit
               }
             }
@@ -349,6 +459,20 @@ let do_finalize_cancelled_deposit_simple
           }
         }
       ; authorization_kind = outer_authorization_kind
+      }
+    ; { public_key = deposit.recipient
+      ; token_id = token_id_l1
+      ; balance_change = recipient_payout_amount
+      ; may_use_token = Parents_own_token
+      ; authorization_kind = None_given
+      ; implicit_account_creation_fee = true
+      }
+    ; { public_key = bridge_fee_recipient_l1
+      ; token_id = token_id_l1
+      ; balance_change = bridge_proof_fee
+      ; may_use_token = Parents_own_token
+      ; authorization_kind = None_given
+      ; implicit_account_creation_fee = true
       }
     ]
   }
@@ -364,6 +488,8 @@ let do_finalize_withdrawal
   ~action_state_before_commit
   ~commit
   ~prev_next_withdrawal
+  ~prev_nonce
+  ~helper_account_new
   ~withdrawal_index
   ~outer_authorization_kind
   ~may_use_token
@@ -385,6 +511,10 @@ let do_finalize_withdrawal
   *)
   assert commit.inner_action_state = inner_action_state ;
   assert commit.inner_action_state_length = inner_action_state_length ;
+  let recipient_payout_amount =
+    withdrawal.amount - bridge_proof_fee
+    - if helper_account_new then outer_account_creation_fee else 0
+  in
   { account_id = holder_account_l1
   ; balance_change = -withdrawal.amount
   ; may_use_token
@@ -396,13 +526,16 @@ let do_finalize_withdrawal
         [ { public_key = withdrawal.recipient
           ; token_id = helper_token_id_l1
           ; authorization_kind = Signature
-          ; use_full_commitment = true
+          ; use_full_commitment = false
+          ; increment_nonce = true
           ; may_use_token = Parents_own_token
           ; app_state =
             { next_withdrawal = withdrawal_index + 1
             }
          ; preconditions =
-            { app_state =
+            { is_new = helper_account_new
+            ; nonce = { lower = prev_nonce ; upper = prev_nonce }
+            ; app_state =
               { next_withdrawal = prev_next_withdrawal
               }
             }
@@ -418,6 +551,20 @@ let do_finalize_withdrawal
           { lower = commit.valid_while.upper + withdrawal_delay
           ; upper = infinity }
         }
+      }
+    ; { public_key = withdrawal.recipient
+      ; token_id = token_id_l1
+      ; balance_change = recipient_payout_amount
+      ; may_use_token = Parents_own_token
+      ; authorization_kind = None_given
+      ; implicit_account_creation_fee = true
+      }
+    ; { public_key = bridge_fee_recipient_l1
+      ; token_id = token_id_l1
+      ; balance_change = bridge_proof_fee
+      ; may_use_token = Parents_own_token
+      ; authorization_kind = None_given
+      ; implicit_account_creation_fee = true
       }
     ]
   }
@@ -449,6 +596,7 @@ let do_disable ~disabled_vk ~disable_offset_lower ~disable_offset_upper ~disable
 ```
 
 Circuit when disabled
+
 ```ocaml
 let do_enable ~enabled_vk ~enable_offset_lower ~enable_offset_upper ~enable_period idx =
   { account_id = holder_accounts_l1.(account_idx)
@@ -477,6 +625,7 @@ let do_enable ~enabled_vk ~enable_offset_lower ~enable_offset_upper ~enable_peri
 ```
 
 Init state
+
 ```ocaml
 let init_inner =
   { Account.empty with

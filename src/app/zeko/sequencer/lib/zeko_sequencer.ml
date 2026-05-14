@@ -178,13 +178,13 @@ module Sequencer = struct
               in
               let%bind command =
                 Committer.prove_commit ~logger ~proof_cache_db ~provers
-                  ~executor ~archive
+                  ~executor ~l1_uri:config.l1_uri ~archive
                   ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
                   ~archive_uri:config.archive_uri ~l1_config:config.l1_config
                   ~commit_validity_period:config.commit_validity_period
                   commit_witness
               in
-              let%bind () =
+              let%bind _hash =
                 Executor.send_zkapp_command ~logger executor command
               in
               let source_ledger_hash =
@@ -345,8 +345,8 @@ module Sequencer = struct
     Da_layer.Diff.add_time_and_acc_set ~logger diff
       ~acc_set:(Indexed_merkle_tree.Sparse.merkle_root acc_set_openings)
 
-  let apply_events_and_actions t command =
-    let ledger = L.of_database t.ledger in
+  let apply_events_and_actions ledger archive command =
+    let ledger = L.of_database ledger in
     Zkapp_command.(Call_forest.to_list (Poly.account_updates command))
     |> List.mapi ~f:(fun i update ->
            let%bind.Result account =
@@ -367,7 +367,7 @@ module Sequencer = struct
                  Error (Error.of_string "Account not present in the db")
            in
            Ok
-             (Archive.add_account_update t.archive i update account
+             (Archive.add_account_update archive i update account
                 (Some
                    Archive.Transaction_info.
                      { status = Applied
@@ -534,7 +534,7 @@ module Sequencer = struct
             | Signed_command _ ->
                 return (Ok ( (* Signed command has no events nor actions *) ))
             | Zkapp_command command ->
-                return (apply_events_and_actions t command)
+                return (apply_events_and_actions t.ledger t.archive command)
           in
 
           (* Accumulate fee *)
@@ -1033,7 +1033,7 @@ module Sequencer = struct
               Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
             with
             | Some (Zkapp_command command, _) ->
-                apply_events_and_actions t
+                apply_events_and_actions t.ledger t.archive
                   (Zkapp_command.write_all_proofs_to_disk
                      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                      ~proof_cache_db:t.merger_ctx.proof_cache_db command )
@@ -1223,8 +1223,8 @@ module Sequencer = struct
     let kvdb = L.Db.zeko_kvdb ledger in
     let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in
     let executor =
-      Executor.create ~l1_uri:config.l1_uri
-        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ~kvdb ()
+      Executor.create ~kind:(`L1 config.l1_uri)
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ()
     in
     let archive = Archive.create ~kvdb in
     let merger_ctx =
@@ -1242,6 +1242,126 @@ module Sequencer = struct
         }
     in
     let%bind merger = Merger.P.create_and_requeue ~logger merger_ctx db_pool in
+    let state_view_template =
+      let consensus_constants =
+        let protocol_constants : Genesis_constants.Protocol.t =
+          { k = 1
+          ; slots_per_epoch = 1000
+          ; slots_per_sub_window = 1
+          ; grace_period_slots = 1
+          ; delta = 1
+          ; genesis_state_timestamp = Int64.one
+          }
+        in
+        Consensus.Constants.create ~constraint_constants ~protocol_constants
+      in
+      let compile_time_genesis =
+        Mina_state.Genesis_protocol_state.t
+          ~genesis_ledger:Genesis_ledger.(Packed.t for_unit_tests)
+          ~genesis_epoch_data:Consensus.Genesis_epoch_data.for_unit_tests
+          ~constraint_constants ~consensus_constants
+          ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
+      in
+      Mina_state.Protocol_state.Body.view compile_time_genesis.data.body
+    in
+    let make_command ~fee_payer_pk ~nonce forest : Zkapp_command.t =
+      let proof_cache_db = Proof_cache_tag.create_identity_db () in
+      let attach_dummy_proof_to_proof_aus (au : Account_update.Stable.Latest.t)
+          : Account_update.Stable.Latest.t =
+        match Account_update.Poly.body au with
+        | { authorization_kind = Proof _; _ } ->
+            { au with
+              authorization =
+                Control.Poly.Proof
+                  (Lazy.force Mina_base.Proof.transaction_dummy)
+            }
+        | _ ->
+            au
+      in
+      { fee_payer =
+          { body =
+              { public_key = fee_payer_pk
+              ; fee = Currency.Fee.of_mina_string_exn "0.1"
+              ; valid_until = None
+              ; nonce
+              }
+          ; authorization = Signature.dummy
+          }
+      ; account_updates =
+          Zkapp_command.Call_forest.map forest ~f:(fun au ->
+              attach_dummy_proof_to_proof_aus au
+              |> Account_update.write_all_proofs_to_disk ~proof_cache_db )
+      ; memo = Signed_command_memo.empty
+      }
+    in
+    let preverify_l2 forest =
+      let mask = L.of_database ledger in
+      let signer_pk = Signer_service.Signer.public_key signer in
+      let signer_aid = Account_id.create signer_pk Token_id.default in
+      let nonce =
+        match L.location_of_account mask signer_aid with
+        | Some loc ->
+            ( L.get mask loc
+            |> Option.value_exn ~message:"signer account missing" )
+              .nonce
+        | None ->
+            Account.Nonce.zero
+      in
+      let command = make_command ~fee_payer_pk:signer_pk ~nonce forest in
+      let global_slot = Utils.Slot.global_slot ~l1_config in
+      let state_view : Zkapp_precondition.Protocol_state.View.t =
+        { state_view_template with global_slot_since_genesis = global_slot }
+      in
+      let get_account aid =
+        let acc =
+          let%bind.Option loc = L.location_of_account mask aid in
+          L.get mask loc
+        in
+        Async_kernel.Deferred.Or_error.return acc
+      in
+      Zeko_transaction_logic.preverify_user_command ~get_account
+        ~constraint_constants ~global_slot ~state_view
+        (User_command.Zkapp_command command)
+    in
+    (* The other constraint_constants (ledger_depth, transaction_capacity, …)
+       are block-production related and don't affect [apply_user_command], so
+       we can reuse [Zeko_constants.constraint_constants] for those. The one
+       field that matters here is [account_creation_fee], which differs by
+       network — fetch it from the L1 daemon. *)
+    let%bind l1_account_creation_fee =
+      Gql_client.fetch_account_creation_fee ~logger config.l1_uri
+      >>| Or_error.ok_exn
+    in
+    let l1_constraint_constants =
+      { constraint_constants with
+        account_creation_fee = l1_account_creation_fee
+      }
+    in
+    let preverify_l1 forest =
+      let signer_pk = Signer_service.Signer.public_key signer in
+      (* preverify simulates the command against the *committed* L1 state, so
+         use [fetch_nonce] (committed nonce) rather than [infer_nonce] (which
+         includes pooled commands and would advance past the on-chain nonce
+         the simulated fee payer is checked against). *)
+      let%bind.Deferred.Or_error nonce =
+        Gql_client.fetch_nonce ~logger config.l1_uri signer_pk
+      in
+      let command = make_command ~fee_payer_pk:signer_pk ~nonce forest in
+      let global_slot = Utils.Slot.global_slot ~l1_config in
+      let state_view : Zkapp_precondition.Protocol_state.View.t =
+        { state_view_template with global_slot_since_genesis = global_slot }
+      in
+      let get_account aid =
+        Gql_client.fetch_account ~logger config.l1_uri aid
+      in
+      Zeko_transaction_logic.preverify_user_command ~get_account
+        ~constraint_constants:l1_constraint_constants ~global_slot ~state_view
+        (User_command.Zkapp_command command)
+    in
+    let%bind bridge_prover =
+      Bridge_prover.create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2
+    in
+
     let t =
       { ledger
       ; imt
@@ -1254,7 +1374,7 @@ module Sequencer = struct
       ; nats_client
       ; nats_sink
       ; instance_id = Uuid.to_string (Uuid_unix.create ())
-      ; bridge_prover = Bridge_prover.create ~provers ~proof_cache_db
+      ; bridge_prover
       ; merger
       ; merger_ctx
       ; closed = Ivar.create ()
@@ -1271,7 +1391,8 @@ module Sequencer = struct
     let%bind () =
       Committer.recommit_all ~logger ~proof_cache_db
         ~provers:t.bridge_prover.provers ~executor:t.merger_ctx.executor
-        ~archive ~db_pool ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+        ~l1_uri:config.l1_uri ~archive ~db_pool
+        ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
       >>| Or_error.ok_exn
     in

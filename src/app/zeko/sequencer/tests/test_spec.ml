@@ -367,6 +367,8 @@ module Sequencer_spec = struct
     ; da_keys : Public_key.Compressed.t list
     ; accounts : Keypair.t list
     ; l1_config : Utils.Slot.l1_config
+    ; l1_executor : Executor.t
+    ; l2_executor : Executor.t
     }
 
   let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir ?nats_url
@@ -420,11 +422,22 @@ module Sequencer_spec = struct
     let `Inner inner_account, `Holder holder_account =
       run Deploy.Z.Inner.initial_accounts
     in
+    (* Pre-fund the sequencer's signer on L2 so the bridge prover's
+       preverify_l2 (which uses the signer as fee payer) can debit a real
+       account when simulating commands. *)
+    let signer_l2_account =
+      let aid = Account_id.create signer_pk Token_id.default in
+      ( aid
+      , Account.create aid
+          (Currency.Balance.of_uint64
+             (Unsigned.UInt64.of_int64 (Int64.of_float (1000. *. 1e8))) ) )
+    in
     let genesis_accounts =
       ( Account_id.create inner_account.public_key inner_account.token_id
       , inner_account )
       :: ( Account_id.create holder_account.public_key holder_account.token_id
          , holder_account )
+      :: signer_l2_account
       :: ( Array.concat [ init_ledger; funded_accounts ]
          |> Array.map ~f:(fun (keypair, balance) ->
                 let pk = Signature_lib.Public_key.compress keypair.public_key in
@@ -465,9 +478,7 @@ module Sequencer_spec = struct
 
     print_endline "(* Deploy zkapp *)" ;
     run (fun () ->
-        let sequencer_pk =
-          signer_pk |> Even_PC.create_exn
-        in
+        let sequencer_pk = signer_pk |> Even_PC.create_exn in
         ( print_endline
         @@ Public_key.(
              Compressed.to_base58_check @@ compress outer_kp.public_key) ) ;
@@ -479,8 +490,7 @@ module Sequencer_spec = struct
              Compressed.to_base58_check @@ compress token_holder_kp.public_key)
         ) ;
         let%bind nonce =
-          Gql_client.infer_nonce ~logger gql_uri signer_pk
-          >>| Or_error.ok_exn
+          Gql_client.infer_nonce ~logger gql_uri signer_pk >>| Or_error.ok_exn
         in
         let%bind command =
           let da_key =
@@ -490,8 +500,7 @@ module Sequencer_spec = struct
           printf "Deplying with DA key: %s\n%!" (Field.to_string da_key) ;
           Deploy.deploy_command_exn
             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-            ~signer:signer_keypair
-            ~outer_kp ~holder_kp ~token_holder_kp
+            ~signer:signer_keypair ~outer_kp ~holder_kp ~token_holder_kp
             ~fee:(Currency.Fee.of_mina_int_exn 1)
             ~nonce ~initial_ledger:ephemeral_ledger
             ~account_creation_fee:constraint_constants.account_creation_fee
@@ -525,12 +534,23 @@ module Sequencer_spec = struct
           Sequencer.create ?nats_url ~logger ~max_pool_size:10
             ~commitment_period_sec:0.
             ~da_config ~da_keys ~da_quorum ~db_dir ~postgres_uri ~l1_uri:gql_uri
-            ~archive_uri:gql_uri
-            ~signer
-            ~deposit_delay_blocks:delay_deposit
+            ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:delay_deposit
             ~mq_host ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
             ~l1_config ~commit_validity_period ~checkpoints_dir )
+    in
+    let l1_executor =
+      Executor.create ~kind:(`L1 gql_uri)
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ()
+    in
+    let l2_executor =
+      Executor.create
+        ~kind:
+          (`L2
+            { infer_nonce = Sequencer.infer_nonce sequencer
+            ; apply_user_command = Sequencer.apply_user_command sequencer
+            } )
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~signer ()
     in
     Quickcheck.Generator.return
       { outer_kp
@@ -543,5 +563,7 @@ module Sequencer_spec = struct
       ; da_keys
       ; accounts = Array.map funded_accounts ~f:fst |> Array.to_list
       ; l1_config
+      ; l1_executor
+      ; l2_executor
       }
 end

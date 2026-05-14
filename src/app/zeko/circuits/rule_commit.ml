@@ -131,6 +131,8 @@ module Make (Inputs : sig
 
   val chain_l1 : Mina_signature_kind.t
 
+  val chain_l2 : Mina_signature_kind.t
+
   val max_sequencer_inactivity : int
 
   val emergency_da_public_key : PC.t
@@ -273,7 +275,7 @@ struct
                          Zeko_constants.da_layer_check_salt )
                     (Random_oracle.Checked.pack_input input) )
             in
-            Multisig.check ~signature_kind:chain_l1 da_multisig payload
+            Multisig.check ~signature_kind:chain_l2 da_multisig payload
           in
           let*| da_key = Multisig.of_witness_var da_multisig in
           Some da_key
