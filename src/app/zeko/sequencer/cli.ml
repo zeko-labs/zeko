@@ -40,11 +40,12 @@ let write_signed_multisig_updates ?output updates =
   write_json ?output
     (`List (List.map updates ~f:Deploy.Signed_multisig_update.to_yojson))
 
-let send_direct ~logger ~l1_uri ~(signer : Keypair.t) ~bodies =
+let send_direct ~logger ~l1_uri ~(signers : Keypair.t list)
+    ~(fee_signer : Keypair.t) ~bodies =
   let signature_kind = Zeko_circuits_config.t.chain_l1 in
   let%bind nonce =
     Gql_client.infer_nonce ~logger l1_uri
-      (Public_key.compress signer.public_key)
+      (Public_key.compress fee_signer.public_key)
     >>| Or_error.ok_exn
   in
   let account_updates =
@@ -64,7 +65,7 @@ let send_direct ~logger ~l1_uri ~(signer : Keypair.t) ~bodies =
   let command : Zkapp_command.t =
     { fee_payer =
         { Account_update.Fee_payer.body =
-            { public_key = Public_key.compress signer.public_key
+            { public_key = Public_key.compress fee_signer.public_key
             ; fee = Currency.Fee.of_mina_string_exn "0.1"
             ; valid_until = None
             ; nonce
@@ -76,7 +77,7 @@ let send_direct ~logger ~l1_uri ~(signer : Keypair.t) ~bodies =
     }
   in
   let command =
-    Utils.sign_zkapp_command ~signature_kind command [ signer ]
+    Utils.sign_zkapp_command ~signature_kind command ([ fee_signer ] @ signers)
     |> Zkapp_command.read_all_proofs_from_disk
   in
   match%map Gql_client.send_zkapp l1_uri command with
@@ -240,9 +241,6 @@ let update_outer_verification_keys =
          and bridge_holder_enabled_vk =
            Lazy.force Bridge_inst_mina.System_L1_enabled.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
-         and bridge_holder_disabled_vk =
-           Lazy.force Bridge_inst_mina.System_L1_disabled.tag
-           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          and helper_token_owner_vk =
            Lazy.force Bridge_inst_mina.System_L1_token_owner.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
@@ -250,25 +248,9 @@ let update_outer_verification_keys =
          let outer =
            (outer_vk, fetched_outer_vk, Zeko_circuits_config.t.zeko_l1)
          in
-         let bridge_holder_kind, bridge_holder_vk =
-           let enabled_hash =
-             Compile_simple.Verification_key.hash bridge_holder_enabled_vk
-           in
-           let disabled_hash =
-             Compile_simple.Verification_key.hash bridge_holder_disabled_vk
-           in
-           if Field.equal fetched_bridge_holder_vk enabled_hash then
-             ( Deploy.Multisig_update_kind.Bridge_holder_l1_enabled
-             , bridge_holder_enabled_vk )
-           else if Field.equal fetched_bridge_holder_vk disabled_hash then
-             ( Deploy.Multisig_update_kind.Bridge_holder_l1_disabled
-             , bridge_holder_disabled_vk )
-           else
-             failwith "Current bridge holder vk is neither enabled nor disabled"
-         in
          let bridge_holders =
            List.map Zeko_circuits_config.t.holder_accounts_l1 ~f:(fun pk ->
-               (bridge_holder_vk, fetched_bridge_holder_vk, pk) )
+               (bridge_holder_enabled_vk, fetched_bridge_holder_vk, pk) )
          in
          let helper_token_owner =
            ( helper_token_owner_vk
@@ -309,12 +291,26 @@ let update_outer_verification_keys =
                        Public_key.Compressed.equal pk
                          Zeko_circuits_config.t.helper_token_owner_l1
                      then Deploy.Multisig_update_kind.Bridge_token_owner_l1
-                     else bridge_holder_kind
+                     else Deploy.Multisig_update_kind.Bridge_holder_l1_enabled
                    in
                    Deploy.build_verification_key_multisig_update_body ~kind
                      ~public_key:pk ~verification_key:new_vk )
              in
-             send_direct ~logger ~l1_uri ~signer ~bodies
+             let deploy_config =
+               Option.value_exn Zeko_circuits_config.deploy_config
+                 ~message:"Deploy config not found"
+             in
+             send_direct ~logger ~l1_uri
+               ~signers:
+                 ( [ signer
+                   ; Keypair.of_private_key_exn
+                       deploy_config.helper_token_owner_l1
+                   ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                   ; Keypair.of_private_key_exn deploy_config.emergency_da
+                   ]
+                 @ List.map deploy_config.holder_accounts_l1
+                     ~f:Keypair.of_private_key_exn )
+               ~fee_signer:signer ~bodies
            else
              let%map signed_updates =
                Deferred.List.map to_update ~how:`Sequential
@@ -328,7 +324,7 @@ let update_outer_verification_keys =
                        Public_key.Compressed.equal pk
                          Zeko_circuits_config.t.helper_token_owner_l1
                      then Deploy.Multisig_update_kind.Bridge_token_owner_l1
-                     else bridge_holder_kind
+                     else Deploy.Multisig_update_kind.Bridge_holder_l1_enabled
                    in
                    let%map body =
                      Deploy.build_verification_key_multisig_update_body ~kind
@@ -594,7 +590,21 @@ let update_inner_verification_keys =
                    }
            in
            if direct then
-             send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+             let deploy_config =
+               Option.value_exn Zeko_circuits_config.deploy_config
+                 ~message:"Deploy config not found"
+             in
+             send_direct ~logger ~l1_uri
+               ~signers:
+                 ( [ sender
+                   ; Keypair.of_private_key_exn
+                       deploy_config.helper_token_owner_l1
+                   ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                   ; Keypair.of_private_key_exn deploy_config.emergency_da
+                   ]
+                 @ List.map deploy_config.holder_accounts_l1
+                     ~f:Keypair.of_private_key_exn )
+               ~fee_signer:sender ~bodies:[ body ]
            else
              let signed_update =
                Deploy.sign_multisig_update ~signer:sender
@@ -687,7 +697,21 @@ let update_da_key =
                    }
            in
            if direct then
-             send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+             let deploy_config =
+               Option.value_exn Zeko_circuits_config.deploy_config
+                 ~message:"Deploy config not found"
+             in
+             send_direct ~logger ~l1_uri
+               ~signers:
+                 ( [ sender
+                   ; Keypair.of_private_key_exn
+                       deploy_config.helper_token_owner_l1
+                   ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                   ; Keypair.of_private_key_exn deploy_config.emergency_da
+                   ]
+                 @ List.map deploy_config.holder_accounts_l1
+                     ~f:Keypair.of_private_key_exn )
+               ~fee_signer:sender ~bodies:[ body ]
            else
              let signed_update =
                Deploy.sign_multisig_update ~signer:sender
@@ -737,7 +761,21 @@ let update_permissions =
                (Option.value_exn ~message:"--l1-uri is required with --direct"
                   l1_uri )
            in
-           send_direct ~logger ~l1_uri ~signer ~bodies:[ body.body ]
+           let deploy_config =
+             Option.value_exn Zeko_circuits_config.deploy_config
+               ~message:"Deploy config not found"
+           in
+           send_direct ~logger ~l1_uri
+             ~signers:
+               ( [ signer
+                 ; Keypair.of_private_key_exn
+                     deploy_config.helper_token_owner_l1
+                 ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                 ; Keypair.of_private_key_exn deploy_config.emergency_da
+                 ]
+               @ List.map deploy_config.holder_accounts_l1
+                   ~f:Keypair.of_private_key_exn )
+             ~fee_signer:signer ~bodies:[ body.body ]
          else
            let signed_update =
              Deploy.sign_multisig_update ~signer
@@ -901,7 +939,21 @@ let set_pause =
                  }
          in
          if direct then
-           send_direct ~logger ~l1_uri ~signer:sender ~bodies:[ body ]
+           let deploy_config =
+             Option.value_exn Zeko_circuits_config.deploy_config
+               ~message:"Deploy config not found"
+           in
+           send_direct ~logger ~l1_uri
+             ~signers:
+               ( [ sender
+                 ; Keypair.of_private_key_exn
+                     deploy_config.helper_token_owner_l1
+                 ; Keypair.of_private_key_exn deploy_config.zeko_l1
+                 ; Keypair.of_private_key_exn deploy_config.emergency_da
+                 ]
+               @ List.map deploy_config.holder_accounts_l1
+                   ~f:Keypair.of_private_key_exn )
+             ~fee_signer:sender ~bodies:[ body ]
          else
            let signed_update =
              Deploy.sign_multisig_update ~signer:sender
@@ -1137,6 +1189,107 @@ let prover_load =
          in
          print_endline "Done ✅" ) )
 
+let sync_ledger =
+  ( "sync-ledger"
+  , Command.async ~summary:"Sync the ledger"
+      (let%map_open.Command log_json = Flag.Log.json
+       and log_level = Flag.Log.level
+       and da_node = flag "--da-node" (required string) ~doc:"string DA node"
+       and ledger_path =
+         flag "--ledger-path" (required string) ~doc:"string Ledger path"
+       and target_ledger_hash =
+         flag "--target-ledger-hash" (required string)
+           ~doc:"string Target ledger hash"
+       and output_path =
+         flag "--output-path" (required string) ~doc:"string Output path"
+       in
+       fun () ->
+         let logger = Logger.create () in
+         Stdout_log.setup log_json log_level ;
+
+         let da_config = Da_layer.Client.Config.of_string_list [ da_node ] in
+
+         [%log info] "Creating ledger" ;
+         let ledger =
+           let ledger =
+             Ledger.Db.create ~directory_name:ledger_path
+               ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+           in
+           Ledger.Db.create_checkpoint ledger
+             ~directory_name:(output_path ^ "/ledger") ()
+         in
+         let%bind () =
+           Da_layer.Client.iter_diffs ~logger ~config:da_config
+             ~depth:Zeko_constants.constraint_constants.ledger_depth
+             ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root ledger))
+             ~target_ledger_hash:
+               (Ledger_hash.of_decimal_string target_ledger_hash)
+             ()
+             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+               assert (
+                 Ledger_hash.equal
+                   (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
+                   (Ledger.Db.merkle_root ledger) ) ;
+               [%log info]
+                 "Applying diff with source ledger hash %s, progress: %.0f%%"
+                 (Ledger_hash.to_decimal_string
+                    (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) )
+                 ( Float.of_int current_chunk /. Float.of_int chunks_length
+                 *. 100.0 ) ;
+
+               let mask = Ledger.of_database ledger in
+               let changed_accounts =
+                 Da_layer.Diff.Stable.Latest.changed_accounts diff
+                 |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+               in
+               List.iter changed_accounts ~f:(fun (index, account) ->
+                   Ledger.set_at_index_exn mask index account ) ;
+               Ledger.Mask.Attached.commit mask ;
+
+               let () =
+                 match
+                   Da_layer.Diff.Stable.Latest.command_with_action_step_flags
+                     diff
+                 with
+                 | Some (Zkapp_command command, _) ->
+                     Sequencer.apply_events_and_actions ledger
+                       (Archive.create ~kvdb:(Ledger.Db.zeko_kvdb ledger))
+                       (Zkapp_command.write_all_proofs_to_disk
+                          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                          ~proof_cache_db:
+                            (Proof_cache_tag.create_identity_db ())
+                          command )
+                     |> Or_error.ok_exn
+                 | _ ->
+                     ( (* No events nor actions to add *) )
+               in
+
+               return () )
+           >>| Or_error.ok_exn
+         in
+         [%log info] "Synced ledger" ;
+
+         [%log info] "Creating IMT" ;
+         let imt =
+           Indexed_merkle_tree.Db.create
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+         in
+         let l = Ledger.Db.num_accounts ledger in
+         let () =
+           Ledger.Db.iteri ledger ~f:(fun index account ->
+               let progress = Float.of_int index /. Float.of_int l *. 100.0 in
+               if index mod 200 = 0 then
+                 [%log info] "Progress: %.2f%%\t%d/%d" progress index l ;
+               let aid = Account.identifier account in
+               let tid = Account_id.derive_token_id ~owner:aid in
+               let _witness =
+                 Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
+               in
+               () )
+         in
+         [%log info] "Created IMT" ;
+         return () ) )
+
 let () =
   Command.group ~summary:"Sequencer CLI"
     [ generate_even_key
@@ -1152,5 +1305,6 @@ let () =
     ; load_db
     ; prover_load
     ; construct_multisig_key
+    ; sync_ledger
     ]
   |> Command_unix.run

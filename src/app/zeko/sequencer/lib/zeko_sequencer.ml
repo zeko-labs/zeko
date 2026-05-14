@@ -278,8 +278,8 @@ module Sequencer = struct
       ; committed_ledger_hash = Field.zero
       }
 
-  let apply_events_and_actions t command =
-    let ledger = L.of_database t.ledger in
+  let apply_events_and_actions ledger archive command =
+    let ledger = L.of_database ledger in
     Zkapp_command.(Call_forest.to_list (Poly.account_updates command))
     |> List.mapi ~f:(fun i update ->
            let%bind.Result account =
@@ -300,7 +300,7 @@ module Sequencer = struct
                  Error (Error.of_string "Account not present in the db")
            in
            Ok
-             (Archive.add_account_update t.archive i update account
+             (Archive.add_account_update archive i update account
                 (Some
                    Archive.Transaction_info.
                      { status = Applied
@@ -467,7 +467,7 @@ module Sequencer = struct
             | Signed_command _ ->
                 return (Ok ( (* Signed command has no events nor actions *) ))
             | Zkapp_command command ->
-                return (apply_events_and_actions t command)
+                return (apply_events_and_actions t.ledger t.archive command)
           in
 
           (* Accumulate fee *)
@@ -893,7 +893,7 @@ module Sequencer = struct
               Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
             with
             | Some (Zkapp_command command, _) ->
-                apply_events_and_actions t
+                apply_events_and_actions t.ledger t.archive
                   (Zkapp_command.write_all_proofs_to_disk
                      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                      ~proof_cache_db:t.merger_ctx.proof_cache_db command )
