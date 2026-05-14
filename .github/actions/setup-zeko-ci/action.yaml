@@ -75,23 +75,6 @@ runs:
     - name: 🏗️  Install opam dependencies
       shell: bash
       run: |
-        opam switch "4.14.0"
-        opam repository remove --yes --all opam-current || true
-        opam repository remove --yes --all nats-client-packages || true
-        opam pin remove --yes nats-client nats-client-async || true
-        nats_opam_repo="$(mktemp -d)"
-        mkdir -p \
-          "$nats_opam_repo/packages/nats-client/nats-client.0.0.10" \
-          "$nats_opam_repo/packages/nats-client-async/nats-client-async.0.0.10"
-        printf 'opam-version: "2.0"\n' > "$nats_opam_repo/repo"
-        opam_repo_ref="59e4d4e2486da34e0b39a77dbaf2b75d2f034b95"
-        curl --retry 5 --retry-connrefused --fail --location --silent --show-error \
-          "https://raw.githubusercontent.com/ocaml/opam-repository/${opam_repo_ref}/packages/nats-client/nats-client.0.0.10/opam" \
-          -o "$nats_opam_repo/packages/nats-client/nats-client.0.0.10/opam"
-        curl --retry 5 --retry-connrefused --fail --location --silent --show-error \
-          "https://raw.githubusercontent.com/ocaml/opam-repository/${opam_repo_ref}/packages/nats-client-async/nats-client-async.0.0.10/opam" \
-          -o "$nats_opam_repo/packages/nats-client-async/nats-client-async.0.0.10/opam"
-        opam repository add --yes nats-client-packages "$nats_opam_repo"
         opam switch import opam.export --yes
         eval "$(opam env)"
         ./scripts/pin-external-packages.sh
