@@ -243,79 +243,139 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
       in
 
       print_endline "(* Deploy contract *)" ;
-      match%bind
+      match%map
         Gql_client.send_zkapp l1_uri
           (Zkapp_command.read_all_proofs_from_disk command)
       with
       | Ok _ ->
-          Deferred.unit
+          let txn_hash =
+            Mina_transaction.Transaction_hash.hash_command
+              (Zkapp_command (Zkapp_command.read_all_proofs_from_disk command))
+          in
+          [%log info] "Successfully sent zkapp command: %s"
+            (Mina_transaction.Transaction_hash.to_base58_check txn_hash)
       | Error (`Failed_request err) ->
-          eprintf "Failed request: %s\n%!" err ;
-          Deferred.unit
+          [%log error] "Failed request: %s" err
       | Error (`Graphql_error err) ->
-          eprintf "Graphql error: %s\n%!" err ;
-          Deferred.unit )
+          [%log error] "Graphql error: %s" err )
+
+let deploy_all =
+  ( "deploy-all"
+  , Command.basic ~summary:"Deploy zeko zkapp"
+      (let%map_open.Command l1_uri =
+         flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and ledger_input =
+         flag "--ledger-input" (optional string)
+           ~doc:"string Path to the json dump of the ledger"
+       and faucet_account =
+         flag "--faucet-account" (optional string)
+           ~doc:"string Faucet public key"
+       and da_nodes =
+         flag "--da-node" (listed string)
+           ~doc:"string Address of the DA node, can be supplied multiple times"
+       and pause_key =
+         flag "--pause-key" (required string) ~doc:"string Pause key"
+       and sequencer_key =
+         flag "--sequencer-key" (required string) ~doc:"string Sequencer key"
+       and da_keys =
+         flag "--da-keys" (required string)
+           ~doc:"string List of DA keys, separated by commas"
+       and da_quorum =
+         flag "--da-quorum" (required int)
+           ~doc:"int Quorum for the DA signature count"
+       and account_creation_fee =
+         flag "--account-creation-fee" (required string)
+           ~doc:"float Account creation fee in mina"
+       in
+       let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+       let da_nodes =
+         List.mapi da_nodes ~f:(fun i uri ->
+             Cli_lib.Flag.Types.
+               { value = Host_and_port.of_string uri
+               ; name = sprintf "da-node-%d" i
+               } )
+       in
+       let faucet_aid =
+         Option.map faucet_account ~f:(fun pk ->
+             Public_key.Compressed.of_base58_check_exn pk
+             |> Public_key.decompress_exn |> Account_id.of_public_key )
+       in
+       let string_to_even_pc x =
+         Public_key.Compressed.of_base58_check_exn x
+         |> Zeko_types.Even_PC.create |> Or_error.ok
+       in
+       let da_keys =
+         String.split ~on:',' da_keys
+         |> List.map ~f:Public_key.Compressed.of_base58_check_exn
+       in
+       let pause_key =
+         string_to_even_pc pause_key
+         |> Option.value_exn ~message:"Pause key odd"
+       in
+       let sequencer_key =
+         string_to_even_pc sequencer_key
+         |> Option.value_exn ~message:"Sequencer key odd"
+       in
+       let account_creation_fee =
+         Currency.Fee.of_mina_string_exn account_creation_fee
+       in
+       let l1_uri = Uri.of_string l1_uri in
+       run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
+         ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee ) )
+
+let deploy_token_owner =
+  ( "deploy-token-owner"
+  , Command.basic ~summary:"Deploy zeko token owner"
+      (let%map_open.Command l1_uri =
+         flag "--l1-uri" (required string) ~doc:"string L1 URI"
+       and account_creation_fee =
+         flag "--account-creation-fee" (required string)
+           ~doc:"float Account creation fee in mina"
+       in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let account_creation_fee =
+           Currency.Fee.of_mina_string_exn account_creation_fee
+         in
+         let l1_uri = Uri.of_string l1_uri in
+
+         let sender_keypair =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+         in
+         let deploy_config =
+           Option.value_exn ~message:"ZEKO_DEPLOY_CONFIG is not set"
+             Zeko_circuits_config.deploy_config
+         in
+         let token_owner_kp =
+           Keypair.of_private_key_exn deploy_config.helper_token_owner_l1
+         in
+         let logger = Logger.create () in
+         Thread_safe.block_on_async_exn (fun () ->
+             let%bind nonce =
+               Gql_client.infer_nonce ~logger l1_uri
+                 (Public_key.compress sender_keypair.public_key)
+               >>| Or_error.ok_exn
+             in
+             let%bind command =
+               Sequencer_lib.Deploy.deploy_token_owner_exn
+                 ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+                 ~signer:sender_keypair ~token_owner_kp
+                 ~fee:(Currency.Fee.of_mina_int_exn 1)
+                 ~nonce ~account_creation_fee ()
+             in
+             match%bind
+               Gql_client.send_zkapp l1_uri
+                 (Zkapp_command.read_all_proofs_from_disk command)
+             with
+             | Ok _ ->
+                 Deferred.unit
+             | Error (`Failed_request err) ->
+                 eprintf "Failed request: %s\n%!" err ;
+                 Deferred.unit
+             | Error (`Graphql_error err) ->
+                 eprintf "Graphql error: %s\n%!" err ;
+                 Deferred.unit ) ) )
 
 let () =
-  Command_unix.run
-  @@ Command.basic ~summary:"Deploy zeko zkapp"
-       (let%map_open.Command l1_uri =
-          flag "--l1-uri" (required string) ~doc:"string L1 URI"
-        and ledger_input =
-          flag "--ledger-input" (optional string)
-            ~doc:"string Path to the json dump of the ledger"
-        and faucet_account =
-          flag "--faucet-account" (optional string)
-            ~doc:"string Faucet public key"
-        and da_nodes =
-          flag "--da-node" (listed string)
-            ~doc:"string Address of the DA node, can be supplied multiple times"
-        and pause_key =
-          flag "--pause-key" (required string) ~doc:"string Pause key"
-        and sequencer_key =
-          flag "--sequencer-key" (required string) ~doc:"string Sequencer key"
-        and da_keys =
-          flag "--da-keys" (required string)
-            ~doc:"string List of DA keys, separated by commas"
-        and da_quorum =
-          flag "--da-quorum" (required int)
-            ~doc:"int Quorum for the DA signature count"
-        and account_creation_fee =
-          flag "--account-creation-fee" (required string)
-            ~doc:"float Account creation fee in mina"
-        in
-        let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
-        let da_nodes =
-          List.mapi da_nodes ~f:(fun i uri ->
-              Cli_lib.Flag.Types.
-                { value = Host_and_port.of_string uri
-                ; name = sprintf "da-node-%d" i
-                } )
-        in
-        let faucet_aid =
-          Option.map faucet_account ~f:(fun pk ->
-              Public_key.Compressed.of_base58_check_exn pk
-              |> Public_key.decompress_exn |> Account_id.of_public_key )
-        in
-        let string_to_even_pc x =
-          Public_key.Compressed.of_base58_check_exn x
-          |> Zeko_types.Even_PC.create |> Or_error.ok
-        in
-        let da_keys =
-          String.split ~on:',' da_keys
-          |> List.map ~f:Public_key.Compressed.of_base58_check_exn
-        in
-        let pause_key =
-          string_to_even_pc pause_key
-          |> Option.value_exn ~message:"Pause key odd"
-        in
-        let sequencer_key =
-          string_to_even_pc sequencer_key
-          |> Option.value_exn ~message:"Sequencer key odd"
-        in
-        let account_creation_fee =
-          Currency.Fee.of_mina_string_exn account_creation_fee
-        in
-        let l1_uri = Uri.of_string l1_uri in
-        run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-          ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee )
+  Command.group ~summary:"Sequencer CLI" [ deploy_all; deploy_token_owner ]
+  |> Command_unix.run

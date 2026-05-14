@@ -1,4 +1,5 @@
 open Core_kernel
+open Async_kernel
 open Mina_base
 open Mina_ledger
 open Mina_transaction_logic
@@ -561,3 +562,76 @@ let apply_fee_transfer_unchecked ~(receiver_pk : Even_PC.t) ~fee
               Base_witness.
                 { ledger_path_handler = source_ledger; update_acc_set_witness }
           } )
+
+let status_to_or_error : Transaction_status.t -> unit Or_error.t = function
+  | Applied ->
+      Ok ()
+  | Failed failures ->
+      Or_error.error_string
+        (sprintf "Transaction failed: %s"
+           (Yojson.Safe.pretty_to_string
+              (Transaction_status.Failure.Collection.to_yojson failures) ) )
+
+(** Preverify a [User_command.t] by simulating its application against a sparse
+    ledger built from accounts produced by [get_account]. Authorization
+    (signatures and proofs) is NOT verified — only the state-transition logic
+    (balances, nonces, preconditions, permissions, account creation, …) is
+    checked. Useful for both L1 and L2: provide L1 [constraint_constants] and a
+    [get_account] that fetches via GraphQL for L1, or L2 constants and a
+    function that reads from the local ledger for L2. *)
+let preverify_user_command
+    ~(get_account : Account_id.t -> Account.t option Deferred.Or_error.t)
+    ~(constraint_constants : Genesis_constants.Constraint_constants.t)
+    ~(global_slot : Mina_numbers.Global_slot_since_genesis.t)
+    ~(state_view : Zkapp_precondition.Protocol_state.View.t)
+    (command : User_command.t) : unit Deferred.Or_error.t =
+  let open Deferred.Or_error.Let_syntax in
+  let accounts_referenced = User_command.accounts_referenced command in
+  let%bind accounts =
+    Deferred.Or_error.List.map ~how:`Sequential accounts_referenced
+      ~f:(fun aid ->
+        let%map acc = get_account aid in
+        (aid, acc) )
+  in
+  Deferred.return
+  @@ Or_error.try_with_join (fun () ->
+         Ledger.with_ephemeral_ledger ~depth:constraint_constants.ledger_depth
+           ~f:(fun ledger ->
+             List.iter accounts ~f:(fun (aid, acc) ->
+                 match acc with
+                 | None ->
+                     ()
+                 | Some acc ->
+                     Ledger.create_new_account_exn ledger aid acc ) ;
+             let sparse_ledger =
+               Sparse_ledger.of_ledger_subset_exn ledger accounts_referenced
+             in
+             match command with
+             | Signed_command sc ->
+                 let (`If_this_is_used_it_should_have_a_comment_justifying_it
+                       valid ) =
+                   Signed_command.to_valid_unsafe sc
+                 in
+                 let open Or_error.Let_syntax in
+                 let%bind _, applied =
+                   Sparse_ledger.apply_user_command ~constraint_constants
+                     ~txn_global_slot:global_slot sparse_ledger valid
+                 in
+                 status_to_or_error applied.common.user_command.status
+             | Zkapp_command zc ->
+                 let open Or_error.Let_syntax in
+                 let%bind partial_txn, states =
+                   Sparse_ledger
+                   .apply_zkapp_first_pass_unchecked_with_states
+                     ~constraint_constants ~global_slot ~state_view
+                     ~fee_excess:Currency.Amount.Signed.zero
+                     ~supply_increase:Currency.Amount.Signed.zero
+                     ~first_pass_ledger:sparse_ledger
+                     ~second_pass_ledger:sparse_ledger zc
+                 in
+                 let%bind applied, _ =
+                   Sparse_ledger
+                   .apply_zkapp_second_pass_unchecked_with_states ~init:states
+                     sparse_ledger partial_txn
+                 in
+                 status_to_or_error applied.command.status ) )

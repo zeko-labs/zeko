@@ -2,6 +2,7 @@ open Mina_base
 open Snark_params.Tick
 open Zeko_util
 open Checked.Let_syntax
+module PC = Signature_lib.Public_key.Compressed
 
 module Make (Inputs : sig
   module Deposit_params : Bridge_state.DEPOSIT_PARAMS
@@ -11,6 +12,10 @@ module Make (Inputs : sig
   val token_owner_l1 : Account_id.t option
 
   val chain_l1 : Mina_signature_kind.t
+
+  val bridge_fee_recipient_l1 : Signature_lib.Public_key.Compressed.t
+
+  val bridge_proof_fee : Currency.Amount.t
 end)
 () =
 struct
@@ -51,8 +56,10 @@ struct
         ({ params; original_action_state; deposit_index } : Init.var) :
         Stmt.var Checked.t =
       let* witness =
-        Bridge_state.deposit_action ~chain_l1 ~holder_accounts_l1
-          ~token_owner_l1
+        Bridge_state.deposit_action ~chain_l1
+          ~bridge_fee_recipient_l1:(constant PC.typ bridge_fee_recipient_l1)
+          ~bridge_proof_fee:(constant Currency.Amount.typ bridge_proof_fee)
+          ~holder_accounts_l1 ~token_owner_l1
           (module Deposit_params)
           params
       in

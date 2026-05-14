@@ -15,6 +15,14 @@ module Make_mina (Inputs : sig
 
   val withdrawal_delay : Mina_numbers.Global_slot_span.t
 
+  val bridge_proof_fee : Currency.Amount.t
+
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_fee_recipient_l2 : PC.t
+
+  val outer_account_creation_fee : Currency.Fee.t
+
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
@@ -37,6 +45,10 @@ struct
         let chain_l1 = Inputs.chain_l1
 
         module Deposit_params = Deposit_params_base
+
+        let bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+
+        let bridge_proof_fee = Inputs.bridge_proof_fee
       end)
       ()
 
@@ -130,6 +142,14 @@ module Make_custom (Inputs : sig
 
   val withdrawal_delay : Mina_numbers.Global_slot_span.t
 
+  val bridge_proof_fee : Currency.Amount.t
+
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_fee_recipient_l2 : PC.t
+
+  val outer_account_creation_fee : Currency.Fee.t
+
   val holder_account_l1_permissions_enabled : Mina_base.Permissions.t
 
   val holder_account_l1_permissions_disabled : Mina_base.Permissions.t
@@ -152,6 +172,10 @@ struct
         let chain_l1 = Inputs.chain_l1
 
         module Deposit_params = Deposit_params_custom
+
+        let bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+
+        let bridge_proof_fee = Inputs.bridge_proof_fee
       end)
       ()
 

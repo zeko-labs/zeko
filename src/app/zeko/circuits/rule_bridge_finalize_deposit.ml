@@ -22,6 +22,12 @@ module Make (Inputs : sig
 
   val zeko_l2 : PC.t
 
+  val bridge_proof_fee : Currency.Amount.t
+
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_fee_recipient_l2 : PC.t
+
   val chain_l1 : Mina_signature_kind.t
 
   val chain_l2 : Mina_signature_kind.t
@@ -37,6 +43,10 @@ module Make (Inputs : sig
             module Deposit_params = Deposit_params
 
             let chain_l1 = chain_l1
+
+            let bridge_fee_recipient_l1 = bridge_fee_recipient_l1
+
+            let bridge_proof_fee = bridge_proof_fee
           end)
           ()
 end) =
@@ -80,6 +90,8 @@ struct
       ; ase : Ase_inst.t
       ; check_accepted : Check_accepted_inst.t
       ; prev_next_deposit : Checked32.t
+      ; prev_nonce : Checked32.t
+      ; helper_account_new : Boolean.t
       }
     [@@deriving snarky]
   end
@@ -95,6 +107,8 @@ struct
            ; ase
            ; check_accepted
            ; prev_next_deposit
+           ; prev_nonce
+           ; helper_account_new
            } =
       exists Witness.typ ~compute:(V.get w)
     in
@@ -152,12 +166,17 @@ struct
     let@ () = with_label __LOC__ in
     let base_params = Deposit_params.base params in
     let@ () = with_label __LOC__ in
+    let prev_nonce =
+      Mina_numbers.Account_nonce.Checked.Unsafe.of_field
+        (Checked32.Checked.to_field prev_nonce)
+    in
     let helper_account =
       { default_account_update with
         public_key = base_params.recipient
       ; token_id = helper_token_id
       ; authorization_kind = authorization_signed ()
-      ; use_full_commitment = Boolean.true_
+      ; use_full_commitment = Boolean.false_
+      ; increment_nonce = Boolean.true_
       ; may_use_token = constant May_use_token.typ Parents_own_token
       ; implicit_account_creation_fee = constant Boolean.typ false
       ; update =
@@ -170,10 +189,18 @@ struct
           { default_account_update.preconditions with
             account =
               { default_account_update.preconditions.account with
-                state =
+                is_new =
+                  Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.true_
+                    helper_account_new
+              ; state =
                   Inner_user_state.fine
                     { next_deposit = Some prev_next_deposit }
                   |> var_to_precondition_fine
+              ; nonce =
+                  Zkapp_basic.Or_ignore.Checked.make_unsafe Boolean.true_
+                    { Zkapp_precondition.Closed_interval.lower = prev_nonce
+                    ; upper = prev_nonce
+                    }
               }
           }
       }
@@ -223,10 +250,56 @@ struct
       ; events
       }
     in
+    let bridge_proof_fee = constant Currency.Amount.typ bridge_proof_fee in
+    let* recipient_payout =
+      let* recipient_payout, `Underflow underflow =
+        Currency.Amount.Checked.sub_flagged base_params.amount bridge_proof_fee
+      in
+      let* () = Boolean.Assert.is_true (Boolean.not underflow) in
+      let account_creation_fee =
+        constant Currency.Amount.typ
+          (Currency.Amount.of_fee
+             Zeko_constants.constraint_constants.account_creation_fee )
+      in
+      let* paid_for_helper_account_creation, `Underflow underflow =
+        Currency.Amount.Checked.sub_flagged recipient_payout
+          account_creation_fee
+      in
+      let* () = Boolean.Assert.is_true (Boolean.not underflow) in
+      if_ ~typ:Currency.Amount.typ helper_account_new
+        ~then_:paid_for_helper_account_creation ~else_:recipient_payout
+    in
+
+    let recipient_payout =
+      { default_account_update with
+        public_key = base_params.recipient
+      ; token_id = constant Token_id.typ token_id_l2
+      ; may_use_token = constant May_use_token.typ Parents_own_token
+      ; authorization_kind = constant A.typ None_given
+      ; balance_change =
+          Currency.Amount.Signed.Checked.of_unsigned recipient_payout
+      ; implicit_account_creation_fee = constant Boolean.typ true
+      }
+    in
+    let sequencer_fee_payout =
+      { default_account_update with
+        public_key = constant PC.typ bridge_fee_recipient_l2
+      ; token_id = constant Token_id.typ token_id_l2
+      ; may_use_token = constant May_use_token.typ Parents_own_token
+      ; authorization_kind = constant A.typ None_given
+      ; balance_change =
+          Currency.Amount.Signed.Checked.of_unsigned bridge_proof_fee
+      ; implicit_account_creation_fee = constant Boolean.typ true
+      }
+    in
     let@ () = with_label __LOC__ in
     let*| out =
       make_outputs ~chain:chain_l2 account_update
-        [ (helper_account, []); (witness_inner, []) ]
+        [ (helper_account, [])
+        ; (witness_inner, [])
+        ; (recipient_payout, [])
+        ; (sequencer_fee_payout, [])
+        ]
     in
     Compile_simple.
       { prevs = Two_prevs (verify_check_accepted, verify_ase); out }

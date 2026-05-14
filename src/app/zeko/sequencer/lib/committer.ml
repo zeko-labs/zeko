@@ -66,7 +66,7 @@ module Commit_table = struct
 end
 
 let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
-    ~(archive : Archive.t) ~zkapp_pk ~archive_uri ~l1_config
+    ~l1_uri ~(archive : Archive.t) ~zkapp_pk ~archive_uri ~l1_config
     ~commit_validity_period
     ({ old_inner_ledger
      ; new_inner_ledger
@@ -98,9 +98,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
             ; status_flags
             ; _
             } =
-      Gql_client.infer_state ~logger
-        Executor.(executor.l1_uri)
-        ~zkapp_pk
+      Gql_client.infer_state ~logger l1_uri ~zkapp_pk
         ~signer_pk:(Signer_service.Signer.public_key executor.signer)
       >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
     in
@@ -207,11 +205,11 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   return command
 
 let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
-    ~(executor : Executor.t) ~archive ~zkapp_pk ~archive_uri ~l1_config
+    ~(executor : Executor.t) ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
     ~commit_validity_period =
   let open Deferred.Result.Let_syntax in
   let%bind { ledger_hash; _ } =
-    Gql_client.infer_state ~logger executor.l1_uri ~zkapp_pk
+    Gql_client.infer_state ~logger l1_uri ~zkapp_pk
       ~signer_pk:(Signer_service.Signer.public_key executor.signer)
     >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
   in
@@ -239,10 +237,11 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
               ()
         in
         let%bind command =
-          prove_commit ~logger ~proof_cache_db ~provers ~executor ~archive
-            ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period witness
+          prove_commit ~logger ~proof_cache_db ~provers ~executor ~l1_uri
+            ~archive ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period
+            witness
         in
-        let%bind () = Executor.send_zkapp_command ~logger executor command in
+        let%bind _hash = Executor.send_zkapp_command ~logger executor command in
         recommit_next target_ledger_hash
   in
   recommit_next ledger_hash

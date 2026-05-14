@@ -3,10 +3,20 @@
 open Snark_params.Tick
 open Zeko_util
 
-module With_length : sig
+module M_with_length : sig
   module Stmt : sig
     type t = { action_state : F.t; length : Checked32.t } [@@deriving snarky]
   end
+
+  module Init = Stmt
+
+  val init : check:'a -> Init.var -> Stmt.var Checked.t
+
+  val step : field_var -> Stmt.var -> Stmt.var Checked.t
+end
+
+module With_length : sig
+  module Stmt = M_with_length.Stmt
 
   type trans = { source : Stmt.t; target : Stmt.t }
 
@@ -77,8 +87,17 @@ module With_length : sig
   end
 end
 
-module Without_length : sig
+module M_without_length : sig
   module Stmt = F
+  module Init = Stmt
+
+  val init : check:'a -> Init.var -> Stmt.var Checked.t
+
+  val step : field_var -> Stmt.var -> Stmt.var Checked.t
+end
+
+module Without_length : sig
+  module Stmt = M_without_length.Stmt
 
   type trans = { source : field; target : field }
 

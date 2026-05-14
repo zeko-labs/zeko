@@ -77,7 +77,7 @@ let send_direct ~logger ~l1_uri ~(signers : Keypair.t list)
     }
   in
   let command =
-    Utils.sign_zkapp_command ~signature_kind command ([ fee_signer ] @ signers)
+    Utils.sign_zkapp_command ~signature_kind command (fee_signer :: signers)
     |> Zkapp_command.read_all_proofs_from_disk
   in
   match%map Gql_client.send_zkapp l1_uri command with
@@ -138,6 +138,8 @@ let generate_circuits_config =
          let helper_token_owner_l1 = generate_keypair () in
          let zeko_l1 = generate_keypair () in
          let emergency_da = generate_keypair () in
+         let bridge_fee_recipient_l1 = generate_keypair () in
+         let bridge_fee_recipient_l2 = generate_keypair () in
          let t : Zeko_circuits_config.t =
            { chain_l1 = Testnet
            ; chain_l2 = Testnet
@@ -151,6 +153,9 @@ let generate_circuits_config =
            ; zeko_l1 = fst zeko_l1
            ; emergency_da_public_key = fst emergency_da
            ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
+           ; bridge_fee_recipient_l1 = fst bridge_fee_recipient_l1
+           ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
+           ; outer_account_creation_fee = Currency.Fee.of_mina_string_exn "1"
            }
          in
          let deploy_config : Zeko_circuits_config.Deploy.t =
@@ -158,6 +163,8 @@ let generate_circuits_config =
            ; helper_token_owner_l1 = snd helper_token_owner_l1
            ; zeko_l1 = snd zeko_l1
            ; emergency_da = snd emergency_da
+           ; bridge_fee_recipient_l1 = snd bridge_fee_recipient_l1
+           ; bridge_fee_recipient_l2 = snd bridge_fee_recipient_l2
            }
          in
          let circuits_config_json = Zeko_circuits_config.to_yojson t in
@@ -379,7 +386,7 @@ let update_inner_verification_keys =
            >>| fun { ledger_hash; _ } -> ledger_hash
          in
          let da_config = Da_layer.Client.Config.of_string_list [ da_node ] in
-         let%bind ledger, imt =
+         let ledger, imt =
            match db_path with
            | Some db_path ->
                let ledger =
@@ -392,9 +399,8 @@ let update_inner_verification_keys =
                    ~directory_name:(db_path ^ "/imt")
                    ~depth:Zeko_constants.constraint_constants.ledger_depth ()
                in
-               return (ledger, imt)
+               (ledger, imt)
            | None ->
-               (* Sync ledger *)
                let ledger =
                  Ledger.create_ephemeral
                    ~depth:Zeko_constants.constraint_constants.ledger_depth ()
@@ -403,40 +409,42 @@ let update_inner_verification_keys =
                  Indexed_merkle_tree.Db.create
                    ~depth:Zeko_constants.constraint_constants.ledger_depth ()
                in
-               let%map () =
-                 Da_layer.Client.map_diffs ~logger ~config:da_config
-                   ~depth:Zeko_constants.constraint_constants.ledger_depth
-                   ~source_ledger_hash:`Genesis
-                   ~target_ledger_hash:commited_ledger_hash ()
-                   ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
-                     assert (
-                       Ledger_hash.equal
-                         (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
-                         (Ledger.merkle_root ledger) ) ;
-                     let progress =
-                       Float.of_int current_chunk /. Float.of_int chunks_length
-                     in
-                     [%log info] "Sync progress: %.2f%%" (progress *. 100.0) ;
-                     let changed_accounts =
-                       Da_layer.Diff.Stable.Latest.changed_accounts diff
-                       |> List.sort ~compare:(fun (a, _) (b, _) ->
-                              Int.compare a b )
-                     in
-                     List.iter changed_accounts ~f:(fun (index, account) ->
-                         Ledger.set_at_index_exn ledger index account ) ;
-                     (* Add to Indexed Merkle Tree *)
-                     List.iter changed_accounts ~f:(fun (_, account) ->
-                         let aid = Account.identifier account in
-                         let _w =
-                           Indexed_merkle_tree.Db.get_or_create_entry_exn imt
-                             (Account_id.derive_token_id ~owner:aid)
-                         in
-                         () ) ;
-                     return () )
-                 >>| Or_error.ok_exn >>| ignore
-               in
                (ledger, imt)
          in
+
+         (* Sync ledger *)
+         let%bind () =
+           Da_layer.Client.map_diffs ~logger ~config:da_config
+             ~depth:Zeko_constants.constraint_constants.ledger_depth
+             ~source_ledger_hash:(`Specific (Ledger.merkle_root ledger))
+             ~target_ledger_hash:commited_ledger_hash ()
+             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+               assert (
+                 Ledger_hash.equal
+                   (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
+                   (Ledger.merkle_root ledger) ) ;
+               let progress =
+                 Float.of_int current_chunk /. Float.of_int chunks_length
+               in
+               [%log info] "Sync progress: %.2f%%" (progress *. 100.0) ;
+               let changed_accounts =
+                 Da_layer.Diff.Stable.Latest.changed_accounts diff
+                 |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+               in
+               List.iter changed_accounts ~f:(fun (index, account) ->
+                   Ledger.set_at_index_exn ledger index account ) ;
+               (* Add to Indexed Merkle Tree *)
+               List.iter changed_accounts ~f:(fun (_, account) ->
+                   let aid = Account.identifier account in
+                   let _w =
+                     Indexed_merkle_tree.Db.get_or_create_entry_exn imt
+                       (Account_id.derive_token_id ~owner:aid)
+                   in
+                   () ) ;
+               return () )
+           >>| Or_error.ok_exn >>| ignore
+         in
+         Core.printf "Synced ledger\n%!" ;
 
          let pp label (real_vk, old_vk) =
            let hash = Compile_simple.Verification_key.hash real_vk in
@@ -470,6 +478,7 @@ let update_inner_verification_keys =
          in
 
          (* Get compiled vks *)
+         printf "Compiling circuits\n%!" ;
          let%bind inner_vk =
            Lazy.force Inner_rules_inst.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
@@ -477,9 +486,6 @@ let update_inner_verification_keys =
            Lazy.force Bridge_inst_mina.System_L2.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          in
-         (* let deploy_config =
-              Option.value_exn Zeko_circuits_config.deploy_config
-            in *)
          let inner =
            ( inner_vk
            , fetched_inner_vk
@@ -555,6 +561,7 @@ let update_inner_verification_keys =
                     Account_id.derive_token_id
                       ~owner:(Account.identifier account) )
            in
+           printf "Distributing diff\n%!" ;
            let%bind () =
              Da_layer.Client.distribute_diff ~logger ~config:da_config
                ~ledger_openings

@@ -87,7 +87,7 @@ module Worker = struct
         { Qos.prefetch_size = 0; prefetch_count = 1; global = false }
     in
     let%bind queue =
-      Amqp.Queue.declare channel
+      Amqp.Queue.declare channel ~durable:true
         ~arguments:
           [ Rpc.Server.queue_argument
           ; ("x-max-priority", Amqp.Types.VLonglong 5)

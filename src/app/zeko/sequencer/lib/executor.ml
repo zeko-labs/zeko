@@ -2,33 +2,46 @@ open Async_kernel
 open Core_kernel
 open Mina_base
 open Mina_transaction
+open Signature_lib
+
+module Sequencer_harness = struct
+  type t =
+    { infer_nonce : Public_key.Compressed.t -> Account.Nonce.t
+    ; apply_user_command : User_command.t -> (unit, Error.t) result Deferred.t
+    }
+end
 
 type t =
-  { l1_uri : Uri.t
+  { kind : [ `L1 of Uri.t | `L2 of Sequencer_harness.t ]
   ; signer : Signer_service.Signer.t
   ; q : unit Throttle.t
   ; mutable nonce : Account.Nonce.t option
   ; max_attempts : int
   ; delay : Time_ns.Span.t
-  ; kvdb : Mina_ledger.Ledger.Kvdb.t
   ; signature_kind : Mina_signature_kind.t
   }
 
 let create ?(max_attempts = 5) ?(delay = Time_ns.Span.of_sec 5.) ?nonce
-    ~signature_kind ~l1_uri ~signer ~kvdb () =
-  { l1_uri
+    ~signature_kind ~signer ~kind () =
+  { kind
   ; signature_kind
   ; signer
   ; q = Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
   ; nonce
   ; max_attempts
   ; delay
-  ; kvdb
   }
 
 let refresh_nonce t = t.nonce <- None
 
 let increment_nonce t = t.nonce <- Option.map t.nonce ~f:Account.Nonce.(add one)
+
+let infer_nonce ~logger t pk =
+  match t.kind with
+  | `L1 l1_uri ->
+      Gql_client.infer_nonce ~logger l1_uri pk
+  | `L2 { infer_nonce; _ } ->
+      return (Ok (infer_nonce pk))
 
 let process_command ~logger t (command : Zkapp_command.t) =
   let rec retry attempt () =
@@ -46,8 +59,7 @@ let process_command ~logger t (command : Zkapp_command.t) =
         | Some nonce ->
             return (Ok nonce)
         | None ->
-            Gql_client.infer_nonce ~logger t.l1_uri
-              (Signer_service.Signer.public_key t.signer)
+            infer_nonce ~logger t (Signer_service.Signer.public_key t.signer)
             >>| Result.map_error ~f:(fun err -> `Nonce_inference_error err)
       in
       let command =
@@ -65,9 +77,21 @@ let process_command ~logger t (command : Zkapp_command.t) =
         >>| Result.map_error ~f:(fun err ->
                 `Send_zkapp_error (`Failed_request (Error.to_string_hum err)) )
       in
-      let%map.Deferred.Result _result =
-        Gql_client.send_zkapp t.l1_uri command
-        >>| Result.map_error ~f:(fun err -> `Send_zkapp_error err)
+      let%map.Deferred.Result () =
+        match t.kind with
+        | `L1 l1_uri ->
+            Gql_client.send_zkapp l1_uri command
+            >>| Result.map_error ~f:(fun err -> `Send_zkapp_error err)
+            >>| Result.map ~f:ignore
+        | `L2 { apply_user_command; _ } ->
+            apply_user_command
+              (Zkapp_command
+                 (Zkapp_command.write_all_proofs_to_disk
+                    ~signature_kind:t.signature_kind
+                    ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
+                    command ) )
+            >>| Result.map_error ~f:(fun e ->
+                    `Send_zkapp_error (`Failed_request (Error.to_string_hum e)) )
       in
       command
     with
@@ -76,7 +100,10 @@ let process_command ~logger t (command : Zkapp_command.t) =
           Transaction_hash.(
             to_base58_check @@ hash_command (Zkapp_command command)) ;
         increment_nonce t ;
-        return (Ok ())
+        let hash : Mina_transaction.Transaction_hash.t =
+          Mina_transaction.Transaction_hash.hash_command (Zkapp_command command)
+        in
+        return (Ok hash)
     | Error err when attempt >= t.max_attempts ->
         return
           (Error

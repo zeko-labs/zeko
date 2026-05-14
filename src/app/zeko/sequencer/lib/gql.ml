@@ -9,6 +9,14 @@ open Currency
 module Schema = Graphql_wrapper.Make (Schema)
 module Zeko_sequencer = Zeko_sequencer.Sequencer
 
+module Context = struct
+  type t =
+    { sequencer : Zeko_sequencer.t
+    ; l1_executor : Executor.t
+    ; l2_executor : Executor.t
+    }
+end
+
 module Types = struct
   open Schema
 
@@ -98,7 +106,7 @@ module Types = struct
               match x with `Left _ -> None | `Right h -> Some h )
         ] )
 
-  let account_timing : (Zeko_sequencer.t, Account_timing.t option) typ =
+  let account_timing : (Context.t, Account_timing.t option) typ =
     obj "AccountTiming" ~fields:(fun _ ->
         [ field "initialMinimumBalance" ~typ:balance
             ~doc:"The initial minimum balance for a time-locked account"
@@ -818,7 +826,7 @@ module Types = struct
           resolve c uc.With_status.data )
 
     let user_command_shared_fields :
-        ( Zeko_sequencer.t
+        ( Context.t
         , (Signed_command.t, Transaction_hash.t) With_hash.t With_status.t )
         field
         list =
@@ -838,20 +846,20 @@ module Types = struct
             |> Account.Nonce.to_int )
       ; field_no_status "source" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command is sent from"
-          ~resolve:(fun { ctx = sequencer; _ } cmd ->
+          ~resolve:(fun { ctx = { sequencer; _ }; _ } cmd ->
             AccountObj.get_best_ledger_account
               (Ledger.of_database sequencer.ledger)
               (Signed_command.fee_payer cmd.With_hash.data) )
       ; field_no_status "receiver" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that the command applies to"
-          ~resolve:(fun { ctx = sequencer; _ } cmd ->
+          ~resolve:(fun { ctx = { sequencer; _ }; _ } cmd ->
             AccountObj.get_best_ledger_account
               (Ledger.of_database sequencer.ledger)
               (Signed_command.receiver cmd.With_hash.data) )
       ; field_no_status "feePayer" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account that pays the fees for the command"
           ~deprecated:(Deprecated (Some "use source field instead"))
-          ~resolve:(fun { ctx = sequencer; _ } cmd ->
+          ~resolve:(fun { ctx = { sequencer; _ }; _ } cmd ->
             AccountObj.get_best_ledger_account
               (Ledger.of_database sequencer.ledger)
               (Signed_command.fee_payer cmd.With_hash.data) )
@@ -912,7 +920,7 @@ module Types = struct
       ; field_no_status "fromAccount" ~typ:(non_null AccountObj.account)
           ~args:[] ~doc:"Account of the sender"
           ~deprecated:(Deprecated (Some "use feePayer field instead"))
-          ~resolve:(fun { ctx = sequencer; _ } payment ->
+          ~resolve:(fun { ctx = { sequencer; _ }; _ } payment ->
             AccountObj.get_best_ledger_account
               (Ledger.of_database sequencer.ledger)
             @@ Signed_command.fee_payer payment.With_hash.data )
@@ -925,7 +933,7 @@ module Types = struct
           ~doc:"Account of the receiver"
           ~deprecated:(Deprecated (Some "use receiver field instead"))
           ~args:Arg.[]
-          ~resolve:(fun { ctx = sequencer; _ } cmd ->
+          ~resolve:(fun { ctx = { sequencer; _ }; _ } cmd ->
             AccountObj.get_best_ledger_account
               (Ledger.of_database sequencer.ledger)
             @@ Signed_command.receiver cmd.With_hash.data )
@@ -965,10 +973,10 @@ module Types = struct
     let zkapp_command =
       let conv
           (x :
-            ( Zeko_sequencer.t
+            ( Context.t
             , Zkapp_command.Stable.Latest.t )
             Fields_derivers_graphql.Schema.typ ) :
-          (Zeko_sequencer.t, Zkapp_command.Stable.Latest.t) typ =
+          (Context.t, Zkapp_command.Stable.Latest.t) typ =
         Obj.magic x
       in
       obj "ZkappCommandResult" ~fields:(fun _ ->
@@ -1003,7 +1011,7 @@ module Types = struct
   end
 
   module State_hashes = struct
-    let t : (Zeko_sequencer.t, Zeko_sequencer.State_hashes.t option) typ =
+    let t : (Context.t, Zeko_sequencer.State_hashes.t option) typ =
       let open Snark_params.Tick in
       obj "StateHashes" ~fields:(fun _ ->
           [ field "provedLedgerHash" ~typ:(non_null string)
@@ -1039,6 +1047,9 @@ module Types = struct
       ; chain_l2 : Mina_signature_kind.t
       ; withdrawal_delay : int
       ; outer_action_delay : int
+      ; bridge_fee_recipient_l1 : Public_key.Compressed.t
+      ; bridge_fee_recipient_l2 : Public_key.Compressed.t
+      ; bridge_proof_fee : Currency.Amount.t
       }
 
     let signature_kind_to_string = function
@@ -1049,7 +1060,7 @@ module Types = struct
       | Other_network s ->
           s
 
-    let t : (Zeko_sequencer.t, t option) typ =
+    let t : (Context.t, t option) typ =
       obj "ZekoCircuitsConfig" ~fields:(fun _ ->
           [ field "zekoL1" ~typ:(non_null public_key)
               ~args:Arg.[]
@@ -1082,6 +1093,15 @@ module Types = struct
           ; field "outerActionDelay" ~typ:(non_null int)
               ~args:Arg.[]
               ~resolve:(fun _ t -> t.outer_action_delay)
+          ; field "bridgeFeeRecipientL1" ~typ:(non_null public_key)
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.bridge_fee_recipient_l1)
+          ; field "bridgeFeeRecipientL2" ~typ:(non_null public_key)
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.bridge_fee_recipient_l2)
+          ; field "bridgeProofFee" ~typ:(non_null amount)
+              ~args:Arg.[]
+              ~resolve:(fun _ t -> t.bridge_proof_fee)
           ] )
   end
 
@@ -1442,6 +1462,49 @@ module Types = struct
               ]
       end
 
+      module Transferrer = struct
+        type input = Account_update.Stable.Latest.t
+
+        let arg_typ =
+          scalar "BridgeTransferrerInput"
+            ~doc:
+              "A single pre-signed account update encoded as accountUpdates \
+               JSON"
+            ~coerce:(function
+              | `String s ->
+                  Result.try_with (fun () ->
+                      let forest =
+                        Yojson.Safe.from_string s
+                        |> Mina_base.Zkapp_command.account_updates_of_json
+                        |> Mina_base.Zkapp_command.Call_forest
+                           .of_account_updates_map
+                             ~f:Account_update.of_graphql_repr
+                             ~account_update_depth:(fun au ->
+                               au.body.call_depth )
+                        |> Mina_base.Zkapp_command.Call_forest
+                           .accumulate_hashes_predicated
+                             ~signature_kind:Zeko_circuits_config.t.chain_l1
+                      in
+                      match forest with
+                      | [ tree ] when List.is_empty tree.elt.calls ->
+                          tree.elt.account_update
+                      | _ ->
+                          failwith
+                            "Expected a single account update with empty calls" )
+                  |> Result.map_error ~f:Exn.to_string
+              | _ ->
+                  Error "Expected JSON-encoded account update" )
+            ~to_json:(fun account_update ->
+              let forest =
+                Mina_base.Zkapp_command.Call_forest.cons
+                  ~signature_kind:Zeko_circuits_config.t.chain_l1 account_update
+                  []
+              in
+              `String
+                ( Yojson.Safe.to_string
+                @@ Mina_base.Zkapp_command.account_updates_to_json forest ) )
+      end
+
       module Folder = struct
         module Ase_with_length = struct
           module Stmt = struct
@@ -1697,22 +1760,39 @@ module Types = struct
       end
 
       module Deposit_request = struct
-        type input = { deposit_params : Deposit_params.input }
+        type input =
+          { deposit_params : Deposit_params.input
+          ; transferrer : Transferrer.input
+          }
 
         let arg_typ ~proof_cache_db =
           obj "DepositRequestInput"
-            ~coerce:(fun deposit_params -> { deposit_params })
-            ~split:(fun f (x : input) -> f x.deposit_params)
+            ~coerce:(fun deposit_params transferrer ->
+              { deposit_params; transferrer } )
+            ~split:(fun f (x : input) -> f x.deposit_params x.transferrer)
             ~fields:
               [ arg "depositParams"
                   ~typ:(non_null @@ Deposit_params.arg_typ ~proof_cache_db)
+              ; arg "transferrer" ~typ:(non_null Transferrer.arg_typ)
               ]
       end
 
       module Withdrawal_request = struct
-        type input = Withdrawal_params.input
+        type input =
+          { withdrawal_params : Withdrawal_params.input
+          ; transferrer : Transferrer.input
+          }
 
-        let arg_typ ~proof_cache_db = Withdrawal_params.arg_typ ~proof_cache_db
+        let arg_typ ~proof_cache_db =
+          obj "WithdrawalRequestInput"
+            ~coerce:(fun withdrawal_params transferrer ->
+              { withdrawal_params; transferrer } )
+            ~split:(fun f (x : input) -> f x.withdrawal_params x.transferrer)
+            ~fields:
+              [ arg "withdrawalParams"
+                  ~typ:(non_null @@ Withdrawal_params.arg_typ ~proof_cache_db)
+              ; arg "transferrer" ~typ:(non_null Transferrer.arg_typ)
+              ]
       end
 
       module Finalize_deposit = struct
@@ -1722,21 +1802,30 @@ module Types = struct
               Bridge.Check_accepted_mina.Init.t
               * Bridge.Check_accepted_mina.Elem.t list
           ; prev_next_deposit : Unsigned.uint32
+          ; prev_nonce : Unsigned.uint32
+          ; helper_account_new : bool
+          ; helper_account_signature : Signature.t
           }
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeDepositInput"
             ~coerce:(fun ase (check_accepted_init, check_accepted_elems)
-                         prev_next_deposit ->
+                         prev_next_deposit prev_nonce helper_account_new
+                         helper_account_signature ->
               let%map.Result check_accepted_elems =
                 Result.all check_accepted_elems
               in
               { ase
               ; check_accepted = (check_accepted_init, check_accepted_elems)
               ; prev_next_deposit
+              ; prev_nonce
+              ; helper_account_new
+              ; helper_account_signature =
+                  Result.ok_or_failwith helper_account_signature
               } )
             ~split:(fun f (x : input) ->
-              f x.ase x.check_accepted x.prev_next_deposit )
+              f x.ase x.check_accepted x.prev_next_deposit x.prev_nonce
+                x.helper_account_new (Raw x.helper_account_signature) )
             ~fields:
               [ arg "ase" ~typ:(non_null Folder.Ase_with_length.arg_typ)
               ; arg "checkAccepted"
@@ -1744,6 +1833,10 @@ module Types = struct
                     ( non_null
                     @@ Folder.Check_accepted_mina.arg_typ ~proof_cache_db )
               ; arg "prevNextDeposit" ~typ:(non_null UInt32.arg_typ)
+              ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
+              ; arg "helperAccountNew" ~typ:(non_null bool)
+              ; arg "helperAccountSignature"
+                  ~typ:(non_null SignatureInput.arg_typ)
               ]
       end
 
@@ -1759,13 +1852,17 @@ module Types = struct
               * Bridge.Check_accepted_mina.Elem.t list
           ; check_accepted_ase : Ase.With_length.Stmt.t * Field.t list
           ; prev_next_cancelled_deposit : Unsigned.uint32
+          ; prev_nonce : Unsigned.uint32
+          ; helper_account_new : bool
+          ; helper_account_signature : Signature.t
           }
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeCancelledDepositInput"
             ~coerce:(fun public_key commit before_commit commit_ase sync_ase
                          (check_accepted_init, check_accepted_elems)
-                         check_accepted_ase prev_next_cancelled_deposit ->
+                         check_accepted_ase prev_next_cancelled_deposit
+                         prev_nonce helper_account_new helper_account_signature ->
               let%bind.Result check_accepted_elems =
                 Result.all check_accepted_elems
               in
@@ -1786,13 +1883,18 @@ module Types = struct
               ; check_accepted = (check_accepted_init, check_accepted_elems)
               ; check_accepted_ase
               ; prev_next_cancelled_deposit
+              ; prev_nonce
+              ; helper_account_new
+              ; helper_account_signature =
+                  Result.ok_or_failwith helper_account_signature
               } )
             ~split:(fun f (x : input) ->
               f x.public_key (Commit x.commit)
                 (Zeko_circuits.Rollup_state.Outer_action_state.raw
                    x.before_commit )
                 x.commit_ase x.sync_ase x.check_accepted x.check_accepted_ase
-                x.prev_next_cancelled_deposit )
+                x.prev_next_cancelled_deposit x.prev_nonce x.helper_account_new
+                (Raw x.helper_account_signature) )
             ~fields:
               [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
               ; arg "commit"
@@ -1809,6 +1911,10 @@ module Types = struct
               ; arg "checkAcceptedAse"
                   ~typ:(non_null Folder.Ase_with_length.arg_typ)
               ; arg "prevNextCancelledDeposit" ~typ:(non_null UInt32.arg_typ)
+              ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
+              ; arg "helperAccountNew" ~typ:(non_null bool)
+              ; arg "helperAccountSignature"
+                  ~typ:(non_null SignatureInput.arg_typ)
               ]
       end
 
@@ -1822,13 +1928,17 @@ module Types = struct
           ; withdrawal_ase : Ase.With_length.Stmt.t * Field.t list
           ; prev_next_withdrawal : Unsigned.uint32
           ; withdrawal_params : Withdrawal_params.input
+          ; prev_nonce : Unsigned.uint32
+          ; helper_account_new : bool
+          ; helper_account_signature : Signature.t
           }
 
         let arg_typ ~proof_cache_db =
           obj "FinalizeWithdrawalInput"
             ~coerce:(fun public_key commit before_commit commit_ase
                          before_withdrawal withdrawal_ase prev_next_withdrawal
-                         withdrawal_params ->
+                         withdrawal_params prev_nonce helper_account_new
+                         helper_account_signature ->
               let%map.Result commit =
                 match%bind.Result commit with
                 | Commit commit ->
@@ -1848,6 +1958,10 @@ module Types = struct
               ; withdrawal_ase
               ; prev_next_withdrawal
               ; withdrawal_params
+              ; prev_nonce
+              ; helper_account_new
+              ; helper_account_signature =
+                  Result.ok_or_failwith helper_account_signature
               } )
             ~split:(fun f (x : input) ->
               f x.public_key (Commit x.commit)
@@ -1856,7 +1970,9 @@ module Types = struct
                 x.commit_ase
                 (Zeko_circuits.Rollup_state.Inner_action_state.raw
                    x.before_withdrawal )
-                x.withdrawal_ase x.prev_next_withdrawal x.withdrawal_params )
+                x.withdrawal_ase x.prev_next_withdrawal x.withdrawal_params
+                x.prev_nonce x.helper_account_new
+                (Raw x.helper_account_signature) )
             ~fields:
               [ arg "publicKey" ~typ:(non_null PublicKey.arg_typ)
               ; arg "commit"
@@ -1872,6 +1988,10 @@ module Types = struct
               ; arg "prevNextWithdrawal" ~typ:(non_null UInt32.arg_typ)
               ; arg "withdrawalParams"
                   ~typ:(non_null @@ Withdrawal_params.arg_typ ~proof_cache_db)
+              ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
+              ; arg "helperAccountNew" ~typ:(non_null bool)
+              ; arg "helperAccountSignature"
+                  ~typ:(non_null SignatureInput.arg_typ)
               ]
       end
     end
@@ -2126,7 +2246,7 @@ module Mutations = struct
           [ arg "input" ~typ:(non_null Types.Input.SendPaymentInput.arg_typ)
           ; Types.Input.Fields.signature
           ]
-      ~resolve:(fun { ctx = sequencer; _ } ()
+      ~resolve:(fun { ctx = { sequencer; _ }; _ } ()
                     (from, to_, amount, fee, valid_until, memo, nonce_opt)
                     signature ->
         let payload =
@@ -2156,8 +2276,8 @@ module Mutations = struct
               in
               match
                 Signed_command.create_with_signature_checked
-                  ~signature_kind:Mina_signature_kind.Testnet signature from
-                  payload
+                  ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 signature
+                  from payload
               with
               | Some command ->
                   return (Ok command)
@@ -2191,7 +2311,7 @@ module Mutations = struct
       ~typ:(non_null Types.Payload.send_zkapp)
       ~args:
         Arg.[ arg "input" ~typ:(non_null Types.Input.SendZkappInput.arg_typ) ]
-      ~resolve:(fun { ctx = sequencer; _ } () zkapp_command_stable ->
+      ~resolve:(fun { ctx = { sequencer; _ }; _ } () zkapp_command_stable ->
         let zkapp_command =
           Zkapp_command.write_all_proofs_to_disk
             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
@@ -2233,7 +2353,8 @@ module Mutations = struct
                   @@ Types.Input.Provers.Deposit_request.arg_typ ~proof_cache_db
                   )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () { deposit_params } ->
+        ~resolve:(fun { ctx = Context.{ sequencer; l1_executor; _ }; _ } ()
+                      { deposit_params; transferrer } ->
           let ( + ) a b = Currency.Fee.add a b |> Option.value_exn in
           let account_creation_fee =
             Zeko_constants.constraint_constants.account_creation_fee
@@ -2243,11 +2364,16 @@ module Mutations = struct
           if Currency.Amount.(deposit_params.amount < account_creation_fee) then
             return (Error "Amount must be at least 2 account creation fees")
           else
+            let logger = Zeko_sequencer.(sequencer.logger) in
+            let t = Zeko_sequencer.(sequencer.bridge_prover) in
             let key, d =
-              Bridge_prover.Deposit_request.f
-                ~t:Zeko_sequencer.(sequencer.bridge_prover)
-                ~logger:Zeko_sequencer.(sequencer.logger)
-                { deposit_params }
+              Bridge_prover.Deposit_request.f ~t ~logger
+                { deposit_params; transferrer }
+            in
+            let d =
+              Bridge_prover.execute_request t ~logger ~executor:l1_executor
+                (key, d)
+              >>| ignore
             in
             don't_wait_for d ; return (Ok key) )
 
@@ -2262,12 +2388,20 @@ module Mutations = struct
                   @@ Types.Input.Provers.Withdrawal_request.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () withdrawal_params ->
+        ~resolve:(fun { ctx = Context.{ sequencer; l2_executor; _ }; _ } ()
+                      { withdrawal_params; transferrer } ->
+          let logger = Zeko_sequencer.(sequencer.logger) in
+          let t = Zeko_sequencer.(sequencer.bridge_prover) in
           let key, d =
             Bridge_prover.Withdrawal_request.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)
               ~logger:Zeko_sequencer.(sequencer.logger)
-              { withdrawal_params }
+              { withdrawal_params; transferrer }
+          in
+          let d =
+            Bridge_prover.execute_request t ~logger ~executor:l2_executor
+              (key, d)
+            >>| ignore
           in
           don't_wait_for d ; return (Ok key) )
 
@@ -2282,14 +2416,20 @@ module Mutations = struct
                   @@ Types.Input.Provers.Finalize_deposit.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () witness ->
+        ~resolve:(fun { ctx = Context.{ sequencer; l2_executor; _ }; _ } ()
+                      witness ->
           let%bind.Deferred.Result { ase = ase_source, ase_elems
                                    ; check_accepted =
                                        check_accepted_init, check_accepted_elems
                                    ; prev_next_deposit
+                                   ; prev_nonce
+                                   ; helper_account_new
+                                   ; helper_account_signature
                                    } =
             return (Result.map_error witness ~f:Error.to_string_hum)
           in
+          let logger = Zeko_sequencer.(sequencer.logger) in
+          let t = Zeko_sequencer.(sequencer.bridge_prover) in
           let key, d =
             Bridge_prover.Finalize_deposit.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)
@@ -2299,7 +2439,15 @@ module Mutations = struct
               ; check_accepted_init
               ; check_accepted_elems
               ; prev_next_deposit
+              ; prev_nonce
+              ; helper_account_new
               }
+              helper_account_signature
+          in
+          let d =
+            Bridge_prover.execute_request t ~logger ~executor:l2_executor
+              (key, d)
+            >>| ignore
           in
           don't_wait_for d ; return (Ok key) )
 
@@ -2314,7 +2462,8 @@ module Mutations = struct
                   @@ Types.Input.Provers.Finalize_withdrawal.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () witness ->
+        ~resolve:(fun { ctx = Context.{ sequencer; l1_executor; _ }; _ } ()
+                      witness ->
           let%bind.Deferred.Result { public_key
                                    ; commit
                                    ; before_commit
@@ -2326,9 +2475,14 @@ module Mutations = struct
                                        , withdrawal_ase_elems )
                                    ; prev_next_withdrawal
                                    ; withdrawal_params
+                                   ; prev_nonce
+                                   ; helper_account_new
+                                   ; helper_account_signature
                                    } =
             return (Result.map_error witness ~f:Error.to_string_hum)
           in
+          let logger = Zeko_sequencer.(sequencer.logger) in
+          let t = Zeko_sequencer.(sequencer.bridge_prover) in
           let key, d =
             Bridge_prover.Finalize_withdrawal.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)
@@ -2343,7 +2497,15 @@ module Mutations = struct
               ; withdrawal_ase_elems
               ; prev_next_withdrawal
               ; withdrawal_params
+              ; prev_nonce
+              ; helper_account_new
               }
+              helper_account_signature
+          in
+          let d =
+            Bridge_prover.execute_request t ~logger ~executor:l1_executor
+              (key, d)
+            >>| ignore
           in
           don't_wait_for d ; return (Ok key) )
 
@@ -2358,7 +2520,7 @@ module Mutations = struct
                   @@ Types.Input.Provers.Finalize_cancelled_deposit.arg_typ
                        ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () witness ->
+        ~resolve:(fun { ctx = { sequencer; l1_executor; _ }; _ } () witness ->
           let%bind.Deferred.Result { public_key
                                    ; commit
                                    ; before_commit
@@ -2371,9 +2533,14 @@ module Mutations = struct
                                        ( check_accepted_ase_source
                                        , check_accepted_ase_elems )
                                    ; prev_next_cancelled_deposit
+                                   ; prev_nonce
+                                   ; helper_account_new
+                                   ; helper_account_signature
                                    } =
             return (Result.map_error witness ~f:Error.to_string_hum)
           in
+          let logger = Zeko_sequencer.(sequencer.logger) in
+          let t = Zeko_sequencer.(sequencer.bridge_prover) in
           let key, d =
             Bridge_prover.Finalize_cancelled_deposit.f
               ~t:Zeko_sequencer.(sequencer.bridge_prover)
@@ -2390,7 +2557,15 @@ module Mutations = struct
               ; check_accepted_ase_source
               ; check_accepted_ase_elems
               ; prev_next_cancelled_deposit
+              ; prev_nonce
+              ; helper_account_new
               }
+              helper_account_signature
+          in
+          let d =
+            Bridge_prover.execute_request t ~logger ~executor:l1_executor
+              (key, d)
+            >>| ignore
           in
           don't_wait_for d ; return (Ok key) )
 
@@ -2462,7 +2637,7 @@ module Queries = struct
               ~typ:int
           ]
       ~typ:(non_null float)
-      ~resolve:(fun { ctx = sequencer; _ } () weight ->
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () weight ->
         Zeko_sequencer.calculate_required_fee sequencer
           (Option.value ~default:1 weight) )
 
@@ -2477,7 +2652,7 @@ module Queries = struct
               ~doc:"Token of account being retrieved (defaults to MINA)"
               ~typ:Types.Input.TokenId.arg_typ ~default:Token_id.default
           ]
-      ~resolve:(fun { ctx = sequencer; _ } () public_key token_id ->
+      ~resolve:(fun { ctx = { sequencer; _ }; _ } () public_key token_id ->
         let%map.Option account =
           Zeko_sequencer.get_account sequencer public_key token_id
         in
@@ -2492,7 +2667,7 @@ module Queries = struct
           [ arg "publicKey" ~doc:"Public key to find accounts for"
               ~typ:(non_null Types.Input.PublicKey.arg_typ)
           ]
-      ~resolve:(fun { ctx = sequencer; _ } () pk ->
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () pk ->
         let ledger = Ledger.of_database sequencer.ledger in
         let tokens = Ledger.tokens ledger pk |> Set.to_list in
         List.filter_map tokens ~f:(fun token ->
@@ -2511,7 +2686,7 @@ module Queries = struct
           [ arg "tokenId" ~doc:"Token ID to find accounts for"
               ~typ:(non_null Types.Input.TokenId.arg_typ)
           ]
-      ~resolve:(fun { ctx = sequencer; _ } () token_id ->
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () token_id ->
         let ledger = Ledger.of_database sequencer.ledger in
         let%map account_ids = Ledger.accounts ledger in
         Ok
@@ -2535,11 +2710,11 @@ module Queries = struct
       ~typ:(non_null Types.genesis_constants)
       ~resolve:(fun _ () -> ())
 
-  let proved_forest =
-    io_field "provedForest" ~doc:"Query proved forest in a JSON format"
+  let proving_result =
+    io_field "provingResult" ~doc:"Query proving result in a JSON format"
       ~typ:string
       ~args:Arg.[ arg "key" ~typ:(non_null string) ]
-      ~resolve:(fun { ctx = sequencer; _ } () key ->
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () key ->
         match
           Bridge_prover.Proofs_memory.get
             Zeko_sequencer.(sequencer.bridge_prover.proofs_memory)
@@ -2549,20 +2724,34 @@ module Queries = struct
             return (Error "Invalid key")
         | Some (_, `Pending) ->
             return (Ok None)
-        | Some (_, `Done (Ok forest)) ->
+        | Some (_, `Proved (Ok forest)) ->
             return
               (Ok
                  (Some
                     ( Yojson.Safe.to_string
-                    @@ Zkapp_command.account_updates_to_json forest ) ) )
-        | Some (_, `Done (Error err)) ->
+                    @@ `Assoc
+                         [ ( "proved"
+                           , Zkapp_command.account_updates_to_json forest )
+                         ] ) ) )
+        | Some (_, `Executed (Ok hash)) ->
+            return
+              (Ok
+                 (Some
+                    ( Yojson.Safe.to_string
+                    @@ `Assoc
+                         [ ( "executed"
+                           , `String
+                               (Mina_transaction.Transaction_hash
+                                .to_base58_check hash ) )
+                         ] ) ) )
+        | Some (_, `Proved (Error err)) | Some (_, `Executed (Error err)) ->
             return (Error (Error.to_string_mach err)) )
 
   let state_hashes =
     field "stateHashes" ~doc:"Get current state of the rollup"
       ~typ:Types.State_hashes.t
       ~args:Arg.[]
-      ~resolve:(fun { ctx = sequencer; _ } () ->
+      ~resolve:(fun { ctx = { sequencer; _ }; _ } () ->
         Some (Zeko_sequencer.get_latest_state sequencer) )
 
   let token_owner =
@@ -2573,7 +2762,7 @@ module Queries = struct
           [ arg "tokenId" ~doc:"Token ID to find the owning account for"
               ~typ:(non_null Types.Input.TokenId.arg_typ)
           ]
-      ~resolve:(fun { ctx = sequencer; _ } () token ->
+      ~resolve:(fun { ctx = { sequencer; _ }; _ } () token ->
         let open Option.Let_syntax in
         let l = Ledger.of_database sequencer.ledger in
         let%map account_id = Ledger.token_owner l token in
@@ -2583,7 +2772,7 @@ module Queries = struct
     field "proverQueueSize" ~doc:"Get the size of the prover queue"
       ~typ:(non_null int)
       ~args:Arg.[]
-      ~resolve:(fun { ctx = sequencer; _ } () ->
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () ->
         Zeko_prover.Client.queue_size
           Zeko_sequencer.(sequencer.merger_ctx.provers) )
 
@@ -2591,7 +2780,7 @@ module Queries = struct
     field "circuitsConfig" ~doc:"Get the circuits config"
       ~typ:(non_null Types.Circuits_config.t)
       ~args:Arg.[]
-      ~resolve:(fun { ctx = sequencer; _ } () ->
+      ~resolve:(fun { ctx = { sequencer; _ }; _ } () ->
         let open Zeko_circuits_config in
         { Types.Circuits_config.zeko_l1 = Inputs.zeko_l1
         ; zeko_l2 = Inputs.zeko_l2
@@ -2606,13 +2795,16 @@ module Queries = struct
         ; outer_action_delay =
             Mina_numbers.Global_slot_span.to_int
               sequencer.config.commit_validity_period
+        ; bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+        ; bridge_fee_recipient_l2 = Inputs.bridge_fee_recipient_l2
+        ; bridge_proof_fee = Inputs.bridge_proof_fee
         } )
 
   let sequencer_pk =
     field "sequencerPk" ~doc:"Get the sequencer's public key"
       ~typ:(non_null Types.public_key)
       ~args:Arg.[]
-      ~resolve:(fun { ctx = sequencer; _ } () ->
+      ~resolve:(fun { ctx = { sequencer; _ }; _ } () ->
         Signer_service.Signer.public_key sequencer.config.signer )
 
   module Archive = struct
@@ -2625,7 +2817,7 @@ module Queries = struct
                 ~typ:
                   (non_null Types.Input.Archive.ActionFilterOptionsInput.arg_typ)
             ]
-        ~resolve:(fun { ctx = sequencer; _ } ()
+        ~resolve:(fun { ctx = { sequencer; _ }; _ } ()
                       (public_key, token_id, from_action_state, end_action_state)
                       ->
           let token_id = Option.value ~default:Token_id.default token_id in
@@ -2643,7 +2835,7 @@ module Queries = struct
                 ~typ:
                   (non_null Types.Input.Archive.EventFilterOptionsInput.arg_typ)
             ]
-        ~resolve:(fun { ctx = sequencer; _ } () (public_key, token_id) ->
+        ~resolve:(fun { ctx = { sequencer; _ }; _ } () (public_key, token_id) ->
           let token_id = Option.value ~default:Token_id.default token_id in
           Archive.get_events sequencer.archive
             (Account_id.create public_key token_id) )
@@ -2658,7 +2850,7 @@ module Queries = struct
     ; accounts_for_pk
     ; token_accounts
     ; genesis_constants
-    ; proved_forest
+    ; proving_result
     ; state_hashes
     ; token_owner
     ; network_id
