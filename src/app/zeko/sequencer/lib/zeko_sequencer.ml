@@ -27,6 +27,7 @@ module Sequencer = struct
       ; l1_config : Utils.Slot.l1_config
       ; slot_acceptance : Time.Span.t
       ; commit_validity_period : Global_slot_span.t
+      ; commit_fee : Currency.Fee.t
       }
   end
 
@@ -176,7 +177,7 @@ module Sequencer = struct
                   ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
                   ~archive_uri:config.archive_uri ~l1_config:config.l1_config
                   ~commit_validity_period:config.commit_validity_period
-                  commit_witness
+                  ~commit_fee:config.commit_fee commit_witness
               in
               let%bind _hash =
                 Executor.send_zkapp_command ~logger executor command
@@ -800,11 +801,11 @@ module Sequencer = struct
 
     [%log info] "Init root: %s" Ledger_hash.(to_decimal_string (get_root t)) ;
 
-    let%bind () =
+    let%bind inserted_genesis =
       match source with
       | `Genesis ->
           [%log info] "Syncing from genesis" ;
-          return ()
+          return false
       | `Specific ledger_hash ->
           [%log info] "Syncing from specific ledger hash: %s"
             (Ledger_hash.to_decimal_string ledger_hash) ;
@@ -817,20 +818,26 @@ module Sequencer = struct
                 Archive.query_actions t.archive aid
                 |> List.map ~f:(fun x -> List.map x.actions ~f:Array.to_list) )
           in
-          let%bind () =
-            Deferred.List.iteri ~how:`Sequential diffs
+          let%bind inserted_genesis =
+            Deferred.List.foldi ~init:false diffs
               ~f:(fun
                    i
+                   acc
                    ( diff
                    , ledger_openings
                    , acc_set_openings
                    , `Target target_ledger_hash )
                  ->
-                Da_layer.Client.enqueue_diff t.da_client ~diff ~ledger_openings
-                  ~acc_set_openings ~target_ledger_hash ~genesis:(i = 0) )
+                let genesis = i = 0 in
+                let%map () =
+                  Da_layer.Client.enqueue_diff t.da_client ~diff
+                    ~ledger_openings ~acc_set_openings ~target_ledger_hash
+                    ~genesis
+                in
+                genesis || acc )
           in
           [%log info] "Enqueued genesis diff" ;
-          return ()
+          return inserted_genesis
     in
 
     (* apply diffs from DA layer *)
@@ -884,7 +891,8 @@ module Sequencer = struct
               ~diff:(Da_layer.Diff.drop_time diff)
               ~ledger_openings ~acc_set_openings
               ~target_ledger_hash:(L.Db.merkle_root t.ledger)
-              ~genesis:(current_chunk = 0 && current_diff = 0)
+              ~genesis:
+                ((not inserted_genesis) && current_chunk = 0 && current_diff = 0)
           in
 
           (* Add events and actions *)
@@ -1026,7 +1034,7 @@ module Sequencer = struct
       ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
       ~(signer : Signer_service.Signer.t) ~deposit_delay_blocks ~mq_host
       ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
-      ~commit_validity_period =
+      ~commit_validity_period ~commit_fee ~bridge_txn_fee =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let db_dir =
@@ -1058,6 +1066,7 @@ module Sequencer = struct
         ; l1_config
         ; slot_acceptance
         ; commit_validity_period
+        ; commit_fee
         }
     in
     let%bind db_pool = Db.create_and_migrate ~postgres_uri ~logger in
@@ -1204,6 +1213,7 @@ module Sequencer = struct
     in
     let%bind bridge_prover =
       Bridge_prover.create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2
+        ~bridge_txn_fee
     in
 
     let t =
@@ -1235,6 +1245,7 @@ module Sequencer = struct
         ~l1_uri:config.l1_uri ~archive ~db_pool
         ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
+        ~commit_fee
       >>| Or_error.ok_exn
     in
     let () =

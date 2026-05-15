@@ -67,7 +67,7 @@ end
 
 let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     ~l1_uri ~(archive : Archive.t) ~zkapp_pk ~archive_uri ~l1_config
-    ~commit_validity_period
+    ~commit_validity_period ~commit_fee
     ({ old_inner_ledger
      ; new_inner_ledger
      ; processed_actions_pointer
@@ -190,7 +190,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     { fee_payer =
         { Account_update.Fee_payer.body =
             { public_key = Signer_service.Signer.public_key executor.signer
-            ; fee = Currency.Fee.of_mina_int_exn 1
+            ; fee = commit_fee
             ; valid_until = None
             ; nonce = Unsigned.UInt32.zero
             }
@@ -206,7 +206,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
 
 let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
     ~(executor : Executor.t) ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
-    ~commit_validity_period =
+    ~commit_validity_period ~commit_fee =
   let open Deferred.Result.Let_syntax in
   let%bind { ledger_hash; _ } =
     Gql_client.infer_state ~logger l1_uri ~zkapp_pk
@@ -239,7 +239,7 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
         let%bind command =
           prove_commit ~logger ~proof_cache_db ~provers ~executor ~l1_uri
             ~archive ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period
-            witness
+            ~commit_fee witness
         in
         let%bind _hash = Executor.send_zkapp_command ~logger executor command in
         recommit_next target_ledger_hash

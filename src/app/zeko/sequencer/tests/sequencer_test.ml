@@ -238,6 +238,8 @@ let () =
                 ~l1_config
                 ~commit_validity_period:
                   (Mina_numbers.Global_slot_span.of_int 10)
+                ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
+                ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
             in
             [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
               final_ledger_hash ;
@@ -339,7 +341,9 @@ let () =
               ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
-              ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10) )
+              ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10)
+              ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
+              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
       in
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
@@ -469,7 +473,9 @@ let () =
               ~da_keys ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
-              ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10) )
+              ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10)
+              ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
+              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
       in
 
       print_endline "(* Check that all da nodes are synced *)" ;
@@ -575,7 +581,9 @@ let () =
               ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
-              ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10) )
+              ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10)
+              ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
+              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
       in
 
       print_endline "(* Check that after restart it recommited *)" ;

@@ -60,8 +60,17 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
             let sequencer_account =
               { Account.empty with public_key = Even_PC.to_pc sequencer_key }
             in
-            List.iter [ inner_account; holder_account; sequencer_account ]
-              ~f:(fun acc ->
+            let fee_recipient_account =
+              { Account.empty with
+                public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l2
+              }
+            in
+            List.iter
+              [ inner_account
+              ; holder_account
+              ; sequencer_account
+              ; fee_recipient_account
+              ] ~f:(fun acc ->
                 L.create_new_account_exn ledger
                   (Account_id.create acc.public_key acc.token_id)
                   acc ) ;
