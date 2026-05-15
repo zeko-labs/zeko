@@ -85,6 +85,11 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
                      ( Account_id.of_public_key
                      @@ Public_key.decompress_exn sequencer_account.public_key
                      )
+              :: Account_id.derive_token_id
+                   ~owner:
+                     ( Account_id.of_public_key
+                     @@ Public_key.decompress_exn
+                          fee_recipient_account.public_key )
               ::
               ( match faucet_aid with
               | None ->
