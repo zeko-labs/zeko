@@ -22,7 +22,7 @@ let rec keep_retrying ~logger ?(delay = Time_ns.Span.of_sec 5.) ~f () =
 
 module Diff_table = struct
   type t =
-    { diff : Diff.Stable.V1.t
+    { diff : Diff.Pending.Stable.V1.t
     ; ledger_openings : Sparse_ledger.t
     ; acc_set_openings : Indexed_merkle_tree.Sparse.t
     ; genesis : bool
@@ -47,7 +47,7 @@ module Diff_table = struct
           ; ( if genesis then None
             else Some (Ledger_hash.to_decimal_string diff.source_ledger_hash) )
           ; Binable.to_bigstring
-              (module Diff.Stable.V1.With_top_version_tag)
+              (module Diff.Pending.Stable.V1.With_top_version_tag)
               diff
             |> Bigstring.to_string
           ; Sparse_ledger.to_yojson ledger_openings |> Yojson.Safe.to_string
@@ -69,7 +69,7 @@ module Diff_table = struct
         in
         { diff =
             Binable.of_bigstring
-              (module Diff.Stable.V1.With_top_version_tag)
+              (module Diff.Pending.Stable.V1.With_top_version_tag)
               (Bigstring.of_string diff)
         ; ledger_openings =
             Sparse_ledger.of_yojson (Yojson.Safe.from_string ledger_openings)
@@ -279,7 +279,9 @@ module Rpc = struct
     dispatch_with_fallback_same_query ~max_tries:1 ~logger node_location
       ledger_hash
       ~versions:
-        [ Versioned_rpc_same_query.V (Rpc.Get_diff.V3.t, Fn.id)
+        [ Versioned_rpc_same_query.V (Rpc.Get_diff.V4.t, Fn.id)
+        ; Versioned_rpc_same_query.V
+            (Rpc.Get_diff.V3.t, Option.map ~f:Diff.Stable.V3.to_latest)
         ; Versioned_rpc_same_query.V
             (Rpc.Get_diff.V2.t, Option.map ~f:Diff.Stable.V2.to_latest)
         ; Versioned_rpc_same_query.V
@@ -322,7 +324,7 @@ module Rpc = struct
       ?max_length ~source ~target () =
     [%log debug] "Getting diffs chain from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diffs_chain.V1.t
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diffs_chain.V2.t
       { source; target; max_length }
 
   let has_diff ~logger
@@ -384,7 +386,7 @@ module Rpc = struct
       ~target () =
     [%log debug] "Getting diffs stream from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    pipe_dispatch Rpc.Diffs_stream.V2.t { source; target } node_location.value
+    pipe_dispatch Rpc.Diffs_stream.V3.t { source; target } node_location.value
 end
 
 module Config = struct
@@ -817,7 +819,7 @@ let map_diffs :
          (   current_chunk:int
           -> current_diff:int
           -> chunks_length:int
-          -> Diff.Stable.V3.t
+          -> Diff.Stable.V4.t
           -> 'a Deferred.t )
     -> unit
     -> ('a list, Error.t) Deferred.Result.t =
@@ -861,7 +863,7 @@ let iter_diffs :
          (   current_chunk:int
           -> current_diff:int
           -> chunks_length:int
-          -> Diff.Stable.V3.t
+          -> Diff.Stable.V4.t
           -> unit Deferred.t )
     -> unit
     -> (unit, Error.t) Deferred.Result.t =
@@ -921,7 +923,7 @@ let distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff =
 (** One diff can be too big, split it into multiple smaller ones
     To have only one diff set [max_size] to [Int.max_value]
 *)
-let create_genesis_diffs ?(max_size = 50) ~logger ledger =
+let create_genesis_diffs ?(max_size = 50) ~logger ledger ~get_actions_for_aid =
   let%bind account_ids =
     Ledger.to_list ledger >>| List.map ~f:Account.identifier
   in
@@ -946,10 +948,15 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
         in
         List.iter chunk ~f:(fun (index, account) ->
             Ledger.set_at_index_exn ephemeral index account ) ;
+        let actions =
+          List.map chunk ~f:(fun (_, account) ->
+              let aid = Account.identifier account in
+              (aid, get_actions_for_aid (Account.identifier account)) )
+        in
         let diff =
-          Diff.create
+          Diff.create_pending
             ~source_ledger_hash:(Sparse_ledger.merkle_root ledger_openings)
-            ~changed_accounts:chunk ~command_with_action_step_flags:None
+            ~changed_accounts:chunk ~actions:(`Actions actions)
         in
         [%log debug] "Adding accounts to acc set db" ;
         Indexed_merkle_tree.In_memory.insert_batch_exn acc_set
@@ -979,8 +986,8 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger =
   result
 
 (** Distribute diff of initial accounts *)
-let distribute_genesis_diff ~logger ~config ~ledger =
-  let%bind diffs = create_genesis_diffs ~logger ledger in
+let distribute_genesis_diff ~logger ~config ~ledger ~get_actions_for_aid =
+  let%bind diffs = create_genesis_diffs ~logger ledger ~get_actions_for_aid in
   Deferred.List.iter ~how:`Sequential diffs
     ~f:(fun (diff, ledger_openings, acc_set_openings, `Target _) ->
       distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff )

@@ -60,8 +60,17 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
             let sequencer_account =
               { Account.empty with public_key = Even_PC.to_pc sequencer_key }
             in
-            List.iter [ inner_account; holder_account; sequencer_account ]
-              ~f:(fun acc ->
+            let fee_recipient_account =
+              { Account.empty with
+                public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l2
+              }
+            in
+            List.iter
+              [ inner_account
+              ; holder_account
+              ; sequencer_account
+              ; fee_recipient_account
+              ] ~f:(fun acc ->
                 L.create_new_account_exn ledger
                   (Account_id.create acc.public_key acc.token_id)
                   acc ) ;
@@ -212,10 +221,10 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
                 failwith "Unreachable"
           in
           let diff =
-            Da_layer.Diff.create
+            Da_layer.Diff.create_pending
               ~source_ledger_hash:
                 (Sparse_ledger.merkle_root old_ledger_openings)
-              ~changed_accounts ~command_with_action_step_flags:None
+              ~changed_accounts ~actions:(`Actions [])
           in
           let new_accounts_keys =
             List.filter changed_accounts ~f:(fun (index, _) ->
@@ -239,7 +248,7 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
               "(* Post the whole genesis diff with all the accounts *)"
           in
           Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
-            ~ledger:new_ledger
+            ~ledger:new_ledger ~get_actions_for_aid:(fun _aid -> [])
       in
 
       print_endline "(* Deploy contract *)" ;

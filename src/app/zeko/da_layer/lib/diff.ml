@@ -3,11 +3,47 @@ open Mina_base
 open Mina_ledger
 open Snark_params.Tick
 
+module Actions = struct
+  [%%versioned
+  module Stable = struct
+    module V1 = struct
+      type t =
+        [ `Command_with_action_step_flags of
+          User_command.Stable.V2.t * bool list
+        | `Actions of
+          (Account_id.Stable.V2.t * (Field.t[@version_asserted]) list list list)
+          list ]
+      [@@deriving yojson, sexp, compare]
+
+      let to_latest = Fn.id
+    end
+  end]
+
+  let of_legacy_command_with_action_step_flags = function
+    | Some (command, flags) ->
+        `Command_with_action_step_flags (command, flags)
+    | None ->
+        `Actions []
+end
+
 [%%versioned
 module Stable = struct
   [@@@with_top_version_tag]
 
   [@@@no_toplevel_latest_type]
+
+  module V4 = struct
+    type t =
+      { source_ledger_hash : Ledger_hash.Stable.V1.t
+      ; changed_accounts : (int * Account.Stable.V2.t) list
+      ; actions : Actions.Stable.V1.t
+      ; timestamp : Block_time.Stable.V1.t
+      ; acc_set : (Field.t[@version_asserted])
+      }
+    [@@deriving yojson, fields, sexp_of, compare]
+
+    let to_latest = Fn.id
+  end
 
   module V3 = struct
     type t =
@@ -20,7 +56,15 @@ module Stable = struct
       }
     [@@deriving yojson, fields, sexp_of, compare]
 
-    let to_latest = Fn.id
+    let to_latest t =
+      { V4.source_ledger_hash = t.source_ledger_hash
+      ; changed_accounts = t.changed_accounts
+      ; actions =
+          Actions.of_legacy_command_with_action_step_flags
+            t.command_with_action_step_flags
+      ; timestamp = t.timestamp
+      ; acc_set = t.acc_set
+      }
   end
 
   module V2 = struct
@@ -34,9 +78,11 @@ module Stable = struct
     [@@deriving yojson, fields, sexp_of, compare]
 
     let to_latest t =
-      { V3.source_ledger_hash = t.source_ledger_hash
+      { V4.source_ledger_hash = t.source_ledger_hash
       ; changed_accounts = t.changed_accounts
-      ; command_with_action_step_flags = t.command_with_action_step_flags
+      ; actions =
+          Actions.of_legacy_command_with_action_step_flags
+            t.command_with_action_step_flags
       ; timestamp = t.timestamp
       ; acc_set = Field.zero
       }
@@ -53,53 +99,63 @@ module Stable = struct
 
     let to_latest ?(timestamp = Block_time.zero) ?(acc_set = Field.zero) (t : t)
         =
-      { V3.source_ledger_hash = t.source_ledger_hash
+      { V4.source_ledger_hash = t.source_ledger_hash
       ; changed_accounts = t.changed_accounts
-      ; command_with_action_step_flags = t.command_with_action_step_flags
+      ; actions =
+          Actions.of_legacy_command_with_action_step_flags
+            t.command_with_action_step_flags
       ; timestamp
       ; acc_set
       }
   end
 end]
 
-type t =
+module Pending = struct
+  [%%versioned
+  module Stable = struct
+    [@@@with_top_version_tag]
+
+    module V1 = struct
+      type t =
+        { source_ledger_hash : Ledger_hash.Stable.V1.t
+        ; changed_accounts : (int * Account.Stable.V2.t) list
+        ; actions : Actions.Stable.V1.t
+        }
+      [@@deriving yojson, fields, sexp]
+
+      let to_latest = Fn.id
+    end
+  end]
+end
+
+type t = Stable.V4.t =
   { source_ledger_hash : Ledger_hash.t
   ; changed_accounts : (int * Account.t) list
-  ; command_with_action_step_flags : (User_command.t * bool list) option
+  ; actions : Actions.t
   ; timestamp : Block_time.t
+  ; acc_set : (Field.t[@version_asserted])
   }
 [@@deriving to_yojson, fields, sexp_of]
 
-let create ~source_ledger_hash ~changed_accounts ~command_with_action_step_flags
-    =
-  { Stable.V1.source_ledger_hash
-  ; changed_accounts
-  ; command_with_action_step_flags
-  }
-
-let changed_accounts { Stable.V1.changed_accounts; _ } = changed_accounts
-
-let source_ledger_hash { Stable.V1.source_ledger_hash; _ } = source_ledger_hash
-
-let command_with_action_step_flags
-    { Stable.V1.command_with_action_step_flags; _ } =
-  command_with_action_step_flags
+let create_pending ~source_ledger_hash ~changed_accounts ~actions =
+  { Pending.source_ledger_hash; changed_accounts; actions }
 
 let add_time_and_acc_set ~logger t ~acc_set =
-  Stable.V1.to_latest
-    ~timestamp:(Block_time.now (Block_time.Controller.basic ~logger))
-    ~acc_set t
+  { Stable.V4.source_ledger_hash = t.Pending.source_ledger_hash
+  ; changed_accounts = t.changed_accounts
+  ; actions = t.actions
+  ; timestamp = Block_time.now (Block_time.Controller.basic ~logger)
+  ; acc_set
+  }
 
 let drop_time
-    { Stable.V3.source_ledger_hash
+    { Stable.V4.source_ledger_hash
     ; changed_accounts
-    ; command_with_action_step_flags
-    ; _
+    ; actions
+    ; acc_set = _
+    ; timestamp = _
     } =
-  { Stable.V1.source_ledger_hash
-  ; changed_accounts
-  ; command_with_action_step_flags
-  }
+  { Pending.source_ledger_hash; changed_accounts; actions }
 
 let to_bigstring =
   Binable.to_bigstring (module Stable.Latest.With_top_version_tag)
@@ -123,6 +179,6 @@ let%test_unit "diff versioning" =
   let v1_serialized =
     Binable.to_bigstring (module Stable.V1.With_top_version_tag) v1
   in
-  let v3 = of_bigstring v1_serialized |> Or_error.ok_exn in
+  let v4 = of_bigstring v1_serialized |> Or_error.ok_exn in
 
-  [%test_eq: Stable.V3.t] (Stable.V1.to_latest v1) (Stable.V3.to_latest v3)
+  [%test_eq: Stable.V4.t] (Stable.V1.to_latest v1) (Stable.V4.to_latest v4)

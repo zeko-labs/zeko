@@ -14,8 +14,7 @@ let ok_exn x =
 
 module Field = struct
   open Ppx_deriving_yojson_runtime.Result
-
-  type t = Snark_params.Tick.Field.t [@@deriving sexp]
+  include Snark_params.Tick.Field
 
   let to_yojson t = `String (Field.to_string t)
 
@@ -190,6 +189,20 @@ module Archive = struct
         in
         let previous = query_actions t account in
         store_actions t account (action :: previous)
+
+  let add_raw_actions t aid actions =
+    let action =
+      { Account_update_actions.block_info = None
+      ; transaction_info = None
+      ; action_state =
+          Pickles_types.Vector.Vector_5.of_list_exn
+            [ Field.zero; Field.zero; Field.zero; Field.zero; Field.zero ]
+      ; account_update_id = 0
+      ; actions
+      }
+    in
+    let previous = query_actions t aid in
+    store_actions t aid (action :: previous)
 
   let add_events t ?(height = 0) (account_update : Account_update.t)
       transaction_info =

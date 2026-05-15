@@ -547,12 +547,11 @@ let update_inner_verification_keys =
 
            (* Distribute diff to DA layer *)
            let diff =
-             Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:diff
-               ~command_with_action_step_flags:None
+             Da_layer.Diff.create_pending ~source_ledger_hash
+               ~changed_accounts:diff ~actions:(`Actions [])
            in
            let new_accounts_keys =
-             List.filter (Da_layer.Diff.changed_accounts diff)
-               ~f:(fun (index, _) ->
+             List.filter diff.changed_accounts ~f:(fun (index, _) ->
                  Account.equal
                    (Sparse_ledger.get_exn ledger_openings index)
                    Account.empty )
@@ -1254,11 +1253,8 @@ let sync_ledger =
                Ledger.Mask.Attached.commit mask ;
 
                let () =
-                 match
-                   Da_layer.Diff.Stable.Latest.command_with_action_step_flags
-                     diff
-                 with
-                 | Some (Zkapp_command command, _) ->
+                 match diff.actions with
+                 | `Command_with_action_step_flags (Zkapp_command command, _) ->
                      Sequencer.apply_events_and_actions ledger
                        (Archive.create ~kvdb:(Ledger.Db.zeko_kvdb ledger))
                        (Zkapp_command.write_all_proofs_to_disk
@@ -1267,7 +1263,9 @@ let sync_ledger =
                             (Proof_cache_tag.create_identity_db ())
                           command )
                      |> Or_error.ok_exn
-                 | _ ->
+                 | `Command_with_action_step_flags (Signed_command _, _) ->
+                     ( (* No events nor actions to add *) )
+                 | `Actions _ ->
                      ( (* No events nor actions to add *) )
                in
 

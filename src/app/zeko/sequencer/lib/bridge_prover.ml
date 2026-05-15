@@ -80,9 +80,11 @@ type t =
   ; verification_keys : Zeko_prover.Prover.Verification_key_hashes.t
   ; preverify_l1 : preverify_fn
   ; preverify_l2 : preverify_fn
+  ; bridge_txn_fee : Currency.Fee.t
   }
 
-let create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2 =
+let create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2 ~bridge_txn_fee
+    =
   let%map verification_keys =
     Zeko_prover.Client.verification_keys provers >>| Or_error.ok_exn
   in
@@ -92,6 +94,7 @@ let create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2 =
   ; verification_keys
   ; preverify_l1
   ; preverify_l2
+  ; bridge_txn_fee
   }
 
 (** For [Finalize_cancelled_deposit] and [Finalize_withdrawal] the helper
@@ -233,7 +236,7 @@ let execute_request ?label t ~logger ~(executor : Executor.t) (key, d) =
             Account_update.Fee_payer.make
               ~body:
                 { public_key = Signer_service.Signer.public_key executor.signer
-                ; fee = Currency.Fee.of_mina_string_exn "0.1"
+                ; fee = t.bridge_txn_fee
                 ; valid_until = None
                 ; nonce = Account.Nonce.zero
                 }

@@ -27,6 +27,7 @@ module Sequencer = struct
       ; l1_config : Utils.Slot.l1_config
       ; slot_acceptance : Time.Span.t
       ; commit_validity_period : Global_slot_span.t
+      ; commit_fee : Currency.Fee.t
       }
   end
 
@@ -176,7 +177,7 @@ module Sequencer = struct
                   ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
                   ~archive_uri:config.archive_uri ~l1_config:config.l1_config
                   ~commit_validity_period:config.commit_validity_period
-                  commit_witness
+                  ~commit_fee:config.commit_fee commit_witness
               in
               let%bind _hash =
                 Executor.send_zkapp_command ~logger executor command
@@ -488,18 +489,18 @@ module Sequencer = struct
                 (index, L.get_at_index_exn l index) )
           in
           let diff =
-            Da_layer.Diff.create
+            Da_layer.Diff.create_pending
               ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
               ~changed_accounts
-              ~command_with_action_step_flags:
-                (Some
-                   ( User_command.read_all_proofs_from_disk command
-                   , match command with
-                     | Signed_command _ ->
-                         []
-                     | Zkapp_command command ->
-                         Zkapp_command.all_account_updates_list command
-                         |> List.map ~f:(fun _ -> true) ) )
+              ~actions:
+                (`Command_with_action_step_flags
+                  ( User_command.read_all_proofs_from_disk command
+                  , match command with
+                    | Signed_command _ ->
+                        []
+                    | Zkapp_command command ->
+                        Zkapp_command.all_account_updates_list command
+                        |> List.map ~f:(fun _ -> true) ) )
           in
           let new_accounts_keys =
             List.filter changed_accounts ~f:(fun (index, _) ->
@@ -577,9 +578,9 @@ module Sequencer = struct
             in
             let diff =
               (* FIXME: add fee transfer command to DA *)
-              Da_layer.Diff.create
+              Da_layer.Diff.create_pending
                 ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
-                ~changed_accounts ~command_with_action_step_flags:None
+                ~changed_accounts ~actions:(`Actions [])
             in
             let new_accounts_keys =
               List.filter changed_accounts ~f:(fun (index, _) ->
@@ -800,11 +801,11 @@ module Sequencer = struct
 
     [%log info] "Init root: %s" Ledger_hash.(to_decimal_string (get_root t)) ;
 
-    let%bind () =
+    let%bind inserted_genesis =
       match source with
       | `Genesis ->
           [%log info] "Syncing from genesis" ;
-          return ()
+          return false
       | `Specific ledger_hash ->
           [%log info] "Syncing from specific ledger hash: %s"
             (Ledger_hash.to_decimal_string ledger_hash) ;
@@ -813,21 +814,30 @@ module Sequencer = struct
           let ledger = L.of_database t.ledger in
           let%bind diffs =
             Da_layer.Client.create_genesis_diffs ~logger ledger
+              ~get_actions_for_aid:(fun aid ->
+                Archive.query_actions t.archive aid
+                |> List.map ~f:(fun x -> List.map x.actions ~f:Array.to_list) )
           in
-          let%bind () =
-            Deferred.List.iteri ~how:`Sequential diffs
+          let%bind inserted_genesis =
+            Deferred.List.foldi ~init:false diffs
               ~f:(fun
                    i
+                   acc
                    ( diff
                    , ledger_openings
                    , acc_set_openings
                    , `Target target_ledger_hash )
                  ->
-                Da_layer.Client.enqueue_diff t.da_client ~diff ~ledger_openings
-                  ~acc_set_openings ~target_ledger_hash ~genesis:(i = 0) )
+                let genesis = i = 0 in
+                let%map () =
+                  Da_layer.Client.enqueue_diff t.da_client ~diff
+                    ~ledger_openings ~acc_set_openings ~target_ledger_hash
+                    ~genesis
+                in
+                genesis || acc )
           in
           [%log info] "Enqueued genesis diff" ;
-          return ()
+          return inserted_genesis
     in
 
     (* apply diffs from DA layer *)
@@ -851,9 +861,7 @@ module Sequencer = struct
           (* Apply accounts diff *)
           let mask = L.of_database t.ledger in
           let ledger_openings =
-            Da_layer.Client.get_ledger_openings
-              ~diff:(Da_layer.Diff.drop_time diff)
-              ~ledger:mask
+            Da_layer.Client.get_ledger_openings ~diff ~ledger:mask
           in
           let changed_accounts =
             Da_layer.Diff.Stable.Latest.changed_accounts diff
@@ -873,9 +881,8 @@ module Sequencer = struct
               () ) ;
 
           let acc_set_openings =
-            Da_layer.Client.get_acc_set_openings ~logger
-              ~diff:(Da_layer.Diff.drop_time diff)
-              ~ledger_openings ~imt:t.imt
+            Da_layer.Client.get_acc_set_openings ~logger ~diff ~ledger_openings
+              ~imt:t.imt
           in
 
           (* Store diff to DA client *)
@@ -884,20 +891,21 @@ module Sequencer = struct
               ~diff:(Da_layer.Diff.drop_time diff)
               ~ledger_openings ~acc_set_openings
               ~target_ledger_hash:(L.Db.merkle_root t.ledger)
-              ~genesis:(current_chunk = 0 && current_diff = 0)
+              ~genesis:
+                ((not inserted_genesis) && current_chunk = 0 && current_diff = 0)
           in
 
           (* Add events and actions *)
           let result =
-            match
-              Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff
-            with
-            | Some (Zkapp_command command, _) ->
+            match diff.actions with
+            | `Command_with_action_step_flags (Zkapp_command command, _) ->
                 apply_events_and_actions t.ledger t.archive
                   (Zkapp_command.write_all_proofs_to_disk
                      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
                      ~proof_cache_db:t.merger_ctx.proof_cache_db command )
-            | _ ->
+            | `Command_with_action_step_flags (Signed_command _, _) ->
+                Ok ( (* No events or actions in signed command *) )
+            | `Actions _actions ->
                 Ok ( (* No events nor actions to add *) )
           in
           return
@@ -1026,7 +1034,7 @@ module Sequencer = struct
       ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
       ~(signer : Signer_service.Signer.t) ~deposit_delay_blocks ~mq_host
       ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
-      ~commit_validity_period =
+      ~commit_validity_period ~commit_fee ~bridge_txn_fee =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let db_dir =
@@ -1058,6 +1066,7 @@ module Sequencer = struct
         ; l1_config
         ; slot_acceptance
         ; commit_validity_period
+        ; commit_fee
         }
     in
     let%bind db_pool = Db.create_and_migrate ~postgres_uri ~logger in
@@ -1204,6 +1213,7 @@ module Sequencer = struct
     in
     let%bind bridge_prover =
       Bridge_prover.create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2
+        ~bridge_txn_fee
     in
 
     let t =
@@ -1235,6 +1245,7 @@ module Sequencer = struct
         ~l1_uri:config.l1_uri ~archive ~db_pool
         ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
+        ~commit_fee
       >>| Or_error.ok_exn
     in
     let () =
