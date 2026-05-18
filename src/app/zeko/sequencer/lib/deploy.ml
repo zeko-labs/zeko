@@ -367,7 +367,8 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
     ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~(outer_kp : Keypair.t)
     ~(holder_kp : Keypair.t) ~(token_holder_kp : Keypair.t)
     ~(initial_ledger : L.t) ~account_set_hash
-    ~(account_creation_fee : Currency.Fee.t) ~pause_key ~sequencer ~da_key () =
+    ~(account_creation_fee : Currency.Fee.t) ~pause_key ~sequencer ~da_key
+    ~prefund_amount () =
   let%map ( `Outer outer_update
           , `Holder holder_update
           , `Token_owner token_owner_update ) =
@@ -393,6 +394,7 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
           public_key = Public_key.compress holder_kp.public_key
         ; implicit_account_creation_fee = false
         ; update = holder_update
+        ; balance_change = Currency.Amount.Signed.of_unsigned prefund_amount
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
@@ -419,7 +421,9 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
             Currency.Amount.(
               let ( + ) a b = Currency.Fee.add a b |> Option.value_exn in
               account_creation_fee + account_creation_fee + account_creation_fee
-              |> of_fee |> Signed.of_unsigned |> Signed.negate)
+              |> of_fee
+              |> Currency.Amount.add prefund_amount
+              |> Option.value_exn |> Signed.of_unsigned |> Signed.negate)
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
