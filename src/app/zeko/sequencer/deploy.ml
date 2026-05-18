@@ -12,7 +12,8 @@ let constraint_constants = Zeko_constants.constraint_constants
 let print_endline = Core.print_endline
 
 let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-    ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee () =
+    ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee ~prefund_account ()
+    =
   let logger = Logger.create () in
   let sender_keypair =
     Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
@@ -65,39 +66,41 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
                 public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l2
               }
             in
-            List.iter
+            let genesis_accounts =
               [ inner_account
               ; holder_account
               ; sequencer_account
               ; fee_recipient_account
-              ] ~f:(fun acc ->
+              ]
+              @ ( match prefund_account with
+                | Some (signer, amount) ->
+                    [ { Account.empty with
+                        public_key = signer
+                      ; balance = amount
+                      }
+                    ]
+                | None ->
+                    [] )
+              @
+              match faucet_aid with
+              | Some faucet_aid ->
+                  [ { Account.empty with
+                      public_key = Account_id.public_key faucet_aid
+                    ; token_id = Account_id.token_id faucet_aid
+                    ; balance = Currency.Balance.max_int
+                    }
+                  ]
+              | None ->
+                  []
+            in
+            List.iter genesis_accounts ~f:(fun acc ->
                 L.create_new_account_exn ledger
                   (Account_id.create acc.public_key acc.token_id)
                   acc ) ;
+
             let tids =
-              Account_id.derive_token_id ~owner:Zeko_constants.inner_account_id
-              :: Account_id.derive_token_id
-                   ~owner:
-                     ( Account_id.of_public_key
-                     @@ Public_key.decompress_exn holder_account.public_key )
-              :: Account_id.derive_token_id
-                   ~owner:
-                     ( Account_id.of_public_key
-                     @@ Public_key.decompress_exn sequencer_account.public_key
-                     )
-              :: Account_id.derive_token_id
-                   ~owner:
-                     ( Account_id.of_public_key
-                     @@ Public_key.decompress_exn
-                          fee_recipient_account.public_key )
-              ::
-              ( match faucet_aid with
-              | None ->
-                  []
-              | Some faucet_aid ->
-                  L.create_new_account_exn ledger faucet_aid
-                    (Account.create faucet_aid Currency.Balance.max_int) ;
-                  [ Account_id.derive_token_id ~owner:faucet_aid ] )
+              List.map genesis_accounts ~f:(fun acc ->
+                  Account_id.derive_token_id ~owner:(Account.identifier acc) )
             in
             printf "Creating imt\n%!" ;
             let imt, _witnesses =
@@ -190,6 +193,10 @@ let run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
                    List.sort da_keys ~compare:Public_key.Compressed.compare
                ; quorum = Field.of_int da_quorum
                } )
+          ~prefund_amount:
+            ( Option.map prefund_account ~f:snd
+            |> Option.value ~default:Currency.Balance.zero
+            |> Currency.Balance.to_amount )
           ()
       in
 
@@ -300,6 +307,12 @@ let deploy_all =
        and account_creation_fee =
          flag "--account-creation-fee" (required string)
            ~doc:"float Account creation fee in mina"
+       and prefund_account =
+         flag "--prefund-account" (optional string)
+           ~doc:"Prefund the signer account with the given amount of mina"
+       and prefund_amount =
+         flag "--prefund-amount" (optional string)
+           ~doc:"float Amount of mina to prefund the signer account with"
        in
        let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
        let da_nodes =
@@ -333,9 +346,23 @@ let deploy_all =
        let account_creation_fee =
          Currency.Fee.of_mina_string_exn account_creation_fee
        in
+       let prefund_account =
+         match (prefund_account, prefund_amount) with
+         | Some signer, Some amount ->
+             Some
+               ( Public_key.of_base58_check_decompress_exn signer
+               , Currency.Balance.of_mina_string_exn amount )
+         | None, None ->
+             None
+         | _ ->
+             failwith
+               "Either both or neither of prefund-signer and prefund-amount \
+                must be provided"
+       in
        let l1_uri = Uri.of_string l1_uri in
        run ~l1_uri ~sk ~ledger_input ~faucet_aid ~da_nodes ~pause_key
-         ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee ) )
+         ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee
+         ~prefund_account ) )
 
 let deploy_token_owner =
   ( "deploy-token-owner"

@@ -523,7 +523,7 @@ module Sequencer_spec = struct
             ~nonce ~initial_ledger:ephemeral_ledger
             ~account_creation_fee:constraint_constants.account_creation_fee
             ~account_set_hash ~pause_key:sequencer_pk ~sequencer:sequencer_pk
-            ~da_key ()
+            ~da_key ~prefund_amount:Currency.Amount.zero ()
         in
         let%bind _ =
           Gql_client.send_zkapp gql_uri
