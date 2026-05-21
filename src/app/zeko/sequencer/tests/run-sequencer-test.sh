@@ -92,23 +92,32 @@ SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
-if [ "$TEST_TARGET" = "explorer-e2e" ]; then
-  TEST_DUNE_TARGET="src/app/zeko/sequencer/explorer/tests/explorer_e2e_gherkin_tests.exe"
-else
-  TEST_DUNE_TARGET="src/app/zeko/sequencer/tests/sequencer_test.exe"
-  if [ "$MODE" = "fake" ]; then
-    TEST_DUNE_TARGET="src/app/zeko/sequencer/tests/sequencer_test_fake.exe"
+test_binary() {
+  if [ "$TEST_TARGET" = "explorer-e2e" ]; then
+    echo "$SEQUENCER_BUILD_ROOT/explorer/tests/explorer_e2e_gherkin_tests.exe"
+  elif [ "$MODE" = "fake" ]; then
+    echo "$SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe"
+  else
+    echo "$SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe"
   fi
-fi
+}
 
-opam exec -- env -u DUNE_RPC dune build \
-  src/app/zeko/sequencer/tests/testing_ledger/run.exe \
-  src/app/zeko/da_layer/cli.exe \
-  src/app/zeko/sequencer/cli.exe \
-  src/app/zeko/sequencer/prover/cli.exe \
-  src/app/zeko/sequencer/prover/cli_fake.exe \
-  src/app/zeko/signer/cli.exe \
-  "$TEST_DUNE_TARGET"
+ensure_explorer_e2e_build() {
+  if [ "$TEST_TARGET" != "explorer-e2e" ]; then
+    return
+  fi
+
+  opam exec -- env -u DUNE_RPC dune build \
+    src/app/zeko/sequencer/tests/testing_ledger/run.exe \
+    src/app/zeko/da_layer/cli.exe \
+    src/app/zeko/sequencer/cli.exe \
+    src/app/zeko/sequencer/prover/cli.exe \
+    src/app/zeko/sequencer/prover/cli_fake.exe \
+    src/app/zeko/signer/cli.exe \
+    src/app/zeko/sequencer/explorer/tests/explorer_e2e_gherkin_tests.exe
+}
+
+ensure_explorer_e2e_build
 
 export ZEKO_SIGNATURE_KIND=zeko-testnet
 export ZEKO_CIRCUITS_CONFIG=test
@@ -298,13 +307,13 @@ echo "All services started successfully"
 if [ "$TEST_TARGET" = "explorer-e2e" ]; then
   run "explorer-e2e" \
     env ZEKO_CIRCUITS_MODE=$MODE \
-    "$SEQUENCER_BUILD_ROOT/explorer/tests/explorer_e2e_gherkin_tests.exe"
+    "$(test_binary)"
 elif [ "$MODE" = "fake" ]; then
   run "sequencer-test" \
     env ZEKO_CIRCUITS_MODE=$MODE \
-    $SEQUENCER_BUILD_ROOT/tests/sequencer_test_fake.exe "${PROVERS[@]}"
+    "$(test_binary)" "${PROVERS[@]}"
 else
   run "sequencer-test" \
     env ZEKO_CIRCUITS_MODE=$MODE \
-    $SEQUENCER_BUILD_ROOT/tests/sequencer_test.exe "${PROVERS[@]}"
+    "$(test_binary)" "${PROVERS[@]}"
 fi

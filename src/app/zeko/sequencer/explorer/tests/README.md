@@ -98,6 +98,11 @@ existing sequencer integration tests. A later follow-up can move this to a
 fully external `run.exe` process once the bootstrap/deploy path is ready for
 that shape.
 
+Unlike the shared sequencer harness path, the `explorer-e2e` mode in
+`run-sequencer-test.sh` still builds its own dedicated test executable and
+service binaries because the standalone `Explorer E2E` workflow does not run a
+separate prebuild step first.
+
 Run it with:
 
 ```bash
