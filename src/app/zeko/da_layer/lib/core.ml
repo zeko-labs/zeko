@@ -160,19 +160,26 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
         Ok (Map.set acc ~key:account_id ~data:action_state) )
   in
   let%bind.Result () =
-    List.fold_result diff.changed_accounts ~init:() ~f:(fun _ (_, account) ->
-        let account_id = Account.identifier account in
-        let%bind.Result target_account = get_account target_ledger account_id in
-        let target_action_state = get_action_state target_account in
-        let applied_action_state =
-          Map.find_exn applied_action_states account_id
-        in
-        if Field.equal target_action_state applied_action_state then Ok ()
-        else
-          Error
-            (Error.create "Action state mismatch"
-               (account_id, target_action_state, applied_action_state)
-               [%sexp_of: Account_id.t * Field.t * Field.t] ) )
+    match network_id with
+    | Testnet ->
+        Ok ()
+    | Mainnet | Other_network _ ->
+        List.fold_result diff.changed_accounts ~init:()
+          ~f:(fun _ (_, account) ->
+            let account_id = Account.identifier account in
+            let%bind.Result target_account =
+              get_account target_ledger account_id
+            in
+            let target_action_state = get_action_state target_account in
+            let applied_action_state =
+              Map.find_exn applied_action_states account_id
+            in
+            if Field.equal target_action_state applied_action_state then Ok ()
+            else
+              Error
+                (Error.create "Action state mismatch"
+                   (account_id, target_action_state, applied_action_state)
+                   [%sexp_of: Account_id.t * Field.t * Field.t] ) )
   in
 
   (* 6 *)

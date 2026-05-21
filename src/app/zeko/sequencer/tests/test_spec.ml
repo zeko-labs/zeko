@@ -518,12 +518,19 @@ module Sequencer_spec = struct
           printf "Deplying with DA key: %s\n%!" (Field.to_string da_key) ;
           Deploy.deploy_command_exn
             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-            ~signer:signer_keypair ~outer_kp ~holder_kp ~token_holder_kp
+            ~signer_pk:(Public_key.compress signer_keypair.public_key)
+            ~outer_pk:(Public_key.compress outer_kp.public_key)
+            ~holder_pk:(Public_key.compress holder_kp.public_key)
+            ~token_holder_pk:(Public_key.compress token_holder_kp.public_key)
             ~fee:(Currency.Fee.of_mina_int_exn 1)
             ~nonce ~initial_ledger:ephemeral_ledger
             ~account_creation_fee:constraint_constants.account_creation_fee
             ~account_set_hash ~pause_key:sequencer_pk ~sequencer:sequencer_pk
             ~da_key ~prefund_amount:Currency.Amount.zero ()
+          >>| fun command ->
+          Utils.sign_zkapp_command
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 command
+            [ outer_kp; holder_kp; token_holder_kp; signer_keypair ]
         in
         let%bind _ =
           Gql_client.send_zkapp gql_uri
