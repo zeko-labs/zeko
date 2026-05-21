@@ -789,6 +789,41 @@ let update_permissions =
            in
            return (write_signed_multisig_updates ?output [ signed_update ]) ) )
 
+let sign_multisig_update =
+  ( "sign-multisig-update"
+  , Command.basic ~summary:"Sign a multisig update body JSON file"
+      (let%map_open.Command output =
+         flag "--output" (optional string)
+           ~doc:"string Output signed update JSON file"
+       and kind =
+         flag "--kind" (required string)
+           ~doc:
+             "string Multisig update kind: Outer, Bridge_holder_l1_enabled, \
+              Bridge_holder_l1_disabled, or Bridge_token_owner_l1"
+       and body_file =
+         flag "--body-file" (required string)
+           ~doc:"string Account_update.Body.t JSON file to sign"
+       in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let signer =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+         in
+         let kind =
+           match
+             Deploy.Multisig_update_kind.of_yojson (`List [ `String kind ])
+           with
+           | Ok kind ->
+               kind
+           | Error err ->
+               failwithf "Failed to parse multisig update kind: %s" err ()
+         in
+         let body =
+           load_json_file body_file [%of_yojson: Account_update.Body.t]
+         in
+         let signed_update = Deploy.sign_multisig_update ~signer ~kind ~body in
+         write_signed_multisig_updates ?output [ signed_update ] ) )
+
 let multisig_submit =
   ( "multisig-submit"
   , Command.async
@@ -1303,6 +1338,7 @@ let () =
     ; update_inner_verification_keys
     ; update_da_key
     ; update_permissions
+    ; sign_multisig_update
     ; multisig_submit
     ; set_pause
     ; migrate
