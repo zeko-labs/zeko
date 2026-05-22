@@ -79,7 +79,7 @@ cleanup() {
     kill_process_tree KILL "$pid"
   done
 
-  rm -rf "$TMP_DIR"
+  [ -z "${TMP_DIR:-}" ] || rm -rf "$TMP_DIR"
   docker rm -f pg-sequencer 2>/dev/null
   docker rm -f rabbitmq-sequencer 2>/dev/null
   exit ${exit_status:-0}

@@ -46,14 +46,6 @@ module Make (Schema : Graphql_intf.Schema) = struct
           `Null
       | `Int i ->
           `Int i
-      | `Intlit s -> (
-          match int_of_string s with
-          | i ->
-              `Int i
-          | exception Failure _ ->
-              failwith
-                (Printf.sprintf
-                   "GraphQL default integer literal is out of range: %s" s ) )
       | `Float f ->
           `Float f
       | `String s ->
@@ -62,12 +54,6 @@ module Make (Schema : Graphql_intf.Schema) = struct
           `Bool b
       | `List xs ->
           `List (List.map const_value_of_json xs)
-      | `Tuple xs ->
-          `List (List.map const_value_of_json xs)
-      | `Variant (name, _) ->
-          failwith
-            (Printf.sprintf
-               "GraphQL default values do not support variant JSON: %s" name )
       | `Assoc fields ->
           `Assoc
             (List.map (fun (name, value) -> (name, const_value_of_json value)) fields)
