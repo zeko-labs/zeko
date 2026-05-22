@@ -240,6 +240,7 @@ let () =
                   (Mina_numbers.Global_slot_span.of_int 10)
                 ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
                 ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
+                ()
             in
             [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
               final_ledger_hash ;
@@ -343,7 +344,8 @@ let () =
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10)
               ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
-              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
+              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
+              () )
       in
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
@@ -475,7 +477,8 @@ let () =
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10)
               ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
-              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
+              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
+              () )
       in
 
       print_endline "(* Check that all da nodes are synced *)" ;
@@ -583,7 +586,8 @@ let () =
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10)
               ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
-              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
+              ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
+              () )
       in
 
       print_endline "(* Check that after restart it recommited *)" ;

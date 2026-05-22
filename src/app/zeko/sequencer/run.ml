@@ -40,7 +40,7 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
           ~commitment_period_sec:commitment_period ~deposit_delay_blocks
           ?nats_url ~signer
           ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db
-          ~l1_config ~commit_validity_period ~commit_fee ~bridge_txn_fee )
+          ~l1_config ~commit_validity_period ~commit_fee ~bridge_txn_fee () )
   in
 
   Sequencer.run_committer sequencer ;

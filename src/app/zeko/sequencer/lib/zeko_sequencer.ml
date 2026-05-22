@@ -1167,7 +1167,7 @@ module Sequencer = struct
       ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
       ~(signer : Signer_service.Signer.t) ~deposit_delay_blocks ~mq_host
       ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
-      ~commit_validity_period ~commit_fee ~bridge_txn_fee =
+      ~commit_validity_period ~commit_fee ~bridge_txn_fee () =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let db_dir =

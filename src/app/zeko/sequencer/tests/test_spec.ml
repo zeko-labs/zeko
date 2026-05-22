@@ -564,7 +564,8 @@ module Sequencer_spec = struct
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
             ~l1_config ~commit_validity_period ~checkpoints_dir
             ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
-            ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
+            ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
+            () )
     in
     let l1_executor =
       Executor.create ~kind:(`L1 gql_uri)
