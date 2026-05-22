@@ -357,7 +357,7 @@ let publish_target t job ~current_source ~index ~target_ledger_hash =
   if
     not
       (Ledger_hash.equal
-         (Da_layer.Diff.Stable.V3.source_ledger_hash diff)
+         (Da_layer.Diff.Stable.V4.source_ledger_hash diff)
          current_source )
   then
     Deferred.return

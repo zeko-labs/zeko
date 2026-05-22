@@ -127,8 +127,8 @@ let publish_jetstream_message label client
 let sample_diff ?(source_ledger_hash = Ledger_hash.empty_hash) () =
   Explorer_events.build_live_diff ~logger:(Logger.create ())
     ~diff:
-      (Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:[]
-         ~command_with_action_step_flags:None )
+      (Da_layer.Diff.create_pending ~source_ledger_hash ~changed_accounts:[]
+         ~actions:(`Actions []) )
     ~acc_set_root:Snark_params.Tick.Field.zero
 
 let test_service nats_client : Explorer_backfill_service.t =

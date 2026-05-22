@@ -76,8 +76,8 @@ let add_job (service : Explorer_backfill_service.t)
 let sample_diff ?(source_ledger_hash = Ledger_hash.empty_hash) () =
   Explorer_events.build_live_diff ~logger:(Logger.create ())
     ~diff:
-      (Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:[]
-         ~command_with_action_step_flags:None )
+      (Da_layer.Diff.create_pending ~source_ledger_hash ~changed_accounts:[]
+         ~actions:(`Actions []) )
     ~acc_set_root:Snark_params.Tick.Field.zero
 
 let sse_request body =
@@ -276,7 +276,7 @@ let%test_unit
     "Transaction events expose diff fields and NATS dedup header" ;
   let target_ledger_hash = Ledger_hash.empty_hash in
   let diff = sample_diff () in
-  let diff_json = Da_layer.Diff.Stable.V3.to_yojson diff in
+  let diff_json = Da_layer.Diff.Stable.V4.to_yojson diff in
   let message =
     Explorer_events.build_transaction_message
       ~kind:Explorer_events.Transaction_kind.Sync_replay ~target_ledger_hash

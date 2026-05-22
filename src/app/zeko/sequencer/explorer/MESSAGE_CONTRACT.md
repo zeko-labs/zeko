@@ -60,10 +60,11 @@ Payload:
       "account": "<Account.to_yojson account>"
     }
   ],
-  "command_with_action_step_flags": "<raw DA diff command field>",
+  "command_with_action_step_flags": "<legacy command tuple when present>",
+  "actions": "<raw DA diff actions field>",
   "genesis": false,
   "diff": {
-    "...": "Da_layer.Diff.Stable.V3.to_yojson diff"
+    "...": "Da_layer.Diff.Stable.V4.to_yojson diff"
   }
 }
 ```
@@ -81,10 +82,11 @@ Fields:
   without a command.
 - `changed_accounts`: post-state accounts affected by the diff, normalized as
   `{index, account}` objects.
-- `command_with_action_step_flags`: raw DA-layer command field, retained for
-  consumers that need the exact OCaml-derived encoding.
+- `command_with_action_step_flags`: legacy command tuple projection, retained for
+  consumers that still read the previous command field.
+- `actions`: raw DA-layer actions field from the current diff format.
 - `genesis`: `true` when replaying the first diff from the genesis source hash.
-- `diff`: DA-layer diff encoded with `Da_layer.Diff.Stable.V3.to_yojson`.
+- `diff`: DA-layer diff encoded with `Da_layer.Diff.Stable.V4.to_yojson`.
 
 ## Finality
 

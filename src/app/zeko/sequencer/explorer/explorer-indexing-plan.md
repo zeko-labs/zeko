@@ -89,13 +89,13 @@ Fields:
 Encoding rules:
 
 - `source_ledger_hash`, `timestamp`, `acc_set`, and
-  `command_with_action_step_flags` come from the JSON shape derived from
-  `Da_layer.Diff.Stable.V3`.
+  `actions` come from the JSON shape derived from
+  `Da_layer.Diff.Stable.V4`.
 - `command` is a normalized envelope with `type`, `raw`, and
   `action_step_flags`, or `null` when the diff has no command.
 - `changed_accounts` is normalized to `{index, account}` objects.
 - `diff` retains the existing JSON shape derived from
-  `Da_layer.Diff.Stable.V3`.
+  `Da_layer.Diff.Stable.V4`.
 - `target_ledger_hash` is the post-diff ledger hash passed to `Da_layer.Client.enqueue_diff`.
 - `genesis` matches the flag passed to `Da_layer.Client.enqueue_diff`.
 

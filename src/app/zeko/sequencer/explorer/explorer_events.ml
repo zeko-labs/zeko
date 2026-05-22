@@ -354,11 +354,11 @@ let connect_and_ensure_jetstream_strict ?timeout ~logger uri =
 let assoc_field_exn fields name =
   List.Assoc.find_exn fields name ~equal:String.equal
 
-let transaction_command_payload command_with_action_step_flags =
-  match command_with_action_step_flags with
-  | None ->
+let transaction_command_payload actions =
+  match actions with
+  | `Actions _ ->
       `Null
-  | Some (command, action_step_flags) ->
+  | `Command_with_action_step_flags (command, action_step_flags) ->
       let command_type, command_json =
         match command with
         | User_command.Signed_command command ->
@@ -382,8 +382,18 @@ let changed_accounts_payload changed_accounts =
            ; ("account", Account.Stable.V2.to_yojson account)
            ] ) )
 
+let legacy_command_with_action_step_flags_payload actions =
+  match actions with
+  | `Actions _ ->
+      `Null
+  | `Command_with_action_step_flags (command, action_step_flags) ->
+      `List
+        [ User_command.Stable.V2.to_yojson command
+        ; `List (List.map action_step_flags ~f:(fun flag -> `Bool flag))
+        ]
+
 let build_transaction_message ~kind ~target_ledger_hash ~genesis ~diff =
-  let diff_json = Da_layer.Diff.Stable.V3.to_yojson diff in
+  let diff_json = Da_layer.Diff.Stable.V4.to_yojson diff in
   let diff_fields =
     match diff_json with
     | `Assoc fields ->
@@ -391,9 +401,7 @@ let build_transaction_message ~kind ~target_ledger_hash ~genesis ~diff =
     | _ ->
         []
   in
-  let command_with_action_step_flags =
-    Da_layer.Diff.Stable.V3.command_with_action_step_flags diff
-  in
+  let actions = Da_layer.Diff.Stable.V4.actions diff in
   { subject = Subject.transactions
   ; headers = nats_msg_id_headers target_ledger_hash
   ; payload =
@@ -403,13 +411,13 @@ let build_transaction_message ~kind ~target_ledger_hash ~genesis ~diff =
         ; ("target_ledger_hash", Ledger_hash.to_yojson target_ledger_hash)
         ; ("timestamp", assoc_field_exn diff_fields "timestamp")
         ; ("acc_set", assoc_field_exn diff_fields "acc_set")
-        ; ( "command"
-          , transaction_command_payload command_with_action_step_flags )
+        ; ("command", transaction_command_payload actions)
         ; ( "changed_accounts"
           , changed_accounts_payload
-              (Da_layer.Diff.Stable.V3.changed_accounts diff) )
+              (Da_layer.Diff.Stable.V4.changed_accounts diff) )
         ; ( "command_with_action_step_flags"
-          , assoc_field_exn diff_fields "command_with_action_step_flags" )
+          , legacy_command_with_action_step_flags_payload actions )
+        ; ("actions", assoc_field_exn diff_fields "actions")
         ; ("genesis", `Bool genesis)
         ; ("diff", diff_json)
         ]

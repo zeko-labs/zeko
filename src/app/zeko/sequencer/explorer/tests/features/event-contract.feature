@@ -9,6 +9,7 @@ Feature: Explorer Event Contract
     And the payload includes "target_ledger_hash"
     And the payload includes "changed_accounts"
     And the payload includes "command"
+    And the payload includes "actions"
     And the headers include "Nats-Msg-Id"
 
   Scenario: Finality events include level, ledger hashes, and NATS dedup header
