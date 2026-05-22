@@ -3,7 +3,7 @@ open Mina_base
 
 module Key_value = struct
   type _ t =
-    | Diff : (Ledger_hash.t * Diff.Stable.V3.t) t
+    | Diff : (Ledger_hash.t * Diff.Stable.V4.t) t
     | Migration : (unit * int) t
 
   let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =

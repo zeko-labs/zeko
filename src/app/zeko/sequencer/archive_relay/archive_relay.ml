@@ -303,12 +303,12 @@ let sync_archive (t : t) ~hash =
       in
       List.iter changed_accounts ~f:(fun (index, account) ->
           Ledger.set_at_index_exn ledger index account ) ;
-      match Da_layer.Diff.Stable.Latest.command_with_action_step_flags diff with
-      | None ->
+      match diff.actions with
+      | `Actions _ ->
           [%log info] "No command with action step flags, committing ledger" ;
           Ledger.commit ledger ;
           return ()
-      | Some (command, _) -> (
+      | `Command_with_action_step_flags (command, _) -> (
           let command =
             User_command.write_all_proofs_to_disk ~signature_kind:t.chain
               ~proof_cache_db:t.proof_cache_db command

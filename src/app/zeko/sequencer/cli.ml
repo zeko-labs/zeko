@@ -547,12 +547,11 @@ let update_inner_verification_keys =
 
            (* Distribute diff to DA layer *)
            let diff =
-             Da_layer.Diff.create ~source_ledger_hash ~changed_accounts:diff
-               ~command_with_action_step_flags:None
+             Da_layer.Diff.create_pending ~source_ledger_hash
+               ~changed_accounts:diff ~actions:(`Actions [])
            in
            let new_accounts_keys =
-             List.filter (Da_layer.Diff.changed_accounts diff)
-               ~f:(fun (index, _) ->
+             List.filter diff.changed_accounts ~f:(fun (index, _) ->
                  Account.equal
                    (Sparse_ledger.get_exn ledger_openings index)
                    Account.empty )
@@ -789,6 +788,41 @@ let update_permissions =
                ~kind:Deploy.Multisig_update_kind.Outer ~body:body.body
            in
            return (write_signed_multisig_updates ?output [ signed_update ]) ) )
+
+let sign_multisig_update =
+  ( "sign-multisig-update"
+  , Command.basic ~summary:"Sign a multisig update body JSON file"
+      (let%map_open.Command output =
+         flag "--output" (optional string)
+           ~doc:"string Output signed update JSON file"
+       and kind =
+         flag "--kind" (required string)
+           ~doc:
+             "string Multisig update kind: Outer, Bridge_holder_l1_enabled, \
+              Bridge_holder_l1_disabled, or Bridge_token_owner_l1"
+       and body_file =
+         flag "--body-file" (required string)
+           ~doc:"string Account_update.Body.t JSON file to sign"
+       in
+       fun () ->
+         let sk = Sys.getenv_exn "MINA_PRIVATE_KEY" in
+         let signer =
+           Keypair.of_private_key_exn @@ Private_key.of_base58_check_exn sk
+         in
+         let kind =
+           match
+             Deploy.Multisig_update_kind.of_yojson (`List [ `String kind ])
+           with
+           | Ok kind ->
+               kind
+           | Error err ->
+               failwithf "Failed to parse multisig update kind: %s" err ()
+         in
+         let body =
+           load_json_file body_file [%of_yojson: Account_update.Body.t]
+         in
+         let signed_update = Deploy.sign_multisig_update ~signer ~kind ~body in
+         write_signed_multisig_updates ?output [ signed_update ] ) )
 
 let multisig_submit =
   ( "multisig-submit"
@@ -1254,11 +1288,8 @@ let sync_ledger =
                Ledger.Mask.Attached.commit mask ;
 
                let () =
-                 match
-                   Da_layer.Diff.Stable.Latest.command_with_action_step_flags
-                     diff
-                 with
-                 | Some (Zkapp_command command, _) ->
+                 match diff.actions with
+                 | `Command_with_action_step_flags (Zkapp_command command, _) ->
                      Sequencer.apply_events_and_actions ledger
                        (Archive.create ~kvdb:(Ledger.Db.zeko_kvdb ledger))
                        (Zkapp_command.write_all_proofs_to_disk
@@ -1267,7 +1298,9 @@ let sync_ledger =
                             (Proof_cache_tag.create_identity_db ())
                           command )
                      |> Or_error.ok_exn
-                 | _ ->
+                 | `Command_with_action_step_flags (Signed_command _, _) ->
+                     ( (* No events nor actions to add *) )
+                 | `Actions _ ->
                      ( (* No events nor actions to add *) )
                in
 
@@ -1305,6 +1338,7 @@ let () =
     ; update_inner_verification_keys
     ; update_da_key
     ; update_permissions
+    ; sign_multisig_update
     ; multisig_submit
     ; set_pause
     ; migrate

@@ -108,6 +108,7 @@ module Transaction_spec = struct
     ; sender : Keypair.t * Account_nonce.t
     ; receiver : Public_key.Compressed.t
     ; amount : Currency.Amount.t
+    ; actions : Field.t list list option
     }
   [@@deriving sexp]
 
@@ -152,7 +153,15 @@ module Transaction_spec = struct
     let%bind fee = gen_fee () in
     let%bind amount = gen_amount () in
     let nonces = Map.set nonces ~key:sender ~data:(Account_nonce.succ nonce) in
-    let spec = { fee; amount; receiver; sender = (sender, nonce) } in
+    let%bind actions = List.gen_non_empty Field.gen in
+    let spec =
+      { fee
+      ; amount
+      ; receiver
+      ; sender = (sender, nonce)
+      ; actions = Some [ actions ]
+      }
+    in
     return (spec, nonces)
 end
 
@@ -179,8 +188,12 @@ module Test_spec = struct
 end
 
 let command_send ?chain ?(valid_until = Global_slot_since_genesis.max_value)
-    { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount } :
-    Signed_command.t =
+    { Transaction_spec.fee
+    ; sender = sender, sender_nonce
+    ; receiver
+    ; amount
+    ; actions = _
+    } : Signed_command.t =
   let sender_pk = Public_key.compress sender.public_key in
   let signature_kind =
     match chain with
@@ -207,8 +220,12 @@ let account_update_send ?chain ?(use_full_commitment = true)
       (Zkapp_basic.Or_ignore.Ignore, Zkapp_basic.Or_ignore.Ignore))
     ?(global_slot_precondition =
       (Zkapp_basic.Or_ignore.Ignore, Zkapp_basic.Or_ignore.Ignore))
-    { Transaction_spec.fee; sender = sender, sender_nonce; receiver; amount } :
-    Zkapp_command.t =
+    { Transaction_spec.fee
+    ; sender = sender, sender_nonce
+    ; receiver
+    ; amount
+    ; actions
+    } : Zkapp_command.t =
   let signature_kind =
     Option.value ~default:Mina_signature_kind.t_DEPRECATED chain
   in
@@ -245,7 +262,8 @@ let account_update_send ?chain ?(use_full_commitment = true)
               ; balance_change = Amount.Signed.(negate (of_unsigned amount))
               ; increment_nonce = double_sender_nonce
               ; events = []
-              ; actions = []
+              ; actions =
+                  Option.value ~default:[] actions |> List.map ~f:Array.of_list
               ; call_data = Snark_params.Tick.Field.zero
               ; call_depth = 0
               ; preconditions =
@@ -474,7 +492,7 @@ module Sequencer_spec = struct
     print_endline "(* Post genesis batch *)" ;
     run (fun () ->
         Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
-          ~ledger:ephemeral_ledger ) ;
+          ~ledger:ephemeral_ledger ~get_actions_for_aid:(fun _aid -> []) ) ;
 
     print_endline "(* Deploy zkapp *)" ;
     run (fun () ->
@@ -500,12 +518,19 @@ module Sequencer_spec = struct
           printf "Deplying with DA key: %s\n%!" (Field.to_string da_key) ;
           Deploy.deploy_command_exn
             ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
-            ~signer:signer_keypair ~outer_kp ~holder_kp ~token_holder_kp
+            ~signer_pk:(Public_key.compress signer_keypair.public_key)
+            ~outer_pk:(Public_key.compress outer_kp.public_key)
+            ~holder_pk:(Public_key.compress holder_kp.public_key)
+            ~token_holder_pk:(Public_key.compress token_holder_kp.public_key)
             ~fee:(Currency.Fee.of_mina_int_exn 1)
             ~nonce ~initial_ledger:ephemeral_ledger
             ~account_creation_fee:constraint_constants.account_creation_fee
             ~account_set_hash ~pause_key:sequencer_pk ~sequencer:sequencer_pk
-            ~da_key ()
+            ~da_key ~prefund_amount:Currency.Amount.zero ()
+          >>| fun command ->
+          Utils.sign_zkapp_command
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 command
+            [ outer_kp; holder_kp; token_holder_kp; signer_keypair ]
         in
         let%bind _ =
           Gql_client.send_zkapp gql_uri
@@ -537,7 +562,9 @@ module Sequencer_spec = struct
             ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:delay_deposit
             ~mq_host ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
-            ~l1_config ~commit_validity_period ~checkpoints_dir )
+            ~l1_config ~commit_validity_period ~checkpoints_dir
+            ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
+            ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
     in
     let l1_executor =
       Executor.create ~kind:(`L1 gql_uri)

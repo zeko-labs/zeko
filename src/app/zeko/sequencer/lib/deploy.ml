@@ -363,11 +363,12 @@ let deploy_token_owner_exn ~signature_kind ~(signer : Keypair.t)
   in
   Utils.sign_zkapp_command ~signature_kind command [ token_owner_kp; signer ]
 
-let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
-    ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t) ~(outer_kp : Keypair.t)
-    ~(holder_kp : Keypair.t) ~(token_holder_kp : Keypair.t)
-    ~(initial_ledger : L.t) ~account_set_hash
-    ~(account_creation_fee : Currency.Fee.t) ~pause_key ~sequencer ~da_key () =
+let deploy_command_exn ~signature_kind ~(signer_pk : Public_key.Compressed.t)
+    ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)
+    ~(outer_pk : Public_key.Compressed.t) ~(holder_pk : Public_key.Compressed.t)
+    ~(token_holder_pk : Public_key.Compressed.t) ~(initial_ledger : L.t)
+    ~account_set_hash ~(account_creation_fee : Currency.Fee.t) ~pause_key
+    ~sequencer ~da_key ~prefund_amount () =
   let%map ( `Outer outer_update
           , `Holder holder_update
           , `Token_owner token_owner_update ) =
@@ -378,7 +379,7 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
     Account_update.with_aux
       ~body:
         { Body.dummy with
-          public_key = Public_key.compress outer_kp.public_key
+          public_key = outer_pk
         ; implicit_account_creation_fee = false
         ; update = outer_update
         ; use_full_commitment = true
@@ -390,9 +391,10 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
     Account_update.with_aux
       ~body:
         { Body.dummy with
-          public_key = Public_key.compress holder_kp.public_key
+          public_key = holder_pk
         ; implicit_account_creation_fee = false
         ; update = holder_update
+        ; balance_change = Currency.Amount.Signed.of_unsigned prefund_amount
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
@@ -402,7 +404,7 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
     Account_update.with_aux
       ~body:
         { Body.dummy with
-          public_key = Public_key.compress token_holder_kp.public_key
+          public_key = token_holder_pk
         ; implicit_account_creation_fee = false
         ; update = token_owner_update
         ; use_full_commitment = true
@@ -414,12 +416,14 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
     Account_update.with_aux
       ~body:
         { Body.dummy with
-          public_key = Public_key.compress signer.public_key
+          public_key = signer_pk
         ; balance_change =
             Currency.Amount.(
               let ( + ) a b = Currency.Fee.add a b |> Option.value_exn in
               account_creation_fee + account_creation_fee + account_creation_fee
-              |> of_fee |> Signed.of_unsigned |> Signed.negate)
+              |> of_fee
+              |> Currency.Amount.add prefund_amount
+              |> Option.value_exn |> Signed.of_unsigned |> Signed.negate)
         ; use_full_commitment = true
         ; authorization_kind = Signature
         }
@@ -436,19 +440,14 @@ let deploy_command_exn ~signature_kind ~(signer : Keypair.t)
   let command : Zkapp_command.t =
     { fee_payer =
         { Account_update.Fee_payer.body =
-            { public_key = Public_key.compress signer.public_key
-            ; fee
-            ; valid_until = None
-            ; nonce
-            }
+            { public_key = signer_pk; fee; valid_until = None; nonce }
         ; authorization = Signature.dummy
         }
     ; account_updates = call_forest
     ; memo = Signed_command_memo.empty
     }
   in
-  Utils.sign_zkapp_command ~signature_kind command
-    [ outer_kp; holder_kp; token_holder_kp; signer ]
+  command
 
 let update_verification_keys ~signature_kind ~(signer : Keypair.t)
     ~(fee : Currency.Fee.t) ~(nonce : Account.Nonce.t)

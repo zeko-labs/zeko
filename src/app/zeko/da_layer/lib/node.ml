@@ -60,7 +60,7 @@ let get_ledger_hashes_chain t
         >>| fun diff ->
         Option.value_exn ~here:[%here]
           ~message:"Get_ledger_hashes_chain: diff not found" diff
-        |> Diff.Stable.V3.source_ledger_hash
+        |> Diff.Stable.V4.source_ledger_hash
       in
       let%map next = go (n - 1) source in
       current :: next
@@ -89,11 +89,7 @@ let implementations t =
                 [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;
                 failwith (Error.to_string_hum e) )
       ; (* Get_diff *)
-        Rpc.Rpc.implement Rpc_def.Get_diff.V1.t (fun () query ->
-            let%map v2_diff = Db.Async.get_diff t.db ~ledger_hash:query in
-            let v1_diff = Option.map v2_diff ~f:Diff.drop_time in
-            v1_diff )
-      ; Rpc.Rpc.implement Rpc_def.Get_diff.V3.t (fun () query ->
+        Rpc.Rpc.implement Rpc_def.Get_diff.V4.t (fun () query ->
             Db.Async.get_diff t.db ~ledger_hash:query )
       ; (* Has_diff *)
         Rpc.Rpc.implement Rpc_def.Has_diff.V1.t (fun () query ->
@@ -123,7 +119,7 @@ let implementations t =
         Rpc.Rpc.implement Rpc_def.Get_ledger_hashes_chain.V1.t (fun () query ->
             get_ledger_hashes_chain t query )
       ; (* Get_diffs_chain *)
-        Rpc.Rpc.implement Rpc_def.Get_diffs_chain.V1.t
+        Rpc.Rpc.implement Rpc_def.Get_diffs_chain.V2.t
           (fun () { source; target; max_length } ->
             let logger = t.logger in
             let%bind chain =
@@ -153,7 +149,7 @@ let implementations t =
                 >>| fun diff ->
                 Option.value_exn ~here:[%here] ~message:"Diff not found" diff ) )
       ; (* Diffs_stream *)
-        Rpc.Pipe_rpc.implement Rpc_def.Diffs_stream.V2.t
+        Rpc.Pipe_rpc.implement Rpc_def.Diffs_stream.V3.t
           (fun () { source; target } ->
             let logger = t.logger in
             let r, w = Pipe.create () in

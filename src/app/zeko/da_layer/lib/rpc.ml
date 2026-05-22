@@ -20,7 +20,7 @@ module Post_diff = struct
       (* Use Diff.V1 without timestamp, the node determines the timestamp itself *)
       type t =
         { ledger_openings : Sparse_ledger.Stable.V2.t
-        ; diff : Diff.Stable.V1.t
+        ; diff : Diff.Pending.Stable.V1.t
         ; acc_set_openings : Indexed_merkle_tree.Sparse.Stable.V1.t
         }
       [@@deriving bin_io_unversioned]
@@ -66,6 +66,16 @@ module Get_diff = struct
 
     let t : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Get_diff" ~version:3
+        ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
+  end
+
+  module V4 = struct
+    module Response = struct
+      type t = Diff.Stable.V4.t option [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Ledger_hash.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_diff" ~version:4
         ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
   end
 end
@@ -143,7 +153,7 @@ end
 
 (* val get_diffs_chain : source:Ledger_hash.t option -> target:Ledger_hash.t -> Diff.t list *)
 module Get_diffs_chain = struct
-  module V1 = struct
+  module V2 = struct
     module Query = struct
       type t =
         { source : [ `Genesis | `Specific of Ledger_hash.Stable.V1.t ]
@@ -154,18 +164,18 @@ module Get_diffs_chain = struct
     end
 
     module Response = struct
-      type t = Diff.Stable.V3.t list [@@deriving bin_io_unversioned]
+      type t = Diff.Stable.V4.t list [@@deriving bin_io_unversioned]
     end
 
     let t : (Query.t, Response.t) Rpc.Rpc.t =
-      Rpc.Rpc.create ~name:"Get_diffs_chain" ~version:1 ~bin_query:Query.bin_t
+      Rpc.Rpc.create ~name:"Get_diffs_chain" ~version:2 ~bin_query:Query.bin_t
         ~bin_response:Response.bin_t
   end
 end
 
 (* val diffs_stream : source:Ledger_hash.t option -> target:Ledger_hash.t -> Diff.t stream *)
 module Diffs_stream = struct
-  module V2 = struct
+  module V3 = struct
     module Query = struct
       type t =
         { source : [ `Genesis | `Specific of Ledger_hash.Stable.V1.t ]
@@ -175,11 +185,11 @@ module Diffs_stream = struct
     end
 
     module Response = struct
-      type t = Diff.Stable.V3.t [@@deriving bin_io_unversioned]
+      type t = Diff.Stable.V4.t [@@deriving bin_io_unversioned]
     end
 
     let t : (Query.t, Response.t, Error.t) Rpc.Pipe_rpc.t =
-      Rpc.Pipe_rpc.create ~name:"Diffs_stream" ~version:2 ~bin_query:Query.bin_t
+      Rpc.Pipe_rpc.create ~name:"Diffs_stream" ~version:3 ~bin_query:Query.bin_t
         ~bin_response:Response.bin_t ~bin_error:Error.bin_t ()
   end
 end
