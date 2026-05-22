@@ -380,11 +380,7 @@ let%test_unit "Health events include the service identity and publishing state"
 let%test_unit "Disabled NATS publishing is a no-op" =
   Feature_parser.assert_scenario "event-contract.feature"
     "Disabled NATS publishing is a no-op" ;
-  let client =
-    Thread_safe.block_on_async_exn (fun () -> Nats_client_async.connect None)
-  in
-  let sink = Explorer_events.create_nats_sink client in
-  Explorer_events.publish_transaction sink
+  Explorer_events.publish_transaction Explorer_events.noop_sink
     ~kind:Explorer_events.Transaction_kind.User_command
     ~target_ledger_hash:Ledger_hash.empty_hash ~genesis:false
     ~diff:(sample_diff ())

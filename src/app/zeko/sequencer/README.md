@@ -77,7 +77,7 @@ When NATS is enabled, the sequencer emits:
 - `genesis`
 - `diff`
 
-`diff` uses the existing `Da_layer.Diff.Stable.V3` JSON shape and every
+`diff` uses the existing `Da_layer.Diff.Stable.V4` JSON shape and every
 transaction message includes `Nats-Msg-Id: <target_ledger_hash>`.
 
 `zeko.l2.finality` carries:
@@ -101,10 +101,10 @@ Every finality message includes
 - `timestamp`
 
 When NATS is configured, the sequencer startup path best-effort configures the
-Zeko-owned JetStream stream `ZEKO_L2` for `zeko.l2.transactions`,
-`zeko.l2.finality`, and `zeko.health`. If NATS is down or JetStream setup fails,
-startup logs a warning and explorer publishing stays disabled or drops messages
-rather than crashing the sequencer.
+Zeko-owned JetStream streams `zeko-l2` for `zeko.l2.transactions` and
+`zeko.l2.finality`, and `zeko-health` for `zeko.health`. If NATS is down or
+JetStream setup fails, startup logs a warning and explorer publishing stays
+disabled or drops messages rather than crashing the sequencer.
 
 Run help to see the options:
 
