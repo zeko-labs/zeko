@@ -1,5 +1,3 @@
-; Core sequencer library plus dedicated inline test modules.
-
 (library
  (name sequencer_lib)
  (inline_tests)

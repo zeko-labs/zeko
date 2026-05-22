@@ -228,7 +228,7 @@ let () =
       let new_sequencer =
         run (fun () ->
             let%map new_sequencer =
-              Sequencer.create ?nats_url:None ~logger ~max_pool_size:10
+              Sequencer.create ~logger ~max_pool_size:10
                 ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
                 ~da_quorum ~db_dir:None ~checkpoints_dir:None
                 ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
@@ -333,8 +333,7 @@ let () =
       print_endline "(* Restart sequencer *)" ;
       let new_sequencer =
         run (fun () ->
-            Sequencer.create ?nats_url:None ~logger ~max_pool_size:10
-              ~commitment_period_sec:0.
+            Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir)
               ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer:(get_test_signer ())
@@ -466,8 +465,7 @@ let () =
       print_endline "(* Restart sequencer from checkpoint *)" ;
       let new_sequencer =
         run (fun () ->
-            Sequencer.create ?nats_url:None ~logger ~max_pool_size:10
-              ~commitment_period_sec:0.
+            Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir2)
               ~checkpoints_dir:(Some checkpoints_dir)
               ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
@@ -575,8 +573,7 @@ let () =
       print_endline "(* Restart sequencer *)" ;
       let new_sequencer =
         run (fun () ->
-            Sequencer.create ?nats_url:None ~logger ~max_pool_size:10
-              ~commitment_period_sec:0.
+            Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
               ~da_config:da_config_with2 ~da_quorum ~db_dir:(Some db_dir)
               ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer:(get_test_signer ())

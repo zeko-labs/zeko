@@ -1,7 +1,3 @@
-(* Implements the Zeko sequencer runtime, including transaction application,
-   DA-layer synchronization, proof/commit orchestration, and explorer event
-   publishing hooks. *)
-
 open Core_kernel
 open Async_kernel
 open Mina_base

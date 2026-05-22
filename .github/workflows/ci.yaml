@@ -1,4 +1,3 @@
-# Builds and tests Zeko in CI using the exported opam toolchain.
 ---
 name: CI
 

@@ -12,7 +12,7 @@ module Field = Snark_params.Tick.Field
     6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
     7. Check that new accounts in ledger openings are in same order as in acc set openings.
     8. Attach timestamp and acc set root.
-    9. Store the diff under the [target_ledger_hash].
+    9. Store the diff under the [target_ledger_hash]. 
     10. Sign [target_ledger_hash]. *)
 let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
     ~(signer : Signer_service.Signer.t) ~ledger_openings ~acc_set_openings

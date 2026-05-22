@@ -11,11 +11,6 @@ Think of the sequencer as the conductor of an orchestra in Zeko. It plays a vita
 
 ## Build
 
-The repo-managed OCaml setup imports `opam.export`. The explorer NATS client
-dependencies are the published opam packages `nats-client` and
-`nats-client-async`; no `nats-ml` submodule checkout or GitHub opam pin is
-required.
-
 ```bash
 DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
 ```
@@ -25,13 +20,7 @@ DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
 ```bash
 dune build
 ./src/app/zeko/sequencer/tests/run-sequencer-test.sh {fake | real} <num_provers>
-NATS_URL="nats://127.0.0.1:4222" opam exec -- env -u DUNE_RPC dune runtest --profile=devnet src/app/zeko/sequencer/explorer/tests
 ```
-
-The explorer Gherkin suite includes NATS-backed scenarios. `NATS_URL` must be
-set and point at a running NATS server with JetStream enabled when running
-those tests outside CI. The message contract is documented in
-`src/app/zeko/sequencer/explorer/MESSAGE_CONTRACT.md`.
 
 ## Run
 
@@ -64,47 +53,14 @@ dune exec ./run.exe -- \
 `--nats-url` enables explorer event publishing. Without it, the sequencer keeps
 the existing behavior and all NATS publish paths become no-ops.
 
-When NATS is enabled, the sequencer emits:
+When NATS is enabled, the sequencer emits these NATS subjects:
 
 - `zeko.l2.transactions`
 - `zeko.l2.finality`
 - `zeko.health`
 
-`zeko.l2.transactions` carries:
-
-- `kind`: `user_command`, `fee_transfer`, `sync_replay`, or `genesis_replay`
-- `target_ledger_hash`
-- `genesis`
-- `diff`
-
-`diff` uses the existing `Da_layer.Diff.Stable.V4` JSON shape and every
-transaction message includes `Nats-Msg-Id: <target_ledger_hash>`.
-
-`zeko.l2.finality` carries:
-
-- `status`: `proved` or `committed`
-- `source_ledger_hash`
-- `target_ledger_hash`
-- `timestamp`
-
-Every finality message includes
-`Nats-Msg-Id: finality-<status>-<target_ledger_hash>`, for example
-`finality-proved-...` or `finality-committed-...`.
-
-`zeko.health` carries:
-
-- `service`
-- `instance_id`
-- `status`
-- `last_published_hash`
-- `unproved_hash`
-- `timestamp`
-
-When NATS is configured, the sequencer startup path best-effort configures the
-Zeko-owned JetStream streams `zeko-l2` for `zeko.l2.transactions` and
-`zeko.l2.finality`, and `zeko-health` for `zeko.health`. If NATS is down or
-JetStream setup fails, startup logs a warning and explorer publishing stays
-disabled or drops messages rather than crashing the sequencer.
+The exact subjects, JetStream streams, payload fields, and dedup headers are
+documented in `src/app/zeko/sequencer/explorer/MESSAGE_CONTRACT.md`.
 
 Run help to see the options:
 
@@ -113,9 +69,6 @@ dune exec ./run.exe -- --help
 ```
 
 ## Explorer backfill service
-
-The backfill service republishes historical DA diffs into the same
-`zeko.l2.transactions` NATS subject used by the live sequencer path.
 
 Build it with:
 
@@ -133,16 +86,9 @@ dune exec ./explorer/explorer_backfill_server.exe -- \
     --nats-url <string>
 ```
 
-The backfill API is a separate process from the sequencer GraphQL API. By
-default the sequencer listens on `8080` and the standalone backfill server
-listens on `8090`, so they do not conflict unless you explicitly bind both to
-the same port.
-
-The backfill GraphQL HTTP endpoint stays on `/graphql`.
-The service requires `--nats-url` because each backfill republishes historical
-diffs into NATS. Unlike the live sequencer publisher, the standalone backfill
-service fails startup when it cannot connect to JetStream, and a dropped publish
-marks the backfill job as failed.
+The backfill API is a separate process from the sequencer GraphQL API and
+republishes historical DA diffs into `zeko.l2.transactions`. It requires
+`--nats-url` because every backfill job publishes to JetStream.
 
 Available GraphQL operations:
 
@@ -150,49 +96,16 @@ Available GraphQL operations:
 - `backfillJob(id) -> BackfillJob | null`
 - `health -> Health`
 
-The GraphQL-SSE endpoint is `/graphql/stream`.
-
-Supported subscription:
+GraphQL-SSE endpoint:
 
 - `backfillProgress(id) -> BackfillProgress`
 
-Use the same GraphQL subscription document against `/graphql/stream`; the
-service executes the schema subscription and streams `backfillProgress`
-responses as GraphQL-SSE events.
-
-`BackfillJob` fields:
-
-- `id`
-- `fromHash`
-- `toHash`
-- `status`
-- `diffsPublished`
-- `error`
-- `createdAt`
-- `startedAt`
-- `finishedAt`
-
-`BackfillProgress` fields:
-
-- `id`
-- `status`
-- `diffsPublished`
-- `error`
-
-`Health` fields:
-
-- `ok`
-- `instanceId`
-- `startedAt`
-
 ## Explorer acceptance tests
 
-The explorer-specific tests now live under
-`src/app/zeko/sequencer/explorer/tests/` and use copied `.feature` files from
-the explorer spike as the main test inventory. CI runs them in the dedicated
-Explorer Gherkin workflow, separate from the longer sequencer integration flow.
-The real-NATS scenarios expect `NATS_URL` to point at a running NATS server
-with JetStream enabled.
+Explorer-specific Gherkin tests live under
+`src/app/zeko/sequencer/explorer/tests/`. See
+`src/app/zeko/sequencer/explorer/tests/README.md` for the fast integration,
+NATS-backed, and E2E commands.
 
 ## Deploy rollup contract to L1
 
