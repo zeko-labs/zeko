@@ -3078,7 +3078,7 @@ module Input = struct
   end
 
   module RosettaTransaction = struct
-    type input = Signed_command.t
+    type input = Yojson.Basic.t
 
     let to_default_json (command : Signed_command.t) =
       let public_key pk = `Pk (Public_key.Compressed.to_base58_check pk) in
@@ -3134,7 +3134,7 @@ module Input = struct
         ~coerce:(fun graphql_json ->
           Rosetta_lib.Transaction.to_mina_signed (Utils.to_yojson graphql_json)
           |> Result.map_error ~f:Error.to_string_hum )
-        ~to_json:to_default_json
+        ~to_json:Fn.id
         ~to_default_json
   end
 
