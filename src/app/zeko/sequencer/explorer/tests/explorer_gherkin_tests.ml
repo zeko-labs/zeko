@@ -238,6 +238,26 @@ let%test_unit "The backfill job query returns the current job snapshot" =
     (`String "running") ;
   assert_basic_json_equal (find_assoc_exn "diffsPublished" backfill_job) (`Int 0)
 
+let%test_unit "Concurrent backfill requests are bounded" =
+  Feature_parser.assert_scenario "backfill-api.feature"
+    "Concurrent backfill requests are bounded" ;
+  let service = test_service () in
+  let _active_job =
+    add_job service ~status:Explorer_backfill_service.Running ()
+  in
+  let rejected_job =
+    Explorer_backfill_service.start_backfill service
+      ~from_hash:Ledger_hash.empty_hash
+      ~to_hash:Explorer_backfill_service.genesis_hash
+  in
+  [%test_eq: string]
+    (Explorer_backfill_service.string_of_job_status rejected_job.status)
+    "failed" ;
+  [%test_eq: bool]
+    (Option.value_map rejected_job.error ~default:false ~f:(fun error ->
+         String.is_substring error ~substring:"active" ) )
+    true
+
 let%test_unit "Backfill progress subscriptions stream GraphQL-SSE events" =
   Feature_parser.assert_scenario "backfill-api.feature"
     "Backfill progress subscriptions stream GraphQL-SSE events" ;

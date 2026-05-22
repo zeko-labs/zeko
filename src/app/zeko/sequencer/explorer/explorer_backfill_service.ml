@@ -91,6 +91,8 @@ let terminal_job_retention = Time.Span.of_hr 1.
 
 let backfill_interval_size = 1000
 
+let max_active_backfill_jobs = 1
+
 let genesis_hash =
   Da_layer.Diff.empty_ledger_hash ~depth:constraint_constants.ledger_depth
 
@@ -228,6 +230,9 @@ let find_active_job_by_range t ~from_hash ~to_hash =
          (not (is_terminal job.status))
          && Ledger_hash.equal job.from_hash from_hash
          && Ledger_hash.equal job.to_hash to_hash )
+
+let active_job_count t =
+  Hashtbl.count t.jobs ~f:(fun job -> not (is_terminal job.status))
 
 let subscribe_progress t ~id =
   match find_job t id with
@@ -487,12 +492,23 @@ let start_backfill t ~from_hash ~to_hash =
         (Ledger_hash.to_decimal_string to_hash) ;
       job
   | None ->
-      let job =
-        create_job ~status:Queued ~from_hash ~to_hash ()
-      in
-      let job = register_job t job in
-      run_job t job ;
-      job
+      if active_job_count t >= max_active_backfill_jobs then (
+        let now = Time.now () in
+        [%log debug]
+          "Rejecting explorer backfill job because active job limit is reached: \
+           from_hash=%s to_hash=%s max_active=%d"
+          (Ledger_hash.to_decimal_string from_hash)
+          (Ledger_hash.to_decimal_string to_hash)
+          max_active_backfill_jobs ;
+        create_job ~status:Failed ~from_hash ~to_hash
+          ~error:"Another backfill job is already active" ~started_at:now
+          ~finished_at:now ()
+        |> register_job t )
+      else
+        let job = create_job ~status:Queued ~from_hash ~to_hash () in
+        let job = register_job t job in
+        run_job t job ;
+        job
 
 let failed_job_snapshot_from_strings ~from_hash ~to_hash error =
   let now = Time.now () in

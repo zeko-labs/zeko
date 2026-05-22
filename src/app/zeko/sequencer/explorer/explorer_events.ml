@@ -263,7 +263,7 @@ let ensure_jetstream_stream ~logger client =
       warn_jetstream ~logger "JetStream stream setup failed"
         ~metadata:[ ("error", `String (Error.to_string_hum error)) ]
 
-let nats_uri_available ?(timeout = Time_ns.Span.of_sec 3.) ~logger uri =
+let nats_uri_available ?(timeout = Time.Span.of_sec 3.) ~logger uri =
   match Uri.host uri with
   | None ->
       warn_jetstream ~logger "NATS URL is missing a host"
@@ -274,11 +274,9 @@ let nats_uri_available ?(timeout = Time_ns.Span.of_sec 3.) ~logger uri =
       let where =
         Tcp.Where_to_connect.of_host_and_port (Host_and_port.create ~host ~port)
       in
-      Clock_ns.with_timeout timeout
+      Clock.with_timeout timeout
         (Monitor.try_with_or_error (fun () ->
-             let%bind _socket, reader, writer = Tcp.connect where in
-             let%bind () = Writer.close writer in
-             Reader.close reader ) )
+             Tcp.with_connection where ~timeout (fun _ _ _ -> Deferred.unit) ) )
       >>| function
       | `Timeout ->
           warn_jetstream ~logger

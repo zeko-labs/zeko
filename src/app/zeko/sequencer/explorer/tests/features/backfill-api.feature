@@ -31,6 +31,12 @@ Feature: Explorer Backfill API
     Then the response includes the matching job id
     And the response includes the job status
 
+  Scenario: Concurrent backfill requests are bounded
+    Given a standalone backfill service with an active backfill job
+    When another backfill is requested for a different range
+    Then the second backfill request is rejected
+    And the snapshot error mentions an active job
+
   Scenario: Backfill progress subscriptions stream GraphQL-SSE events
     Given a standalone backfill service with a queued backfill job
     When the GraphQL-SSE endpoint subscribes to that job
