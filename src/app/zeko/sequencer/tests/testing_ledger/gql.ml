@@ -60,7 +60,7 @@ module Types = struct
           [ field "chainId" ~typ:(non_null string)
               ~args:Arg.[]
               ~resolve:(fun _ v -> v.chain_id)
-          ])
+          ] )
   end
 
   let merkle_path_element :
@@ -75,7 +75,7 @@ module Types = struct
             ~args:Arg.[]
             ~resolve:(fun _ x ->
               match x with `Left _ -> None | `Right h -> Some h )
-        ])
+        ] )
 
   let account_timing : (State.t, Account_timing.t option) typ =
     obj "AccountTiming" ~fields:(fun _ ->
@@ -124,7 +124,7 @@ module Types = struct
                   None
               | Timed timing_info ->
                   Some timing_info.vesting_increment )
-        ])
+        ] )
 
   let genesis_constants =
     obj "GenesisConstants" ~fields:(fun _ ->
@@ -142,7 +142,7 @@ module Types = struct
             ~resolve:(fun _ () ->
               State.Constants.genesis_timestamp |> Genesis_constants.of_time
               |> Genesis_constants.genesis_timestamp_to_string )
-        ])
+        ] )
 
   module AccountObj = struct
     module AnnotatedBalance = struct
@@ -238,7 +238,7 @@ module Types = struct
                 ~resolve:(fun _ (b : t) ->
                   Option.map b.breadcrumb ~f:(fun crumb ->
                       Transition_frontier.Breadcrumb.state_hash crumb ) )
-            ])
+            ] )
     end
 
     module Partial_account = struct
@@ -389,7 +389,7 @@ module Types = struct
               ~args:Arg.[]
               ~resolve:(fun _ (_, version) ->
                 Mina_numbers.Txn_version.to_string version )
-          ])
+          ] )
 
     let account_permissions =
       obj "AccountPermissions" ~fields:(fun _ ->
@@ -462,7 +462,7 @@ module Types = struct
               ~args:Arg.[]
               ~resolve:(fun _ permission ->
                 permission.Permissions.Poly.set_timing )
-          ])
+          ] )
 
     let account_vk =
       obj "AccountVerificationKeyWithHash" ~doc:"Verification key with hash"
@@ -479,7 +479,7 @@ module Types = struct
                 @@ Pickles_graphql.Graphql_scalars.VerificationKeyHash.typ () )
               ~args:Arg.[]
               ~resolve:(fun _ (vk : _ With_hash.t) -> vk.hash)
-          ])
+          ] )
 
     let rec account =
       lazy
@@ -672,7 +672,7 @@ module Types = struct
                  ~typ:(list (non_null merkle_path_element))
                  ~args:Arg.[]
                  ~resolve:(fun _ _ -> None)
-             ]  ))
+             ] ) )
 
     let account = Lazy.force account
   end
@@ -699,7 +699,7 @@ module Types = struct
                 "Failure reason for the account update or any nested zkapp \
                  command"
               ~resolve:(fun _ (_, failures) -> failures)
-          ])
+          ] )
   end
 
   module User_command = struct
@@ -785,7 +785,7 @@ module Types = struct
                 (Mina_base_graphql.Graphql_scalars.TransactionStatusFailure.typ
                    () )
               ~args:[] ~doc:"null is no failure, reason for failure otherwise."
-          ])
+          ] )
 
     module With_status = struct
       type 'a t = { data : 'a; status : Command_status.t }
@@ -973,7 +973,7 @@ module Types = struct
                       (List.map
                          (Transaction_status.Failure.Collection.to_display
                             failures ) ~f:(fun f -> Some f) ) )
-          ])
+          ] )
   end
 
   let block : (State.t, Unsigned.uint32 option) typ =
@@ -983,7 +983,7 @@ module Types = struct
               ~doc:"Height of the blockchain at this block"
               ~args:Arg.[]
               ~resolve:(fun _ asd -> asd)
-          ])
+          ] )
     in
     let protocol_state =
       obj "ProtocolState" ~fields:(fun _ ->
@@ -994,13 +994,13 @@ module Types = struct
               ~typ:(non_null @@ consensus_state)
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
-          ])
+          ] )
     in
     obj "Block" ~fields:(fun _ ->
         [ field "protocolState" ~typ:(non_null protocol_state)
             ~args:Arg.[]
             ~resolve:(fun _ -> Fn.id)
-        ])
+        ] )
 
   module Payload = struct
     let send_payment =
@@ -1010,7 +1010,7 @@ module Types = struct
               ~doc:"Payment that was sent"
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
-          ])
+          ] )
 
     let send_zkapp =
       obj "SendZkappPayload" ~fields:(fun _ ->
@@ -1019,7 +1019,7 @@ module Types = struct
               ~doc:"zkApp transaction that was sent"
               ~args:Arg.[]
               ~resolve:(fun _ -> Fn.id)
-          ])
+          ] )
   end
 
   module Input = struct
@@ -1351,7 +1351,7 @@ module Types = struct
             ; field "distanceFromMaxBlockHeight" ~typ:(non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.distance_from_max_block_height)
-            ])
+            ] )
     end
 
     module TransactionInfo = struct
@@ -1385,7 +1385,7 @@ module Types = struct
                 ~typ:(non_null @@ list @@ non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ v -> v.zkapp_account_update_ids)
-            ])
+            ] )
     end
 
     module StupidActionState = struct
@@ -1424,7 +1424,7 @@ module Types = struct
                   Option.map
                     (Pickles_types.Vector.nth action_state 4)
                     ~f:Snark_params.Tick.Field.to_string )
-            ])
+            ] )
     end
 
     module ActionData = struct
@@ -1445,7 +1445,7 @@ module Types = struct
             ; field "transactionInfo" ~typ:TransactionInfo.t
                 ~args:Arg.[]
                 ~resolve:(fun _ (_, _, transaction_info) -> transaction_info)
-            ])
+            ] )
     end
 
     module EventData = struct
@@ -1462,7 +1462,7 @@ module Types = struct
             ; field "transactionInfo" ~typ:TransactionInfo.t
                 ~args:Arg.[]
                 ~resolve:(fun _ (_, transaction_info) -> transaction_info)
-            ])
+            ] )
     end
 
     module ActionOutput = struct
@@ -1470,7 +1470,6 @@ module Types = struct
 
       let t : ('context, t option) typ =
         obj "ActionOutput" ~fields:(fun _ ->
-          (
             let open Archive.Account_update_actions in
             [ field "blockInfo" ~typ:BlockInfo.t
                 ~args:Arg.[]
@@ -1488,7 +1487,7 @@ module Types = struct
                 ~resolve:(fun _ v ->
                   List.map v.actions ~f:(fun x ->
                       (x, v.account_update_id, v.transaction_info) ) )
-            ] ))
+            ] )
     end
 
     module EventOutput = struct
@@ -1496,7 +1495,6 @@ module Types = struct
 
       let t : ('context, t option) typ =
         obj "EventOutput" ~fields:(fun _ ->
-          (
             let open Archive.Account_update_events in
             [ field "blockInfo" ~typ:BlockInfo.t
                 ~args:Arg.[]
@@ -1506,7 +1504,7 @@ module Types = struct
                 ~args:Arg.[]
                 ~resolve:(fun _ v ->
                   List.map v.events ~f:(fun x -> (x, v.transaction_info)) )
-            ] ))
+            ] )
     end
   end
 end

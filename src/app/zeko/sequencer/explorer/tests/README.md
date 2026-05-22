@@ -91,23 +91,22 @@ and assert behavior from the outside where practical:
   GraphQL `backfill` mutation over HTTP, and assert both GraphQL-SSE progress
   and replayed NATS messages
 
-The current E2E entry point reuses the existing sequencer integration service
-setup: real L1 test ledger, DA nodes, signers, RabbitMQ, Postgres, and NATS.
-The sequencer runtime is still driven through `Sequencer.create`, matching the
-existing sequencer integration tests. A later follow-up can move this to a
-fully external `run.exe` process once the bootstrap/deploy path is ready for
-that shape.
+The current E2E script starts the same service shape as the sequencer
+integration test: real L1 test ledger, DA nodes, signers, RabbitMQ, Postgres,
+and NATS. The sequencer runtime is still driven through `Sequencer.create`,
+matching the existing sequencer integration tests. A later follow-up can move
+this to a fully external `run.exe` process once the bootstrap/deploy path is
+ready for that shape.
 
-Unlike the shared sequencer harness path, the `explorer-e2e` mode in
-`run-sequencer-test.sh` still builds its own dedicated test executable and
-service binaries because the standalone `Explorer E2E` workflow does not run a
-separate prebuild step first.
+The explorer E2E script is separate from `run-sequencer-test.sh` so the
+existing sequencer harness keeps its original interface and the explorer suite
+can build and run its dedicated Gherkin executable explicitly.
 
 Run it with:
 
 ```bash
 NATS_URL="nats://127.0.0.1:4222" \
-  ./src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1 explorer-e2e
+  ./src/app/zeko/sequencer/explorer/tests/run-explorer-e2e-test.sh real 1
 ```
 
 The E2E harness should remain separate from the faster integration suite so

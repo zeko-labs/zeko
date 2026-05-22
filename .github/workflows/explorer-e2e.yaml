@@ -42,4 +42,4 @@ jobs:
             sleep 1
           done
           NATS_URL="nats://127.0.0.1:4222" \
-            ./src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1 explorer-e2e
+            ./src/app/zeko/sequencer/explorer/tests/run-explorer-e2e-test.sh real 1
