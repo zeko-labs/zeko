@@ -2807,6 +2807,21 @@ module Queries = struct
       ~resolve:(fun { ctx = { sequencer; _ }; _ } () ->
         Signer_service.Signer.public_key sequencer.config.signer )
 
+  let signature_kind =
+    field "signatureKind"
+      ~doc:"The signature kind that this daemon instance is using"
+      ~typ:(non_null string)
+      ~args:Arg.[]
+      ~resolve:(fun _ () ->
+        match Zeko_circuits_config.Inputs.chain_l1 with
+        | Mainnet ->
+            "mainnet"
+        | Testnet ->
+            "testnet"
+        | Other_network s ->
+            (* Prefix string to disambiguate *)
+            "other network: " ^ s )
+
   module Archive = struct
     let actions =
       io_field "actions"
@@ -2858,6 +2873,7 @@ module Queries = struct
     ; prover_queue_size
     ; circuits_config
     ; sequencer_pk
+    ; signature_kind
     ]
     @ Archive.commands
 end
