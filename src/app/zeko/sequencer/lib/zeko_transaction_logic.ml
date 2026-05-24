@@ -174,6 +174,13 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
         | Ok { common = { user_command = { status; _ }; _ }; body = Payment _ }
           ->
             Ok status
+        | Ok
+            { common = { user_command = { status = Failed failure_tbl; _ }; _ }
+            ; body = Failed
+            } ->
+            Error
+              ( Error.of_string @@ Yojson.Safe.pretty_to_string
+              @@ Transaction_status.Failure.Collection.to_yojson failure_tbl )
         | Ok _ ->
             failwith "Internal error: it should be payment"
         | Error err ->
@@ -621,8 +628,7 @@ let preverify_user_command
              | Zkapp_command zc ->
                  let open Or_error.Let_syntax in
                  let%bind partial_txn, states =
-                   Sparse_ledger
-                   .apply_zkapp_first_pass_unchecked_with_states
+                   Sparse_ledger.apply_zkapp_first_pass_unchecked_with_states
                      ~constraint_constants ~global_slot ~state_view
                      ~fee_excess:Currency.Amount.Signed.zero
                      ~supply_increase:Currency.Amount.Signed.zero
@@ -630,8 +636,7 @@ let preverify_user_command
                      ~second_pass_ledger:sparse_ledger zc
                  in
                  let%bind applied, _ =
-                   Sparse_ledger
-                   .apply_zkapp_second_pass_unchecked_with_states ~init:states
-                     sparse_ledger partial_txn
+                   Sparse_ledger.apply_zkapp_second_pass_unchecked_with_states
+                     ~init:states sparse_ledger partial_txn
                  in
                  status_to_or_error applied.command.status ) )
