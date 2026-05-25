@@ -2813,7 +2813,7 @@ module Queries = struct
       ~typ:(non_null string)
       ~args:Arg.[]
       ~resolve:(fun _ () ->
-        match Zeko_circuits_config.Inputs.chain_l1 with
+        match Zeko_circuits_config.Inputs.chain_l2 with
         | Mainnet ->
             "mainnet"
         | Testnet ->
