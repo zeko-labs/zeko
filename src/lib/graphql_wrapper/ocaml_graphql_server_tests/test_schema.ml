@@ -20,7 +20,7 @@ let input_role = Schema.Arg.(enum "role" ~values:role_values)
 
 let user =
   Schema.(
-    obj "user" ~fields:
+    obj "user" ~fields:(fun _ ->
         [ field "id" ~typ:(non_null int)
             ~args:Arg.[]
             ~resolve:(fun { ctx = (); _ } p -> p.id)
@@ -30,7 +30,7 @@ let user =
         ; field "role" ~typ:(non_null role)
             ~args:Arg.[]
             ~resolve:(fun _ p -> p.role)
-        ] )
+        ] ))
 
 (* Not available in List before OCaml 4.07 *)
 let list_to_seq n l =

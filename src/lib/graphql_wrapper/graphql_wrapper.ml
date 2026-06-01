@@ -40,30 +40,9 @@ module Make (Schema : Graphql_intf.Schema) = struct
     }
 
   module Arg = struct
-    let rec const_value_of_json : Yojson.Basic.t -> Graphql_parser.const_value =
-      function
-      | `Null ->
-          `Null
-      | `Int i ->
-          `Int i
-      | `Float f ->
-          `Float f
-      | `String s ->
-          `String s
-      | `Bool b ->
-          `Bool b
-      | `List xs ->
-          `List (List.map const_value_of_json xs)
-      | `Assoc fields ->
-          `Assoc
-            (List.map (fun (name, value) -> (name, const_value_of_json value)) fields)
-
     (** wrapper around the [Arg.arg_typ] type *)
     type ('obj_arg, 'a) arg_typ =
-      { arg_typ : 'obj_arg Schema.Arg.arg_typ
-      ; to_json : 'a -> Yojson.Basic.t
-      ; to_graphql_const : 'obj_arg -> Graphql_parser.const_value
-      }
+      { arg_typ : 'obj_arg Schema.Arg.arg_typ; to_json : 'a -> Yojson.Basic.t }
 
     (** wrapper around the [Arg.arg] type *)
     type ('obj_arg, 'a) arg =
@@ -145,56 +124,38 @@ module Make (Schema : Graphql_intf.Schema) = struct
           Schema.Arg.(graphql_arg :: to_ocaml_graphql_server_args t)
       | DefaultArg { name; doc; typ; default } :: t ->
           let graphql_arg =
-            Schema.Arg.arg' ?doc name ~typ:typ.arg_typ
-              ~default:(typ.to_graphql_const (Some default))
+            Schema.Arg.arg' ?doc name ~typ:typ.arg_typ ~default
           in
           Schema.Arg.(graphql_arg :: to_ocaml_graphql_server_args t)
 
     let int =
-      let to_json = Json.json_of_option (fun i -> `Int i) in
       { arg_typ = Schema.Arg.int
-      ; to_json
-      ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
-      }
-
-    let scalar_with_default_to_json ?doc name ~coerce ~to_json ~to_default_json =
-      let to_json = Json.json_of_option to_json in
-      let to_default_json = Json.json_of_option to_default_json in
-      { arg_typ = Schema.Arg.scalar ?doc name ~coerce
-      ; to_json
-      ; to_graphql_const = (fun x -> const_value_of_json (to_default_json x))
+      ; to_json = Json.json_of_option (fun i -> `Int i)
       }
 
     let scalar ?doc name ~coerce ~to_json =
-      scalar_with_default_to_json ?doc name ~coerce ~to_json
-        ~to_default_json:to_json
+      { arg_typ = Schema.Arg.scalar ?doc name ~coerce
+      ; to_json = Json.json_of_option to_json
+      }
 
     let string =
-      let to_json = Json.json_of_option (function s -> `String s) in
       { arg_typ = Schema.Arg.string
-      ; to_json
-      ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
+      ; to_json = Json.json_of_option (function s -> `String s)
       }
 
     let float =
-      let to_json = Json.json_of_option (function f -> `Float f) in
       { arg_typ = Schema.Arg.float
-      ; to_json
-      ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
+      ; to_json = Json.json_of_option (function f -> `Float f)
       }
 
     let bool =
-      let to_json = Json.json_of_option (function f -> `Bool f) in
       { arg_typ = Schema.Arg.bool
-      ; to_json
-      ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
+      ; to_json = Json.json_of_option (function f -> `Bool f)
       }
 
     let guid =
-      let to_json = Json.json_of_option (function s -> `String s) in
       { arg_typ = Schema.Arg.guid
-      ; to_json
-      ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
+      ; to_json = Json.json_of_option (function s -> `String s)
       }
 
     let obj ?doc name ~fields ~coerce ~split =
@@ -203,29 +164,17 @@ module Make (Schema : Graphql_intf.Schema) = struct
       let arg_typ =
         Schema.Arg.obj name ?doc ~fields:gql_server_fields ~coerce
       in
-      { arg_typ
-      ; to_json = Json.json_of_option @@ split build_obj_json
-      ; to_graphql_const =
-          (fun _ ->
-            failwith "GraphQL input object default values are not supported" )
-      }
+      { arg_typ; to_json = Json.json_of_option @@ split build_obj_json }
 
     let non_null (arg_typ : _ arg_typ) =
       { arg_typ = Schema.Arg.non_null arg_typ.arg_typ
       ; to_json = (function x -> arg_typ.to_json (Some x))
-      ; to_graphql_const = (function x -> arg_typ.to_graphql_const (Some x))
       }
 
     let list (arg_typ : _ arg_typ) =
       { arg_typ = Schema.Arg.list arg_typ.arg_typ
       ; to_json =
           Json.json_of_option (function l -> `List (List.map arg_typ.to_json l))
-      ; to_graphql_const =
-          (function
-          | None ->
-              `Null
-          | Some l ->
-              `List (List.map arg_typ.to_graphql_const l) )
       }
 
     (** wrapper around the enum arg_typ.
@@ -247,10 +196,8 @@ module Make (Schema : Graphql_intf.Schema) = struct
       let ocaml_graphql_server_values =
         List.map (function { enum_value; _ } -> enum_value) values
       in
-      let to_json = Json.json_of_option (fun v -> `String (to_string values v)) in
       { arg_typ = Schema.Arg.enum ?doc name ~values:ocaml_graphql_server_values
-      ; to_json
-      ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
+      ; to_json = Json.json_of_option (fun v -> `String (to_string values v))
       }
 
     let arg ?doc name ~typ = Arg { name; typ; doc }
@@ -340,8 +287,7 @@ module Make (Schema : Graphql_intf.Schema) = struct
 
   (** The [Propagated] module contains the parts of the Schema we do not modify *)
   module Propagated = struct
-    let obj ?doc name ~fields =
-      Schema.fix (fun r -> r.obj ?doc name ~fields)
+    let obj = Schema.obj
 
     let schema = Schema.schema
 

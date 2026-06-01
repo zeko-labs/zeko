@@ -285,26 +285,22 @@ module Graphql_raw = struct
         let graphql_fields =
           { Input.T.run =
               (fun () ->
-                let fields =
-                  List.rev
-                  @@ List.filter_map graphql_fields_accumulator ~f:(fun g ->
-                         g.Accumulator.T.run () )
-                in
                 Schema.obj annotations.name ?doc:annotations.doc
-                  ~fields
+                  ~fields:(fun _ ->
+                    List.rev
+                    @@ List.filter_map graphql_fields_accumulator ~f:(fun g ->
+                           g.Accumulator.T.run () ) )
                 |> Schema.non_null )
           }
         in
         let nullable_graphql_fields =
           { Input.T.run =
               (fun () ->
-                let fields =
-                  List.rev
-                  @@ List.filter_map graphql_fields_accumulator ~f:(fun g ->
-                         g.Accumulator.T.run () )
-                in
                 Schema.obj annotations.name ?doc:annotations.doc
-                  ~fields )
+                  ~fields:(fun _ ->
+                    List.rev
+                    @@ List.filter_map graphql_fields_accumulator ~f:(fun g ->
+                           g.Accumulator.T.run () ) ) )
           }
         in
         obj#graphql_fields := graphql_fields ;
@@ -657,8 +653,7 @@ let%test_module "Test" =
 
       let manual_typ =
         Schema.(
-          obj "T1" ~doc
-            ~fields:
+          obj "T1" ~doc ~fields:(fun _ ->
               [ field "fooHello"
                   ~args:Arg.[]
                   ~typ:int
@@ -667,7 +662,7 @@ let%test_module "Test" =
                   ~args:Arg.[]
                   ~typ:(non_null (list (non_null string)))
                   ~resolve:(fun _ t -> t.bar)
-              ] )
+              ] ))
 
       let derived init =
         let open Graphql_fields in
@@ -753,13 +748,12 @@ let%test_module "Test" =
 
       let manual_typ =
         Schema.(
-          obj "T2" ?doc:None
-            ~fields:
+          obj "T2" ?doc:None ~fields:(fun _ ->
               [ field "foo"
                   ~args:Arg.[]
                   ~typ:T1.manual_typ
                   ~resolve:(fun _ t -> Or_ignore_test.to_option t.foo)
-              ] )
+              ] ))
 
       let derived init =
         let open Graphql_fields in

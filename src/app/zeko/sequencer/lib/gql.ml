@@ -1362,13 +1362,12 @@ module Types = struct
           Obj.magic x
         in
         let arg_typ =
-          let to_json x =
-            Yojson.Safe.to_basic
-              (Mina_base.Zkapp_command.zkapp_command_to_json x)
-          in
           { arg_typ = Mina_base.Zkapp_command.arg_typ () |> conv
-          ; to_json
-          ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
+          ; to_json =
+              (function
+              | x ->
+                  Yojson.Safe.to_basic
+                    (Mina_base.Zkapp_command.zkapp_command_to_json x) )
           }
         in
         obj "SendZkappInput" ~coerce:Fn.id

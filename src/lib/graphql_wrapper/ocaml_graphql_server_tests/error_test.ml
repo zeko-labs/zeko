@@ -49,11 +49,11 @@ let non_nullable_error_test () =
 let nested_nullable_error_test () =
   let obj_with_non_nullable_field =
     Schema.(
-      obj "obj" ~fields:
+      obj "obj" ~fields:(fun _ ->
           [ io_field "non_nullable" ~typ:(non_null int)
               ~args:Arg.[]
               ~resolve:(fun _ () -> Error "boom")
-          ] )
+          ] ))
   in
   let schema =
     Schema.(
@@ -79,12 +79,12 @@ let nested_nullable_error_test () =
 let error_in_list_test () =
   let foo =
     Schema.(
-      obj "Foo" ~fields:
+      obj "Foo" ~fields:(fun _ ->
           [ io_field "id" ~typ:int
               ~args:Arg.[]
               ~resolve:(fun _ (id, should_fail) ->
                 if should_fail then Error "boom" else Ok (Some id) )
-          ] )
+          ] ))
   in
   let schema =
     Schema.(

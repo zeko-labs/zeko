@@ -75,7 +75,7 @@ module Epoch_ledger = struct
   let typ () : ('ctx, Value.t option) Graphql_async.Schema.typ =
     let open Graphql_async in
     let open Schema in
-    obj "epochLedger" ~fields:
+    obj "epochLedger" ~fields:(fun _ ->
         [ field "hash"
             ~typ:
               (non_null @@ Mina_base_graphql.Graphql_scalars.LedgerHash.typ ())
@@ -85,7 +85,7 @@ module Epoch_ledger = struct
             ~typ:(non_null @@ Currency_graphql.Graphql_scalars.Amount.typ ())
             ~args:Arg.[]
             ~resolve:(fun _ { Poly.total_currency; _ } -> total_currency)
-        ]
+        ] )
 end
 
 module Epoch_data = struct
@@ -94,7 +94,7 @@ module Epoch_data = struct
   let typ name =
     let open Graphql_async in
     let open Schema in
-    obj name ~fields:
+    obj name ~fields:(fun _ ->
         [ field "ledger"
             ~typ:(non_null @@ Epoch_ledger.typ ())
             ~args:Arg.[]
@@ -115,7 +115,7 @@ module Epoch_data = struct
             ~typ:(non_null @@ Mina_numbers_graphql.Graphql_scalars.Length.typ ())
             ~args:Arg.[]
             ~resolve:(fun _ { Poly.epoch_length; _ } -> epoch_length)
-        ]
+        ] )
 end
 
 module Consensus_state = struct
@@ -128,7 +128,7 @@ module Consensus_state = struct
     let open Schema in
     let length = Mina_numbers_graphql.Graphql_scalars.Length.typ () in
     let amount = Currency_graphql.Graphql_scalars.Amount.typ () in
-    obj "ConsensusState" ~fields:
+    obj "ConsensusState" ~fields:(fun _ ->
         [ field "blockchainLength" ~typ:(non_null length)
             ~doc:"Length of the blockchain at this block"
             ~deprecated:(Deprecated (Some "use blockHeight instead"))
@@ -200,7 +200,7 @@ module Consensus_state = struct
         ; field "coinbaseReceiever" ~typ:(non_null public_key)
             ~args:Arg.[]
             ~resolve:(const coinbase_receiver)
-        ]
+        ] )
 end
 
 let%test_module "Roundtrip tests" =

@@ -3029,13 +3029,12 @@ module Input = struct
         Obj.magic x
       in
       let arg_typ =
-        let to_json x =
-          Yojson.Safe.to_basic
-            (Mina_base.Zkapp_command.zkapp_command_to_json x)
-        in
         { arg_typ = Mina_base.Zkapp_command.arg_typ () |> conv
-        ; to_json
-        ; to_graphql_const = (fun x -> const_value_of_json (to_json x))
+        ; to_json =
+            (function
+            | x ->
+                Yojson.Safe.to_basic
+                  (Mina_base.Zkapp_command.zkapp_command_to_json x) )
         }
       in
       obj "SendZkappInput" ~coerce:Fn.id
@@ -3080,62 +3079,13 @@ module Input = struct
   module RosettaTransaction = struct
     type input = Yojson.Basic.t
 
-    let to_default_json (command : Signed_command.t) =
-      let public_key pk = `Pk (Public_key.Compressed.to_base58_check pk) in
-      let token_id token = `Token_id (Token_id.to_string token) in
-      let valid_until =
-        let slot = Signed_command.valid_until command in
-        if Mina_numbers.Global_slot_since_genesis.equal slot
-             Mina_numbers.Global_slot_since_genesis.max_value
-        then None
-        else Some (Mina_numbers.Global_slot_since_genesis.to_uint32 slot)
-      in
-      let command_kind =
-        match Signed_command.payload command |> Signed_command_payload.body with
-        | Payment _ ->
-            `Payment
-        | Stake_delegation _ ->
-            `Delegation
-      in
-      let command' : Rosetta_lib.User_command_info.Partial.t =
-        { kind = command_kind
-        ; fee_payer = public_key (Signed_command.fee_payer_pk command)
-        ; source = public_key (Signed_command.fee_payer_pk command)
-        ; receiver = public_key (Signed_command.receiver_pk command)
-        ; fee_token = token_id (Signed_command.fee_token command)
-        ; token = token_id (Signed_command.token command)
-        ; fee = Currency.Fee.to_uint64 (Signed_command.fee command)
-        ; amount =
-            Option.map (Signed_command.amount command)
-              ~f:Currency.Amount.to_uint64
-        ; valid_until
-        ; memo =
-            (let memo = Signed_command.memo command in
-             if Signed_command_memo.equal memo Signed_command_memo.empty then
-               None
-             else Some (Signed_command_memo.to_string_hum memo) )
-        }
-      in
-      let transaction : Rosetta_lib.Transaction.Signed.t =
-        { command = command'
-        ; nonce = Mina_numbers.Account_nonce.to_uint32 (Signed_command.nonce command)
-        ; signature = Signed_command.signature command
-        }
-      in
-      Rosetta_lib.Transaction.Signed.render transaction
-      |> Result.map ~f:Rosetta_lib.Transaction.Signed.Rendered.to_yojson
-      |> Result.map_error ~f:(fun err ->
-             Error.of_string (Rosetta_lib.Errors.show err) )
-      |> Or_error.ok_exn |> Yojson.Safe.to_basic
-
     let arg_typ =
-      Schema.Arg.scalar_with_default_to_json "RosettaTransaction"
+      Schema.Arg.scalar "RosettaTransaction"
         ~doc:"A transaction encoded in the Rosetta format"
         ~coerce:(fun graphql_json ->
           Rosetta_lib.Transaction.to_mina_signed (Utils.to_yojson graphql_json)
           |> Result.map_error ~f:Error.to_string_hum )
-        ~to_json:Fn.id
-        ~to_default_json
+        ~to_json:(Fn.id : input -> input)
   end
 
   module AddAccountInput = struct
