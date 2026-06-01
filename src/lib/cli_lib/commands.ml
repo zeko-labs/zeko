@@ -1,4 +1,8 @@
 open Signature_lib
+
+(* Alias ocamlp-streams before it's hidden by open
+   Core_kernel *)
+module Streams = Stream
 open Core_kernel
 open Async
 
@@ -146,11 +150,11 @@ let validate_transaction =
     @@ fun () ->
     let num_fails = ref 0 in
     let num_transactions = ref 0 in
-    let jsons = Yojson.Safe.seq_from_channel In_channel.stdin in
+    let jsons = Yojson.Safe.stream_from_channel In_channel.stdin in
     let signature_kind = Mina_signature_kind.t_DEPRECATED in
     ( match
         Or_error.try_with (fun () ->
-            Stdlib.Seq.iter
+            Streams.iter
               (fun transaction_json ->
                 incr num_transactions ;
                 match
