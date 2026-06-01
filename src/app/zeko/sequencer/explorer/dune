@@ -46,7 +46,7 @@
   uri
   core
   core_kernel
- async
+  async
   async_unix
   ppx_inline_test.config)
  (preprocess

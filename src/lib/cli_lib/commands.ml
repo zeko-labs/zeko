@@ -149,14 +149,14 @@ let validate_transaction =
     ( Command.Param.return
     @@ fun () ->
     let num_fails = ref 0 in
-    let num_transactions = ref 0 in
+    (* TODO upgrade to yojson 2.0.0 when possible to use seq_from_channel
+     * instead of the deprecated stream interface *)
     let jsons = Yojson.Safe.stream_from_channel In_channel.stdin in
     let signature_kind = Mina_signature_kind.t_DEPRECATED in
     ( match
         Or_error.try_with (fun () ->
             Streams.iter
               (fun transaction_json ->
-                incr num_transactions ;
                 match
                   Rosetta_lib.Transaction.to_mina_signed transaction_json
                 with
@@ -186,15 +186,18 @@ let validate_transaction =
           (Yojson.Safe.pretty_to_string (Error_json.error_to_yojson err)) ;
         Format.printf "Invalid transaction.@." ;
         Core_kernel.exit 1 ) ;
-    if !num_transactions = 0 then (
-      Format.printf "Could not parse any transactions@." ;
-      exit 1 )
-    else if !num_fails > 0 then (
+    if !num_fails > 0 then (
       Format.printf "Some transactions failed to verify@." ;
       exit 1 )
-    else (
-      Format.printf "All transactions were valid@." ;
-      exit 0 ) )
+    else
+      let first = Streams.peek jsons in
+      match first with
+      | None ->
+          Format.printf "Could not parse any transactions@." ;
+          exit 1
+      | _ ->
+          Format.printf "All transactions were valid@." ;
+          exit 0 )
 
 module Vrf = struct
   let generate_witness =

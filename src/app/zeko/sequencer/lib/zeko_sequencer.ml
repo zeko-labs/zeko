@@ -193,6 +193,14 @@ module Sequencer = struct
               State.Last_committed_ledger.set sequencer_state
                 ~data:new_inner_ledger ;
               let () =
+                [%log debug]
+                  "Publishing explorer finality event: subject=%s status=%s \
+                   source_ledger_hash=%s target_ledger_hash=%s"
+                  Explorer_events.Subject.finality
+                  (Explorer_events.Finality_status.to_string
+                     Explorer_events.Finality_status.Committed )
+                  (Ledger_hash.to_decimal_string source_ledger_hash)
+                  (Ledger_hash.to_decimal_string target_ledger_hash) ;
                 Explorer_events.publish_finality nats_sink ~logger
                   ~status:Explorer_events.Finality_status.Committed
                   ~source_ledger_hash ~target_ledger_hash

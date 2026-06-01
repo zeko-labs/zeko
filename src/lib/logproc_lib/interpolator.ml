@@ -68,7 +68,7 @@ let interpolate { mode; max_interpolation_length; pretty_print } msg metadata =
   let open Result.Let_syntax in
   let format_json =
     if pretty_print then Yojson.Safe.pretty_to_string
-    else fun ?std json -> Yojson.Safe.to_string ?std json
+    else Yojson.Safe.to_string ?buf:None ?len:None
   in
   match mode with
   | Hidden ->
