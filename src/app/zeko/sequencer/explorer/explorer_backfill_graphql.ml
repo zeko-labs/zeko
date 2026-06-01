@@ -10,7 +10,7 @@ let backfill_job_typ :
     (Explorer_backfill_service.t, Explorer_backfill_service.job_snapshot option) typ
     =
   obj "BackfillJob"
-    ~fields:
+    ~fields:(fun _ ->
       [ field "id" ~typ:(non_null string) ~args:[]
           ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) -> job.id)
       ; field "fromHash" ~typ:(non_null string) ~args:[]
@@ -37,13 +37,13 @@ let backfill_job_typ :
       ; field "finishedAt" ~typ:string ~args:[]
           ~resolve:(fun _ (job : Explorer_backfill_service.job_snapshot) ->
             job.finished_at)
-      ]
+      ] )
 
 let progress_typ :
     (Explorer_backfill_service.t, Explorer_backfill_service.progress_snapshot option) typ
     =
   obj "BackfillProgress"
-    ~fields:
+    ~fields:(fun _ ->
       [ field "id" ~typ:(non_null string) ~args:[]
           ~resolve:
             (fun _ (progress : Explorer_backfill_service.progress_snapshot) ->
@@ -60,13 +60,13 @@ let progress_typ :
           ~resolve:
             (fun _ (progress : Explorer_backfill_service.progress_snapshot) ->
               progress.error)
-      ]
+      ] )
 
 let health_typ :
     (Explorer_backfill_service.t, Explorer_backfill_service.health_snapshot option) typ
     =
   obj "Health"
-    ~fields:
+    ~fields:(fun _ ->
       [ field "ok" ~typ:(non_null bool) ~args:[]
           ~resolve:(fun _ (value : Explorer_backfill_service.health_snapshot) ->
             value.ok)
@@ -76,7 +76,7 @@ let health_typ :
       ; field "startedAt" ~typ:(non_null string) ~args:[]
           ~resolve:(fun _ (value : Explorer_backfill_service.health_snapshot) ->
             value.started_at)
-      ]
+      ] )
 
 let query_fields =
   [ io_field "backfillJob" ~typ:backfill_job_typ
