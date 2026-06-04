@@ -377,29 +377,25 @@ module Deposit_request = struct
     |> Field.to_string
 
   let f ~t ~logger ({ deposit_params; transferrer } : t) =
-    let expected_amount =
+    let%bind.Result expected_amount =
       Currency.Amount.add deposit_params.amount
         Zeko_circuits_config.Inputs.bridge_proof_fee
-      |> Option.value_exn
+      |> Result.of_option ~error:(Error.of_string "Amount overflow")
     in
-    let () =
-      validate_transferrer ~expected_amount transferrer |> Or_error.ok_exn
-    in
+    let%bind.Result () = validate_transferrer ~expected_amount transferrer in
     (* Verify the transferrer signature and preverify the command
        on L1 before spending compute on the proof. *)
-    let forest, `Commitment commitment =
+    let%bind.Result forest, `Commitment commitment =
       precompute_commitments t { deposit_params; transferrer }
-      |> Or_error.ok_exn
     in
-    let () =
+    let%map.Result () =
       match Account_update.Poly.authorization transferrer with
       | Control.Poly.Signature signature ->
           verify_signature ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
             ~tx_commitment:commitment ~public_key:transferrer.body.public_key
             signature
-          |> Or_error.ok_exn
       | _ ->
-          failwith "Deposit_request: transferrer must be signed"
+          Error (Error.of_string "Deposit_request: transferrer must be signed")
     in
     let key = key { deposit_params } transferrer in
     ( key
@@ -562,28 +558,25 @@ module Withdrawal_request = struct
 
   let f ~t ~logger ({ withdrawal_params; transferrer } : t) =
     let bridge_fee = Zeko_circuits_config.Inputs.bridge_proof_fee in
-    let expected_amount =
+    let%bind.Result expected_amount =
       Currency.Amount.add withdrawal_params.amount bridge_fee
-      |> Option.value_exn
+      |> Result.of_option ~error:(Error.of_string "Amount overflow")
     in
-    let () =
-      validate_transferrer ~expected_amount transferrer |> Or_error.ok_exn
-    in
+    let%bind.Result () = validate_transferrer ~expected_amount transferrer in
     (* Verify the transferrer signature and preverify the command
        on L2 before spending compute on the proof. *)
-    let forest, `Commitment commitment =
+    let%bind.Result forest, `Commitment commitment =
       precompute_commitments t { withdrawal_params; transferrer }
-      |> Or_error.ok_exn
     in
-    let () =
+    let%map.Result () =
       match Account_update.Poly.authorization transferrer with
       | Control.Poly.Signature signature ->
           verify_signature ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
             ~tx_commitment:commitment ~public_key:transferrer.body.public_key
             signature
-          |> Or_error.ok_exn
       | _ ->
-          failwith "Withdrawal_request: transferrer must be signed"
+          Error
+            (Error.of_string "Withdrawal_request: transferrer must be signed")
     in
     let key = key { withdrawal_params } transferrer in
     ( key
@@ -807,8 +800,8 @@ module Finalize_deposit = struct
         t_ ) (helper_account_signature : Signature.t) =
     (* Verify the helper-account signature and preverify the
        command on L2 before spending compute on the proof. *)
-    let forest, `Commitment commitment =
-      precompute_commitments t request |> Or_error.ok_exn
+    let%bind.Result forest, `Commitment commitment =
+      precompute_commitments t request
     in
     let top_tree, helper, rest_calls =
       match forest with
@@ -818,10 +811,9 @@ module Finalize_deposit = struct
           failwith "Finalize_deposit: unexpected precomputed forest layout"
     in
     let helper_pk = helper.elt.account_update.body.public_key in
-    let () =
+    let%map.Result () =
       verify_signature ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
         ~tx_commitment:commitment ~public_key:helper_pk helper_account_signature
-      |> Or_error.ok_exn
     in
     let key = key request in
     ( key
@@ -1246,8 +1238,8 @@ module Finalize_cancelled_deposit = struct
         t_ ) (helper_account_signature : Signature.t) =
     (* Verify the helper-account signature and preverify the
        command on L1 before spending compute on the proof. *)
-    let forest, `Commitment commitment =
-      precompute_commitments t request |> Or_error.ok_exn
+    let%bind.Result forest, `Commitment commitment =
+      precompute_commitments t request
     in
     let helper_pk =
       match forest with
@@ -1271,10 +1263,9 @@ module Finalize_cancelled_deposit = struct
           failwith
             "Finalize_cancelled_deposit: unexpected precomputed forest layout"
     in
-    let () =
+    let%map.Result () =
       verify_signature ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
         ~tx_commitment:commitment ~public_key:helper_pk helper_account_signature
-      |> Or_error.ok_exn
     in
     let key = key request in
     ( key
@@ -1642,8 +1633,8 @@ module Finalize_withdrawal = struct
         t_ ) (helper_account_signature : Signature.t) =
     (* Verify the helper-account signature and preverify the
        command on L1 before spending compute on the proof. *)
-    let forest, `Commitment commitment =
-      precompute_commitments t request |> Or_error.ok_exn
+    let%bind.Result forest, `Commitment commitment =
+      precompute_commitments t request
     in
     let helper_pk =
       match forest with
@@ -1666,10 +1657,9 @@ module Finalize_withdrawal = struct
       | _ ->
           failwith "Finalize_withdrawal: unexpected precomputed forest layout"
     in
-    let () =
+    let%map.Result () =
       verify_signature ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
         ~tx_commitment:commitment ~public_key:helper_pk helper_account_signature
-      |> Or_error.ok_exn
     in
     let key = key request in
     ( key
