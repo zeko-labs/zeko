@@ -659,7 +659,10 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
                    Option.value_exn ~message:"Signature not found" x
                  in
                  Signature_table.insert c
-                   { target_ledger_hash; public_key; signature } ) ) )
+                   { target_ledger_hash = last_ledger_hash
+                   ; public_key
+                   ; signature
+                   } ) ) )
           t.db_pool
         >>| fun res ->
         if Ivar.is_full t.stop then ()
