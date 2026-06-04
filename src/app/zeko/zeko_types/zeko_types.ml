@@ -271,17 +271,25 @@ module Zkapp_rule_input = struct
     ; source_local_state : Local_state.t
     ; sequencer : Even_PC.t
     ; source_acc_set : Account_set.t
+    ; global_slot : Slot.t
     ; witness : Zkapp_rule_input_witness.serializable
     }
   [@@deriving yojson]
 
   let of_serializable ~proof_cache_db
-      ({ source_ledger; source_local_state; sequencer; source_acc_set; witness } :
+      ({ source_ledger
+       ; source_local_state
+       ; sequencer
+       ; source_acc_set
+       ; global_slot
+       ; witness
+       } :
         serializable ) : t =
     { source_ledger
     ; source_local_state
     ; sequencer
     ; source_acc_set
+    ; global_slot
     ; witness = Zkapp_rule_input_witness.of_serializable ~proof_cache_db witness
     }
 end

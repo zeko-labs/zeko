@@ -161,6 +161,7 @@ module Zkapp_rule_input = struct
     ; source_local_state : Local_state.t
     ; sequencer : Even_PC.t
     ; source_acc_set : Account_set.t
+    ; global_slot : Slot.t
     ; witness : Zkapp_rule_input_witness_V.t
     }
   [@@deriving snarky]
@@ -173,6 +174,7 @@ open struct
         ; source_local_state
         ; sequencer
         ; source_acc_set
+        ; global_slot
         ; witness
         }
       (account_updates_data :
@@ -196,6 +198,7 @@ open struct
       type t =
         { fee_excess : Currency.Amount.Signed.var
         ; supply_increase : Currency.Amount.Signed.var
+        ; global_slot : Slot.var
         }
 
       let fee_excess { fee_excess; _ } = fee_excess
@@ -206,7 +209,7 @@ open struct
 
       let set_supply_increase t supply_increase = { t with supply_increase }
 
-      let block_global_slot _ = constant Slot.typ Slot.zero
+      let block_global_slot { global_slot; _ } = global_slot
     end in
     let* ( ( (((((g, l), vks), must_verify_zkapp), zkapp_input), accounts_new)
            , global_slot_ranges )
@@ -252,6 +255,7 @@ open struct
       let g : Global_state.t =
         { fee_excess = Currency.Amount.Signed.(constant typ zero)
         ; supply_increase = Currency.Amount.Signed.(constant typ zero)
+        ; global_slot
         }
       in
       foldl account_updates_data ~init:(g, l)
@@ -371,6 +375,30 @@ open struct
         | Some x ->
             fun y -> slot_range_intersection x y >>| fun x -> Some x )
       >>| Option.value ~default:Slot_range.(constant typ infinite)
+    in
+    (* [global_slot] is the slot used for timing checks during the fold (it is
+       what [block_global_slot] returns). It is a prover-supplied witness, so on
+       its own nothing stops a prover from claiming a future slot to over-vest a
+       timed account. We make it sound by *gating the commit* on it: we raise the
+       lower bound of [global_slot_range] to include [global_slot].
+
+       The commit rule installs [global_slot_range] as the commit's
+       [global_slot_since_genesis] network precondition, so L1 enforces
+       [global_slot_range.lower <= s] for the real inclusion slot [s]. After this
+       raise, [global_slot <= global_slot_range.lower <= s], i.e. the commit can
+       only land once the claimed slot has actually arrived on L1. Timing is
+       monotonic (a later slot only vests more), so a check at [global_slot] is
+       never more permissive than one at the true slot [s] -- sound. An honest
+       sequencer sets [global_slot] to the current slot; a malicious one that
+       claims a future slot merely makes its own commit un-landable until then.
+
+       Intersection takes the max of the lowers, so this composes with any
+       explicit global-slot precondition and survives merges (which intersect
+       ranges too). *)
+    let* global_slot_range =
+      slot_range_intersection global_slot_range
+        ( { lower = global_slot; upper = constant Slot.typ Slot.max_value }
+          : Slot_range.var )
     in
     let target_ledger, _ = l.ledger in
     let* stack_frame_digest =
