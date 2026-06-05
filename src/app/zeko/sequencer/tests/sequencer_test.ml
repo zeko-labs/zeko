@@ -843,8 +843,9 @@ let () =
         Bridge_prover.(
           execute_request ~label:"SubmitDeposit" ~logger ~executor:l1_executor
             !sequencer.bridge_prover
-            (Deposit_request.f ~t:!sequencer.bridge_prover ~logger
-               { deposit_params; transferrer = transferrer_update } ))
+            ( Deposit_request.f ~t:!sequencer.bridge_prover ~logger
+                { deposit_params; transferrer = transferrer_update }
+            |> Or_error.ok_exn ))
         >>| Or_error.ok_exn
       in
       let deposit ~amount ~(account : Keypair.t) ~timeout :
@@ -1095,8 +1096,9 @@ let () =
         Bridge_prover.(
           execute_request ~label:"FinalizeDeposit" ~logger ~executor:l2_executor
             !sequencer.bridge_prover
-            (Finalize_deposit.f ~t:!sequencer.bridge_prover ~logger witness
-               helper_account_signature ))
+            ( Finalize_deposit.f ~t:!sequencer.bridge_prover ~logger witness
+                helper_account_signature
+            |> Or_error.ok_exn ))
         >>| Or_error.ok_exn
       in
 
@@ -1307,8 +1309,9 @@ let () =
         Bridge_prover.(
           execute_request ~label:"FinalizeCancelledDeposit" ~logger
             ~executor:l1_executor !sequencer.bridge_prover
-            (Finalize_cancelled_deposit.f ~t:!sequencer.bridge_prover ~logger
-               witness helper_account_signature ))
+            ( Finalize_cancelled_deposit.f ~t:!sequencer.bridge_prover ~logger
+                witness helper_account_signature
+            |> Or_error.ok_exn ))
         >>| Or_error.ok_exn
       in
       print_endline "(* Cancel timeouted deposits 7-9 *)" ;
@@ -1377,8 +1380,9 @@ let () =
         Bridge_prover.(
           execute_request ~label:"SubmitWithdrawal" ~logger
             ~executor:l2_executor !sequencer.bridge_prover
-            (Withdrawal_request.f ~t:!sequencer.bridge_prover ~logger
-               { withdrawal_params; transferrer = transferrer_update } ))
+            ( Withdrawal_request.f ~t:!sequencer.bridge_prover ~logger
+                { withdrawal_params; transferrer = transferrer_update }
+            |> Or_error.ok_exn ))
         >>| Or_error.ok_exn
       in
 
@@ -1619,8 +1623,9 @@ let () =
         Bridge_prover.(
           execute_request ~label:"FinalizeWithdrawal" ~logger
             ~executor:l1_executor !sequencer.bridge_prover
-            (Finalize_withdrawal.f ~t:!sequencer.bridge_prover ~logger witness
-               helper_account_signature ))
+            ( Finalize_withdrawal.f ~t:!sequencer.bridge_prover ~logger witness
+                helper_account_signature
+            |> Or_error.ok_exn ))
         >>| Or_error.ok_exn
       in
 

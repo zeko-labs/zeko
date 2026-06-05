@@ -2366,16 +2366,18 @@ module Mutations = struct
           else
             let logger = Zeko_sequencer.(sequencer.logger) in
             let t = Zeko_sequencer.(sequencer.bridge_prover) in
-            let key, d =
-              Bridge_prover.Deposit_request.f ~t ~logger
-                { deposit_params; transferrer }
-            in
-            let d =
-              Bridge_prover.execute_request t ~logger ~executor:l1_executor
-                (key, d)
-              >>| ignore
-            in
-            don't_wait_for d ; return (Ok key) )
+            return
+              (let%bind.Result key, d =
+                 Bridge_prover.Deposit_request.f ~t ~logger
+                   { deposit_params; transferrer }
+                 |> Result.map_error ~f:Error.to_string_hum
+               in
+               let d =
+                 Bridge_prover.execute_request t ~logger ~executor:l1_executor
+                   (key, d)
+                 >>| ignore
+               in
+               don't_wait_for d ; Ok key ) )
 
     let withdrawal_request ~proof_cache_db =
       io_field "proveWithdrawalRequest" ~doc:"Prove withdrawal request"
@@ -2392,18 +2394,20 @@ module Mutations = struct
                       { withdrawal_params; transferrer } ->
           let logger = Zeko_sequencer.(sequencer.logger) in
           let t = Zeko_sequencer.(sequencer.bridge_prover) in
-          let key, d =
-            Bridge_prover.Withdrawal_request.f
-              ~t:Zeko_sequencer.(sequencer.bridge_prover)
-              ~logger:Zeko_sequencer.(sequencer.logger)
-              { withdrawal_params; transferrer }
-          in
-          let d =
-            Bridge_prover.execute_request t ~logger ~executor:l2_executor
-              (key, d)
-            >>| ignore
-          in
-          don't_wait_for d ; return (Ok key) )
+          return
+            (let%bind.Result key, d =
+               Bridge_prover.Withdrawal_request.f
+                 ~t:Zeko_sequencer.(sequencer.bridge_prover)
+                 ~logger:Zeko_sequencer.(sequencer.logger)
+                 { withdrawal_params; transferrer }
+               |> Result.map_error ~f:Error.to_string_hum
+             in
+             let d =
+               Bridge_prover.execute_request t ~logger ~executor:l2_executor
+                 (key, d)
+               >>| ignore
+             in
+             don't_wait_for d ; Ok key ) )
 
     let finalize_deposit ~proof_cache_db =
       io_field "finalizeDeposit" ~doc:"Finalize a deposit"
@@ -2430,26 +2434,28 @@ module Mutations = struct
           in
           let logger = Zeko_sequencer.(sequencer.logger) in
           let t = Zeko_sequencer.(sequencer.bridge_prover) in
-          let key, d =
-            Bridge_prover.Finalize_deposit.f
-              ~t:Zeko_sequencer.(sequencer.bridge_prover)
-              ~logger:Zeko_sequencer.(sequencer.logger)
-              { ase_source
-              ; ase_elems
-              ; check_accepted_init
-              ; check_accepted_elems
-              ; prev_next_deposit
-              ; prev_nonce
-              ; helper_account_new
-              }
-              helper_account_signature
-          in
-          let d =
-            Bridge_prover.execute_request t ~logger ~executor:l2_executor
-              (key, d)
-            >>| ignore
-          in
-          don't_wait_for d ; return (Ok key) )
+          return
+            (let%bind.Result key, d =
+               Bridge_prover.Finalize_deposit.f
+                 ~t:Zeko_sequencer.(sequencer.bridge_prover)
+                 ~logger:Zeko_sequencer.(sequencer.logger)
+                 { ase_source
+                 ; ase_elems
+                 ; check_accepted_init
+                 ; check_accepted_elems
+                 ; prev_next_deposit
+                 ; prev_nonce
+                 ; helper_account_new
+                 }
+                 helper_account_signature
+               |> Result.map_error ~f:Error.to_string_hum
+             in
+             let d =
+               Bridge_prover.execute_request t ~logger ~executor:l2_executor
+                 (key, d)
+               >>| ignore
+             in
+             don't_wait_for d ; Ok key ) )
 
     let finalize_withdrawal ~proof_cache_db =
       io_field "finalizeWithdrawal" ~doc:"Finalize a withdrawal"
@@ -2483,31 +2489,33 @@ module Mutations = struct
           in
           let logger = Zeko_sequencer.(sequencer.logger) in
           let t = Zeko_sequencer.(sequencer.bridge_prover) in
-          let key, d =
-            Bridge_prover.Finalize_withdrawal.f
-              ~t:Zeko_sequencer.(sequencer.bridge_prover)
-              ~logger:Zeko_sequencer.(sequencer.logger)
-              { public_key
-              ; commit
-              ; before_commit
-              ; commit_ase_source
-              ; commit_ase_elems
-              ; before_withdrawal
-              ; withdrawal_ase_source
-              ; withdrawal_ase_elems
-              ; prev_next_withdrawal
-              ; withdrawal_params
-              ; prev_nonce
-              ; helper_account_new
-              }
-              helper_account_signature
-          in
-          let d =
-            Bridge_prover.execute_request t ~logger ~executor:l1_executor
-              (key, d)
-            >>| ignore
-          in
-          don't_wait_for d ; return (Ok key) )
+          return
+            (let%bind.Result key, d =
+               Bridge_prover.Finalize_withdrawal.f
+                 ~t:Zeko_sequencer.(sequencer.bridge_prover)
+                 ~logger:Zeko_sequencer.(sequencer.logger)
+                 { public_key
+                 ; commit
+                 ; before_commit
+                 ; commit_ase_source
+                 ; commit_ase_elems
+                 ; before_withdrawal
+                 ; withdrawal_ase_source
+                 ; withdrawal_ase_elems
+                 ; prev_next_withdrawal
+                 ; withdrawal_params
+                 ; prev_nonce
+                 ; helper_account_new
+                 }
+                 helper_account_signature
+               |> Result.map_error ~f:Error.to_string_hum
+             in
+             let d =
+               Bridge_prover.execute_request t ~logger ~executor:l1_executor
+                 (key, d)
+               >>| ignore
+             in
+             don't_wait_for d ; Ok key ) )
 
     let cancel_deposit ~proof_cache_db =
       io_field "cancelDeposit" ~doc:"Cancel a deposit"
@@ -2541,33 +2549,35 @@ module Mutations = struct
           in
           let logger = Zeko_sequencer.(sequencer.logger) in
           let t = Zeko_sequencer.(sequencer.bridge_prover) in
-          let key, d =
-            Bridge_prover.Finalize_cancelled_deposit.f
-              ~t:Zeko_sequencer.(sequencer.bridge_prover)
-              ~logger:Zeko_sequencer.(sequencer.logger)
-              { public_key
-              ; commit
-              ; before_commit
-              ; commit_ase_source
-              ; commit_ase_elems
-              ; sync_ase_source
-              ; sync_ase_elems
-              ; check_accepted_init
-              ; check_accepted_elems
-              ; check_accepted_ase_source
-              ; check_accepted_ase_elems
-              ; prev_next_cancelled_deposit
-              ; prev_nonce
-              ; helper_account_new
-              }
-              helper_account_signature
-          in
-          let d =
-            Bridge_prover.execute_request t ~logger ~executor:l1_executor
-              (key, d)
-            >>| ignore
-          in
-          don't_wait_for d ; return (Ok key) )
+          return
+            (let%bind.Result key, d =
+               Bridge_prover.Finalize_cancelled_deposit.f
+                 ~t:Zeko_sequencer.(sequencer.bridge_prover)
+                 ~logger:Zeko_sequencer.(sequencer.logger)
+                 { public_key
+                 ; commit
+                 ; before_commit
+                 ; commit_ase_source
+                 ; commit_ase_elems
+                 ; sync_ase_source
+                 ; sync_ase_elems
+                 ; check_accepted_init
+                 ; check_accepted_elems
+                 ; check_accepted_ase_source
+                 ; check_accepted_ase_elems
+                 ; prev_next_cancelled_deposit
+                 ; prev_nonce
+                 ; helper_account_new
+                 }
+                 helper_account_signature
+               |> Result.map_error ~f:Error.to_string_hum
+             in
+             let d =
+               Bridge_prover.execute_request t ~logger ~executor:l1_executor
+                 (key, d)
+               >>| ignore
+             in
+             don't_wait_for d ; Ok key ) )
 
     let commands ~proof_cache_db =
       [ deposit_request ~proof_cache_db
