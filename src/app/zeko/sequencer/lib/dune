@@ -12,6 +12,9 @@
   indexed_merkle_tree
   utils
   gql_client
+  explorer_events
+  nats-client
+  nats-client-async
   ;; mina ;;
   mina_base
   mina_base.import

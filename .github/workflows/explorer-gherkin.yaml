@@ -1,0 +1,46 @@
+# Runs the explorer Gherkin acceptance tests independently from the sequencer
+# integration suite so PR feedback is not blocked on the longer sequencer flow.
+---
+name: Explorer Gherkin
+
+on:
+  push:
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  explorer-gherkin:
+    name: "Explorer Gherkin"
+    runs-on: warp-ubuntu-latest-x64-16x
+    services:
+      nats:
+        image: nats:2-alpine
+        command: -js
+        ports:
+          - 4222:4222
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: 🧰 Setup Zeko CI
+        uses: ./.github/actions/setup-zeko-ci
+        timeout-minutes: 20
+        with:
+          opam-cache-key: zeko_opam_dependencies-${{ hashFiles('./opam.export') }}
+          build-cache-key: zeko_build-${{ hashFiles('./opam.export') }}
+      - name: 🧪 Run explorer Gherkin tests
+        run: |
+          for i in $(seq 1 30); do
+            nc -z 127.0.0.1 4222 && break
+            if [ "$i" -eq 30 ]; then
+              echo "Timed out waiting for NATS" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          NATS_URL="nats://127.0.0.1:4222" \
+            opam exec -- env -u DUNE_RPC dune runtest --profile=devnet \
+            src/app/zeko/sequencer/explorer/tests

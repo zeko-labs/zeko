@@ -389,7 +389,7 @@ module Sequencer_spec = struct
     ; l2_executor : Executor.t
     }
 
-  let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir
+  let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir ?nats_url
       ?checkpoints_dir ?(commit_validity_period = Global_slot_span.of_int 10)
       ~logger ~postgres_uri ~gql_uri ~da_config ~da_keys ~da_quorum ~mq_host
       ~slot_acceptance () =
@@ -556,14 +556,16 @@ module Sequencer_spec = struct
 
     let sequencer =
       run (fun () ->
-          Sequencer.create ~logger ~max_pool_size:10 ~commitment_period_sec:0.
+          Sequencer.create ?nats_url ~logger ~max_pool_size:10
+            ~commitment_period_sec:0.
             ~da_config ~da_keys ~da_quorum ~db_dir ~postgres_uri ~l1_uri:gql_uri
             ~archive_uri:gql_uri ~signer ~deposit_delay_blocks:delay_deposit
             ~mq_host ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
             ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
             ~l1_config ~commit_validity_period ~checkpoints_dir
             ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
-            ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
+            ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
+            () )
     in
     let l1_executor =
       Executor.create ~kind:(`L1 gql_uri)

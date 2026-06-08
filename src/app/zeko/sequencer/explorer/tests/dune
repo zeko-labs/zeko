@@ -1,0 +1,92 @@
+; Gherkin-backed acceptance tests for the explorer publish and backfill contract.
+
+(library
+ (name explorer_feature_parser)
+ (wrapped false)
+ (modules feature_parser)
+ (libraries core))
+
+(library
+ (name explorer_gherkin_tests)
+ (inline_tests)
+ (modules explorer_gherkin_tests)
+ (libraries
+  explorer_feature_parser
+  explorer_events
+  explorer_backfill
+  sequencer_lib
+  is_compile_simple_real_real
+  da_layer
+  zeko_constants
+  ;; mina ;;
+  mina_base
+  snark_params
+  ;; opam libraries ;;
+  graphql-async
+  graphql_parser
+  yojson
+  core
+  core_kernel
+  async
+  async_unix
+  nats-client
+  nats-client-async
+  ppx_inline_test.config)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina)))
+
+(executable
+ (name explorer_nats_gherkin_tests)
+ (modules explorer_nats_gherkin_tests)
+ (libraries
+  explorer_feature_parser
+  explorer_events
+  explorer_backfill
+  sequencer_lib
+  is_compile_simple_real_real
+  da_layer
+  zeko_constants
+  ;; mina ;;
+  mina_base
+  snark_params
+  ;; opam libraries ;;
+  yojson
+  core
+  core_kernel
+  async
+  async_unix
+  nats-client
+  nats-client-async)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina)))
+
+(executable
+ (name explorer_e2e_gherkin_tests)
+ (modules explorer_e2e_gherkin_tests)
+ (libraries
+  explorer_feature_parser
+  explorer_events
+  explorer_backfill
+  sequencer_lib
+  test_spec
+  is_compile_simple_real_real
+  da_layer
+  zeko_constants
+  ;; mina ;;
+  mina_base
+  snark_params
+  ;; opam libraries ;;
+  yojson
+  core
+  core_kernel
+  async
+  async_unix
+  nats-client
+  nats-client-async)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina)))
+
+(rule
+ (alias runtest)
+ (action
+  (run ./explorer_nats_gherkin_tests.exe)))

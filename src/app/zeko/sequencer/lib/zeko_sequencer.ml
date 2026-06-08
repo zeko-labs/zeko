@@ -72,6 +72,7 @@ module Sequencer = struct
       type t =
         { provers : Zeko_prover.Client.t
         ; da_client : Da_layer.Client.t
+        ; nats_sink : Explorer_events.sink
         ; executor : Executor.t
         ; config : Config.t
         ; sequencer_state : State.t
@@ -135,6 +136,7 @@ module Sequencer = struct
 
       let process
           ({ da_client
+           ; nats_sink
            ; provers
            ; executor
            ; config
@@ -182,17 +184,34 @@ module Sequencer = struct
               let%bind _hash =
                 Executor.send_zkapp_command ~logger executor command
               in
+              let source_ledger_hash =
+                Sparse_ledger.merkle_root old_inner_ledger
+              in
+              let target_ledger_hash =
+                Sparse_ledger.merkle_root new_inner_ledger
+              in
               State.Last_committed_ledger.set sequencer_state
                 ~data:new_inner_ledger ;
+              let () =
+                [%log debug]
+                  "Publishing explorer finality event: subject=%s status=%s \
+                   source_ledger_hash=%s target_ledger_hash=%s"
+                  Explorer_events.Subject.finality
+                  (Explorer_events.Finality_status.to_string
+                     Explorer_events.Finality_status.Committed )
+                  (Ledger_hash.to_decimal_string source_ledger_hash)
+                  (Ledger_hash.to_decimal_string target_ledger_hash) ;
+                Explorer_events.publish_finality nats_sink ~logger
+                  ~status:Explorer_events.Finality_status.Committed
+                  ~source_ledger_hash ~target_ledger_hash
+              in
               return (fun () ->
                   let open Relational_db in
                   Pool.use
                     (fun conn ->
                       Committer.Commit_table.insert conn
-                        { source_ledger_hash =
-                            Sparse_ledger.merkle_root old_inner_ledger
-                        ; target_ledger_hash =
-                            Sparse_ledger.merkle_root new_inner_ledger
+                        { source_ledger_hash
+                        ; target_ledger_hash
                         ; witness = commit_witness
                         } )
                     db_pool ) )
@@ -236,6 +255,9 @@ module Sequencer = struct
     ; merger : Merger.M.t
     ; merger_ctx : Merger.Context.t
     ; da_client : Da_layer.Client.t
+    ; nats_client : Nats_client_async.client option
+    ; nats_sink : Explorer_events.sink
+    ; instance_id : string
     ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
@@ -245,6 +267,13 @@ module Sequencer = struct
     let logger = t.logger in
     [%log info] "Shutting down sequencer" ;
     Ivar.fill t.closed () ;
+    let%bind () =
+      match t.nats_client with
+      | None ->
+          return ()
+      | Some client ->
+          Nats_client_async.close client
+    in
     Da_layer.Client.stop t.da_client ;
     L.Db.close t.ledger ;
     Indexed_merkle_tree.Db.close t.imt ;
@@ -278,6 +307,48 @@ module Sequencer = struct
       ; unproved_ledger_hash = get_root t
       ; committed_ledger_hash = Field.zero
       }
+
+  let publish_transaction_event t ~kind ~target_ledger_hash ~genesis ~diff =
+    let logger = t.logger in
+    [%log debug]
+      "Publishing explorer transaction event: subject=%s kind=%s \
+       target_ledger_hash=%s genesis=%b"
+      Explorer_events.Subject.transactions
+      (Explorer_events.Transaction_kind.to_string kind)
+      (Ledger_hash.to_decimal_string target_ledger_hash)
+      genesis ;
+    Explorer_events.publish_transaction t.nats_sink ~kind
+      ~target_ledger_hash ~genesis ~diff
+
+  let publish_finality_event t ~status ~source_ledger_hash ~target_ledger_hash =
+    let logger = t.logger in
+    [%log debug]
+      "Publishing explorer finality event: subject=%s status=%s \
+       source_ledger_hash=%s target_ledger_hash=%s"
+      Explorer_events.Subject.finality
+      (Explorer_events.Finality_status.to_string status)
+      (Ledger_hash.to_decimal_string source_ledger_hash)
+      (Ledger_hash.to_decimal_string target_ledger_hash) ;
+    Explorer_events.publish_finality t.nats_sink ~logger:t.logger ~status
+      ~source_ledger_hash ~target_ledger_hash
+
+  let publish_health_event t =
+    let logger = t.logger in
+    let { State_hashes.unproved_ledger_hash; _ } = get_latest_state t in
+    [%log debug]
+      "Publishing explorer health event: subject=%s service=%s \
+       last_published_hash=%s unproved_hash=%s"
+      Explorer_events.Subject.health "sequencer-nats-publisher"
+      (Ledger_hash.to_decimal_string (get_root t))
+      (Ledger_hash.to_decimal_string unproved_ledger_hash) ;
+    Explorer_events.publish_health t.nats_sink ~logger:t.logger
+      ~service:"sequencer-nats-publisher" ~instance_id:t.instance_id
+      ~status:"ok" ~last_published_hash:(get_root t)
+      ~unproved_hash:unproved_ledger_hash ()
+
+  let diff_with_metadata ~logger ~diff ~acc_set_openings =
+    Da_layer.Diff.add_time_and_acc_set ~logger diff
+      ~acc_set:(Indexed_merkle_tree.Sparse.merkle_root acc_set_openings)
 
   let apply_events_and_actions ledger archive command =
     let ledger = L.of_database ledger in
@@ -512,14 +583,24 @@ module Sequencer = struct
                    Account_id.derive_token_id
                      ~owner:(Account.identifier account) )
           in
+          let acc_set_openings =
+            Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger ~db:t.imt
+              ~keys:new_accounts_keys
+          in
+          let target_ledger_hash = L.Db.merkle_root t.ledger in
+          let published_diff =
+            diff_with_metadata ~logger:t.logger ~diff ~acc_set_openings
+          in
           let%bind () =
             Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-              ~ledger_openings:source_ledger
-              ~acc_set_openings:
-                (Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
-                   ~db:t.imt ~keys:new_accounts_keys )
-              ~diff
-              ~target_ledger_hash:(L.Db.merkle_root t.ledger)
+              ~ledger_openings:source_ledger ~acc_set_openings ~diff
+              ~target_ledger_hash
+          in
+          let () =
+            publish_transaction_event t
+              ~kind:Explorer_events.Transaction_kind.User_command
+              ~target_ledger_hash
+              ~genesis:false ~diff:published_diff
           in
 
           (* Add witnesses to the merger *)
@@ -592,14 +673,23 @@ module Sequencer = struct
                      Account_id.derive_token_id
                        ~owner:(Account.identifier account) )
             in
+            let acc_set_openings =
+              Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
+                ~db:t.imt ~keys:new_accounts_keys
+            in
+            let target_ledger_hash = L.Db.merkle_root t.ledger in
+            let published_diff =
+              diff_with_metadata ~logger:t.logger ~diff ~acc_set_openings
+            in
             let%bind () =
               Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-                ~ledger_openings:source_ledger
-                ~acc_set_openings:
-                  (Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
-                     ~db:t.imt ~keys:new_accounts_keys )
-                ~diff
-                ~target_ledger_hash:(L.Db.merkle_root t.ledger)
+                ~ledger_openings:source_ledger ~acc_set_openings ~diff
+                ~target_ledger_hash
+            in
+            let () =
+              publish_transaction_event t
+                ~kind:Explorer_events.Transaction_kind.Fee_transfer
+                ~target_ledger_hash ~genesis:false ~diff:published_diff
             in
             match%map
               Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
@@ -775,6 +865,12 @@ module Sequencer = struct
         let%bind () =
           match%map ledger_applied >>| Or_error.ok_exn with
           | Some (stmt, _) ->
+              let () =
+                publish_finality_event t
+                  ~status:Explorer_events.Finality_status.Proved
+                  ~source_ledger_hash:stmt.source_ledger
+                  ~target_ledger_hash:stmt.target_ledger
+              in
               [%log info] "Committed: %s -> %s"
                 (Ledger_hash.to_decimal_string stmt.source_ledger)
                 (Ledger_hash.to_decimal_string stmt.target_ledger)
@@ -786,7 +882,26 @@ module Sequencer = struct
       in
       don't_wait_for (within' ~monitor:Monitor.main (fun () -> go ()))
 
-  let sync ~logger ({ config; _ } as t) da_config source =
+  let run_health_heartbeat t =
+    let period = Time_ns.Span.of_sec 30. in
+    let rec go () =
+      let () = publish_health_event t in
+      let%bind () = Deferred.any [ after period; Ivar.read t.closed ] in
+      if Ivar.is_full t.closed then return () else go ()
+    in
+    don't_wait_for (within' ~monitor:Monitor.main (fun () -> go ()))
+
+  let replay_genesis_flag
+      ~(source : [ `Genesis | `Specific of Field.t ])
+      ~current_chunk ~current_diff =
+    match source with
+    | `Genesis ->
+        current_chunk = 0 && current_diff = 0
+    | `Specific _ ->
+        false
+
+  let sync ~logger ({ config; _ } as t) da_config
+      (source : [ `Genesis | `Specific of Field.t ]) =
     [%log info] "Syncing" ;
     let%bind commited_ledger_hash =
       Gql_client.infer_state ~logger config.l1_uri
@@ -829,11 +944,20 @@ module Sequencer = struct
                    , `Target target_ledger_hash )
                  ->
                 let genesis = i = 0 in
+                let published_diff =
+                  diff_with_metadata ~logger:t.logger ~diff ~acc_set_openings
+                in
                 let%map () =
                   Da_layer.Client.enqueue_diff t.da_client ~diff
                     ~ledger_openings ~acc_set_openings ~target_ledger_hash
                     ~genesis
                 in
+                publish_transaction_event t
+                  ~kind:
+                    (if genesis then
+                       Explorer_events.Transaction_kind.Genesis_replay
+                     else Explorer_events.Transaction_kind.Sync_replay)
+                  ~target_ledger_hash ~genesis ~diff:published_diff ;
                 genesis || acc )
           in
           [%log info] "Enqueued genesis diff" ;
@@ -884,15 +1008,31 @@ module Sequencer = struct
             Da_layer.Client.get_acc_set_openings ~logger ~diff ~ledger_openings
               ~imt:t.imt
           in
+          let target_ledger_hash = L.Db.merkle_root t.ledger in
+          let genesis =
+            (not inserted_genesis)
+            && replay_genesis_flag ~source ~current_chunk ~current_diff
+          in
+          let published_diff =
+            diff_with_metadata ~logger:t.logger
+              ~diff:(Da_layer.Diff.drop_time diff)
+              ~acc_set_openings
+          in
 
           (* Store diff to DA client *)
           let%bind () =
             Da_layer.Client.enqueue_diff t.da_client
               ~diff:(Da_layer.Diff.drop_time diff)
               ~ledger_openings ~acc_set_openings
-              ~target_ledger_hash:(L.Db.merkle_root t.ledger)
-              ~genesis:
-                ((not inserted_genesis) && current_chunk = 0 && current_diff = 0)
+              ~target_ledger_hash ~genesis
+          in
+          let () =
+            publish_transaction_event t
+              ~kind:
+                (if genesis then
+                   Explorer_events.Transaction_kind.Genesis_replay
+                 else Explorer_events.Transaction_kind.Sync_replay)
+              ~target_ledger_hash ~genesis ~diff:published_diff
           in
 
           (* Add events and actions *)
@@ -1030,11 +1170,12 @@ module Sequencer = struct
     | true, false | false, true ->
         failwithf "Corrupted db %s and %s" ledger_dir imt_dir ()
 
-  let create ~logger ~max_pool_size ~commitment_period_sec ~da_config ~da_keys
+  let create ?nats_url ~logger ~max_pool_size ~commitment_period_sec ~da_config
+      ~da_keys
       ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
       ~(signer : Signer_service.Signer.t) ~deposit_delay_blocks ~mq_host
       ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
-      ~commit_validity_period ~commit_fee ~bridge_txn_fee =
+      ~commit_validity_period ~commit_fee ~bridge_txn_fee () =
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let db_dir =
@@ -1074,6 +1215,20 @@ module Sequencer = struct
       Da_layer.Client.create ~logger ~config:da_config ~quorum:da_quorum
         ~da_keys ~db_pool
     in
+    let%bind nats_client =
+      match nats_url with
+      | None ->
+          return None
+      | Some uri ->
+          Explorer_events.connect_and_ensure_jetstream ~logger uri
+    in
+    let nats_sink =
+      match nats_client with
+      | None ->
+          Explorer_events.noop_sink
+      | Some client ->
+          Explorer_events.create_nats_sink ~logger client
+    in
     let kvdb = L.Db.zeko_kvdb ledger in
     let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in
     let executor =
@@ -1085,6 +1240,7 @@ module Sequencer = struct
       Merger.Context.
         { provers
         ; da_client
+        ; nats_sink
         ; executor
         ; config
         ; sequencer_state = kvdb
@@ -1225,6 +1381,9 @@ module Sequencer = struct
       ; archive
       ; config
       ; da_client
+      ; nats_client
+      ; nats_sink
+      ; instance_id = Uuid.to_string (Uuid_unix.create ())
       ; bridge_prover
       ; merger
       ; merger_ctx
@@ -1251,5 +1410,6 @@ module Sequencer = struct
     let () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)
     in
+    let () = run_health_heartbeat t in
     return t
 end

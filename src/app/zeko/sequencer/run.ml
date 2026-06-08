@@ -9,7 +9,7 @@ module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
-    ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
+    ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee ~nats_url
     ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
@@ -37,9 +37,10 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
         Sequencer.create ~logger ~max_pool_size ~da_config ~da_keys ~da_quorum
           ~db_dir:(Some db_dir) ~checkpoints_dir:(Some checkpoints_dir)
           ~postgres_uri ~l1_uri ~archive_uri
-          ~commitment_period_sec:commitment_period ~deposit_delay_blocks ~signer
+          ~commitment_period_sec:commitment_period ~deposit_delay_blocks
+          ?nats_url ~signer
           ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db
-          ~l1_config ~commit_validity_period ~commit_fee ~bridge_txn_fee )
+          ~l1_config ~commit_validity_period ~commit_fee ~bridge_txn_fee () )
   in
 
   Sequencer.run_committer sequencer ;
@@ -128,6 +129,9 @@ let () =
        flag "--minimum-fee"
          (optional_with_default 0.01 float)
          ~doc:"float Minimum fee for the sequencer"
+     and nats_url =
+       flag "--nats-url" (optional string)
+         ~doc:"string Optional NATS URL for explorer event publishing"
      and slot_acceptance_m =
        flag "--slot-acceptance"
          (optional_with_default 60. float)
@@ -155,6 +159,7 @@ let () =
      in
      let l1_uri = Uri.of_string l1_uri in
      let archive_uri = Uri.of_string archive_uri in
+     let nats_url = Option.map nats_url ~f:Uri.of_string in
      let mq_host = Host_and_port.of_string mq_host in
      let logger = Logger.create () in
      let postgres_uri = Uri.of_string postgres_uri in
@@ -171,5 +176,6 @@ let () =
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
        ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
        ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-       ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee )
+       ~nats_url ~slot_acceptance ~commit_validity_period ~commit_fee
+       ~bridge_txn_fee )
   |> Command_unix.run

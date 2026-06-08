@@ -45,15 +45,67 @@ dune exec ./run.exe -- \
     --deposit-delay-blocks <int?> \
     --fee-modifier <float?> \
     --minimum-fee <float?> \
+    --nats-url <string?> \
     --slot-acceptance <float?> \
     --commit-validity-period <int?>
 ```
+
+`--nats-url` enables explorer event publishing. Without it, the sequencer keeps
+the existing behavior and all NATS publish paths become no-ops.
+
+When NATS is enabled, the sequencer emits these NATS subjects:
+
+- `zeko.l2.transactions`
+- `zeko.l2.finality`
+- `zeko.health`
+
+The exact subjects, JetStream streams, payload fields, and dedup headers are
+documented in `src/app/zeko/sequencer/explorer/MESSAGE_CONTRACT.md`.
 
 Run help to see the options:
 
 ```bash
 dune exec ./run.exe -- --help
 ```
+
+## Explorer backfill service
+
+Build it with:
+
+```bash
+DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer/explorer
+```
+
+Run it with:
+
+```bash
+export DUNE_PROFILE=devnet
+dune exec ./explorer/explorer_backfill_server.exe -- \
+    -p <int?> \
+    --da-node <string list> \
+    --nats-url <string>
+```
+
+The backfill API is a separate process from the sequencer GraphQL API and
+republishes historical DA diffs into `zeko.l2.transactions`. It requires
+`--nats-url` because every backfill job publishes to JetStream.
+
+Available GraphQL operations:
+
+- `backfill(fromHash, toHash) -> BackfillJob`
+- `backfillJob(id) -> BackfillJob | null`
+- `health -> Health`
+
+GraphQL-SSE endpoint:
+
+- `backfillProgress(id) -> BackfillProgress`
+
+## Explorer acceptance tests
+
+Explorer-specific Gherkin tests live under
+`src/app/zeko/sequencer/explorer/tests/`. See
+`src/app/zeko/sequencer/explorer/tests/README.md` for the fast integration,
+NATS-backed, and E2E commands.
 
 ## Deploy rollup contract to L1
 
