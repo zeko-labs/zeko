@@ -14,7 +14,11 @@ module Inputs = struct
   include Ledger.Inputs
 
   module Global_state = struct
-    type t = { fee_excess : Amount.Signed.t; supply_increase : Amount.Signed.t }
+    type t =
+      { fee_excess : Amount.Signed.t
+      ; supply_increase : Amount.Signed.t
+      ; global_slot : Global_slot_since_genesis.t
+      }
 
     let fee_excess { fee_excess; _ } = fee_excess
 
@@ -24,7 +28,7 @@ module Inputs = struct
 
     let set_supply_increase t supply_increase = { t with supply_increase }
 
-    let block_global_slot _ = Global_slot_since_genesis.zero
+    let block_global_slot { global_slot; _ } = global_slot
   end
 
   module Call_stack = struct
@@ -217,6 +221,7 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
         ; source_acc_set = Account_set.of_fields [| source_imt |]
         ; sequencer = sequencer_pk
         ; transaction = Command command
+        ; global_slot
         ; witness =
             Base_witness.
               { ledger_path_handler = source_ledger; update_acc_set_witness }
@@ -253,6 +258,7 @@ let apply_zkapp_command_unchecked ~signature_kind ~sequencer_pk ~zeko_env
     let open Inputs in
     ( { fee_excess = Amount.(Signed.of_unsigned zero)
       ; supply_increase = Amount.(Signed.of_unsigned zero)
+      ; global_slot
       }
     , { stack_frame =
           Stack_frame.make ~calls:(Call_forest.empty ())
@@ -288,6 +294,7 @@ let apply_zkapp_command_unchecked ~signature_kind ~sequencer_pk ~zeko_env
                   ; source_local_state = Inputs.Local_state.to_zeko l
                   ; sequencer = sequencer_pk
                   ; source_acc_set = imt_hash
+                  ; global_slot
                   ; witness =
                       (let l = snd state in
                        Zkapp_rule_input_witness.
@@ -350,6 +357,7 @@ let apply_zkapp_command_unchecked ~signature_kind ~sequencer_pk ~zeko_env
               ; source_local_state = Inputs.Local_state.to_zeko l
               ; sequencer = sequencer_pk
               ; source_acc_set = imt_hash
+              ; global_slot
               ; witness =
                   (let l = snd state in
                    Zkapp_rule_input_witness.
@@ -565,6 +573,7 @@ let apply_fee_transfer_unchecked ~(receiver_pk : Even_PC.t) ~fee
           ; source_acc_set = source_imt
           ; sequencer = receiver_pk
           ; transaction = Fee_transfer command
+          ; global_slot
           ; witness =
               Base_witness.
                 { ledger_path_handler = source_ledger; update_acc_set_witness }

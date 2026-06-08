@@ -30,11 +30,6 @@ open struct
         ~genesis_body_reference:Staged_ledger_diff.genesis_body_reference
     in
     Mina_state.Protocol_state.body compile_time_genesis.data
-
-  let dummy_pc =
-    Pending_coinbase.Stack.push_state
-      (Mina_state.Protocol_state.Body.hash dummy_state_body)
-      Mina_numbers.Global_slot_since_genesis.zero dummy_pc_init
 end
 
 module Base_witness = struct
@@ -52,16 +47,46 @@ module Base_input = struct
     ; source_acc_set : Account_set.t
     ; sequencer : Even_PC.t
     ; transaction : Mina_transaction.Transaction_union.t
+    ; global_slot : Slot.t
     ; witness : Base_witness_V.t
     }
   [@@deriving snarky]
 end
 
 let main input =
-  let* { source_ledger; source_acc_set; transaction; sequencer; witness } =
+  let* { source_ledger
+       ; source_acc_set
+       ; transaction
+       ; sequencer
+       ; global_slot
+       ; witness
+       } =
     exists Base_input.typ ~compute:(V.get input)
   in
   let* (module Shifted) = Inner_curve.Checked.Shifted.create () in
+  let pc_init = constant Pending_coinbase.Stack.typ dummy_pc_init in
+  let state_body =
+    constant
+      (Mina_state.Protocol_state.Body.typ ~constraint_constants)
+      dummy_state_body
+  in
+  (* [apply_tagged_transaction] uses [global_slot] both for timing/[valid_until]
+     and to push the protocol state onto the pending-coinbase stack. The latter
+     means the "after" stack it checks against is [push_state] at [global_slot],
+     so we can no longer use the slot-0 [dummy_pc] constant. We pass [dummy_pc_init]
+     as the "before" stack (making the [init = before] branch of its
+     valid-init-state check hold) and recompute the "after" stack here at the
+     witnessed slot. *)
+  let* pending_coinbase_after =
+    make_checked
+    @@ fun () ->
+    let state_body_hash =
+      Run.run_checked (Mina_state.Protocol_state.Body.hash_checked state_body)
+    in
+    Run.run_checked
+      (Pending_coinbase.Stack.Checked.push_state state_body_hash global_slot
+         pc_init )
+  in
   let* (target_ledger, fee_excess, _supply_increase), accounts =
     accumulate
     @@ fun zeko_set_account_new ->
@@ -72,14 +97,8 @@ let main input =
     Transaction_snark.Base.apply_tagged_transaction ~zeko_set_account_new
       ~constraint_constants
       (module Shifted)
-      source_ledger Slot.Checked.zero
-      (constant Pending_coinbase.Stack.typ dummy_pc_init)
-      (constant Pending_coinbase.Stack.typ dummy_pc)
-      (constant Pending_coinbase.Stack.typ dummy_pc)
-      (constant
-         (Mina_state.Protocol_state.Body.typ ~constraint_constants)
-         dummy_state_body )
-      transaction
+      source_ledger global_slot pc_init pc_init pending_coinbase_after
+      state_body transaction
   in
   let*| target_acc_set =
     update_acc_set accounts source_acc_set
@@ -93,7 +112,16 @@ let main input =
     ; sequencer
     ; accumulated_fees = fee_excess
     ; slot_range = Slot_range.(constant typ infinite)
-    ; global_slot_range = Slot_range.(constant typ infinite)
+    ; (* [global_slot] is the slot applied to the transaction (timing checks and,
+         for signed commands, the [valid_until] bound). Gate the commit on it so
+         L1 only accepts the commit once that slot has arrived: the commit
+         installs [global_slot_range] as its [global_slot_since_genesis]
+         precondition, guaranteeing the real inclusion slot [s] satisfies
+         [global_slot <= global_slot_range.lower <= s]. See the matching argument
+         in [Rule_zkapp_command]. *)
+      global_slot_range =
+        ({ lower = global_slot; upper = constant Slot.typ Slot.max_value } : Slot_range
+                                                                             .var)
     ; source_local_state = Local_state.dummy
     ; target_local_state = Local_state.dummy
     }
