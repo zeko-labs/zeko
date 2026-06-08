@@ -1207,6 +1207,7 @@ let prover_load =
                @@ Public_key.compress
                     (Even_PC.generate_even_signer ()).public_key
            ; transaction = Command command
+           ; global_slot = Mina_numbers.Global_slot_since_genesis.zero
            ; witness =
                { ledger_path_handler =
                    (let aids = Signed_command.accounts_referenced command in

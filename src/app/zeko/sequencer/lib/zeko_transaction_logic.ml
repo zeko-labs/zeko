@@ -221,6 +221,7 @@ let apply_signed_command_unchecked ~sequencer_pk ~constraint_constants
         ; source_acc_set = Account_set.of_fields [| source_imt |]
         ; sequencer = sequencer_pk
         ; transaction = Command command
+        ; global_slot
         ; witness =
             Base_witness.
               { ledger_path_handler = source_ledger; update_acc_set_witness }
@@ -572,6 +573,7 @@ let apply_fee_transfer_unchecked ~(receiver_pk : Even_PC.t) ~fee
           ; source_acc_set = source_imt
           ; sequencer = receiver_pk
           ; transaction = Fee_transfer command
+          ; global_slot
           ; witness =
               Base_witness.
                 { ledger_path_handler = source_ledger; update_acc_set_witness }

@@ -419,12 +419,19 @@ module Base_input = struct
     ; source_acc_set : Account_set.t
     ; sequencer : Even_PC.t
     ; transaction : transaction_union
+    ; global_slot : Slot.t
     ; witness : Base_witness.serializable
     }
   [@@deriving yojson]
 
   let of_serializable
-      ({ source_ledger; source_acc_set; sequencer; transaction; witness } :
+      ({ source_ledger
+       ; source_acc_set
+       ; sequencer
+       ; transaction
+       ; global_slot
+       ; witness
+       } :
         serializable ) : t =
     { source_ledger
     ; source_acc_set
@@ -436,6 +443,7 @@ module Base_input = struct
               Command c
           | Fee_transfer c ->
               Fee_transfer c )
+    ; global_slot
     ; witness = Base_witness.of_serializable witness
     }
 end
