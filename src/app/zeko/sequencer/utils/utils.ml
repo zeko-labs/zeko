@@ -439,13 +439,15 @@ let is_deposit_finalization (command : User_command.t) =
         [ [ Public_key Zeko_circuits_config.Inputs.holder_account_l2
           ; Token_id Token_id.default
           ; Calls
-              [ [ Token_id holder_token_id ]
+              [ [ Token_id holder_token_id; Calls [] ]
               ; [ Public_key Zeko_circuits_config.Inputs.zeko_l2
                 ; Token_id Token_id.default
+                ; Calls []
                 ]
-              ; [ Token_id Token_id.default ]
+              ; [ Token_id Token_id.default; Calls [] ]
               ; [ Public_key Zeko_circuits_config.Inputs.bridge_fee_recipient_l2
                 ; Token_id Token_id.default
+                ; Calls []
                 ]
               ]
           ]
