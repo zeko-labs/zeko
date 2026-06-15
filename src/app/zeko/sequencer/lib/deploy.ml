@@ -628,13 +628,19 @@ let outer_rules_vk_hash () =
     (Lazy.force Zeko_types.Outer_rules_inst.tag)
   |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
 
-let build_permissions_multisig_update_payload ~(permissions : Permissions.t) =
+let build_permissions_multisig_update_payload ~(permissions : Permissions.t)
+    ~(nonce : Account.Nonce.t) =
   let%map vk_hash = outer_rules_vk_hash () in
   Multisig_update_payload.create ~signature_kind:Zeko_circuits_config.t.chain_l1
     { Account_update.Body.dummy with
       public_key = Zeko_circuits_config.t.zeko_l1
     ; authorization_kind = Proof vk_hash
     ; update = { Update.dummy with permissions = Set permissions }
+    ; increment_nonce = true
+    ; preconditions =
+        { Preconditions.accept with
+          account = Zkapp_precondition.Account.nonce nonce
+        }
     ; use_full_commitment = true
     }
 
@@ -726,6 +732,17 @@ let build_verification_key_multisig_update_body ~(kind : Multisig_update_kind.t)
 
 let sign_multisig_update ~(signer : Keypair.t) ~(kind : Multisig_update_kind.t)
     ~(body : Account_update.Body.t) =
+  ( match body.update.permissions with
+  | Keep ->
+      ()
+  | Set _ ->
+      if
+        (not body.increment_nonce)
+        || not (Zkapp_precondition.Account.is_nonce body.preconditions.account)
+      then
+        failwith
+          "permission multisig updates must increment the target nonce and \
+           include an exact nonce precondition" ) ;
   let payload =
     Zkapp_command.Digest.Account_update.create_body
       ~signature_kind:Zeko_circuits_config.t.chain_l1 body
