@@ -34,11 +34,17 @@ module Policy = struct
 end
 
 module Rpc = struct
+  module Auth = struct
+    type t = { auth_token : string } [@@deriving bin_io]
+  end
+
   module Get_public_key = struct
     module V1 = struct
-      let t : (unit, Public_key.Compressed.t) Async.Rpc.Rpc.t =
+      module Query = Auth
+
+      let t : (Query.t, Public_key.Compressed.t) Async.Rpc.Rpc.t =
         Async.Rpc.Rpc.create ~name:"Signer_get_public_key" ~version:1
-          ~bin_query:Unit.bin_t
+          ~bin_query:Query.bin_t
           ~bin_response:Public_key.Compressed.Stable.V1.bin_t
     end
   end
@@ -46,7 +52,8 @@ module Rpc = struct
   module Sign_field = struct
     module V1 = struct
       module Query = struct
-        type t = { signature_kind : string; field : Field.t }
+        type t =
+          { auth_token : string; signature_kind : string; field : Field.t }
         [@@deriving bin_io]
       end
 
@@ -64,7 +71,10 @@ module Rpc = struct
     module V1 = struct
       module Query = struct
         type t =
-          { signature_kind : string; command : Zkapp_command.Stable.V1.t }
+          { auth_token : string
+          ; signature_kind : string
+          ; command : Zkapp_command.Stable.V1.t
+          }
         [@@deriving bin_io]
       end
 
@@ -83,7 +93,10 @@ module Rpc = struct
     module V1 = struct
       module Query = struct
         type t =
-          { signature_kind : string; command : Zkapp_command.Stable.V1.t }
+          { auth_token : string
+          ; signature_kind : string
+          ; command : Zkapp_command.Stable.V1.t
+          }
         [@@deriving bin_io]
       end
 
@@ -258,8 +271,17 @@ module Client = struct
   type t =
     { logger : Logger.t
     ; location : Host_and_port.t
+    ; auth_token : string
     ; public_key : Public_key.Compressed.t
     }
+
+  let validate_auth_token auth_token =
+    if String.is_empty auth_token then
+      failwith "ZEKO_SIGNER_AUTH_TOKEN must not be empty"
+    else auth_token
+
+  let auth_token_from_env () =
+    Sys.getenv_exn "ZEKO_SIGNER_AUTH_TOKEN" |> validate_auth_token
 
   let dispatch ?(max_tries = 5) ?(timeout = 5.) ~logger:_ location rpc data =
     let rec go tries_left errs =
@@ -280,18 +302,23 @@ module Client = struct
     go max_tries []
 
   let create ~logger ~(location : Host_and_port.t) =
+    let auth_token = auth_token_from_env () in
     let%map public_key =
-      dispatch ~max_tries:1 ~logger location Rpc.Get_public_key.V1.t ()
+      dispatch ~max_tries:1 ~logger location Rpc.Get_public_key.V1.t
+        Rpc.Get_public_key.V1.Query.{ auth_token }
       >>| Or_error.ok_exn
     in
-    { logger; location; public_key }
+    { logger; location; auth_token; public_key }
 
   let public_key t = t.public_key
 
   let sign_field ~signature_kind t field =
     dispatch ~logger:t.logger t.location Rpc.Sign_field.V1.t
       Rpc.Sign_field.V1.Query.
-        { signature_kind = signature_kind_to_string signature_kind; field }
+        { auth_token = t.auth_token
+        ; signature_kind = signature_kind_to_string signature_kind
+        ; field
+        }
     >>| function
     | Error err ->
         Error err
@@ -303,7 +330,10 @@ module Client = struct
   let sign_zkapp_command ~signature_kind t command =
     dispatch ~logger:t.logger t.location Rpc.Sign_zkapp_command.V1.t
       Rpc.Sign_zkapp_command.V1.Query.
-        { signature_kind = signature_kind_to_string signature_kind; command }
+        { auth_token = t.auth_token
+        ; signature_kind = signature_kind_to_string signature_kind
+        ; command
+        }
     >>| function
     | Error err ->
         Error err
@@ -315,7 +345,10 @@ module Client = struct
   let sign_fee_payer ~signature_kind t command =
     dispatch ~logger:t.logger t.location Rpc.Sign_fee_payer.V1.t
       Rpc.Sign_fee_payer.V1.Query.
-        { signature_kind = signature_kind_to_string signature_kind; command }
+        { auth_token = t.auth_token
+        ; signature_kind = signature_kind_to_string signature_kind
+        ; command
+        }
     >>| function
     | Error err ->
         Error err
@@ -386,57 +419,79 @@ module Server = struct
     ; public_key : Public_key.Compressed.t
     ; policy : Policy.t
     ; logger : Logger.t
+    ; auth_token : string
     }
 
-  let create ~logger ~policy ~(private_key : Private_key.t) =
+  let create ~logger ~policy ~auth_token ~(private_key : Private_key.t) =
+    let auth_token = Client.validate_auth_token auth_token in
     let keypair = Keypair.of_private_key_exn private_key in
     { keypair
     ; public_key = Public_key.compress keypair.public_key
     ; policy
     ; logger
+    ; auth_token
     }
+
+  let check_auth t auth_token =
+    if String.equal auth_token t.auth_token then Ok ()
+    else Error "Unauthorized signer RPC request"
+
+  let handle_authenticated t auth_token f =
+    match check_auth t auth_token with
+    | Ok () ->
+        f ()
+    | Error err ->
+        return (Error err)
 
   let implementations t =
     Async.Rpc.Implementations.create_exn ~on_unknown_rpc:`Close_connection
       ~implementations:
-        [ Async.Rpc.Rpc.implement Rpc.Get_public_key.V1.t (fun () () ->
-              return t.public_key )
+        [ Async.Rpc.Rpc.implement Rpc.Get_public_key.V1.t
+            (fun () { auth_token } ->
+              match check_auth t auth_token with
+              | Ok () ->
+                  return t.public_key
+              | Error _ ->
+                  failwith "Unauthorized signer RPC request" )
         ; Async.Rpc.Rpc.implement Rpc.Sign_field.V1.t
-            (fun () { signature_kind; field } ->
-              let signature_kind = signature_kind_of_string signature_kind in
-              if t.policy.allow_field_signing then
-                Signer.sign_field ~signature_kind
-                  (Signer.of_keypair t.keypair)
-                  field
-                >>| Result.map_error ~f:Error.to_string_hum
-              else return (Error "Field signing is disabled") )
+            (fun () { auth_token; signature_kind; field } ->
+              handle_authenticated t auth_token (fun () ->
+                  let signature_kind = signature_kind_of_string signature_kind in
+                  if t.policy.allow_field_signing then
+                    Signer.sign_field ~signature_kind
+                      (Signer.of_keypair t.keypair)
+                      field
+                    >>| Result.map_error ~f:Error.to_string_hum
+                  else return (Error "Field signing is disabled") ) )
         ; Async.Rpc.Rpc.implement Rpc.Sign_zkapp_command.V1.t
-            (fun () { signature_kind; command } ->
-              let signature_kind = signature_kind_of_string signature_kind in
-              match t.policy.zkapp with
-              | None ->
-                  return (Error "zkApp command signing is disabled")
-              | Some policy ->
-                  Signer.sign_zkapp_command ~signature_kind ~policy
-                    (Signer.of_keypair t.keypair)
-                    command
-                  >>| Result.map_error ~f:Error.to_string_hum )
+            (fun () { auth_token; signature_kind; command } ->
+              handle_authenticated t auth_token (fun () ->
+                  let signature_kind = signature_kind_of_string signature_kind in
+                  match t.policy.zkapp with
+                  | None ->
+                      return (Error "zkApp command signing is disabled")
+                  | Some policy ->
+                      Signer.sign_zkapp_command ~signature_kind ~policy
+                        (Signer.of_keypair t.keypair)
+                        command
+                      >>| Result.map_error ~f:Error.to_string_hum ) )
         ; Async.Rpc.Rpc.implement Rpc.Sign_fee_payer.V1.t
-            (fun () { signature_kind; command } ->
-              let signature_kind = signature_kind_of_string signature_kind in
-              match t.policy.zkapp with
-              | None ->
-                  return (Error "zkApp command signing is disabled")
-              | Some policy ->
-                  Signer.sign_fee_payer ~signature_kind ~policy
-                    (Signer.of_keypair t.keypair)
-                    command
-                  >>| Result.map_error ~f:Error.to_string_hum )
+            (fun () { auth_token; signature_kind; command } ->
+              handle_authenticated t auth_token (fun () ->
+                  let signature_kind = signature_kind_of_string signature_kind in
+                  match t.policy.zkapp with
+                  | None ->
+                      return (Error "zkApp command signing is disabled")
+                  | Some policy ->
+                      Signer.sign_fee_payer ~signature_kind ~policy
+                        (Signer.of_keypair t.keypair)
+                        command
+                      >>| Result.map_error ~f:Error.to_string_hum ) )
         ]
 
   let run ~port t =
     let where_to_listen =
-      Tcp.Where_to_listen.bind_to All_addresses (On_port port)
+      Tcp.Where_to_listen.bind_to (Localhost) (On_port port)
     in
     Tcp.Server.create
       ~on_handler_error:

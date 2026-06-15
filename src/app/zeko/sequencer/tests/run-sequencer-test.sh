@@ -146,9 +146,11 @@ ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY="$(generate_even_key)"
 DA1_SIGNER_PRIVATE_KEY="$(generate_even_key)"
 DA2_SIGNER_PRIVATE_KEY="$(generate_even_key)"
 DA3_SIGNER_PRIVATE_KEY="$(generate_even_key)"
+ZEKO_SIGNER_AUTH_TOKEN="sequencer-test-signer-token"
 
 export ZEKO_TEST_SEQUENCER_SIGNER="127.0.0.1:8600"
 export ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY
+export ZEKO_SIGNER_AUTH_TOKEN
 
 run() {
   local name="$1"

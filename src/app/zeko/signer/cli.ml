@@ -15,6 +15,10 @@ let run =
        and private_key =
          flag "--private-key" (optional string)
            ~doc:"string Base58 private key, defaults to MINA_PRIVATE_KEY"
+       and auth_token =
+         flag "--auth-token" (optional string)
+           ~doc:
+             "string Shared bearer token, defaults to ZEKO_SIGNER_AUTH_TOKEN"
        and allow_field_signing =
          flag "--allow-field-signing" no_arg
            ~doc:"Allow signing raw field elements"
@@ -39,6 +43,13 @@ let run =
            | None ->
                Sys.getenv_exn "MINA_PRIVATE_KEY"
          in
+         let auth_token =
+           match auth_token with
+           | Some auth_token ->
+               auth_token
+           | None ->
+               Sys.getenv_exn "ZEKO_SIGNER_AUTH_TOKEN"
+         in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
          let policy =
@@ -57,11 +68,11 @@ let run =
            Signer_service.Policy.{ allow_field_signing; zkapp }
          in
          let signer =
-           Signer_service.Server.create ~logger ~policy
+           Signer_service.Server.create ~logger ~policy ~auth_token
              ~private_key:(Private_key.of_base58_check_exn private_key)
          in
          let%bind () = Signer_service.Server.run ~port signer in
-         [%log info] "Signer service listening on port %d" port ;
+         [%log info] "Signer service listening on localhost:%d" port ;
          never () ) )
 
 let () = Command.group ~summary:"Signer service" [ run ] |> Command_unix.run
