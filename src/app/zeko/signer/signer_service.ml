@@ -582,8 +582,22 @@ module Server = struct
     ; tls_config
     }
 
+  let constant_time_compare s1 s2 =
+    let len1 = String.length s1 in
+    let len2 = String.length s2 in
+    if Int.(len1 <> len2) then false
+    else
+      let result = ref 0 in
+      for i = 0 to len1 - 1 do
+        result :=
+          !result
+          lor
+          (Char.to_int (String.get s1 i) lxor Char.to_int (String.get s2 i))
+      done ;
+      Int.(!result = 0)
+
   let check_auth t auth_token =
-    if String.equal auth_token t.auth_token then Ok ()
+    if constant_time_compare auth_token t.auth_token then Ok ()
     else Error "Unauthorized signer RPC request"
 
   let handle_authenticated t auth_token f =
