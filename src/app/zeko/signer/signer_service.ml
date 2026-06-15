@@ -415,7 +415,9 @@ module Client = struct
                        %{sexp:Host_and_port.t} using TLS RPC %s: %s"
                      location (Async.Rpc.Rpc.name rpc) (Exn.to_string exn) )
             | Ok conn ->
-                Async.Rpc.Rpc.dispatch rpc conn data ) )
+                let%map result = Async.Rpc.Rpc.dispatch rpc conn data in
+                don't_wait_for (Async.Rpc.Connection.close conn) ;
+                result ) )
 
   let dispatch ?(max_tries = 5) ?(timeout = 5.) ~logger location ?tls_config rpc
       data =
