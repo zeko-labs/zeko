@@ -15,6 +15,7 @@
   core_kernel
   async_kernel
   async
+  async_ssl
   cohttp
   cohttp-async)
  (preprocess

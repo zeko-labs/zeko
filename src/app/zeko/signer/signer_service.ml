@@ -112,6 +112,103 @@ module Rpc = struct
   end
 end
 
+module Tls = struct
+  module Ssl = Async_ssl.Ssl
+
+  module Client_config = struct
+    type t = { ca_file : string; expected_host : string }
+
+    let of_env location =
+      Option.map (Sys.getenv "ZEKO_SIGNER_TLS_CA_FILE") ~f:(fun ca_file ->
+          let expected_host =
+            Option.value
+              (Sys.getenv "ZEKO_SIGNER_TLS_HOSTNAME")
+              ~default:(Host_and_port.host location)
+          in
+          { ca_file; expected_host } )
+  end
+
+  module Server_config = struct
+    type t = { cert_file : string; key_file : string }
+  end
+
+  let connect_pipes reader writer =
+    let net_to_ssl_r, net_to_ssl_w = Pipe.create () in
+    let ssl_to_net_r, ssl_to_net_w = Pipe.create () in
+    don't_wait_for
+      ( Pipe.transfer (Reader.pipe reader) net_to_ssl_w ~f:Fn.id
+      >>| fun () -> Pipe.close net_to_ssl_w ) ;
+    don't_wait_for
+      ( Pipe.iter ssl_to_net_r ~f:(fun data ->
+            Writer.write writer data ; Writer.flushed writer )
+      >>| fun () -> don't_wait_for (Writer.close writer) ) ;
+    (net_to_ssl_r, ssl_to_net_w)
+
+  let app_streams ~name app_to_ssl_w ssl_to_app_r =
+    let%bind reader =
+      Reader.of_pipe (Info.of_string (name ^ "-reader")) ssl_to_app_r
+    in
+    let%map writer, _ =
+      Writer.of_pipe (Info.of_string (name ^ "-writer")) app_to_ssl_w
+    in
+    (reader, writer)
+
+  let certificate_matches_host cert expected_host =
+    let san_matches =
+      Ssl.Certificate.subject_alt_names cert
+      |> List.exists ~f:(String.equal expected_host)
+    in
+    let cn_matches =
+      Ssl.Certificate.subject cert
+      |> List.exists ~f:(fun (name, value) ->
+             String.equal name "CN" && String.equal value expected_host )
+    in
+    san_matches || cn_matches
+
+  let validate_server_certificate connection expected_host =
+    match Ssl.Connection.peer_certificate connection with
+    | None ->
+        Or_error.error_string "TLS server did not provide a certificate"
+    | Some (Error err) ->
+        Error err
+    | Some (Ok cert) ->
+        if certificate_matches_host cert expected_host then Ok ()
+        else
+          Or_error.errorf
+            "TLS server certificate does not match expected signer host %s"
+            expected_host
+
+  let client_streams ~config ~location reader writer =
+    let net_to_ssl_r, ssl_to_net_w = connect_pipes reader writer in
+    let app_to_ssl_r, app_to_ssl_w = Pipe.create () in
+    let ssl_to_app_r, ssl_to_app_w = Pipe.create () in
+    let%bind connection =
+      Ssl.client ~name:"zeko-signer-client"
+        ~hostname:config.Client_config.expected_host ~ca_file:config.ca_file
+        ~app_to_ssl:app_to_ssl_r ~ssl_to_app:ssl_to_app_w
+        ~net_to_ssl:net_to_ssl_r ~ssl_to_net:ssl_to_net_w ()
+      >>| Or_error.ok_exn
+    in
+    validate_server_certificate connection config.expected_host
+    |> Or_error.ok_exn ;
+    app_streams
+      ~name:(sprintf "zeko-signer-client-%s" (Host_and_port.to_string location))
+      app_to_ssl_w ssl_to_app_r
+
+  let server_streams ~config reader writer =
+    let net_to_ssl_r, ssl_to_net_w = connect_pipes reader writer in
+    let app_to_ssl_r, app_to_ssl_w = Pipe.create () in
+    let ssl_to_app_r, ssl_to_app_w = Pipe.create () in
+    let%bind _connection =
+      Ssl.server ~name:"zeko-signer-server"
+        ~crt_file:config.Server_config.cert_file ~key_file:config.key_file
+        ~app_to_ssl:app_to_ssl_r ~ssl_to_app:ssl_to_app_w
+        ~net_to_ssl:net_to_ssl_r ~ssl_to_net:ssl_to_net_w ()
+      >>| Or_error.ok_exn
+    in
+    app_streams ~name:"zeko-signer-server" app_to_ssl_w ssl_to_app_r
+end
+
 module Command_signing = struct
   let full_commitment ~signature_kind (command : Zkapp_command.t) =
     Zkapp_command.Transaction_commitment.create_complete
@@ -272,6 +369,7 @@ module Client = struct
     { logger : Logger.t
     ; location : Host_and_port.t
     ; auth_token : string
+    ; tls_config : Tls.Client_config.t option
     ; public_key : Public_key.Compressed.t
     }
 
@@ -283,7 +381,44 @@ module Client = struct
   let auth_token_from_env () =
     Sys.getenv_exn "ZEKO_SIGNER_AUTH_TOKEN" |> validate_auth_token
 
-  let dispatch ?(max_tries = 5) ?(timeout = 5.) ~logger:_ location rpc data =
+  let dispatch_tls ~logger:_ tls_config location rpc data =
+    Deferred.Or_error.try_with_join ~here:[%here] (fun () ->
+        Tcp.with_connection (Tcp.Where_to_connect.of_host_and_port location)
+          ~timeout:(Time.Span.of_sec 1.) (fun _ reader writer ->
+            let%bind reader, writer =
+              Tls.client_streams ~config:tls_config ~location reader writer
+            in
+            match%bind
+              Async.Rpc.Connection.create
+                ~handshake_timeout:
+                  (Time.Span.of_sec
+                     Node_config_unconfigurable_constants
+                     .rpc_handshake_timeout_sec )
+                ~heartbeat_config:
+                  (Async.Rpc.Connection.Heartbeat_config.create
+                     ~timeout:
+                       (Time_ns.Span.of_sec
+                          Node_config_unconfigurable_constants
+                          .rpc_heartbeat_timeout_sec )
+                     ~send_every:
+                       (Time_ns.Span.of_sec
+                          Node_config_unconfigurable_constants
+                          .rpc_heartbeat_send_every_sec )
+                     () )
+                reader writer
+                ~connection_state:(fun _ -> ())
+            with
+            | Error exn ->
+                return
+                  (Or_error.errorf
+                     !"Error connecting to the signer on \
+                       %{sexp:Host_and_port.t} using TLS RPC %s: %s"
+                     location (Async.Rpc.Rpc.name rpc) (Exn.to_string exn) )
+            | Ok conn ->
+                Async.Rpc.Rpc.dispatch rpc conn data ) )
+
+  let dispatch ?(max_tries = 5) ?(timeout = 5.) ~logger location ?tls_config rpc
+      data =
     let rec go tries_left errs =
       if Int.( <= ) tries_left 0 then
         let e = Error.of_list (List.rev errs) in
@@ -292,7 +427,13 @@ module Client = struct
              (Error.tag_arg e "Could not send query to signer" location
                 Host_and_port.sexp_of_t ) )
       else
-        match%bind Daemon_rpcs.Client.dispatch rpc data location with
+        match%bind
+          match tls_config with
+          | None ->
+              Daemon_rpcs.Client.dispatch rpc data location
+          | Some tls_config ->
+              dispatch_tls ~logger tls_config location rpc data
+        with
         | Ok result ->
             return (Ok result)
         | Error e ->
@@ -303,17 +444,19 @@ module Client = struct
 
   let create ~logger ~(location : Host_and_port.t) =
     let auth_token = auth_token_from_env () in
+    let tls_config = Tls.Client_config.of_env location in
     let%map public_key =
-      dispatch ~max_tries:1 ~logger location Rpc.Get_public_key.V1.t
+      dispatch ~max_tries:1 ~logger location ?tls_config Rpc.Get_public_key.V1.t
         Rpc.Get_public_key.V1.Query.{ auth_token }
       >>| Or_error.ok_exn
     in
-    { logger; location; auth_token; public_key }
+    { logger; location; auth_token; tls_config; public_key }
 
   let public_key t = t.public_key
 
   let sign_field ~signature_kind t field =
-    dispatch ~logger:t.logger t.location Rpc.Sign_field.V1.t
+    dispatch ~logger:t.logger t.location ?tls_config:t.tls_config
+      Rpc.Sign_field.V1.t
       Rpc.Sign_field.V1.Query.
         { auth_token = t.auth_token
         ; signature_kind = signature_kind_to_string signature_kind
@@ -328,7 +471,8 @@ module Client = struct
         Error (Error.of_string err)
 
   let sign_zkapp_command ~signature_kind t command =
-    dispatch ~logger:t.logger t.location Rpc.Sign_zkapp_command.V1.t
+    dispatch ~logger:t.logger t.location ?tls_config:t.tls_config
+      Rpc.Sign_zkapp_command.V1.t
       Rpc.Sign_zkapp_command.V1.Query.
         { auth_token = t.auth_token
         ; signature_kind = signature_kind_to_string signature_kind
@@ -343,7 +487,8 @@ module Client = struct
         Error (Error.of_string err)
 
   let sign_fee_payer ~signature_kind t command =
-    dispatch ~logger:t.logger t.location Rpc.Sign_fee_payer.V1.t
+    dispatch ~logger:t.logger t.location ?tls_config:t.tls_config
+      Rpc.Sign_fee_payer.V1.t
       Rpc.Sign_fee_payer.V1.Query.
         { auth_token = t.auth_token
         ; signature_kind = signature_kind_to_string signature_kind
@@ -420,9 +565,11 @@ module Server = struct
     ; policy : Policy.t
     ; logger : Logger.t
     ; auth_token : string
+    ; tls_config : Tls.Server_config.t option
     }
 
-  let create ~logger ~policy ~auth_token ~(private_key : Private_key.t) =
+  let create ?tls_config ~logger ~policy ~auth_token
+      ~(private_key : Private_key.t) =
     let auth_token = Client.validate_auth_token auth_token in
     let keypair = Keypair.of_private_key_exn private_key in
     { keypair
@@ -430,6 +577,7 @@ module Server = struct
     ; policy
     ; logger
     ; auth_token
+    ; tls_config
     }
 
   let check_auth t auth_token =
@@ -456,7 +604,9 @@ module Server = struct
         ; Async.Rpc.Rpc.implement Rpc.Sign_field.V1.t
             (fun () { auth_token; signature_kind; field } ->
               handle_authenticated t auth_token (fun () ->
-                  let signature_kind = signature_kind_of_string signature_kind in
+                  let signature_kind =
+                    signature_kind_of_string signature_kind
+                  in
                   if t.policy.allow_field_signing then
                     Signer.sign_field ~signature_kind
                       (Signer.of_keypair t.keypair)
@@ -466,7 +616,9 @@ module Server = struct
         ; Async.Rpc.Rpc.implement Rpc.Sign_zkapp_command.V1.t
             (fun () { auth_token; signature_kind; command } ->
               handle_authenticated t auth_token (fun () ->
-                  let signature_kind = signature_kind_of_string signature_kind in
+                  let signature_kind =
+                    signature_kind_of_string signature_kind
+                  in
                   match t.policy.zkapp with
                   | None ->
                       return (Error "zkApp command signing is disabled")
@@ -478,7 +630,9 @@ module Server = struct
         ; Async.Rpc.Rpc.implement Rpc.Sign_fee_payer.V1.t
             (fun () { auth_token; signature_kind; command } ->
               handle_authenticated t auth_token (fun () ->
-                  let signature_kind = signature_kind_of_string signature_kind in
+                  let signature_kind =
+                    signature_kind_of_string signature_kind
+                  in
                   match t.policy.zkapp with
                   | None ->
                       return (Error "zkApp command signing is disabled")
@@ -491,7 +645,7 @@ module Server = struct
 
   let run ~port t =
     let where_to_listen =
-      Tcp.Where_to_listen.bind_to (Localhost) (On_port port)
+      Tcp.Where_to_listen.bind_to Localhost (On_port port)
     in
     Tcp.Server.create
       ~on_handler_error:
@@ -502,6 +656,13 @@ module Server = struct
               (Exn.to_string_mach exn) ) )
       where_to_listen
       (fun _ reader writer ->
+        let%bind reader, writer =
+          match t.tls_config with
+          | None ->
+              return (reader, writer)
+          | Some config ->
+              Tls.server_streams ~config reader writer
+        in
         Async.Rpc.Connection.server_with_close reader writer
           ~implementations:(implementations t)
           ~connection_state:(fun _ -> ())
