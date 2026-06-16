@@ -53,7 +53,9 @@ struct
                     { state =
                         Some
                           (Outer_action_state.With_length.state_var ase.source)
-                    ; length = None
+                    ; length =
+                        Some
+                          (Outer_action_state.With_length.length_var ase.source)
                     }
                 }
               |> var_to_precondition_fine

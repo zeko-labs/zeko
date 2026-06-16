@@ -15,6 +15,15 @@ let run =
        and private_key =
          flag "--private-key" (optional string)
            ~doc:"string Base58 private key, defaults to MINA_PRIVATE_KEY"
+       and auth_token =
+         flag "--auth-token" (optional string)
+           ~doc:"string Shared bearer token, defaults to ZEKO_SIGNER_AUTH_TOKEN"
+       and tls_cert_file =
+         flag "--tls-cert-file" (optional string)
+           ~doc:"path TLS certificate PEM file for signer RPC"
+       and tls_key_file =
+         flag "--tls-key-file" (optional string)
+           ~doc:"path TLS private key PEM file for signer RPC"
        and allow_field_signing =
          flag "--allow-field-signing" no_arg
            ~doc:"Allow signing raw field elements"
@@ -39,8 +48,25 @@ let run =
            | None ->
                Sys.getenv_exn "MINA_PRIVATE_KEY"
          in
+         let auth_token =
+           match auth_token with
+           | Some auth_token ->
+               auth_token
+           | None ->
+               Sys.getenv_exn "ZEKO_SIGNER_AUTH_TOKEN"
+         in
          let logger = Logger.create () in
          Stdout_log.setup log_json log_level ;
+         let tls_config =
+           match (tls_cert_file, tls_key_file) with
+           | None, None ->
+               None
+           | Some cert_file, Some key_file ->
+               Some Signer_service.Tls.Server_config.{ cert_file; key_file }
+           | _ ->
+               failwith
+                 "--tls-cert-file and --tls-key-file must be provided together"
+         in
          let policy =
            let zkapp =
              if allow_zkapp_signing then
@@ -57,11 +83,12 @@ let run =
            Signer_service.Policy.{ allow_field_signing; zkapp }
          in
          let signer =
-           Signer_service.Server.create ~logger ~policy
+           Signer_service.Server.create ?tls_config ~logger ~policy ~auth_token
              ~private_key:(Private_key.of_base58_check_exn private_key)
          in
          let%bind () = Signer_service.Server.run ~port signer in
-         [%log info] "Signer service listening on port %d" port ;
+         [%log info] "Signer service listening on localhost:%d%s" port
+           (if Option.is_some tls_config then " with TLS" else "") ;
          never () ) )
 
 let () = Command.group ~summary:"Signer service" [ run ] |> Command_unix.run

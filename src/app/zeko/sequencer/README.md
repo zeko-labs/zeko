@@ -55,6 +55,58 @@ Run help to see the options:
 dune exec ./run.exe -- --help
 ```
 
+## Signer service auth and TLS
+
+The signer service listens only on localhost and requires a shared auth token
+for all RPC calls. Set the same `ZEKO_SIGNER_AUTH_TOKEN` in the signer process
+and every process that connects to it, such as the sequencer or DA node.
+
+```bash
+export MINA_PRIVATE_KEY="base58 signer private key"
+export ZEKO_SIGNER_AUTH_TOKEN="long random signer token"
+
+dune exec ../signer/cli.exe -- run \
+    --port 9000 \
+    --allow-zkapp-signing \
+    --max-fee 10 \
+    --max-balance-change 1000000
+```
+
+Then run clients with the same token:
+
+```bash
+export ZEKO_SIGNER_AUTH_TOKEN="long random signer token"
+dune exec ./run.exe -- --signer localhost:9000 ...
+```
+
+TLS is optional but recommended whenever signer traffic may cross a container,
+VM, or host boundary. Start the signer with a certificate and key:
+
+```bash
+export MINA_PRIVATE_KEY="base58 signer private key"
+export ZEKO_SIGNER_AUTH_TOKEN="long random signer token"
+
+dune exec ../signer/cli.exe -- run \
+    --port 9000 \
+    --allow-zkapp-signing \
+    --max-fee 10 \
+    --max-balance-change 1000000 \
+    --tls-cert-file /path/to/signer-cert.pem \
+    --tls-key-file /path/to/signer-key.pem
+```
+
+Clients enable TLS by setting the trusted CA/certificate file. The expected
+hostname defaults to the host in `--signer`; set `ZEKO_SIGNER_TLS_HOSTNAME` when
+the certificate name differs from the connection host.
+
+```bash
+export ZEKO_SIGNER_AUTH_TOKEN="long random signer token"
+export ZEKO_SIGNER_TLS_CA_FILE="/path/to/ca-or-signer-cert.pem"
+export ZEKO_SIGNER_TLS_HOSTNAME="localhost"
+
+dune exec ./run.exe -- --signer localhost:9000 ...
+```
+
 ## Deploy rollup contract to L1
 
 The following script deploys the rollup contract on the L1 with the initial state, which is the genesis ledger of the rollup.

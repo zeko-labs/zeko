@@ -40,6 +40,18 @@ let write_signed_multisig_updates ?output updates =
   write_json ?output
     (`List (List.map updates ~f:Deploy.Signed_multisig_update.to_yojson))
 
+let resolve_nonce_arg ~logger ?l1_uri ?nonce public_key =
+  match nonce with
+  | Some nonce ->
+      return (Account.Nonce.of_string nonce)
+  | None -> (
+      match l1_uri with
+      | Some l1_uri ->
+          Gql_client.fetch_nonce ~logger (Uri.of_string l1_uri) public_key
+          >>| Or_error.ok_exn
+      | None ->
+          failwith "--l1-uri or --target-nonce is required" )
+
 let send_direct ~logger ~l1_uri ~(signers : Keypair.t list)
     ~(fee_signer : Keypair.t) ~bodies =
   let signature_kind = Zeko_circuits_config.t.chain_l1 in
@@ -738,7 +750,14 @@ let update_permissions =
            ~doc:"string Optional JSON file with Permissions.t"
        and l1_uri =
          flag "--l1-uri" (optional string)
-           ~doc:"string L1 URI (required with --direct)"
+           ~doc:
+             "string L1 URI used to fetch the target nonce (required with \
+              --direct unless --target-nonce is provided)"
+       and target_nonce =
+         flag "--target-nonce" (optional string)
+           ~doc:
+             "string Current nonce of the account whose permissions are being \
+              updated"
        and direct =
          flag "--direct" no_arg
            ~doc:
@@ -758,8 +777,13 @@ let update_permissions =
            | Some path ->
                load_json_file path [%of_yojson: Permissions.t]
          in
+         let%bind target_nonce =
+           resolve_nonce_arg ~logger ?l1_uri ?nonce:target_nonce
+             Zeko_circuits_config.t.zeko_l1
+         in
          let%bind body =
            Deploy.build_permissions_multisig_update_payload ~permissions
+             ~nonce:target_nonce
          in
          if direct then
            let l1_uri =
