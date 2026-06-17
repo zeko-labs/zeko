@@ -24,6 +24,7 @@ open struct
       ~(set_slot_range : Slot_range.var -> unit)
       ~(set_global_slot_range : Slot_range.var -> unit)
       ~(set_account_new : Account_id.var * Boolean.var Checked.t -> unit) =
+    ignore set_global_slot_range ;
     let shift_action_states = ref shift_action_states in
     fun (type r)
         (eff :
@@ -58,9 +59,12 @@ open struct
           let ({ lower; upper } : _ Zkapp_precondition.Closed_interval.t) =
             Zkapp_basic.Or_ignore.Checked.data global_slot_since_genesis
           in
-          (* Same as above, if it's not set, it ought to be (minimum, maximum) according to
-             the typ. *)
-          set_global_slot_range { lower; upper } ;
+          (* Same as above, if it's not set, it ought to be (minimum, maximum)
+             according to the typ. Zeko's transaction logic checks this against
+             the transaction slot; on L1, account-update network preconditions
+             are checked against the parent protocol state, so route it through
+             the commit's [valid_while] instead. *)
+          set_slot_range { lower; upper } ;
           Boolean.true_
       | Check_account_precondition
           ( ({ account_update; _ } : Zkapp_call_forest.Checked.account_update)
@@ -379,24 +383,14 @@ open struct
     (* [global_slot] is the slot used for timing checks during the fold (it is
        what [block_global_slot] returns). It is a prover-supplied witness, so on
        its own nothing stops a prover from claiming a future slot to over-vest a
-       timed account. We make it sound by *gating the commit* on it: we raise the
-       lower bound of [global_slot_range] to include [global_slot].
-
-       The commit rule installs [global_slot_range] as the commit's
-       [global_slot_since_genesis] network precondition, so L1 enforces
-       [global_slot_range.lower <= s] for the real inclusion slot [s]. After this
-       raise, [global_slot <= global_slot_range.lower <= s], i.e. the commit can
-       only land once the claimed slot has actually arrived on L1. Timing is
-       monotonic (a later slot only vests more), so a check at [global_slot] is
-       never more permissive than one at the true slot [s] -- sound. An honest
-       sequencer sets [global_slot] to the current slot; a malicious one that
-       claims a future slot merely makes its own commit un-landable until then.
-
-       Intersection takes the max of the lowers, so this composes with any
-       explicit global-slot precondition and survives merges (which intersect
-       ranges too). *)
-    let* global_slot_range =
-      slot_range_intersection global_slot_range
+       timed account. Gate the commit on it through [slot_range], which becomes
+       the commit [valid_while] and is checked by L1 against the inclusion block's
+       slot. Do not put this bound in [global_slot_range]: L1 checks
+       [global_slot_since_genesis] network preconditions against the parent
+       protocol state, so a valid commit can otherwise fail when the parent slot
+       is behind the inclusion slot. *)
+    let* slot_range =
+      slot_range_intersection slot_range
         ( { lower = global_slot; upper = constant Slot.typ Slot.max_value }
           : Slot_range.var )
     in
