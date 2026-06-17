@@ -111,17 +111,14 @@ let main input =
     ; target_acc_set
     ; sequencer
     ; accumulated_fees = fee_excess
-    ; slot_range = Slot_range.(constant typ infinite)
     ; (* [global_slot] is the slot applied to the transaction (timing checks and,
-         for signed commands, the [valid_until] bound). Gate the commit on it so
-         L1 only accepts the commit once that slot has arrived: the commit
-         installs [global_slot_range] as its [global_slot_since_genesis]
-         precondition, guaranteeing the real inclusion slot [s] satisfies
-         [global_slot <= global_slot_range.lower <= s]. See the matching argument
-         in [Rule_zkapp_command]. *)
-      global_slot_range =
+         for signed commands, the [valid_until] bound). Gate the commit on it
+         through [slot_range], which becomes the commit [valid_while] and is
+         checked by L1 against the inclusion block's slot. *)
+      slot_range =
         ({ lower = global_slot; upper = constant Slot.typ Slot.max_value } : Slot_range
                                                                              .var)
+    ; global_slot_range = Slot_range.(constant typ infinite)
     ; source_local_state = Local_state.dummy
     ; target_local_state = Local_state.dummy
     }
