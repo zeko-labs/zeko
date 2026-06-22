@@ -591,8 +591,7 @@ module Server = struct
       for i = 0 to len1 - 1 do
         result :=
           !result
-          lor
-          (Char.to_int (String.get s1 i) lxor Char.to_int (String.get s2 i))
+          lor (Char.to_int (String.get s1 i) lxor Char.to_int (String.get s2 i))
       done ;
       Int.(!result = 0)
 
@@ -659,9 +658,31 @@ module Server = struct
                       >>| Result.map_error ~f:Error.to_string_hum ) )
         ]
 
-  let run ~port t =
+  let is_loopback_host = function
+    | "localhost" | "127.0.0.1" | "::1" ->
+        true
+    | _ ->
+        false
+
+  let run ~host ~port ~allow_insecure_remote_binding t =
+    if
+      (not (is_loopback_host host))
+      && Option.is_none t.tls_config
+      && not allow_insecure_remote_binding
+    then
+      failwithf
+        "Refusing to bind signer service to non-loopback host %s without TLS. \
+         Configure --tls-cert-file and --tls-key-file, or use \
+         --allow-insecure-remote-binding only on a trusted private network."
+        host () ;
+    let%bind bind_address =
+      if String.equal host "localhost" then return Tcp.Bind_to_address.Localhost
+      else
+        Unix.Inet_addr.of_string_or_getbyname host
+        >>| fun address -> Tcp.Bind_to_address.Address address
+    in
     let where_to_listen =
-      Tcp.Where_to_listen.bind_to Localhost (On_port port)
+      Tcp.Where_to_listen.bind_to bind_address (Tcp.Bind_to_port.On_port port)
     in
     Tcp.Server.create
       ~on_handler_error:

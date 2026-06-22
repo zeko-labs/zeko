@@ -57,9 +57,10 @@ dune exec ./run.exe -- --help
 
 ## Signer service auth and TLS
 
-The signer service listens only on localhost and requires a shared auth token
-for all RPC calls. Set the same `ZEKO_SIGNER_AUTH_TOKEN` in the signer process
-and every process that connects to it, such as the sequencer or DA node.
+The signer service listens on localhost by default and requires a shared auth
+token for all RPC calls. Set the same `ZEKO_SIGNER_AUTH_TOKEN` in the signer
+process and every process that connects to it, such as the sequencer or DA
+node.
 
 ```bash
 export MINA_PRIVATE_KEY="base58 signer private key"
@@ -79,14 +80,15 @@ export ZEKO_SIGNER_AUTH_TOKEN="long random signer token"
 dune exec ./run.exe -- --signer localhost:9000 ...
 ```
 
-TLS is optional but recommended whenever signer traffic may cross a container,
-VM, or host boundary. Start the signer with a certificate and key:
+Use `--host` when the signer must accept connections from another container,
+VM, or host. Non-loopback binds require TLS:
 
 ```bash
 export MINA_PRIVATE_KEY="base58 signer private key"
 export ZEKO_SIGNER_AUTH_TOKEN="long random signer token"
 
 dune exec ../signer/cli.exe -- run \
+    --host 0.0.0.0 \
     --port 9000 \
     --allow-zkapp-signing \
     --max-fee 10 \
@@ -94,6 +96,12 @@ dune exec ../signer/cli.exe -- run \
     --tls-cert-file /path/to/signer-cert.pem \
     --tls-key-file /path/to/signer-key.pem
 ```
+
+When using Docker, expose the signer only on a dedicated private container
+network and connect to it using its container DNS name. Do not publish its port
+on a public host interface. For trusted private networks where TLS is
+terminated elsewhere, `--allow-insecure-remote-binding` explicitly permits a
+non-loopback bind without TLS.
 
 Clients enable TLS by setting the trusted CA/certificate file. The expected
 hostname defaults to the host in `--signer`; set `ZEKO_SIGNER_TLS_HOSTNAME` when
