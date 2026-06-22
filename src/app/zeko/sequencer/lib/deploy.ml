@@ -670,10 +670,16 @@ let vk_hash_of_multisig_kind = function
         (Lazy.force Zeko_types.Bridge_inst_mina.System_L1_token_owner.tag)
       |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
 
-let build_outer_state_multisig_update_body
+let build_outer_state_multisig_update_body ?authorization_vk_hash
     ~(precondition : Rollup_state.Outer_state.fine)
-    ~(update : Rollup_state.Outer_state.fine) =
-  let%map vk_hash = outer_rules_vk_hash () in
+    ~(update : Rollup_state.Outer_state.fine) () =
+  let%map vk_hash =
+    match authorization_vk_hash with
+    | Some vk_hash ->
+        return vk_hash
+    | None ->
+        outer_rules_vk_hash ()
+  in
   let update =
     Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine update
     |> Pickles_types.Vector.Vector_8.map ~f:(function
@@ -708,10 +714,16 @@ let build_outer_state_multisig_update_body
   ; authorization_kind = Proof vk_hash
   }
 
-let build_verification_key_multisig_update_body ~(kind : Multisig_update_kind.t)
-    ~(public_key : Public_key.Compressed.t)
-    ~(verification_key : Compile_simple.Verification_key.t) =
-  let%map vk_hash = vk_hash_of_multisig_kind kind in
+let build_verification_key_multisig_update_body ?authorization_vk_hash
+    ~(kind : Multisig_update_kind.t) ~(public_key : Public_key.Compressed.t)
+    ~(verification_key : Compile_simple.Verification_key.t) () =
+  let%map vk_hash =
+    match authorization_vk_hash with
+    | Some vk_hash ->
+        return vk_hash
+    | None ->
+        vk_hash_of_multisig_kind kind
+  in
   { Account_update.Body.dummy with
     public_key
   ; update =
