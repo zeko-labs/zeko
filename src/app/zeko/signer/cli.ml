@@ -12,6 +12,15 @@ let run =
          flag "--port"
            (optional_with_default 9000 int)
            ~doc:"int Port to listen on"
+       and host =
+         flag "--host"
+           (optional_with_default "localhost" string)
+           ~doc:"host Address to listen on"
+       and allow_insecure_remote_binding =
+         flag "--allow-insecure-remote-binding" no_arg
+           ~doc:
+             "Allow a non-loopback bind without TLS (trusted private networks \
+              only)"
        and private_key =
          flag "--private-key" (optional string)
            ~doc:"string Base58 private key, defaults to MINA_PRIVATE_KEY"
@@ -86,8 +95,11 @@ let run =
            Signer_service.Server.create ?tls_config ~logger ~policy ~auth_token
              ~private_key:(Private_key.of_base58_check_exn private_key)
          in
-         let%bind () = Signer_service.Server.run ~port signer in
-         [%log info] "Signer service listening on localhost:%d%s" port
+         let%bind () =
+           Signer_service.Server.run ~host ~port ~allow_insecure_remote_binding
+             signer
+         in
+         [%log info] "Signer service listening on %s:%d%s" host port
            (if Option.is_some tls_config then " with TLS" else "") ;
          never () ) )
 

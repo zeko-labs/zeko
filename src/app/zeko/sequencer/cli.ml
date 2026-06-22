@@ -295,12 +295,12 @@ let update_outer_verification_keys =
                      (Compile_simple.Verification_key.hash new_vk)
                      old_vk
                  then None
-                 else Some (new_vk, kp) )
+                 else Some (new_vk, old_vk, kp) )
            in
            if direct then
              let%bind bodies =
                Deferred.List.map to_update ~how:`Sequential
-                 ~f:(fun (new_vk, pk) ->
+                 ~f:(fun (new_vk, old_vk_hash, pk) ->
                    let kind =
                      if
                        Public_key.Compressed.equal pk
@@ -313,7 +313,8 @@ let update_outer_verification_keys =
                      else Deploy.Multisig_update_kind.Bridge_holder_l1_enabled
                    in
                    Deploy.build_verification_key_multisig_update_body ~kind
-                     ~public_key:pk ~verification_key:new_vk )
+                     ~authorization_vk_hash:old_vk_hash ~public_key:pk
+                     ~verification_key:new_vk () )
              in
              let deploy_config =
                Option.value_exn Zeko_circuits_config.deploy_config
@@ -333,7 +334,7 @@ let update_outer_verification_keys =
            else
              let%map signed_updates =
                Deferred.List.map to_update ~how:`Sequential
-                 ~f:(fun (new_vk, pk) ->
+                 ~f:(fun (new_vk, old_vk_hash, pk) ->
                    let kind =
                      if
                        Public_key.Compressed.equal pk
@@ -347,7 +348,8 @@ let update_outer_verification_keys =
                    in
                    let%map body =
                      Deploy.build_verification_key_multisig_update_body ~kind
-                       ~public_key:pk ~verification_key:new_vk
+                       ~authorization_vk_hash:old_vk_hash ~public_key:pk
+                       ~verification_key:new_vk ()
                    in
                    Deploy.sign_multisig_update ~signer ~kind ~body )
              in
@@ -396,6 +398,12 @@ let update_inner_verification_keys =
            >>| Utils.value_of_zkapp_state
                  Zeko_circuits.Rollup_state.Outer_state.typ
            >>| fun { ledger_hash; _ } -> ledger_hash
+         and fetched_outer_vk_hash =
+           Gql_client.fetch_vk ~logger l1_uri
+             ( Account_id.of_public_key
+             @@ Public_key.decompress_exn Zeko_circuits_config.t.zeko_l1 )
+           >>| Or_error.ok_exn >>| Compile_simple.Verification_key.of_pickles
+           >>| Compile_simple.Verification_key.hash
          in
          let da_config = Da_layer.Client.Config.of_string_list [ da_node ] in
          let ledger, imt =
@@ -584,6 +592,7 @@ let update_inner_verification_keys =
            let%bind body =
              let open Zeko_circuits.Rollup_state in
              Deploy.build_outer_state_multisig_update_body
+               ~authorization_vk_hash:fetched_outer_vk_hash
                ~precondition:
                  Outer_state.
                    { pause_key = None
@@ -606,6 +615,7 @@ let update_inner_verification_keys =
                    ; da_key = None
                    ; acc_set = None
                    }
+               ()
            in
            if direct then
              let deploy_config =
@@ -713,6 +723,7 @@ let update_da_key =
                    ; da_key = Some (Field.Var.constant new_da_key)
                    ; acc_set = None
                    }
+               ()
            in
            if direct then
              let deploy_config =
@@ -1002,6 +1013,7 @@ let set_pause =
                  ; da_key = None
                  ; acc_set = None
                  }
+             ()
          in
          if direct then
            let deploy_config =
