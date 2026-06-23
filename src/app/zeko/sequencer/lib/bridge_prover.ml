@@ -17,7 +17,7 @@ module Proofs_memory = struct
         , float
           * [ `Pending
             | `Proved of
-              ( Account_update.Stable.V1.t
+              ( Account_update.Stable.V2.t
               , Zkapp_command.Digest.Account_update.t
               , Zkapp_command.Digest.Forest.t )
               Zkapp_command.Call_forest.t
@@ -66,7 +66,7 @@ module Proofs_memory = struct
 end
 
 type precomputed_forest =
-  ( Account_update.Stable.V1.t
+  ( Account_update.Stable.V2.t
   , Zkapp_command.Digest.Account_update.t
   , Zkapp_command.Digest.Forest.t )
   Zkapp_command.Call_forest.t
@@ -364,7 +364,7 @@ module Deposit_request = struct
       Ok (forest, `Commitment tx_commitment)
     with exn -> Error (Error.of_exn exn)
 
-  let key t (transferrer : Account_update.Stable.V1.t) =
+  let key t (transferrer : Account_update.Stable.V2.t) =
     let transferrer_hash =
       Account_update.digest ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
         transferrer
@@ -544,7 +544,7 @@ module Withdrawal_request = struct
       Ok (forest, `Commitment tx_commitment)
     with exn -> Error (Error.of_exn exn)
 
-  let key t (transferrer : Account_update.Stable.V1.t) =
+  let key t (transferrer : Account_update.Stable.V2.t) =
     let transferrer_hash =
       Account_update.digest ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
         transferrer

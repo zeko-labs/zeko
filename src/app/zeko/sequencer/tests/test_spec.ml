@@ -549,6 +549,7 @@ module Sequencer_spec = struct
       in
       { fork_timestamp = genesis_timestamp
       ; fork_slot = Mina_numbers.Global_slot_since_genesis.zero
+      ; slot_duration_sec = 90.
       }
     in
 

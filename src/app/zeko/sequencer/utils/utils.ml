@@ -45,8 +45,8 @@ let value_to_zkapp_state (some : Field.t -> 'option) (none : 'option)
     (typ : ('var, 'value) Typ.t) (x : 'value) : 'option Zkapp_state.V.t =
   let (Typ typ) = typ in
   let fields, _aux = typ.value_to_fields x in
-  assert (Array.length fields <= 8) ;
-  let missing = 8 - Array.length fields in
+  assert (Array.length fields <= Zkapp_state.max_size_int) ;
+  let missing = Zkapp_state.max_size_int - Array.length fields in
   Zkapp_state.V.of_list_exn
   @@ List.append
        (List.map ~f:(fun f -> some f) @@ Array.to_list fields)
@@ -56,8 +56,10 @@ let value_of_zkapp_state (typ : ('var, 'value) Typ.t) (x : field Zkapp_state.V.t
     : 'value =
   let (Typ typ) = typ in
   typ.value_of_fields
-    ( Zkapp_state.V.to_list x |> Array.of_list
-    , typ.constraint_system_auxiliary () )
+    ( Zkapp_state.V.to_list x
+    |> fun fields ->
+    ( List.take fields typ.size_in_field_elements |> Array.of_list
+    , typ.constraint_system_auxiliary () ) )
 
 let value_to_fields (type var value) (typ : (var, value) Typ.t) (x : value) :
     Field.t array =
@@ -314,22 +316,41 @@ let command_slot_range (command : User_command.t) : Slot_range.t option =
              |> slot_range_intersection acc )
 
 module Slot = struct
-  type l1_config = { fork_timestamp : Time.t; fork_slot : Slot.t }
+  type l1_config =
+    { fork_timestamp : Time.t; fork_slot : Slot.t; slot_duration_sec : float }
 
   module For_tests = struct
     let add_to_global_slot = ref 0
   end
 
-  let global_slot ~l1_config =
+  let global_slot_at ~now ~l1_config =
     let after_fork_slot =
-      (Time.abs_diff (Time.now ()) l1_config.fork_timestamp |> Time.Span.to_sec)
-      /. 180.
+      (Time.abs_diff now l1_config.fork_timestamp |> Time.Span.to_sec)
+      /. l1_config.slot_duration_sec
       |> Float.to_int
       |> ( + ) !For_tests.add_to_global_slot
       |> Mina_numbers.Global_slot_span.of_int
     in
     Mina_numbers.Global_slot_since_genesis.add l1_config.fork_slot
       after_fork_slot
+
+  let global_slot ~l1_config = global_slot_at ~now:(Time.now ()) ~l1_config
+
+  let span_to_slots ~l1_config span =
+    Time.Span.to_sec span /. l1_config.slot_duration_sec |> Float.to_int
+
+  let%test_unit "Mesa slot duration is used for current-slot calculation" =
+    let fork_timestamp = Time.epoch in
+    let l1_config =
+      { fork_timestamp
+      ; fork_slot = Mina_numbers.Global_slot_since_genesis.of_int 100
+      ; slot_duration_sec = 90.
+      }
+    in
+    let now = Time.add fork_timestamp (Time.Span.of_sec 450.) in
+    let slot = global_slot_at ~now ~l1_config in
+    [%test_eq: int] 105 (Mina_numbers.Global_slot_since_genesis.to_int slot) ;
+    [%test_eq: int] 40 (span_to_slots ~l1_config (Time.Span.of_hr 1.))
 end
 
 let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =
@@ -388,8 +409,7 @@ module Forest_shape = struct
     | Use_full_commitment b :: rest ->
         Bool.equal au.body.use_full_commitment b && check_tree tree rest
     | Authorization_kind kind :: rest ->
-        Account_update.Authorization_kind.equal au.body.authorization_kind
-          kind
+        Account_update.Authorization_kind.equal au.body.authorization_kind kind
         && check_tree tree rest
     | Preconditions_constant_nonce_only :: rest ->
         let { Account_update.Preconditions.network; account; valid_while } =

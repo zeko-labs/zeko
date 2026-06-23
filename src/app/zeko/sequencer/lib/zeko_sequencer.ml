@@ -393,7 +393,8 @@ module Sequencer = struct
           in
           let acceptable_future_slot =
             Global_slot_since_genesis.add l1_global_slot
-              ( (Float.to_int @@ Time.Span.to_min t.config.slot_acceptance) / 3
+              ( Utils.Slot.span_to_slots ~l1_config:t.config.l1_config
+                  t.config.slot_acceptance
               |> Global_slot_span.of_int )
           in
           let%bind.Deferred.Result () =

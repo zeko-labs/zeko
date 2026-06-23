@@ -844,7 +844,7 @@ let create_deploy_inner ~(zeko_kp : Keypair.t) () =
     let (Typ typ) = Zeko_circuits.Rollup_state.Outer_state.typ in
     let fields, _ = typ.value_to_fields init in
     let app_state =
-      Pickles_types.Vector.Vector_8.of_list_exn
+      Zkapp_state.V.of_list_exn
         ( Array.to_list fields
         |> List.map ~f:(fun x -> Zkapp_basic.Set_or_keep.Set x) )
     in

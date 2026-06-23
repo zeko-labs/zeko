@@ -21,6 +21,7 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ; fork_slot =
         Thread_safe.block_on_async_exn (fun () ->
             Gql_client.fetch_fork_slot ~logger l1_uri >>| Or_error.ok_exn )
+    ; slot_duration_sec = 90.
     }
   in
   [%log info] "Current slot: %d"
@@ -134,7 +135,7 @@ let () =
          ~doc:"float Slot acceptance in minutes"
      and commit_validity_period =
        flag "--commit-validity-period"
-         (optional_with_default 20 int)
+         (optional_with_default 40 int)
          ~doc:"int Commit validity period in slots"
      and signer =
        flag "--signer" (required string) ~doc:"string Signer service host:port"

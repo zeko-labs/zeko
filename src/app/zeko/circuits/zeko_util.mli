@@ -26,15 +26,14 @@ end
 
 val var_to_precondition_fine :
      Fine.t
-  -> Field.Var.t Zkapp_basic.Or_ignore.Checked.t Pickles_types.Vector.Vector_8.t
+  -> Field.Var.t Zkapp_basic.Or_ignore.Checked.t Mina_base.Zkapp_state.V.t
 
 val var_to_app_state_fine :
      Fine.t
-  -> Field.Var.t Zkapp_basic.Set_or_keep.Checked.t
-     Pickles_types.Vector.Vector_8.t
+  -> Field.Var.t Zkapp_basic.Set_or_keep.Checked.t Mina_base.Zkapp_state.V.t
 
 val var_to_optional_fine :
-  Fine.t -> Field.Var.t option Pickles_types.Vector.Vector_8.t
+  Fine.t -> Field.Var.t option Mina_base.Zkapp_state.V.t
 
 val var_to_actions :
   ('var, 'value) Typ.t -> 'var -> Mina_base.Zkapp_account.Actions.var Checked.t

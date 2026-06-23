@@ -9,7 +9,7 @@ module Zkapp_command_inputs = struct
 
     module V2 = struct
       type t =
-        ( Zkapp_command_segment.Witness.Stable.V1.t
+        ( Zkapp_command_segment.Witness.Stable.V2.t
         * Zkapp_command_segment.Basic.Stable.V1.t
         * Statement.With_sok.Stable.V2.t )
         list

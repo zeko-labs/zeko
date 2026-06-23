@@ -73,13 +73,13 @@ module Rpc = struct
         type t =
           { auth_token : string
           ; signature_kind : string
-          ; command : Zkapp_command.Stable.V1.t
+          ; command : Zkapp_command.Stable.V2.t
           }
         [@@deriving bin_io]
       end
 
       module Response = struct
-        type t = (Zkapp_command.Stable.V1.t, string) Result.t
+        type t = (Zkapp_command.Stable.V2.t, string) Result.t
         [@@deriving bin_io]
       end
 
@@ -95,13 +95,13 @@ module Rpc = struct
         type t =
           { auth_token : string
           ; signature_kind : string
-          ; command : Zkapp_command.Stable.V1.t
+          ; command : Zkapp_command.Stable.V2.t
           }
         [@@deriving bin_io]
       end
 
       module Response = struct
-        type t = (Zkapp_command.Stable.V1.t, string) Result.t
+        type t = (Zkapp_command.Stable.V2.t, string) Result.t
         [@@deriving bin_io]
       end
 

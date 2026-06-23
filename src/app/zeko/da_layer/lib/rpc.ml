@@ -19,7 +19,7 @@ module Post_diff = struct
     module Query = struct
       (* Use Diff.V1 without timestamp, the node determines the timestamp itself *)
       type t =
-        { ledger_openings : Sparse_ledger.Stable.V2.t
+        { ledger_openings : Sparse_ledger.Stable.V3.t
         ; diff : Diff.Pending.Stable.V1.t
         ; acc_set_openings : Indexed_merkle_tree.Sparse.Stable.V1.t
         }

@@ -63,15 +63,17 @@ let var_to_state_generic_fine :
   in
   fun x ->
     let r = go x in
-    if List.length r > 8 then
+    let state_size = Zkapp_state.max_size_int in
+    if List.length r > state_size then
       failwith
-        "var_to_state_generic_fine used with more than 8 fields, too big for \
-         zkapp state!"
+        "var_to_state_generic_fine used with more fields than fit in zkapp \
+         state!"
     else
       let r' =
-        List.(append r (init ~f:(fun _ -> Maybe_var.none) (8 - length r)))
+        List.(
+          append r (init ~f:(fun _ -> Maybe_var.none) (state_size - length r)))
       in
-      assert (List.length r' = 8) ;
+      assert (List.length r' = state_size) ;
       Zkapp_state.V.of_list_exn r'
 
 let var_to_precondition_fine =

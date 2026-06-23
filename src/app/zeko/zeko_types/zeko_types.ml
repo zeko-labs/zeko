@@ -190,11 +190,11 @@ module Zkapp_rule_input_witness = struct
   type serializable =
     { stack_frame :
         ( Token_id.Stable.V2.t
-        , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
+        , Zkapp_command.Call_forest.With_hashes.Stable.V2.t )
         Stack_frame.Stable.V1.t
     ; call_stack :
         ( ( ( Token_id.Stable.V2.t
-            , Zkapp_command.Call_forest.With_hashes.Stable.V1.t )
+            , Zkapp_command.Call_forest.With_hashes.Stable.V2.t )
             Stack_frame.Stable.V1.t
           , Stack_frame.Digest.Stable.V1.t )
           With_hash.t
@@ -300,7 +300,7 @@ module Per_account_update = struct
   type serializable =
     { account_updates : Zkapp_command.Digest.Forest.t
     ; memo_hash : F.t
-    ; account_updates_data : Zkapp_command.Call_forest.With_hashes.Stable.V1.t
+    ; account_updates_data : Zkapp_command.Call_forest.With_hashes.Stable.V2.t
     ; shift_action_state : bool
     }
   [@@deriving yojson]

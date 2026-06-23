@@ -240,7 +240,7 @@ module Output = struct
     | Call_forest of
         ( Account_update.Body.t
         * Zkapp_command.Digest.Account_update.t
-        * ( Account_update.Stable.V1.t
+        * ( Account_update.Stable.V2.t
           , Zkapp_command.Digest.Account_update.t
           , Zkapp_command.Digest.Forest.t )
           Zkapp_command.Call_forest.t )

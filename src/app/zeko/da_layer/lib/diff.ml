@@ -9,7 +9,7 @@ module Actions = struct
     module V1 = struct
       type t =
         [ `Command_with_action_step_flags of
-          User_command.Stable.V2.t * bool list
+          User_command.Stable.V3.t * bool list
         | `Actions of
           (Account_id.Stable.V2.t * (Field.t[@version_asserted]) list list list)
           list ]
@@ -35,7 +35,7 @@ module Stable = struct
   module V4 = struct
     type t =
       { source_ledger_hash : Ledger_hash.Stable.V1.t
-      ; changed_accounts : (int * Account.Stable.V2.t) list
+      ; changed_accounts : (int * Account.Stable.V3.t) list
       ; actions : Actions.Stable.V1.t
       ; timestamp : Block_time.Stable.V1.t
       ; acc_set : (Field.t[@version_asserted])
@@ -48,9 +48,9 @@ module Stable = struct
   module V3 = struct
     type t =
       { source_ledger_hash : Ledger_hash.Stable.V1.t
-      ; changed_accounts : (int * Account.Stable.V2.t) list
+      ; changed_accounts : (int * Account.Stable.V3.t) list
       ; command_with_action_step_flags :
-          (User_command.Stable.V2.t * bool list) option
+          (User_command.Stable.V3.t * bool list) option
       ; timestamp : Block_time.Stable.V1.t
       ; acc_set : (Field.t[@version_asserted])
       }
@@ -70,9 +70,9 @@ module Stable = struct
   module V2 = struct
     type t =
       { source_ledger_hash : Ledger_hash.Stable.V1.t
-      ; changed_accounts : (int * Account.Stable.V2.t) list
+      ; changed_accounts : (int * Account.Stable.V3.t) list
       ; command_with_action_step_flags :
-          (User_command.Stable.V2.t * bool list) option
+          (User_command.Stable.V3.t * bool list) option
       ; timestamp : Block_time.Stable.V1.t
       }
     [@@deriving yojson, fields, sexp_of, compare]
@@ -91,9 +91,9 @@ module Stable = struct
   module V1 = struct
     type t =
       { source_ledger_hash : Ledger_hash.Stable.V1.t
-      ; changed_accounts : (int * Account.Stable.V2.t) list
+      ; changed_accounts : (int * Account.Stable.V3.t) list
       ; command_with_action_step_flags :
-          (User_command.Stable.V2.t * bool list) option
+          (User_command.Stable.V3.t * bool list) option
       }
     [@@deriving yojson, fields, sexp]
 
@@ -118,7 +118,7 @@ module Pending = struct
     module V1 = struct
       type t =
         { source_ledger_hash : Ledger_hash.Stable.V1.t
-        ; changed_accounts : (int * Account.Stable.V2.t) list
+        ; changed_accounts : (int * Account.Stable.V3.t) list
         ; actions : Actions.Stable.V1.t
         }
       [@@deriving yojson, fields, sexp]

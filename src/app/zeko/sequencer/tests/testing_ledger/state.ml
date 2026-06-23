@@ -77,7 +77,7 @@ let apply_command t ~command =
   let l = Ledger.of_database t.db in
   let global_slot =
     (Time.abs_diff (Time.now ()) Constants.genesis_timestamp |> Time.Span.to_sec)
-    /. 180.
+    /. 90.
     |> Float.to_int |> Mina_numbers.Global_slot_since_genesis.of_int
     |> Fn.flip Mina_numbers.Global_slot_since_genesis.add t.shifted_slot_by
   in

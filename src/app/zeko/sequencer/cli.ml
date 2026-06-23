@@ -1156,6 +1156,143 @@ let load_db =
          Ledger.commit ledger ;
          Core.printf "Loaded %d accounts\n%!" (Ledger.num_accounts ledger) ) )
 
+module Mesa_migration_manifest = struct
+  type t =
+    { source_ledger_hash : string
+    ; target_ledger_hash : string
+    ; target_acc_set : string
+    ; account_count : int
+    ; padded_zkapp_accounts : int
+    ; hardfork_slot : int
+    ; zkapp_state_size : int
+    }
+  [@@deriving yojson]
+end
+
+let migrate_mesa_ledger =
+  ( "migrate-mesa-ledger"
+  , Command.basic
+      ~summary:
+        "Convert a Berkeley dump-db export into a Mesa ledger and migration \
+         manifest"
+      (let%map_open.Command dump_path =
+         flag "--dump-path" (required string)
+           ~doc:"string Berkeley dump-db directory"
+       and db_path =
+         flag "--db-path" (required string)
+           ~doc:"string New Mesa ledger/IMT directory"
+       and source_ledger_hash =
+         flag "--source-ledger-hash" (required string)
+           ~doc:"string Final committed Berkeley ledger hash"
+       and hardfork_slot =
+         flag "--hardfork-slot" (required int)
+           ~doc:"int Mesa global slot since genesis"
+       and manifest_path =
+         flag "--manifest" (required string)
+           ~doc:"string Output migration manifest JSON"
+       in
+       fun () ->
+         if FileUtil.test Is_dir db_path then
+           failwithf "Target database path already exists: %s" db_path () ;
+         let padded_zkapp_accounts = ref 0 in
+         let rec pad_app_state = function
+           | `Assoc fields ->
+               `Assoc
+                 (List.map fields ~f:(fun (name, value) ->
+                      if
+                        String.equal name "app_state"
+                        || String.equal name "appState"
+                      then
+                        match value with
+                        | `List fields when List.length fields = 8 ->
+                            Int.incr padded_zkapp_accounts ;
+                            ( name
+                            , `List
+                                ( fields
+                                @ List.init 24 ~f:(fun _ ->
+                                      [%to_yojson: Field.t] Field.zero ) ) )
+                        | `List fields
+                          when List.length fields = Zkapp_state.max_size_int ->
+                            (name, value)
+                        | `List fields ->
+                            failwithf
+                              "Unexpected zkApp state length %d; expected 8 or \
+                               %d"
+                              (List.length fields) Zkapp_state.max_size_int ()
+                        | _ ->
+                            (name, pad_app_state value)
+                      else (name, pad_app_state value) ) )
+           | `List values ->
+               `List (List.map values ~f:pad_app_state)
+           | value ->
+               value
+         in
+         let accounts =
+           Yojson.Safe.from_file (Filename.concat dump_path "ledger.json")
+           |> Yojson.Safe.Util.to_list |> List.map ~f:pad_app_state
+           |> List.map ~f:[%of_yojson: int * Account.t]
+           |> List.map ~f:(function
+                | Ok value ->
+                    value
+                | Error err ->
+                    failwith err )
+           |> List.map ~f:(fun (index, account) ->
+                  ( index
+                  , Account.slot_reduction_update
+                      ~hardfork_slot:
+                        (Mina_numbers.Global_slot_since_genesis.of_int
+                           hardfork_slot )
+                      account ) )
+         in
+         Core.Unix.mkdir_p db_path ;
+         let ledger_db =
+           Ledger.Db.create ~directory_name:(db_path ^ "/ledger")
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+         in
+         let ledger = Ledger.of_database ledger_db in
+         let imt =
+           Indexed_merkle_tree.Db.create ~directory_name:(db_path ^ "/imt")
+             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+         in
+         List.iter accounts ~f:(fun (index, account) ->
+             Ledger.set_at_index_exn ledger index account ;
+             let owner = Account.identifier account in
+             let token_id = Account_id.derive_token_id ~owner in
+             ignore
+               ( Indexed_merkle_tree.Db.get_or_create_entry_exn imt token_id
+                 : _ * _ ) ) ;
+         Ledger.commit ledger ;
+         let target_ledger_hash =
+           Ledger.merkle_root ledger |> Ledger_hash.to_base58_check
+         in
+         let target_acc_set =
+           Zeko_types.Account_set.of_fields
+             [| Indexed_merkle_tree.Db.merkle_root imt |]
+           |> Zeko_types.Account_set.to_fields
+           |> fun fields -> Field.to_string fields.(0)
+         in
+         let manifest : Mesa_migration_manifest.t =
+           { source_ledger_hash
+           ; target_ledger_hash
+           ; target_acc_set
+           ; account_count = List.length accounts
+           ; padded_zkapp_accounts = !padded_zkapp_accounts
+           ; hardfork_slot
+           ; zkapp_state_size = Zkapp_state.max_size_int
+           }
+         in
+         Yojson.Safe.to_file manifest_path
+           (Mesa_migration_manifest.to_yojson manifest) ;
+         Core.printf
+           "Migrated %d accounts (%d zkApp accounts padded)\n\
+            Target ledger: %s\n\
+            Target account set: %s\n\
+            Manifest: %s\n\
+            %!"
+           manifest.account_count manifest.padded_zkapp_accounts
+           manifest.target_ledger_hash manifest.target_acc_set manifest_path )
+  )
+
 let prover_load =
   ( "prover-load"
   , Command.async ~summary:"Dump the ledger"
@@ -1381,6 +1518,7 @@ let () =
     ; migrate
     ; dump_db
     ; load_db
+    ; migrate_mesa_ledger
     ; prover_load
     ; construct_multisig_key
     ; sync_ledger

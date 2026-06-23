@@ -624,6 +624,9 @@ let () =
           let current_slot : Global_slot_since_genesis.t =
             Utils.Slot.global_slot ~l1_config
           in
+          let accepted_margin =
+            Utils.Slot.span_to_slots ~l1_config (Time.Span.of_min 10.) + 1
+          in
           let command =
             User_command.Signed_command
               (command_send
@@ -642,7 +645,7 @@ let () =
               (command_send
                  ~valid_until:
                    Global_slot_since_genesis.(
-                     add current_slot (Global_slot_span.of_int 5))
+                     add current_slot (Global_slot_span.of_int accepted_margin))
                  ~chain:Zeko_circuits_config.Inputs.chain_l2 spec )
           in
           let%bind result = apply_user_command !sequencer command in

@@ -508,7 +508,7 @@ let update_outer_state ~signature_kind ~(signer : Keypair.t)
     ~(update : Rollup_state.Outer_state.fine) =
   let update =
     Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine update
-    |> Pickles_types.Vector.Vector_8.map ~f:(function
+    |> Zkapp_state.V.map ~f:(function
          | None ->
              Zkapp_basic.Set_or_keep.Keep
          | Some x ->
@@ -519,7 +519,7 @@ let update_outer_state ~signature_kind ~(signer : Keypair.t)
   in
   let precondition =
     Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine precondition
-    |> Pickles_types.Vector.Vector_8.map ~f:(function
+    |> Zkapp_state.V.map ~f:(function
          | None ->
              Zkapp_basic.Or_ignore.Ignore
          | Some x ->
@@ -682,7 +682,7 @@ let build_outer_state_multisig_update_body ?authorization_vk_hash
   in
   let update =
     Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine update
-    |> Pickles_types.Vector.Vector_8.map ~f:(function
+    |> Zkapp_state.V.map ~f:(function
          | None ->
              Zkapp_basic.Set_or_keep.Keep
          | Some x ->
@@ -693,7 +693,7 @@ let build_outer_state_multisig_update_body ?authorization_vk_hash
   in
   let precondition =
     Zeko_util.var_to_optional_fine @@ Rollup_state.Outer_state.fine precondition
-    |> Pickles_types.Vector.Vector_8.map ~f:(function
+    |> Zkapp_state.V.map ~f:(function
          | None ->
              Zkapp_basic.Or_ignore.Ignore
          | Some x ->
