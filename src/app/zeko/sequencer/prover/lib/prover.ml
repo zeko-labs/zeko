@@ -555,6 +555,10 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
       in
+      let l2_holder_vk_hash =
+        Zeko_circuits_config.holder_vk_hash_at_withdrawal_ase_source_length
+          ~current_vk_hash:l2_holder_vk_hash input.withdrawal_ase.init.length
+      in
       let%map (_stmt, parent_with_calls), proof =
         time ?fake_proving_time ~logger
           "Bridge_mina.System_L1.finalize_withdrawal"

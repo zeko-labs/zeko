@@ -168,6 +168,7 @@ let generate_circuits_config =
            ; bridge_fee_recipient_l1 = fst bridge_fee_recipient_l1
            ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
            ; outer_account_creation_fee = Currency.Fee.of_mina_string_exn "1"
+           ; holder_vk_hash_history = []
            }
          in
          let deploy_config : Zeko_circuits_config.Deploy.t =

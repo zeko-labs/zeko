@@ -8,6 +8,14 @@ module Mina_signature_kind = struct
   [@@deriving yojson]
 end
 
+module Holder_vk_hash_history = struct
+  type t =
+    { withdrawal_index : Zeko_circuits.Zeko_util.Checked32.t
+    ; vk_hash : Snark_params.Tick.Field.t
+    }
+  [@@deriving yojson]
+end
+
 type t =
   { chain_l1 : Mina_signature_kind.t
   ; chain_l2 : Mina_signature_kind.t
@@ -21,6 +29,7 @@ type t =
   ; bridge_fee_recipient_l1 : Public_key.Compressed.t
   ; bridge_fee_recipient_l2 : Public_key.Compressed.t
   ; outer_account_creation_fee : Currency.Fee.t
+  ; holder_vk_hash_history : Holder_vk_hash_history.t list [@default []]
   }
 [@@deriving yojson]
 
@@ -85,6 +94,7 @@ let (t, deploy_config) : t * Deploy.t option =
         ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
         ; outer_account_creation_fee =
             Zeko_constants.constraint_constants.account_creation_fee
+        ; holder_vk_hash_history = []
         }
       , Some
           { holder_accounts_l1 = List.map holder_accounts_l1 ~f:snd
@@ -108,6 +118,27 @@ let (t, deploy_config) : t * Deploy.t option =
           (t, deploy_config)
       | Error err ->
           failwithf "Failed to parse Zeko circuits config: %s" err () )
+
+let holder_vk_hash_at_withdrawal_index ~current_vk_hash withdrawal_index =
+  let history =
+    List.sort t.holder_vk_hash_history ~compare:(fun a b ->
+        Zeko_circuits.Zeko_util.Checked32.compare a.withdrawal_index
+          b.withdrawal_index )
+  in
+  List.find_map history ~f:(fun { withdrawal_index = cutoff; vk_hash } ->
+      if Zeko_circuits.Zeko_util.Checked32.(withdrawal_index < cutoff) then
+        Some vk_hash
+      else None )
+  |> Option.value ~default:current_vk_hash
+
+let holder_vk_hash_at_withdrawal_ase_source_length ~current_vk_hash
+    withdrawal_ase_source_length =
+  let withdrawal_index =
+    Zeko_circuits.Zeko_util.Checked32.sub withdrawal_ase_source_length
+      Zeko_circuits.Zeko_util.Checked32.one
+    |> Option.value_exn ~message:"withdrawal ASE source length must be positive"
+  in
+  holder_vk_hash_at_withdrawal_index ~current_vk_hash withdrawal_index
 
 module Inputs = struct
   let inner_public_key = Zeko_constants.inner_public_key

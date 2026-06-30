@@ -1471,6 +1471,11 @@ module Finalize_withdrawal = struct
         ~proof_source:withdrawal_ase_source ~proof_target:target
         withdrawal_ase_source []
     in
+    let l2_holder_vk_hash =
+      Zeko_circuits_config.holder_vk_hash_at_withdrawal_ase_source_length
+        ~current_vk_hash:t.verification_keys.bridge_mina_l2
+        withdrawal_ase_source.length
+    in
     let witness : Bridge.Finalize_withdrawal.t =
       { vk_hash = t.verification_keys.bridge_mina_l1
       ; public_key
@@ -1487,7 +1492,7 @@ module Finalize_withdrawal = struct
       ; withdrawal_params
       ; helper_token_owner_l1_vk_hash =
           t.verification_keys.bridge_mina_token_owner
-      ; l2_holder_vk_hash = t.verification_keys.bridge_mina_l2
+      ; l2_holder_vk_hash
       ; prev_nonce
       ; helper_account_new
       }
