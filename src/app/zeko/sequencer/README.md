@@ -140,6 +140,11 @@ Run help to see the options:
 dune exec ./deploy.exe -- --help
 ```
 
+## Verification key upgrades
+
+For the Docker-based multisig flow to upgrade inner and outer verification keys,
+see [docs/vk-upgrade-multisig-docker.md](docs/vk-upgrade-multisig-docker.md).
+
 ## Using archive node as indexer
 
 Archive node is used for mina blockchain to index the history of the blockchain. You can optionally run the archive alongside the node's daemon, which dispatches new blocks to the archive. In Zeko rollup the blockcreator is the sequencer, and since currently it's not possible to run multiple sequencers, you need to run the client that subscribes to the sequencer and dispatches the new blocks to the archive.

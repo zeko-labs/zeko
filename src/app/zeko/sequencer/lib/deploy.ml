@@ -818,6 +818,8 @@ let submit_multisig_update ~(kind : Multisig_update_kind.t)
     let ordered_signatures =
       List.map Zeko_circuits_config.Inputs.multisig_key.public_keys
         ~f:(fun public_key -> (public_key, Map.find signature_map public_key))
+      |> List.sort ~compare:(fun (a, _) (b, _) ->
+             Public_key.Compressed.compare a b )
     in
     let quorum =
       Int.of_string
