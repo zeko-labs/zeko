@@ -93,19 +93,26 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   in
   let old_inner_acc, old_inner_acc_path = get_inner_acc old_inner_ledger in
   let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
-  let%bind inner_ase_source, emergency_mode =
-    let%map { inner_action_state = committed_inner_action_state
-            ; status_flags
-            ; _
-            } =
+  let%bind outer_state, inner_ase_source, emergency_mode =
+    let%map outer_account =
       Gql_client.infer_state ~logger l1_uri ~zkapp_pk
         ~signer_pk:(Signer_service.Signer.public_key executor.signer)
-      >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
+    in
+    let outer_state : Rollup_state.Outer_state.t =
+      Utils.value_of_zkapp_state Rollup_state.Outer_state.typ outer_account
+    in
+    let ({ Rollup_state.Outer_state.inner_action_state = committed_inner_action_state
+         ; status_flags
+         ; _
+         } :
+          Rollup_state.Outer_state.t ) =
+      outer_state
     in
     let emergency_mode =
       Rollup_state.Outer_state.Status_flags.emergency status_flags
     in
-    ( ( Rollup_state.Inner_action_state.With_length.
+    ( outer_state
+    , ( Rollup_state.Inner_action_state.With_length.
           { action_state = raw committed_inner_action_state
           ; length = length committed_inner_action_state
           }
@@ -160,7 +167,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     (List.length unprocessed_actions)
     (Field.to_string processed_actions_pointer)
     (Field.to_string unprocessed_actions_state) ;
-  let%bind forest =
+  let%bind forest, settlement_export =
     let slot_range : Slot_range.t =
       let current_slot = Utils.Slot.global_slot ~l1_config in
       let slot_range : Slot_range.t =
@@ -176,15 +183,21 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
             (fst txn_snark).slot_range.upper slot_range.upper
       }
     in
-    let%map (body, _, calls), proof =
+    let%bind (body, _, calls), proof =
       Zeko_prover.Client.outer_commit provers ~txn_snark ~public_key:zkapp_pk
         ~inner_ase_source ~new_inner_actions ~old_inner_acc ~old_inner_acc_path
         ~new_inner_acc ~new_inner_acc_path ~unprocessed_actions ~da_multisig
         ~slot_range ~emergency_mode
     in
+    let%map settlement_export =
+      Ethereum_settlement_export.create
+        ~signature_kind:executor.signature_kind ~body ~calls ~state_before:outer_state
+        ~proof
+    in
     (* see #286 *)
-    Utils.attach_proof_to_forest ~signature_kind:executor.signature_kind
-      ~proof_cache_db ~body ~calls ~proof
+    ( Utils.attach_proof_to_forest ~signature_kind:executor.signature_kind
+        ~proof_cache_db ~body ~calls ~proof
+    , settlement_export )
   in
   let command : Zkapp_command.t =
     { fee_payer =
@@ -202,7 +215,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     ; memo = Signed_command_memo.empty
     }
   in
-  return command
+  return (command, settlement_export)
 
 let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
     ~(executor : Executor.t) ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
@@ -236,12 +249,14 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
               (Zeko_util.Slot.to_string upper)
               ()
         in
-        let%bind command =
+        let%bind command, settlement_export =
           prove_commit ~logger ~proof_cache_db ~provers ~executor ~l1_uri
             ~archive ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period
             ~commit_fee witness
         in
-        let%bind _hash = Executor.send_zkapp_command ~logger executor command in
+        let%bind _hash =
+          Executor.send_zkapp_command ~logger ~settlement_export executor command
+        in
         recommit_next target_ledger_hash
   in
   recommit_next ledger_hash

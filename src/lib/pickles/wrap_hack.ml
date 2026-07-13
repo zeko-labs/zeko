@@ -58,6 +58,32 @@ let hash_messages_for_next_wrap_proof (type n)
      .to_field_elements t ~g1:(fun ((x, y) : Tick.Curve.Affine.t) -> [ x; y ])
     )
 
+let proof_to_serde_json
+    (T proof_data : Side_loaded_verification_key.Width.Max.n Proof.t) =
+  let accumulator =
+    pad_accumulator
+      (Vector.map2
+         ~f:(fun commitment challenges ->
+           { Tock.Proof.Challenge_polynomial.commitment
+           ; challenges =
+               Vector.to_array (Common.Ipa.Wrap.compute_challenges challenges)
+           } )
+         (Vector.extend_front_exn
+            proof_data.statement.messages_for_next_step_proof
+              .challenge_polynomial_commitments
+            Side_loaded_verification_key.Width.Max.n
+            (Lazy.force Dummy.Ipa.Wrap.sg) )
+         proof_data.statement.proof_state.messages_for_next_wrap_proof
+           .old_bulletproof_challenges )
+  in
+  let backend_proof =
+    Tock.Proof.to_backend_with_public_evals accumulator []
+      { proof = Wrap_wire_proof.to_kimchi_proof proof_data.proof
+      ; public_evals = None
+      }
+  in
+  Kimchi_bindings.Protocol.Proof.Fq.to_serde_json backend_proof
+
 (* Pad the messages_for_next_wrap_proof of a proof *)
 let pad_proof (type mlmb) (T p : mlmb Proof.t) : Proof.Proofs_verified_max.t =
   T

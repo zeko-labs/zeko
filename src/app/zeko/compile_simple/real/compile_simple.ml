@@ -8,6 +8,8 @@ module Proof = struct
   include Pickles.Side_loaded.Proof
 
   let of_pickles x = x
+
+  let to_pickles x = Some x
 end
 
 type 'var tag =
@@ -19,6 +21,8 @@ module Verification_key = struct
   type var = Checked.t
 
   let of_pickles x = x
+
+  let to_pickles x = Some x
 
   let of_tag (Tag tag) = of_compiled_promise tag
 

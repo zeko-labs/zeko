@@ -1,0 +1,137 @@
+open Core_kernel
+open Async_kernel
+open Mina_base
+open Zeko_circuits
+
+module Field = Snark_params.Tick.Field
+
+type t =
+  { vk_json : string
+  ; proof_json : string
+  ; public_input_skeleton_json : string
+  ; app_statement_json : string
+  ; outer_account_public_key : string
+  ; binding : Yojson.Safe.t
+  }
+
+let proof_json t =
+  `Assoc
+    [ ("vkJson", `String t.vk_json)
+    ; ("proofJson", `String t.proof_json)
+    ; ("publicInputSkeletonJson", `String t.public_input_skeleton_json)
+    ; ("appStatementJson", `String t.app_statement_json)
+    ; ("binding", t.binding)
+    ]
+
+let to_gateway_json t (command : Zkapp_command.Stable.Latest.t) =
+  let command_base64 = Zkapp_command.to_base64 command in
+  let fee_payer = command.fee_payer.body in
+  `Assoc
+    [ ("schemaVersion", `Int 1)
+    ; ( "minaTransactionHash"
+      , `String ("0x" ^ Blake2.(digest_string command_base64 |> to_hex)) )
+    ; ("outerAccountPublicKey", `String t.outer_account_public_key)
+    ; ( "feePayerPublicKey"
+      , `String
+          (Signature_lib.Public_key.Compressed.to_base58_check
+             fee_payer.public_key ) )
+    ; ("nonce", `Int (Unsigned.UInt32.to_int fee_payer.nonce))
+    ; ("commandBase64", `String command_base64)
+    ; ("proof", proof_json t)
+    ]
+
+let field_to_hex field =
+  Kimchi_backend.Pasta.Basic.Bigint256.to_hex_string
+    (Kimchi_backend.Pasta.Basic.Fp.to_bigint field)
+
+let fields_json fields =
+  fields |> Array.to_list
+  |> List.map ~f:(fun field -> `String (field_to_hex field))
+  |> fun fields -> `List fields
+
+let signature_kind_json = function
+  | Mina_signature_kind.Mainnet ->
+      Ok (`String "mainnet")
+  | Testnet ->
+      Ok (`String "testnet")
+  | Other_network _ ->
+      Or_error.error_string
+        "the Ethereum settlement PoC supports mainnet/testnet Mina hash domains"
+
+let binding_json ~signature_kind ~(body : Account_update.Body.t) ~state_before =
+  let open Or_error.Let_syntax in
+  let%map signature_kind = signature_kind_json signature_kind in
+  let { Random_oracle_input.Chunked.field_elements; packeds } =
+    Account_update.Body.to_input body
+  in
+  let packed =
+    packeds |> Array.to_list
+    |> List.map ~f:(fun (value, bits) ->
+           `Assoc
+             [ ("value", `String (field_to_hex value)); ("bits", `Int bits) ] )
+  in
+  let state_fields =
+    Utils.value_to_fields Rollup_state.Outer_state.typ state_before
+  in
+  `Assoc
+    [ ("minaSignatureKind", signature_kind)
+    ; ( "accountUpdateBody"
+      , `Assoc
+          [ ("fieldElements", fields_json field_elements)
+          ; ("packed", `List packed)
+          ] )
+    ; ("actions", `List (List.map body.actions ~f:fields_json))
+    ; ("stateBefore", `Assoc [ ("fields", fields_json state_fields) ])
+    ]
+
+let app_statement_json ~signature_kind ~body ~calls =
+  let statement : Zkapp_statement.t =
+    { account_update =
+        ( Account_update.Body.digest ~signature_kind body
+          :> Zkapp_command.Transaction_commitment.t )
+    ; calls =
+        ( Zkapp_command.Call_forest.hash calls
+          :> Zkapp_command.Transaction_commitment.t )
+    }
+  in
+  Zkapp_statement.to_field_elements statement
+  |> Array.to_list
+  |> List.map ~f:(fun field -> `String (field_to_hex field))
+  |> fun fields -> Yojson.Safe.to_string (`List fields)
+
+let kimchi_proof_json (proof : Pickles.Side_loaded.Proof.t) =
+  Pickles.Side_loaded.Proof.to_serde_json proof
+
+let create ~signature_kind ~(body : Account_update.Body.t) ~calls ~state_before
+    ~(proof : Compile_simple.Proof.t) =
+  let open Deferred.Or_error.Let_syntax in
+  let%bind proof =
+    Compile_simple.Proof.to_pickles proof
+    |> Result.of_option ~error:(Error.of_string "cannot export a fake proof")
+    |> Deferred.return
+  in
+  let%bind verification_key =
+    Deferred.map
+      ( Compile_simple.Verification_key.of_tag
+          (Lazy.force Zeko_types.Outer_rules_inst.tag)
+      |> Promise.to_deferred )
+      ~f:(fun verification_key ->
+        Compile_simple.Verification_key.to_pickles verification_key
+        |> Result.of_option
+             ~error:(Error.of_string "cannot export a fake verification key") )
+  in
+  let%map vk_json =
+    Pickles.Side_loaded.Verification_key.to_serde_json verification_key
+    |> Deferred.return
+  and binding =
+    binding_json ~signature_kind ~body ~state_before |> Deferred.return
+  in
+  { vk_json
+  ; proof_json = kimchi_proof_json proof
+  ; public_input_skeleton_json =
+      Pickles.Side_loaded.Proof.to_yojson_full proof |> Yojson.Safe.to_string
+  ; app_statement_json = app_statement_json ~signature_kind ~body ~calls
+  ; outer_account_public_key =
+      Signature_lib.Public_key.Compressed.to_base58_check body.public_key
+  ; binding
+  }

@@ -43,7 +43,7 @@ let infer_nonce ~logger t pk =
   | `L2 { infer_nonce; _ } ->
       return (Ok (infer_nonce pk))
 
-let process_command ~logger t (command : Zkapp_command.t) =
+let process_command ~logger ?settlement_export t (command : Zkapp_command.t) =
   let rec retry attempt () =
     let err_to_string = function
       | `Nonce_inference_error err ->
@@ -80,7 +80,13 @@ let process_command ~logger t (command : Zkapp_command.t) =
       let%map.Deferred.Result () =
         match t.kind with
         | `L1 l1_uri ->
-            Gql_client.send_zkapp l1_uri command
+            Gql_client.send_zkapp
+              ?settlement:
+                (Option.map settlement_export
+                   ~f:(fun export ->
+                     Ethereum_settlement_export.to_gateway_json export command
+                     |> Yojson.Safe.to_basic ) )
+              l1_uri command
             >>| Result.map_error ~f:(fun err -> `Send_zkapp_error err)
             >>| Result.map ~f:ignore
         | `L2 { apply_user_command; _ } ->
@@ -129,10 +135,10 @@ let process_command ~logger t (command : Zkapp_command.t) =
   in
   retry 0 ()
 
-let send_zkapp_command ~logger t command =
+let send_zkapp_command ~logger ?settlement_export t command =
   Throttle.enqueue t.q (fun () ->
       Monitor.try_with ~here:[%here] (fun () ->
-          process_command ~logger t command )
+          process_command ~logger ?settlement_export t command )
       >>| Result.map_error ~f:Error.of_exn
       >>| Or_error.join )
 

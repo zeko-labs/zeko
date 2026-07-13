@@ -240,6 +240,13 @@ module Make_str (_ : Wire_types.Concrete) = struct
 
       let of_compiled tag = of_compiled_promise tag |> Promise.to_deferred
 
+      let to_serde_json (t : t) =
+        t.wrap_vk
+        |> Result.of_option
+             ~error:(Error.of_string "side-loaded verification key has no wrap index")
+        |> Result.map
+             ~f:Kimchi_bindings.Protocol.VerifierIndex.Fq.to_serde_json
+
       module Max_width = Width.Max
     end
 
@@ -262,6 +269,8 @@ module Make_str (_ : Wire_types.Concrete) = struct
       include Proof.Proofs_verified_max
 
       let of_proof : _ Proof.t -> t = Wrap_hack.pad_proof
+
+      let to_serde_json = Wrap_hack.proof_to_serde_json
     end
 
     let verify_promise (type t) ~(typ : (_, t) Impls.Step.Typ.t)

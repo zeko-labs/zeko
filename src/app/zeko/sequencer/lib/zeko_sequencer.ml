@@ -171,7 +171,7 @@ module Sequencer = struct
                 ; txn_snark
                 }
               in
-              let%bind command =
+              let%bind command, settlement_export =
                 Committer.prove_commit ~logger ~proof_cache_db ~provers
                   ~executor ~l1_uri:config.l1_uri ~archive
                   ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
@@ -180,7 +180,8 @@ module Sequencer = struct
                   ~commit_fee:config.commit_fee commit_witness
               in
               let%bind _hash =
-                Executor.send_zkapp_command ~logger executor command
+                Executor.send_zkapp_command ~logger ~settlement_export executor
+                  command
               in
               State.Last_committed_ledger.set sequencer_state
                 ~data:new_inner_ledger ;
