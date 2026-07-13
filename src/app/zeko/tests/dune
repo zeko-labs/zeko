@@ -61,6 +61,8 @@
  (libraries
   zeko_circuits
   compile_simple_real
+  sequencer_lib
+  is_compile_simple_real_real
   account_set_data
   zeko_constants)
  (instrumentation

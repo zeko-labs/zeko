@@ -102,8 +102,10 @@ let app_statement_json ~signature_kind ~body ~calls =
 let kimchi_proof_json (proof : Pickles.Side_loaded.Proof.t) =
   Pickles.Side_loaded.Proof.to_serde_json proof
 
-let create ~signature_kind ~(body : Account_update.Body.t) ~calls ~state_before
-    ~(proof : Compile_simple.Proof.t) =
+let create_with_verification_key ~signature_kind
+    ~(body : Account_update.Body.t) ~calls ~state_before
+    ~(proof : Compile_simple.Proof.t)
+    ~(verification_key : Compile_simple.Verification_key.t) =
   let open Deferred.Or_error.Let_syntax in
   let%bind proof =
     Compile_simple.Proof.to_pickles proof
@@ -111,14 +113,10 @@ let create ~signature_kind ~(body : Account_update.Body.t) ~calls ~state_before
     |> Deferred.return
   in
   let%bind verification_key =
-    Deferred.map
-      ( Compile_simple.Verification_key.of_tag
-          (Lazy.force Zeko_types.Outer_rules_inst.tag)
-      |> Promise.to_deferred )
-      ~f:(fun verification_key ->
-        Compile_simple.Verification_key.to_pickles verification_key
-        |> Result.of_option
-             ~error:(Error.of_string "cannot export a fake verification key") )
+    Compile_simple.Verification_key.to_pickles verification_key
+    |> Result.of_option
+         ~error:(Error.of_string "cannot export a fake verification key")
+    |> Deferred.return
   in
   let%map vk_json =
     Pickles.Side_loaded.Verification_key.to_serde_json verification_key
@@ -135,3 +133,14 @@ let create ~signature_kind ~(body : Account_update.Body.t) ~calls ~state_before
       Signature_lib.Public_key.Compressed.to_base58_check body.public_key
   ; binding
   }
+
+let create ~signature_kind ~(body : Account_update.Body.t) ~calls ~state_before
+    ~(proof : Compile_simple.Proof.t) =
+  let open Deferred.Or_error.Let_syntax in
+  let%bind verification_key =
+    Compile_simple.Verification_key.of_tag
+      (Lazy.force Zeko_types.Outer_rules_inst.tag)
+    |> Promise.to_deferred |> Deferred.ok
+  in
+  create_with_verification_key ~signature_kind ~body ~calls ~state_before
+    ~proof ~verification_key
