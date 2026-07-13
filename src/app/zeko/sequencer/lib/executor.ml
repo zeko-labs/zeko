@@ -78,12 +78,14 @@ let process_command ~logger ?settlement_export t (command : Zkapp_command.t) =
                 `Send_zkapp_error (`Failed_request (Error.to_string_hum err)) )
       in
       let%map.Deferred.Result () =
+        Option.iter settlement_export ~f:(fun export ->
+            Ethereum_settlement_export.maybe_write_gateway_fixture export
+              command ) ;
         match t.kind with
         | `L1 l1_uri ->
             Gql_client.send_zkapp
               ?settlement:
-                (Option.map settlement_export
-                   ~f:(fun export ->
+                (Option.map settlement_export ~f:(fun export ->
                      Ethereum_settlement_export.to_gateway_json export command
                      |> Yojson.Safe.to_basic ) )
               l1_uri command

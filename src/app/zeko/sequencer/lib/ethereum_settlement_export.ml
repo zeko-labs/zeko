@@ -2,7 +2,6 @@ open Core_kernel
 open Async_kernel
 open Mina_base
 open Zeko_circuits
-
 module Field = Snark_params.Tick.Field
 
 type t =
@@ -25,7 +24,7 @@ let proof_json (t : t) : Yojson.Safe.t =
     ]
   in
   `Assoc
-    (match t.inner_action_batch with
+    ( match t.inner_action_batch with
     | Some batch ->
         ("innerActionBatch", batch) :: fields
     | None ->
@@ -47,6 +46,29 @@ let to_gateway_json t (command : Zkapp_command.Stable.Latest.t) =
     ; ("commandBase64", `String command_base64)
     ; ("proof", proof_json t)
     ]
+
+let maybe_write_gateway_fixture t (command : Zkapp_command.Stable.Latest.t) =
+  match Sys.getenv_opt "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_DIR" with
+  | None ->
+      ()
+  | Some directory ->
+      if not (Caml.Sys.file_exists directory && Caml.Sys.is_directory directory)
+      then
+        failwithf
+          "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_DIR is not an existing directory: \
+           %s"
+          directory () ;
+      let command_base64 = Zkapp_command.to_base64 command in
+      let transaction_hash = Blake2.(digest_string command_base64 |> to_hex) in
+      let nonce = Unsigned.UInt32.to_int command.fee_payer.body.nonce in
+      let filename =
+        sprintf "settlement-%010d-%s.json" nonce transaction_hash
+      in
+      to_gateway_json t command |> Yojson.Safe.pretty_to_string
+      |> fun data ->
+      Out_channel.write_all
+        (Filename.concat directory filename)
+        ~data:(data ^ "\n")
 
 let field_to_hex field =
   Kimchi_backend.Pasta.Basic.Bigint256.to_hex_string
@@ -88,13 +110,13 @@ let inner_action_batch_json ~(archive : Archive.t)
                           [ ("recipient", `String recipient)
                           ; ( "amount"
                             , `Intlit
-                                (Currency.Amount.to_uint64 amount
+                                ( Currency.Amount.to_uint64 amount
                                 |> Unsigned.UInt64.to_string ) )
                           ] ) )
         in
         let fields = [ ("fields", fields_json fields) ] in
         `Assoc
-          (match withdrawal with
+          ( match withdrawal with
           | Some withdrawal ->
               ("withdrawal", withdrawal) :: fields
           | None ->
