@@ -2394,6 +2394,18 @@ module Mutations = struct
                       { withdrawal_params; transferrer } ->
           let logger = Zeko_sequencer.(sequencer.logger) in
           let t = Zeko_sequencer.(sequencer.bridge_prover) in
+          let withdrawal_aux =
+            Utils.value_to_hash ~init:Zeko_constants.withdrawal_salt
+              Zeko_circuits.Bridge_state.Withdrawal_params_base.typ
+              withdrawal_params
+          in
+          Archive.store_ethereum_withdrawal
+            Zeko_sequencer.(sequencer.archive)
+            ~aux:withdrawal_aux
+            { Archive.Ethereum_withdrawal.recipient =
+                withdrawal_params.recipient
+            ; amount = withdrawal_params.amount
+            } ;
           return
             (let%bind.Result key, d =
                Bridge_prover.Withdrawal_request.f

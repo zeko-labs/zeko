@@ -229,6 +229,7 @@ end
 
 let deposit_action (type deposit_params_var) ~chain_l1
     ~(holder_accounts_l1 : PC.t list) ~(token_owner_l1 : Account_id.t option)
+    ~(ethereum_holder_account_l1 : PC.t option)
     (module Deposit_params : DEPOSIT_PARAMS with type var = deposit_params_var)
     (params : deposit_params_var) ~(bridge_fee_recipient_l1 : PC.var)
     ~(bridge_proof_fee : Currency.Amount.var) :
@@ -241,13 +242,28 @@ let deposit_action (type deposit_params_var) ~chain_l1
   *)
   let base_params = Deposit_params.base params in
   let@ () = with_label __LOC__ in
+  let permitted_holder_accounts =
+    match ethereum_holder_account_l1 with
+    | Some holder ->
+        holder :: holder_accounts_l1
+    | None ->
+        holder_accounts_l1
+  in
   let* () =
     Checked.List.map
       ~f:(fun holder_account_l1' ->
         constant PC.typ holder_account_l1'
         |> PC.Checked.equal base_params.holder_account_l1 )
-      holder_accounts_l1
+      permitted_holder_accounts
     >>= Boolean.Assert.any
+  in
+  let* is_ethereum_deposit =
+    match ethereum_holder_account_l1 with
+    | Some holder_account ->
+        constant PC.typ holder_account
+        |> PC.Checked.equal base_params.holder_account_l1
+    | None ->
+        Checked.return Boolean.false_
   in
   let@ () = with_label __LOC__ in
   let a =
@@ -301,9 +317,29 @@ let deposit_action (type deposit_params_var) ~chain_l1
     Calls.hash ~chain:chain_l1
       ((a', children) :: (fee_payout, []) :: Raw base_params.children)
   in
+  let* children' =
+    match ethereum_holder_account_l1 with
+    | Some _ ->
+        if_ ~typ:C.typ is_ethereum_deposit
+          ~then_:(constant C.typ []) ~else_:children'
+    | None ->
+        Checked.return children'
+  in
   let@ () = with_label __LOC__ in
-  let hash_prefix = Zeko_constants.deposit_salt in
-  let* aux = var_to_hash ~init:hash_prefix Deposit_params.typ params in
+  let* mina_aux =
+    var_to_hash ~init:Zeko_constants.deposit_salt Deposit_params.typ params
+  in
+  let* aux =
+    match ethereum_holder_account_l1 with
+    | Some _ ->
+        let* ethereum_aux =
+          var_to_hash ~init:Zeko_constants.ethereum_deposit_salt
+            Deposit_params.typ params
+        in
+        if_ ~typ:F.typ is_ethereum_deposit ~then_:ethereum_aux ~else_:mina_aux
+    | None ->
+        Checked.return mina_aux
+  in
   Checked.return
     ( { aux
       ; children = children'

@@ -12,16 +12,24 @@ type t =
   ; app_statement_json : string
   ; outer_account_public_key : string
   ; binding : Yojson.Safe.t
+  ; inner_action_batch : Yojson.Safe.t option
   }
 
-let proof_json t =
-  `Assoc
+let proof_json (t : t) : Yojson.Safe.t =
+  let fields =
     [ ("vkJson", `String t.vk_json)
     ; ("proofJson", `String t.proof_json)
     ; ("publicInputSkeletonJson", `String t.public_input_skeleton_json)
     ; ("appStatementJson", `String t.app_statement_json)
     ; ("binding", t.binding)
     ]
+  in
+  `Assoc
+    (match t.inner_action_batch with
+    | Some batch ->
+        ("innerActionBatch", batch) :: fields
+    | None ->
+        fields )
 
 let to_gateway_json t (command : Zkapp_command.Stable.Latest.t) =
   let command_base64 = Zkapp_command.to_base64 command in
@@ -48,6 +56,54 @@ let fields_json fields =
   fields |> Array.to_list
   |> List.map ~f:(fun field -> `String (field_to_hex field))
   |> fun fields -> `List fields
+
+let ethereum_address_of_compressed
+    ({ Signature_lib.Public_key.Compressed.Poly.x; is_odd } :
+      Signature_lib.Public_key.Compressed.t ) =
+  if is_odd then None
+  else
+    let hex = field_to_hex x |> String.chop_prefix_if_exists ~prefix:"0x" in
+    let hex = String.make (64 - String.length hex) '0' ^ hex in
+    let high = String.prefix hex 24 in
+    if String.for_all high ~f:(Char.equal '0') then
+      Some ("0x" ^ String.suffix hex 40)
+    else None
+
+let inner_action_batch_json ~(archive : Archive.t)
+    (records : Archive.Account_update_actions.t list) =
+  let actions =
+    List.map records ~f:(fun record ->
+        let fields = List.to_array record.actions in
+        if Array.length fields <> 1 then
+          failwith "Ethereum settlement requires one event per inner action" ;
+        let fields = fields.(0) in
+        if Array.length fields <> 3 then
+          failwith "Ethereum settlement requires three-field inner actions" ;
+        let withdrawal =
+          Archive.find_ethereum_withdrawal archive ~aux:fields.(1)
+          |> Option.bind ~f:(fun { recipient; amount } ->
+                 ethereum_address_of_compressed recipient
+                 |> Option.map ~f:(fun recipient ->
+                        `Assoc
+                          [ ("recipient", `String recipient)
+                          ; ( "amount"
+                            , `Intlit
+                                (Currency.Amount.to_uint64 amount
+                                |> Unsigned.UInt64.to_string ) )
+                          ] ) )
+        in
+        let fields = [ ("fields", fields_json fields) ] in
+        `Assoc
+          (match withdrawal with
+          | Some withdrawal ->
+              ("withdrawal", withdrawal) :: fields
+          | None ->
+              fields ) )
+  in
+  `Assoc
+    [ ("bridgeAddress", `String "0x0000000000000000000000000000000000000000")
+    ; ("actions", `List actions)
+    ]
 
 let signature_kind_json = function
   | Mina_signature_kind.Mainnet ->
@@ -102,7 +158,7 @@ let app_statement_json ~signature_kind ~body ~calls =
 let kimchi_proof_json (proof : Pickles.Side_loaded.Proof.t) =
   Pickles.Side_loaded.Proof.to_serde_json proof
 
-let create_with_verification_key ~signature_kind
+let create_with_verification_key ?inner_action_batch ~signature_kind
     ~(body : Account_update.Body.t) ~calls ~state_before
     ~(proof : Compile_simple.Proof.t)
     ~(verification_key : Compile_simple.Verification_key.t) =
@@ -132,10 +188,11 @@ let create_with_verification_key ~signature_kind
   ; outer_account_public_key =
       Signature_lib.Public_key.Compressed.to_base58_check body.public_key
   ; binding
+  ; inner_action_batch
   }
 
-let create ~signature_kind ~(body : Account_update.Body.t) ~calls ~state_before
-    ~(proof : Compile_simple.Proof.t) =
+let create ?inner_action_batch ~signature_kind ~(body : Account_update.Body.t)
+    ~calls ~state_before ~(proof : Compile_simple.Proof.t) =
   let open Deferred.Or_error.Let_syntax in
   let%bind verification_key =
     Compile_simple.Verification_key.of_tag
@@ -143,4 +200,4 @@ let create ~signature_kind ~(body : Account_update.Body.t) ~calls ~state_before
     |> Promise.to_deferred |> Deferred.ok
   in
   create_with_verification_key ~signature_kind ~body ~calls ~state_before
-    ~proof ~verification_key
+    ?inner_action_batch ~proof ~verification_key

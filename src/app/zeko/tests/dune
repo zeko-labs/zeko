@@ -80,6 +80,18 @@
  (modules test_all_real))
 
 (executable
+ (name ethereum_bridge_vectors)
+ (libraries
+  zeko_circuits
+  compile_simple_fake
+  sequencer_lib
+  is_compile_simple_real_fake
+  zeko_constants)
+ (preprocess
+  (pps ppx_jane))
+ (modules ethereum_bridge_vectors))
+
+(executable
  (name test_pause_fake)
  (libraries zeko_circuits compile_simple_fake)
  (instrumentation

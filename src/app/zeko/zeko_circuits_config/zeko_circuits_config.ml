@@ -14,6 +14,7 @@ type t =
   ; max_valid_while_size : Zeko_circuits.Zeko_util.Slot.t
   ; multisig_key : Zeko_circuits.Multisig.t
   ; holder_accounts_l1 : Public_key.Compressed.t list
+  ; ethereum_holder_account_l1 : Public_key.Compressed.t option [@default None]
   ; helper_token_owner_l1 : Public_key.Compressed.t
   ; zeko_l1 : Public_key.Compressed.t
   ; emergency_da_public_key : Public_key.Compressed.t
@@ -77,6 +78,7 @@ let (t, deploy_config) : t * Deploy.t option =
             ; quorum = Snark_params.Tick.Field.of_int 1
             }
         ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
+        ; ethereum_holder_account_l1 = None
         ; helper_token_owner_l1 = fst helper_token_owner_l1
         ; zeko_l1 = fst zeko_l1
         ; emergency_da_public_key = fst emergency_da
@@ -124,6 +126,8 @@ module Inputs = struct
   let multisig_key = t.multisig_key
 
   let holder_accounts_l1 = t.holder_accounts_l1
+
+  let ethereum_holder_account_l1 = t.ethereum_holder_account_l1
 
   let holder_account_l2 = Zeko_constants.inner_holder_key
 

@@ -119,7 +119,7 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
         : Ase.With_length.Stmt.t )
     , emergency_mode )
   in
-  let%bind new_inner_actions =
+  let%bind new_inner_action_records =
     let from =
       match (Option.value_exn old_inner_acc.zkapp).action_state with
       | x :: _ ->
@@ -149,9 +149,12 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
            |> ( if Stdlib.(from = Zkapp_account.Actions.empty_state_element) then
                 Option.some
               else List.tl )
-           |> Option.value ~default:[]
-           |> List.map ~f:(fun x -> Zkapp_account.Actions_impl.hash x.actions) )
+           |> Option.value ~default:[] )
     |> Deferred.return
+  in
+  let new_inner_actions =
+    List.map new_inner_action_records ~f:(fun x ->
+        Zkapp_account.Actions_impl.hash x.actions )
   in
   let%bind unprocessed_actions =
     Gql_client.fetch_actions ~logger archive_uri
@@ -193,6 +196,9 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
       Ethereum_settlement_export.create
         ~signature_kind:executor.signature_kind ~body ~calls ~state_before:outer_state
         ~proof
+        ~inner_action_batch:
+          (Ethereum_settlement_export.inner_action_batch_json ~archive
+             new_inner_action_records )
     in
     (* see #286 *)
     ( Utils.attach_proof_to_forest ~signature_kind:executor.signature_kind
