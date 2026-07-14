@@ -10,7 +10,8 @@ module Sequencer = Zeko_sequencer.Sequencer
 let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
     ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-    ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee () =
+    ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee
+    ~inner_sync_period () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
     let genesis_timestamp =
@@ -43,6 +44,7 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
   in
 
   Sequencer.run_committer sequencer ;
+  Sequencer.run_inner_syncer sequencer ~period_sec:inner_sync_period ;
 
   let l2_executor =
     Executor.create
@@ -90,6 +92,12 @@ let () =
        flag "--commitment-period"
          (optional_with_default 120. float)
          ~doc:"float Commitment period in seconds"
+     and inner_sync_period =
+       flag "--inner-sync-period"
+         (optional_with_default 0. float)
+         ~doc:
+           "float Period in seconds for synchronizing commit-only outer action \
+            batches without emitting a commit (0 disables)"
      and max_pool_size =
        flag "--max-pool-size"
          (optional_with_default 20 int)
@@ -171,5 +179,6 @@ let () =
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
        ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
        ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-       ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee )
+       ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee
+       ~inner_sync_period )
   |> Command_unix.run

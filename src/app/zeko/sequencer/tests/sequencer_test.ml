@@ -59,128 +59,260 @@ let sequential_export_only =
     ~default:false
     ~f:(String.Caseless.equal "true")
 
+let bridge_export_only =
+  Option.value_map
+    (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_BRIDGE_EXPORT_ONLY")
+    ~default:false
+    ~f:(String.Caseless.equal "true")
+
+let bridge_commit_validity_period =
+  Option.value_map
+    (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_COMMIT_VALIDITY_PERIOD")
+    ~default:20 ~f:Int.of_string
+
 let () =
-  print_endline "Started test 'apply commands and commit'" ;
-
-  let postgres_uri1 =
-    run (fun () ->
-        Relational_db.For_tests.create_database ~port:5433 "sequencer1" )
-  in
-  let postgres_uri2 =
-    run (fun () ->
-        Relational_db.For_tests.create_database ~port:5433 "sequencer2" )
-  in
-
-  Quickcheck.test ~trials:1
-    (Sequencer_spec.gen ~logger ~number_of_transactions:5
-       ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:da_config_with2 ~da_keys
-       ~da_quorum ~mq_host ~slot_acceptance () )
-    ~f:(fun
-         { outer_kp
-         ; signer_pk
-         ; specs
-         ; sequencer
-         ; da_keys
-         ; accounts
-         ; l1_config
-         ; _
-         }
-       ->
-      let commands =
-        List.mapi specs ~f:(fun i spec ->
-            if i % 2 = 0 then
-              User_command.Zkapp_command
-                (account_update_send ~chain:Zeko_circuits_config.Inputs.chain_l2
-                   spec )
-            else
-              Signed_command
-                (command_send ~chain:Zeko_circuits_config.Inputs.chain_l2 spec) )
-      in
-      let zkapp_command_with_real_proof =
-        let fee_signer = List.hd_exn accounts in
-        let account_creation_fee =
-          Account_update.with_aux
-            ~body:
-              { Account_update.Body.dummy with
-                public_key = Public_key.compress fee_signer.public_key
-              ; balance_change =
-                  Currency.Amount.Signed.of_fee @@ Currency.Fee.Signed.negate
-                  @@ Currency.Fee.Signed.of_unsigned
-                       constraint_constants.account_creation_fee
-              ; authorization_kind = Signature
-              ; use_full_commitment = true
-              }
-            ~authorization:(Control.Poly.Signature Signature.dummy)
-        in
-        let open Initialize_state.Test_module in
-        (* First one is the inner account *)
-        let call_forest =
-          Zkapp_command.Call_forest.cons
-            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-            account_creation_fee
-          @@ Zkapp_command.Call_forest.cons
-               ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-               Deploy_account_update.account_update
-          @@ Zkapp_command.Call_forest.cons_tree
-               Initialize_account_update.account_update
-          @@ Zkapp_command.Call_forest.cons_tree
-               Update_state_account_update.account_update []
-        in
-        User_command.Zkapp_command
-          (Utils.sign_zkapp_command
-             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-             { fee_payer =
-                 { body =
-                     { Account_update.Body.Fee_payer.dummy with
-                       public_key = Public_key.compress fee_signer.public_key
-                     ; fee = Currency.Fee.of_mina_int_exn 1
-                     }
-                 ; authorization = Signature.dummy
-                 }
-             ; account_updates = call_forest
-             ; memo = Signed_command_memo.empty
-             }
-             [ fee_signer; Keypair.of_private_key_exn sk ] )
-      in
-      let batch1, batch2 = List.split_n commands 1 in
-      let batch1 = zkapp_command_with_real_proof :: batch1 in
-      let batch2, batch3 = List.split_n batch2 2 in
-
-      print_endline "(* Apply first batch *)" ;
+  if bridge_export_only then (
+    print_endline "Started test 'Ethereum bridge settlement export'" ;
+    let postgres_uri =
       run (fun () ->
-          Deferred.List.iter batch1 ~f:(fun command ->
-              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
-
-      print_endline "(* First commit *)" ;
-      run (fun () ->
-          let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
-          let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
-          let%bind () =
-            Executor.wait_to_finish !sequencer.merger_ctx.executor
+          Relational_db.For_tests.create_database ~port:5433
+            "sequencer_ethereum_bridge_export" )
+    in
+    let open Mina_numbers in
+    Quickcheck.test ~trials:1
+      (Sequencer_spec.gen ~logger ~number_of_transactions:0 ~postgres_uri
+         ~gql_uri ~da_config:da_config_with3 ~da_keys ~da_quorum ~mq_host
+         ~slot_acceptance:(Time.Span.of_min 10.)
+         ~commit_validity_period:
+           (Global_slot_span.of_int bridge_commit_validity_period)
+         () )
+      ~f:(fun { outer_kp
+              ; sequencer
+              ; signer_pk
+              ; ephemeral_ledger
+              ; da_keys
+              ; l1_executor
+              ; l2_executor
+              ; _
+              } ->
+        let rec create_even_keypair () =
+          let keypair = Keypair.create () in
+          if (Public_key.compress keypair.public_key).is_odd then
+            create_even_keypair ()
+          else keypair
+        in
+        let recipient =
+          match
+            Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_BRIDGE_RECIPIENT_PRIVATE_KEY"
+          with
+          | None ->
+              create_even_keypair ()
+          | Some private_key ->
+              let keypair =
+                Private_key.of_base58_check_exn private_key
+                |> Keypair.of_private_key_exn
+              in
+              if (Public_key.compress keypair.public_key).is_odd then
+                failwith
+                  "ZEKO_ETHEREUM_BRIDGE_RECIPIENT_PRIVATE_KEY must have an \
+                   even public key" ;
+              keypair
+        in
+        let local_bridge_vk_hash =
+          Sequencer.get_account !sequencer
+            Zeko_circuits_config.Inputs.holder_account_l2 Token_id.default
+          |> Option.bind ~f:Account.zkapp
+          |> Option.bind ~f:(fun zkapp -> zkapp.verification_key)
+          |> Option.map ~f:With_hash.hash
+          |> Option.value_exn
+               ~message:"L2 bridge holder is missing its verification key"
+        in
+        let prover_bridge_vk_hash =
+          !sequencer.bridge_prover.verification_keys.bridge_mina_l2
+        in
+        let compiled_bridge_vk_hash =
+          run (fun () ->
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Bridge_inst_mina.System_L2.tag)
+              |> Promise.to_deferred >>| Compile_simple.Verification_key.hash )
+        in
+        printf "L2 bridge VK hash in genesis: %s\n%!"
+          (Field.to_string local_bridge_vk_hash) ;
+        printf "L2 bridge VK hash compiled locally: %s\n%!"
+          (Field.to_string compiled_bridge_vk_hash) ;
+        printf "L2 bridge VK hash from prover: %s\n%!"
+          (Field.to_string prover_bridge_vk_hash) ;
+        if
+          (not (Field.equal local_bridge_vk_hash compiled_bridge_vk_hash))
+          || not (Field.equal local_bridge_vk_hash prover_bridge_vk_hash)
+        then
+          failwithf
+            "L2 bridge VK mismatch: genesis %s, local compile %s, real prover \
+             %s"
+            (Field.to_string local_bridge_vk_hash)
+            (Field.to_string compiled_bridge_vk_hash)
+            (Field.to_string prover_bridge_vk_hash)
+            () ;
+        let ethereum_holder =
+          Option.value_exn
+            ~message:
+              "ZEKO_ETHEREUM_BRIDGE_ADDRESS must configure the synthetic \
+               Ethereum holder"
+            Zeko_circuits_config.Inputs.ethereum_holder_account_l1
+        in
+        let ethereum_withdrawal_recipient =
+          Zeko_circuits_config.ethereum_address_to_public_key
+            (Option.value
+               (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_WITHDRAWAL_RECIPIENT")
+               ~default:"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266" )
+        in
+        let deposit_params : C.Bridge_state.Deposit_params_base.t =
+          { children = []
+          ; holder_account_l1 = ethereum_holder
+          ; recipient = Public_key.compress recipient.public_key
+          ; amount = Currency.Amount.of_mina_int_exn 10
+          ; timeout = Global_slot_since_genesis.max_value
+          }
+        in
+        let withdrawal_params : C.Bridge_state.Withdrawal_params_base.t =
+          { children = []
+          ; recipient = ethereum_withdrawal_recipient
+          ; amount = Currency.Amount.of_mina_int_exn 5
+          }
+        in
+        let write_genesis_ledger () =
+          match
+            Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_DIR"
+          with
+          | None ->
+              ()
+          | Some directory ->
+              L.to_list_sequential ephemeral_ledger
+              |> List.mapi ~f:(fun index account -> (index, account))
+              |> [%to_yojson: (int * Account.t) list]
+              |> Yojson.Safe.pretty_to_string
+              |> fun json ->
+              Out_channel.write_all
+                (Filename.concat directory "bridge-genesis-ledger.json")
+                ~data:(json ^ "\n")
+        in
+        let write_scenario_manifest ~outer_action_state_before
+            ~outer_action_state_after =
+          match
+            Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_DIR"
+          with
+          | None ->
+              ()
+          | Some directory ->
+              let recipient = Public_key.compress recipient.public_key in
+              let withdrawal_recipient =
+                Ethereum_settlement_export.ethereum_address_of_compressed
+                  ethereum_withdrawal_recipient
+                |> Option.value_exn
+                     ~message:"withdrawal recipient is not an Ethereum address"
+              in
+              let aux =
+                Utils.value_to_hash ~init:Zeko_constants.ethereum_deposit_salt
+                  C.Bridge_state.Deposit_params_base.typ deposit_params
+              in
+              let json =
+                `Assoc
+                  [ ("schemaVersion", `Int 1)
+                  ; ("commitValidityPeriod", `Int bridge_commit_validity_period)
+                  ; ( "zekoRecipient"
+                    , `String
+                        (Ethereum_settlement_export.field_to_hex recipient.x) )
+                  ; ( "zekoRecipientPublicKey"
+                    , `String (Public_key.Compressed.to_base58_check recipient)
+                    )
+                  ; ("zekoRecipientIsOdd", `Bool recipient.is_odd)
+                  ; ( "depositAmountZeko"
+                    , `String
+                        ( Currency.Amount.to_uint64 deposit_params.amount
+                        |> Unsigned.UInt64.to_string ) )
+                  ; ( "depositTimeout"
+                    , `String
+                        ( Global_slot_since_genesis.to_uint32
+                            deposit_params.timeout
+                        |> Unsigned.UInt32.to_string ) )
+                  ; ( "depositAux"
+                    , `String (Ethereum_settlement_export.field_to_hex aux) )
+                  ; ( "outerActionStateBeforeDeposit"
+                    , `String
+                        (Ethereum_settlement_export.field_to_hex
+                           outer_action_state_before ) )
+                  ; ( "outerActionStateAfterDeposit"
+                    , `String
+                        (Ethereum_settlement_export.field_to_hex
+                           outer_action_state_after ) )
+                  ; ("withdrawalRecipient", `String withdrawal_recipient)
+                  ; ( "withdrawalAmountZeko"
+                    , `String
+                        ( Currency.Amount.to_uint64 withdrawal_params.amount
+                        |> Unsigned.UInt64.to_string ) )
+                  ; ( "daPublicKeys"
+                    , `List
+                        (List.map da_keys ~f:(fun public_key ->
+                             `String
+                               (Public_key.Compressed.to_base58_check public_key) )
+                        ) )
+                  ; ( "sequencerPublicKey"
+                    , `String (Public_key.Compressed.to_base58_check signer_pk)
+                    )
+                  ]
+              in
+              Out_channel.write_all
+                (Filename.concat directory "bridge-scenario.json")
+                ~data:(Yojson.Safe.pretty_to_string json ^ "\n")
+        in
+        let submit_ethereum_deposit () =
+          let witness : Bridge.Outer_action_witness.serializable =
+            { public_key = Zeko_circuits_config.Inputs.zeko_l1
+            ; witness =
+                { aux =
+                    Utils.value_to_hash
+                      ~init:Zeko_constants.ethereum_deposit_salt
+                      C.Bridge_state.Deposit_params_base.typ deposit_params
+                ; children = []
+                ; slot_range = C.Zeko_util.Slot_range.infinite
+                }
+            }
           in
-          let%bind { ledger_hash = committed_ledger_hash; _ } =
-            Gql_client.infer_state ~logger gql_uri ~signer_pk
-              ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+          let%bind (body, _, calls), proof =
+            Zeko_prover.Client.outer_action_witness
+              !sequencer.bridge_prover.provers witness
             >>| Or_error.ok_exn
-            >>| Utils.value_of_zkapp_state
-                  Zeko_circuits.Rollup_state.Outer_state.typ
           in
-          let target_ledger_hash = get_root !sequencer in
-          [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
-
-          Deferred.unit ) ;
-
-      (* To test nonce inferring from pool *)
-      (* The first commit is still in the pool *)
-      Executor.refresh_nonce !sequencer.merger_ctx.executor ;
-
-      print_endline "(* Apply second batch *)" ;
-      run (fun () ->
-          Deferred.List.iter batch2 ~f:(fun command ->
-              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
-
-      print_endline "(* Second commit *)" ;
-      run (fun () ->
+          let account_updates =
+            Utils.attach_proof_to_forest
+              ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+              ~proof_cache_db:!sequencer.bridge_prover.proof_cache_db ~body
+              ~calls ~proof
+          in
+          let command : Zkapp_command.t =
+            { fee_payer =
+                Account_update.Fee_payer.make
+                  ~body:
+                    { public_key =
+                        Signer_service.Signer.public_key l1_executor.signer
+                    ; fee = !sequencer.bridge_prover.bridge_txn_fee
+                    ; valid_until = None
+                    ; nonce = Account.Nonce.zero
+                    }
+                  ~authorization:Signature.dummy
+            ; account_updates =
+                Zkapp_command.Call_forest.map account_updates
+                  ~f:
+                    (Account_update.write_all_proofs_to_disk
+                       ~proof_cache_db:(Proof_cache_tag.create_identity_db ()) )
+            ; memo = Signed_command_memo.empty
+            }
+          in
+          Executor.send_zkapp_command ~logger l1_executor command
+          >>| Or_error.ok_exn
+        in
+        let commit_and_check label =
+          printf "(* %s *)\n%!" label ;
           let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
           let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
           let%bind () =
@@ -197,23 +329,347 @@ let () =
                   Zeko_circuits.Rollup_state.Outer_state.typ
           in
           let target_ledger_hash = get_root !sequencer in
-          [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
+          [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash
+        in
+        let synchronize_accepting_commit () =
+          let%map processed_witnesses, _processed_pointer =
+            Sequencer.sync_commits_only !sequencer >>| Or_error.ok_exn
+          in
+          if processed_witnesses <> 0 then
+            failwith
+              "Synchronizing the accepting commit unexpectedly processed an \
+               outer Witness action"
+        in
+        let finalize_deposit () =
+          let%bind actions =
+            Gql_client.fetch_actions ~logger gql_uri
+              (Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
+            >>| List.map ~f:(fun (fields, _, _, before, after) ->
+                    ( Utils.actions_to_outer_action (List.hd_exn fields)
+                    , before
+                    , after ) )
+          in
+          let ( my_deposit_index
+              , (_my_deposit, `Before before_my_deposit_action_state, _) ) =
+            let hashed_deposit =
+              Utils.value_to_hash ~init:Zeko_constants.ethereum_deposit_salt
+                C.Bridge_state.Deposit_params_base.typ deposit_params
+            in
+            List.findi actions ~f:(fun _ (action, _, _) ->
+                match action with
+                | Commit _ ->
+                    false
+                | Witness witness ->
+                    Field.equal hashed_deposit witness.aux )
+            |> Option.value_exn
+                 ~message:"Did not find synthetic Ethereum deposit"
+          in
+          let ( nearest_commit_index
+              , (_nearest_commit, _, `After after_nearest_commit_action_state) )
+              =
+            List.sub actions ~pos:my_deposit_index
+              ~len:(List.length actions - my_deposit_index)
+            |> List.find_mapi ~f:(fun i (action, before, after) ->
+                   match action with
+                   | Commit commit ->
+                       Some (i, (commit, before, after))
+                   | Witness _ ->
+                       None )
+            |> Option.value_exn ~message:"Did not find accepting commit"
+          in
+          let nearest_commit_index = nearest_commit_index + my_deposit_index in
+          let check_accepted :
+              Bridge.Check_accepted_mina.Init.t
+              * Bridge.Check_accepted_mina.Elem.t list =
+            ( { params = deposit_params
+              ; original_action_state =
+                  C.Rollup_state.Outer_action_state.unsafe_value_of_field
+                    before_my_deposit_action_state
+              ; deposit_index = UInt32.of_int my_deposit_index
+              }
+            , List.sub actions ~pos:my_deposit_index
+                ~len:(nearest_commit_index - my_deposit_index + 1)
+              |> List.map ~f:(fun (action, _, _) -> action) )
+          in
+          let current_synced_outer_action_state =
+            Sequencer.current_synced_outer_action_state !sequencer
+          in
+          let%bind ase_actions =
+            Gql_client.fetch_actions ~logger gql_uri
+              ~from_action_state:after_nearest_commit_action_state
+              ~end_action_state:
+                C.Rollup_state.Outer_action_state.(
+                  With_length.state current_synced_outer_action_state |> raw)
+              (Public_key.compress outer_kp.public_key)
+            >>| Or_error.ok_exn
+            >>| List.map ~f:(fun (fields, _, _, _, _) ->
+                    Zkapp_account.Actions_impl.hash fields )
+          in
+          let ase : Ase.With_length.Stmt.t * Field.t list =
+            ( { action_state = after_nearest_commit_action_state
+              ; length =
+                  Zeko_circuits.Zeko_util.(
+                    Checked32.sub
+                      C.Rollup_state.Outer_action_state.(
+                        With_length.length current_synced_outer_action_state)
+                      (Checked32.of_int @@ List.length ase_actions)
+                    |> Option.value_exn ~message:"Negative ASE length")
+              }
+            , ase_actions )
+          in
+          let helper_account =
+            Sequencer.get_account !sequencer
+              (Public_key.compress recipient.public_key)
+              (Account_id.derive_token_id
+                 ~owner:
+                   (Account_id.of_public_key
+                      (Public_key.decompress_exn
+                         Zeko_circuits_config.Inputs.holder_account_l2 ) ) )
+          in
+          let prev_next_deposit =
+            Option.value ~default:UInt32.zero
+              (let%bind.Option account = helper_account in
+               let%map.Option zkapp = Account.zkapp account in
+               let (next_deposit :: _ : F.t Zkapp_state.V.t) =
+                 Zkapp_account.Poly.app_state zkapp
+               in
+               UInt32.of_string (Field.to_string next_deposit) )
+          in
+          let prev_nonce =
+            Option.value ~default:UInt32.zero
+              (Option.map helper_account ~f:(fun account ->
+                   UInt32.of_string (Account_nonce.to_string account.nonce) ) )
+          in
+          let witness : Bridge_prover.Finalize_deposit.t_ =
+            { ase_source = fst ase
+            ; ase_elems = snd ase
+            ; check_accepted_init = fst check_accepted
+            ; check_accepted_elems = snd check_accepted
+            ; prev_next_deposit
+            ; prev_nonce
+            ; helper_account_new = Option.is_none helper_account
+            }
+          in
+          let _forest, `Commitment commitment =
+            Bridge_prover.Finalize_deposit.precompute_commitments
+              !sequencer.bridge_prover witness
+            |> Or_error.ok_exn
+          in
+          let helper_account_signature =
+            Schnorr.Chunked.sign
+              ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+              recipient.private_key
+              (Random_oracle.Input.Chunked.field commitment)
+          in
+          Bridge_prover.(
+            execute_request ~label:"FinalizeEthereumDeposit" ~logger
+              ~executor:l2_executor !sequencer.bridge_prover
+              ( Finalize_deposit.f ~t:!sequencer.bridge_prover ~logger witness
+                  helper_account_signature
+              |> Or_error.ok_exn ))
+          >>| Or_error.ok_exn
+        in
+        let submit_withdrawal () =
+          let withdrawal_aux =
+            Utils.value_to_hash ~init:Zeko_constants.withdrawal_salt
+              C.Bridge_state.Withdrawal_params_base.typ withdrawal_params
+          in
+          Archive.store_ethereum_withdrawal !sequencer.archive
+            ~aux:withdrawal_aux
+            { Archive.Ethereum_withdrawal.recipient =
+                withdrawal_params.recipient
+            ; amount = withdrawal_params.amount
+            } ;
+          let nonce =
+            Sequencer.infer_nonce !sequencer
+              (Public_key.compress recipient.public_key)
+          in
+          let expected_amount =
+            Currency.Amount.add withdrawal_params.amount
+              Zeko_circuits_config.Inputs.bridge_proof_fee
+            |> Option.value_exn ~message:"Withdrawal amount overflow"
+          in
+          let transferrer_update =
+            Account_update.with_no_aux
+              ~body:
+                { Account_update.Body.dummy with
+                  public_key = Public_key.compress recipient.public_key
+                ; balance_change =
+                    Currency.Amount.Signed.(
+                      negate @@ of_unsigned expected_amount)
+                ; use_full_commitment = false
+                ; authorization_kind = Signature
+                ; increment_nonce = true
+                ; preconditions =
+                    { Account_update.Preconditions.accept with
+                      account = Zkapp_precondition.Account.nonce nonce
+                    }
+                }
+              ~authorization:(Control.Poly.Signature Signature.dummy)
+          in
+          let _forest, `Commitment commitment =
+            Bridge_prover.Withdrawal_request.precompute_commitments
+              !sequencer.bridge_prover
+              { withdrawal_params; transferrer = transferrer_update }
+            |> Or_error.ok_exn
+          in
+          let transferrer_update =
+            Account_update.with_no_aux ~body:transferrer_update.body
+              ~authorization:
+                (Control.Poly.Signature
+                   (Schnorr.Chunked.sign
+                      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                      recipient.private_key
+                      (Random_oracle.Input.Chunked.field commitment) ) )
+          in
+          Bridge_prover.(
+            execute_request ~label:"SubmitEthereumWithdrawal" ~logger
+              ~executor:l2_executor !sequencer.bridge_prover
+              ( Withdrawal_request.f ~t:!sequencer.bridge_prover ~logger
+                  { withdrawal_params; transferrer = transferrer_update }
+              |> Or_error.ok_exn ))
+          >>| Or_error.ok_exn
+        in
+        let outer_action_state_before =
+          run (fun () ->
+              Gql_client.fetch_action_state gql_uri
+                (Public_key.compress outer_kp.public_key)
+                ~logger
+              >>| Or_error.ok_exn )
+        in
+        write_genesis_ledger () ;
+        print_endline "(* Append synthetic Ethereum deposit action *)" ;
+        run (fun () ->
+            let%bind _hash = submit_ethereum_deposit () in
+            let%map _created =
+              Gql_client.For_tests.create_new_block ~logger gql_uri
+            in
+            () ) ;
+        let outer_action_state_after =
+          run (fun () ->
+              Gql_client.fetch_action_state gql_uri
+                (Public_key.compress outer_kp.public_key)
+                ~logger
+              >>| Or_error.ok_exn )
+        in
+        write_scenario_manifest ~outer_action_state_before
+          ~outer_action_state_after ;
+        run (fun () -> commit_and_check "Commit synchronized deposit") ;
+        print_endline
+          "(* Synchronize the accepting commit into the inner account *)" ;
+        run synchronize_accepting_commit ;
+        print_endline "(* Finalize deposit on L2 *)" ;
+        run (fun () -> finalize_deposit () >>| ignore) ;
+        print_endline "(* Submit native withdrawal on L2 *)" ;
+        run (fun () -> submit_withdrawal () >>| ignore) ;
+        run (fun () -> commit_and_check "Commit inner withdrawal action") ;
+        let[@warning "-26"] sequencer = free_sequencer sequencer in
+        run (fun () ->
+            Relational_db.For_tests.drop_database ~port:5433
+              "sequencer_ethereum_bridge_export" ) ) ;
+    print_endline "Ethereum bridge settlement export completed" ;
+    Stdlib.exit 0 )
 
-      print_endline "(* Apply third batch *)" ;
+let () =
+  if not bridge_export_only then (
+    print_endline "Started test 'apply commands and commit'" ;
+
+    let postgres_uri1 =
       run (fun () ->
-          Deferred.List.iter batch3 ~f:(fun command ->
-              apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
+          Relational_db.For_tests.create_database ~port:5433 "sequencer1" )
+    in
+    let postgres_uri2 =
+      run (fun () ->
+          Relational_db.For_tests.create_database ~port:5433 "sequencer2" )
+    in
 
-      print_endline "(* Third commit *)" ;
-      let final_ledger_hash =
+    Quickcheck.test ~trials:1
+      (Sequencer_spec.gen ~logger ~number_of_transactions:5
+         ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:da_config_with2
+         ~da_keys ~da_quorum ~mq_host ~slot_acceptance () )
+      ~f:(fun
+           { outer_kp
+           ; signer_pk
+           ; specs
+           ; sequencer
+           ; da_keys
+           ; accounts
+           ; l1_config
+           ; _
+           }
+         ->
+        let commands =
+          List.mapi specs ~f:(fun i spec ->
+              if i % 2 = 0 then
+                User_command.Zkapp_command
+                  (account_update_send
+                     ~chain:Zeko_circuits_config.Inputs.chain_l2 spec )
+              else
+                Signed_command
+                  (command_send ~chain:Zeko_circuits_config.Inputs.chain_l2 spec) )
+        in
+        let zkapp_command_with_real_proof =
+          let fee_signer = List.hd_exn accounts in
+          let account_creation_fee =
+            Account_update.with_aux
+              ~body:
+                { Account_update.Body.dummy with
+                  public_key = Public_key.compress fee_signer.public_key
+                ; balance_change =
+                    Currency.Amount.Signed.of_fee @@ Currency.Fee.Signed.negate
+                    @@ Currency.Fee.Signed.of_unsigned
+                         constraint_constants.account_creation_fee
+                ; authorization_kind = Signature
+                ; use_full_commitment = true
+                }
+              ~authorization:(Control.Poly.Signature Signature.dummy)
+          in
+          let open Initialize_state.Test_module in
+          (* First one is the inner account *)
+          let call_forest =
+            Zkapp_command.Call_forest.cons
+              ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+              account_creation_fee
+            @@ Zkapp_command.Call_forest.cons
+                 ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                 Deploy_account_update.account_update
+            @@ Zkapp_command.Call_forest.cons_tree
+                 Initialize_account_update.account_update
+            @@ Zkapp_command.Call_forest.cons_tree
+                 Update_state_account_update.account_update []
+          in
+          User_command.Zkapp_command
+            (Utils.sign_zkapp_command
+               ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+               { fee_payer =
+                   { body =
+                       { Account_update.Body.Fee_payer.dummy with
+                         public_key = Public_key.compress fee_signer.public_key
+                       ; fee = Currency.Fee.of_mina_int_exn 1
+                       }
+                   ; authorization = Signature.dummy
+                   }
+               ; account_updates = call_forest
+               ; memo = Signed_command_memo.empty
+               }
+               [ fee_signer; Keypair.of_private_key_exn sk ] )
+        in
+        let batch1, batch2 = List.split_n commands 1 in
+        let batch1 = zkapp_command_with_real_proof :: batch1 in
+        let batch2, batch3 = List.split_n batch2 2 in
+
+        print_endline "(* Apply first batch *)" ;
+        run (fun () ->
+            Deferred.List.iter batch1 ~f:(fun command ->
+                apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
+
+        print_endline "(* First commit *)" ;
         run (fun () ->
             let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
             let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
-            in
-            let%bind _created =
-              Gql_client.For_tests.create_new_block ~logger gql_uri
             in
             let%bind { ledger_hash = committed_ledger_hash; _ } =
               Gql_client.infer_state ~logger gql_uri ~signer_pk
@@ -225,44 +681,102 @@ let () =
             let target_ledger_hash = get_root !sequencer in
             [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
 
-            return target_ledger_hash )
-      in
+            Deferred.unit ) ;
 
-      let[@warning "-26"] sequencer = free_sequencer sequencer in
+        (* To test nonce inferring from pool *)
+        (* The first commit is still in the pool *)
+        Executor.refresh_nonce !sequencer.merger_ctx.executor ;
 
-      print_endline "(* Try to bootstrap again *)" ;
-      let new_sequencer =
+        print_endline "(* Apply second batch *)" ;
         run (fun () ->
-            let%map new_sequencer =
-              Sequencer.create ~logger ~max_pool_size:10
-                ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
-                ~da_quorum ~db_dir:None ~checkpoints_dir:None
-                ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
-                ~signer:(get_test_signer ()) ~deposit_delay_blocks:0 ~mq_host
-                ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
-                ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
-                ~l1_config
-                ~commit_validity_period:
-                  (Mina_numbers.Global_slot_span.of_int 10)
-                ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
-                ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
+            Deferred.List.iter batch2 ~f:(fun command ->
+                apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
+
+        print_endline "(* Second commit *)" ;
+        run (fun () ->
+            let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+            let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
+            let%bind () =
+              Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
-            [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
-              final_ledger_hash ;
-            new_sequencer )
-      in
+            let%bind _created =
+              Gql_client.For_tests.create_new_block ~logger gql_uri
+            in
+            let%map { ledger_hash = committed_ledger_hash; _ } =
+              Gql_client.infer_state ~logger gql_uri ~signer_pk
+                ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+              >>| Or_error.ok_exn
+              >>| Utils.value_of_zkapp_state
+                    Zeko_circuits.Rollup_state.Outer_state.typ
+            in
+            let target_ledger_hash = get_root !sequencer in
+            [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ) ;
 
-      Gc.full_major () ;
-      run (fun () -> Sequencer.shutdown new_sequencer) ;
+        print_endline "(* Apply third batch *)" ;
+        run (fun () ->
+            Deferred.List.iter batch3 ~f:(fun command ->
+                apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
-      print_endline "(* Drop database *)" ;
-      run (fun () ->
-          Relational_db.For_tests.drop_database ~port:5433 "sequencer1" ) ;
-      run (fun () ->
-          Relational_db.For_tests.drop_database ~port:5433 "sequencer2" ) )
+        print_endline "(* Third commit *)" ;
+        let final_ledger_hash =
+          run (fun () ->
+              let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
+              let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
+              let%bind () =
+                Executor.wait_to_finish !sequencer.merger_ctx.executor
+              in
+              let%bind _created =
+                Gql_client.For_tests.create_new_block ~logger gql_uri
+              in
+              let%bind { ledger_hash = committed_ledger_hash; _ } =
+                Gql_client.infer_state ~logger gql_uri ~signer_pk
+                  ~zkapp_pk:(Public_key.compress outer_kp.public_key)
+                >>| Or_error.ok_exn
+                >>| Utils.value_of_zkapp_state
+                      Zeko_circuits.Rollup_state.Outer_state.typ
+              in
+              let target_ledger_hash = get_root !sequencer in
+              [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
+
+              return target_ledger_hash )
+        in
+
+        let[@warning "-26"] sequencer = free_sequencer sequencer in
+
+        print_endline "(* Try to bootstrap again *)" ;
+        let new_sequencer =
+          run (fun () ->
+              let%map new_sequencer =
+                Sequencer.create ~logger ~max_pool_size:10
+                  ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
+                  ~da_quorum ~db_dir:None ~checkpoints_dir:None
+                  ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri
+                  ~archive_uri:gql_uri ~signer:(get_test_signer ())
+                  ~deposit_delay_blocks:0 ~mq_host ~fee_modifier:1.0
+                  ~minimum_fee:0.01 ~slot_acceptance
+                  ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
+                  ~l1_config
+                  ~commit_validity_period:
+                    (Mina_numbers.Global_slot_span.of_int 10)
+                  ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
+                  ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1")
+              in
+              [%test_eq: Frozen_ledger_hash.t] (get_root new_sequencer)
+                final_ledger_hash ;
+              new_sequencer )
+        in
+
+        Gc.full_major () ;
+        run (fun () -> Sequencer.shutdown new_sequencer) ;
+
+        print_endline "(* Drop database *)" ;
+        run (fun () ->
+            Relational_db.For_tests.drop_database ~port:5433 "sequencer1" ) ;
+        run (fun () ->
+            Relational_db.For_tests.drop_database ~port:5433 "sequencer2" ) ) )
 
 let () =
-  if sequential_export_only then (
+  if sequential_export_only && not bridge_export_only then (
     print_endline "Sequential Ethereum settlement export completed" ;
     Stdlib.exit 0 )
 

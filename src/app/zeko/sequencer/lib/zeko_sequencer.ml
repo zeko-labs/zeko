@@ -240,6 +240,8 @@ module Sequencer = struct
     ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
+    ; inner_sync_q : unit Sequencer.t
+          (* Fetching and applying outer actions must also be serialized. *)
     }
 
   let shutdown t =
@@ -613,7 +615,7 @@ module Sequencer = struct
   let current_synced_outer_action_state t =
     Utils.get_synced_outer_action_state_exn (L.of_database t.ledger)
 
-  let update_inner_account t =
+  let update_inner_account_unlocked ?(commits_only = false) t =
     let open Deferred.Result.Let_syntax in
     let logger = t.logger in
     let old_synced_outer_action_state, old_deposits_length =
@@ -642,8 +644,28 @@ module Sequencer = struct
           else (curr_state, curr_actions) )
       |> Tuple2.map_snd ~f:List.rev
     in
+    let contains_only_commits =
+      List.for_all processed_new_actions ~f:(function
+        | [ action ] -> (
+            match Utils.actions_to_outer_action action with
+            | Commit _ ->
+                true
+            | Witness _ ->
+                false )
+        | _ ->
+            false )
+    in
     let proof_cache_db = t.merger_ctx.proof_cache_db in
-    if Field.equal old_synced_outer_action_state processed_pointer then (
+    if
+      commits_only
+      && (not (Field.equal old_synced_outer_action_state processed_pointer))
+      && not contains_only_commits
+    then (
+      [%log info]
+        "Deferring inner sync because the pending outer actions include a \
+         Witness" ;
+      return (0, old_synced_outer_action_state) )
+    else if Field.equal old_synced_outer_action_state processed_pointer then (
       (* In case no new actions are to process, we don't need to update inner account *)
       [%log info] "No new actions to process" ;
       return (0, old_synced_outer_action_state) )
@@ -701,6 +723,13 @@ module Sequencer = struct
         |> List.filter ~f:(function Commit _ -> false | Witness _ -> true)
       in
       (List.length processed_witnesses, processed_pointer) )
+
+  let update_inner_account t =
+    Throttle.enqueue t.inner_sync_q (fun () -> update_inner_account_unlocked t)
+
+  let sync_commits_only t =
+    Throttle.enqueue t.inner_sync_q (fun () ->
+        update_inner_account_unlocked ~commits_only:true t )
 
   (** Double Deferred.t is deliberate, the first is filled after update of ledger, the second is filled after commit *)
   let commit t :
@@ -785,6 +814,23 @@ module Sequencer = struct
         let%bind () = Deferred.any [ after; Ivar.read t.closed ] in
         if Ivar.is_full t.closed then return () else go ()
       in
+      don't_wait_for (within' ~monitor:Monitor.main (fun () -> go ()))
+
+  let run_inner_syncer t ~period_sec =
+    if Float.(period_sec <= 0.) then ()
+    else
+      let logger = t.logger in
+      let period = Time_ns.Span.of_sec period_sec in
+      let rec go () =
+        let after = after period in
+        let%bind processed_witnesses, _processed_pointer =
+          sync_commits_only t >>| Or_error.ok_exn
+        in
+        assert (processed_witnesses = 0) ;
+        let%bind () = Deferred.any [ after; Ivar.read t.closed ] in
+        if Ivar.is_full t.closed then return () else go ()
+      in
+      [%log info] "Running commit-only inner sync every %.3f seconds" period_sec ;
       don't_wait_for (within' ~monitor:Monitor.main (fun () -> go ()))
 
   let sync ~logger ({ config; _ } as t) da_config source =
@@ -1231,6 +1277,7 @@ module Sequencer = struct
       ; merger_ctx
       ; closed = Ivar.create ()
       ; apply_q = Sequencer.create ()
+      ; inner_sync_q = Sequencer.create ()
       }
     in
     let%bind () =

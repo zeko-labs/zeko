@@ -77,7 +77,8 @@ SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/ze
 SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
 export ZEKO_SIGNATURE_KIND=zeko-testnet
-export ZEKO_CIRCUITS_CONFIG=test
+export ZEKO_CIRCUITS_CONFIG="${ZEKO_CIRCUITS_CONFIG:-test}"
+ZEKO_TEST_L1_NETWORK_ID="${ZEKO_TEST_L1_NETWORK_ID:-mainnet}"
 
 TMP_DIR=$(mktemp -d)
 
@@ -119,6 +120,33 @@ wait_for_port() {
   fi
 }
 
+wait_for_provers() {
+  local expected=$1
+  local consumers=0
+
+  echo "Waiting for $expected prover(s) to finish compiling circuits..."
+  for _ in $(seq 1 600); do
+    consumers=$(
+      docker exec rabbitmq-sequencer rabbitmqctl -q list_queues name consumers \
+        2>/dev/null \
+        | awk '$2 ~ /^[0-9]+$/ { total += $2 } END { print total + 0 }'
+    )
+    if [ "$consumers" -ge "$expected" ]; then
+      echo "$consumers prover consumer(s) are ready"
+      return 0
+    fi
+    for pid in "${PROVER_PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "A prover exited before becoming ready" >&2
+        return 1
+      fi
+    done
+    sleep 1
+  done
+  echo "Timed out waiting for prover consumers" >&2
+  return 1
+}
+
 KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli.exe"
 
 generate_even_key() {
@@ -142,10 +170,10 @@ wait_for_port 5672 $$
 SEQUENCER_SIGNER_BIN="$SIGNER_BUILD_ROOT/cli.exe"
 DA_SIGNER_BIN="$SIGNER_BUILD_ROOT/cli.exe"
 
-ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY="$(generate_even_key)"
-DA1_SIGNER_PRIVATE_KEY="$(generate_even_key)"
-DA2_SIGNER_PRIVATE_KEY="$(generate_even_key)"
-DA3_SIGNER_PRIVATE_KEY="$(generate_even_key)"
+ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY="${ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
+DA1_SIGNER_PRIVATE_KEY="${DA1_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
+DA2_SIGNER_PRIVATE_KEY="${DA2_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
+DA3_SIGNER_PRIVATE_KEY="${DA3_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
 ZEKO_SIGNER_AUTH_TOKEN="sequencer-test-signer-token"
 SIGNER_TLS_CERT="$TMP_DIR/signer-tls-cert.pem"
 SIGNER_TLS_KEY="$TMP_DIR/signer-tls-key.pem"
@@ -210,7 +238,7 @@ wait_for_port 8601 $signer_da1_pid
 wait_for_port 8602 $signer_da2_pid
 wait_for_port 8603 $signer_da3_pid
 
-run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id mainnet --block-period 9999999 &
+run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id "$ZEKO_TEST_L1_NETWORK_ID" --block-period 9999999 &
 l1_pid=$!
 
 run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8555 --healthcheck-port 8558 --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
@@ -247,6 +275,7 @@ wait_for_port 8080 $l1_pid
 wait_for_port 8555 $da1_pid
 wait_for_port 8556 $da2_pid
 wait_for_port 8557 $da3_pid
+wait_for_provers "$NUM_PROVERS"
 
 echo "All services started successfully"
 
