@@ -129,11 +129,11 @@ docker run --rm --name pg-sequencer \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
   --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid \
-  -p 5433:5432 \
+  -p 127.0.0.1:5433:5432 \
   -d postgres:16-alpine
 
 docker run -d --name rabbitmq-sequencer \
-  -p 5672:5672 \
+  -p 127.0.0.1:5672:5672 \
   rabbitmq:latest
 
 wait_for_port 5433 $$
@@ -213,13 +213,13 @@ wait_for_port 8603 $signer_da3_pid
 run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id mainnet --block-period 9999999 &
 l1_pid=$!
 
-run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
+run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8555 --healthcheck-port 8558 --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
 da1_pid=$!
 
-run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id zeko-testnet --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 &
+run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8556 --healthcheck-port 8559 --network-id zeko-testnet --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 &
 da2_pid=$!
 
-run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id zeko-testnet --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 &
+run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8557 --healthcheck-port 8560 --network-id zeko-testnet --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 &
 da3_pid=$!
 
 # Launch provers

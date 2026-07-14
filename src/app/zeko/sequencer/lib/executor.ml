@@ -81,13 +81,22 @@ let process_command ~logger ?settlement_export t (command : Zkapp_command.t) =
         Option.iter settlement_export ~f:(fun export ->
             Ethereum_settlement_export.maybe_write_gateway_fixture export
               command ) ;
+        let attach_settlement =
+          not
+            (Option.value_map
+               (Sys.getenv_opt "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_ONLY")
+               ~default:false
+               ~f:(String.Caseless.equal "true") )
+        in
         match t.kind with
         | `L1 l1_uri ->
             Gql_client.send_zkapp
               ?settlement:
-                (Option.map settlement_export ~f:(fun export ->
-                     Ethereum_settlement_export.to_gateway_json export command
-                     |> Yojson.Safe.to_basic ) )
+                ( if attach_settlement then
+                  Option.map settlement_export ~f:(fun export ->
+                      Ethereum_settlement_export.to_gateway_json export command
+                      |> Yojson.Safe.to_basic )
+                else None )
               l1_uri command
             >>| Result.map_error ~f:(fun err -> `Send_zkapp_error err)
             >>| Result.map ~f:ignore

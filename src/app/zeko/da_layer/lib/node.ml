@@ -194,14 +194,14 @@ let implementations t =
             return (Ok r) )
       ]
 
-let start_healthcheck_server ~logger ~port =
+let start_healthcheck_server ~logger ~bind_address ~port =
   let%map _server =
     Cohttp_async.Server.create_expert
       ~on_handler_error:
         (`Call
           (fun _ exn ->
             [%log error] "Unhandled exception: %s" (Exn.to_string exn) ) )
-      (Async.Tcp.Where_to_listen.of_port port)
+      (Tcp.Where_to_listen.bind_to bind_address (On_port port))
       (fun ~body:_ _sock req ->
         let uri = Cohttp_async.Request.uri req in
         let status, body =
@@ -216,10 +216,11 @@ let start_healthcheck_server ~logger ~port =
   in
   [%log info] "Healthcheck server started on port %d" port
 
-let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer
-    ~no_migrations () =
+let create_server ?healthcheck_port
+    ?(bind_address = Tcp.Bind_to_address.All_addresses) ~chain ~port ~logger
+    ~db_dir ~signer ~no_migrations () =
   let where_to_listen =
-    Tcp.Where_to_listen.bind_to All_addresses (On_port port)
+    Tcp.Where_to_listen.bind_to bind_address (On_port port)
   in
   let%bind db_existed = Sys.file_exists_exn db_dir in
   let t =
@@ -243,7 +244,7 @@ let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer
     | None ->
         return ()
     | Some healthcheck_port ->
-        start_healthcheck_server ~logger ~port:healthcheck_port
+        start_healthcheck_server ~logger ~bind_address ~port:healthcheck_port
   in
   Tcp.Server.create
     ~on_handler_error:
