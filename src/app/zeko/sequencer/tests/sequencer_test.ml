@@ -53,6 +53,12 @@ let free_sequencer (sequencer : Sequencer.t Handle.valid_t) =
 
 let slot_acceptance = Time.Span.of_min 60.
 
+let sequential_export_only =
+  Option.value_map
+    (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_SEQUENTIAL_EXPORT_ONLY")
+    ~default:false
+    ~f:(String.Caseless.equal "true")
+
 let () =
   print_endline "Started test 'apply commands and commit'" ;
 
@@ -254,6 +260,11 @@ let () =
           Relational_db.For_tests.drop_database ~port:5433 "sequencer1" ) ;
       run (fun () ->
           Relational_db.For_tests.drop_database ~port:5433 "sequencer2" ) )
+
+let () =
+  if sequential_export_only then (
+    print_endline "Sequential Ethereum settlement export completed" ;
+    Stdlib.exit 0 )
 
 let () =
   print_endline "Started test 'dummy signature should fail'" ;
