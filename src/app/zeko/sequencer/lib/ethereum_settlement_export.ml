@@ -91,6 +91,26 @@ let ethereum_address_of_compressed
       Some ("0x" ^ String.suffix hex 40)
     else None
 
+let configured_ethereum_bridge_address () =
+  match Zeko_circuits_config.t.ethereum_holder_account_l1 with
+  | None ->
+      if
+        Option.is_some (Sys.getenv_opt "ZEKO_ETHEREUM_GATEWAY_TOKEN")
+        || Option.is_some
+             (Sys.getenv_opt "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_DIR")
+      then
+        failwith
+          "Ethereum settlement export requires ethereum_holder_account_l1"
+      else "0x0000000000000000000000000000000000000000"
+  | Some holder -> (
+      match ethereum_address_of_compressed holder with
+      | Some address ->
+          address
+      | None ->
+          failwith
+            "ethereum_holder_account_l1 is not an even 160-bit Ethereum address"
+      )
+
 let inner_action_batch_json ~(archive : Archive.t)
     (records : Archive.Account_update_actions.t list) =
   let actions =
@@ -123,7 +143,7 @@ let inner_action_batch_json ~(archive : Archive.t)
               fields ) )
   in
   `Assoc
-    [ ("bridgeAddress", `String "0x0000000000000000000000000000000000000000")
+    [ ("bridgeAddress", `String (configured_ethereum_bridge_address ()))
     ; ("actions", `List actions)
     ]
 
