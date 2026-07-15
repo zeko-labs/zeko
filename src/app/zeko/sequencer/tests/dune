@@ -46,6 +46,13 @@
  (modules persisted_merger_test))
 
 (executable
+ (name commit_schedule_test)
+ (libraries sequencer_lib is_compile_simple_real_fake)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina))
+ (modules commit_schedule_test))
+
+(executable
  (name imt_benchmark)
  (libraries indexed_merkle_tree yojson)
  (preprocess

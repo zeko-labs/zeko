@@ -92,6 +92,44 @@ module Types = struct
           ] )
   end
 
+  module CommitSchedule = struct
+    let phase : (Context.t, Zeko_sequencer.Commit_schedule.phase option) typ =
+      let open Zeko_sequencer.Commit_schedule in
+      enum "CommitSchedulePhase" ~doc:"State of the periodic commit loop"
+        ~values:
+          [ enum_value "WAITING" ~value:Waiting
+          ; enum_value "COMMITTING" ~value:Committing
+          ; enum_value "DISABLED" ~value:Disabled
+          ]
+
+    let timestamp time =
+      let rendered =
+        time |> Time_ns.to_time_float_round_nearest_microsecond
+        |> Time.to_string_abs ~zone:Time.Zone.utc
+      in
+      String.mapi rendered ~f:(fun index char ->
+          if index = 10 && Char.equal char ' ' then 'T' else char )
+
+    let t : (Context.t, Zeko_sequencer.Commit_schedule.snapshot option) typ =
+      let open Zeko_sequencer.Commit_schedule in
+      obj "CommitSchedule" ~fields:(fun _ ->
+          [ field "periodSeconds" ~typ:(non_null float)
+              ~args:Arg.[]
+              ~resolve:(fun _ (schedule : snapshot) -> schedule.period_seconds)
+          ; field "phase" ~typ:(non_null phase)
+              ~args:Arg.[]
+              ~resolve:(fun _ (schedule : snapshot) -> schedule.phase)
+          ; field "lastAttemptStartedAt" ~typ:string
+              ~args:Arg.[]
+              ~resolve:(fun _ (schedule : snapshot) ->
+                Option.map schedule.last_attempt_started_at ~f:timestamp )
+          ; field "nextAttemptAt" ~typ:string
+              ~args:Arg.[]
+              ~resolve:(fun _ (schedule : snapshot) ->
+                Option.map schedule.next_attempt_at ~f:timestamp )
+          ] )
+  end
+
   let merkle_path_element :
       (_, [ `Left of Zkapp_basic.F.t | `Right of Zkapp_basic.F.t ] option) typ =
     let field_elem = Mina_base_graphql.Graphql_scalars.FieldElem.typ () in
@@ -2630,6 +2668,14 @@ module Queries = struct
                  }
              } ) )
 
+  let commit_schedule =
+    field "commitSchedule"
+      ~doc:"Get the exact schedule and phase of the periodic commit loop"
+      ~args:Arg.[]
+      ~typ:(non_null Types.CommitSchedule.t)
+      ~resolve:(fun { ctx = { sequencer; _ }; _ } () ->
+        Zeko_sequencer.commit_schedule sequencer )
+
   let network_id =
     field "networkID"
       ~doc:
@@ -2883,6 +2929,7 @@ module Queries = struct
   let commands =
     [ sync_status
     ; daemon_status
+    ; commit_schedule
     ; account
     ; accounts_for_pk
     ; token_accounts

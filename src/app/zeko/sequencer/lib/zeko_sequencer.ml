@@ -225,6 +225,50 @@ module Sequencer = struct
       }
   end
 
+  module Commit_schedule = struct
+    type phase = Waiting | Committing | Disabled
+
+    type snapshot =
+      { period_seconds : float
+      ; phase : phase
+      ; last_attempt_started_at : Time_ns.t option
+      ; next_attempt_at : Time_ns.t option
+      }
+
+    type t =
+      { period_seconds : float
+      ; mutable phase : phase
+      ; mutable last_attempt_started_at : Time_ns.t option
+      ; mutable next_attempt_at : Time_ns.t option
+      }
+
+    let create period_seconds =
+      { period_seconds
+      ; phase = (if Float.(period_seconds <= 0.) then Disabled else Waiting)
+      ; last_attempt_started_at = None
+      ; next_attempt_at = None
+      }
+
+    let start_attempt t ~started_at ~next_attempt_at =
+      t.phase <- Committing ;
+      t.last_attempt_started_at <- Some started_at ;
+      t.next_attempt_at <- Some next_attempt_at
+
+    let wait t = t.phase <- Waiting
+
+    let disable t =
+      t.phase <- Disabled ;
+      t.next_attempt_at <- None
+
+    let snapshot (t : t) : snapshot =
+      { period_seconds = t.period_seconds
+      ; phase = t.phase
+      ; last_attempt_started_at = t.last_attempt_started_at
+      ; next_attempt_at = t.next_attempt_at
+      }
+
+  end
+
   type t =
     { ledger : L.Db.t
     ; imt : Indexed_merkle_tree.Db.t
@@ -237,6 +281,7 @@ module Sequencer = struct
     ; merger : Merger.M.t
     ; merger_ctx : Merger.Context.t
     ; da_client : Da_layer.Client.t
+    ; commit_schedule : Commit_schedule.t
     ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
@@ -247,6 +292,7 @@ module Sequencer = struct
   let shutdown t =
     let logger = t.logger in
     [%log info] "Shutting down sequencer" ;
+    Commit_schedule.disable t.commit_schedule ;
     Ivar.fill t.closed () ;
     Da_layer.Client.stop t.da_client ;
     L.Db.close t.ledger ;
@@ -281,6 +327,8 @@ module Sequencer = struct
       ; unproved_ledger_hash = get_root t
       ; committed_ledger_hash = Field.zero
       }
+
+  let commit_schedule t = Commit_schedule.snapshot t.commit_schedule
 
   let apply_events_and_actions ledger archive command =
     let ledger = L.of_database ledger in
@@ -795,12 +843,17 @@ module Sequencer = struct
               return (Some result) )
 
   let run_committer t =
-    if Float.(t.config.commitment_period_sec <= 0.) then ()
+    if Float.(t.config.commitment_period_sec <= 0.) then
+      Commit_schedule.disable t.commit_schedule
     else
       let logger = t.logger in
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
       let rec go () =
-        let after = after period in
+        let started_at = Time_ns.now () in
+        let next_attempt_at = Time_ns.add started_at period in
+        Commit_schedule.start_attempt t.commit_schedule ~started_at
+          ~next_attempt_at ;
+        let after = Clock_ns.at next_attempt_at in
         let%bind ledger_applied = commit t >>| Or_error.ok_exn in
         let%bind () =
           match%map ledger_applied >>| Or_error.ok_exn with
@@ -811,6 +864,8 @@ module Sequencer = struct
           | None ->
               [%log info] "Skipped commit"
         in
+        if Ivar.is_full t.closed then Commit_schedule.disable t.commit_schedule
+        else Commit_schedule.wait t.commit_schedule ;
         let%bind () = Deferred.any [ after; Ivar.read t.closed ] in
         if Ivar.is_full t.closed then return () else go ()
       in
@@ -1275,6 +1330,7 @@ module Sequencer = struct
       ; bridge_prover
       ; merger
       ; merger_ctx
+      ; commit_schedule = Commit_schedule.create commitment_period_sec
       ; closed = Ivar.create ()
       ; apply_q = Sequencer.create ()
       ; inner_sync_q = Sequencer.create ()
