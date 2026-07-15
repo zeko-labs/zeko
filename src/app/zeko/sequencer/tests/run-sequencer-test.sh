@@ -76,7 +76,11 @@ SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
-export ZEKO_SIGNATURE_KIND=zeko-testnet
+# Keep the external signer on the same salt as the circuit configuration. The
+# retained Ethereum PoC uses Mina's built-in `testnet` salt because Auro cannot
+# currently sign a custom network ID; existing test callers retain the historic
+# `zeko-testnet` default.
+export ZEKO_SIGNATURE_KIND="${MINA_SIGNING_NETWORK_ID:-zeko-testnet}"
 export ZEKO_CIRCUITS_CONFIG="${ZEKO_CIRCUITS_CONFIG:-test}"
 ZEKO_TEST_L1_NETWORK_ID="${ZEKO_TEST_L1_NETWORK_ID:-mainnet}"
 
