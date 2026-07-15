@@ -127,8 +127,8 @@ wait_for_provers() {
   echo "Waiting for $expected prover(s) to finish compiling circuits..."
   for _ in $(seq 1 600); do
     consumers=$(
-      docker exec rabbitmq-sequencer rabbitmqctl -q list_queues name consumers \
-        2>/dev/null \
+      { docker exec rabbitmq-sequencer rabbitmqctl -q list_queues name consumers \
+        2>/dev/null || true; } \
         | awk '$2 ~ /^[0-9]+$/ { total += $2 } END { print total + 0 }'
     )
     if [ "$consumers" -ge "$expected" ]; then
