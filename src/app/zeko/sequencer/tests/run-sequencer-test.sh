@@ -76,11 +76,12 @@ SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
-# Keep the external signer on the same salt as the circuit configuration. The
-# retained Ethereum PoC uses Mina's built-in `testnet` salt because Auro cannot
-# currently sign a custom network ID; existing test callers retain the historic
-# `zeko-testnet` default.
-export ZEKO_SIGNATURE_KIND="${MINA_SIGNING_NETWORK_ID:-zeko-testnet}"
+# Keep the external signer and DA receipt validation on the same salt as the
+# circuit configuration. The retained Ethereum PoC uses Mina's built-in
+# `testnet` salt because Auro cannot currently sign a custom network ID;
+# existing test callers retain the historic `zeko-testnet` default.
+SIGNING_NETWORK_ID="${MINA_SIGNING_NETWORK_ID:-zeko-testnet}"
+export ZEKO_SIGNATURE_KIND="$SIGNING_NETWORK_ID"
 export ZEKO_CIRCUITS_CONFIG="${ZEKO_CIRCUITS_CONFIG:-test}"
 ZEKO_TEST_L1_NETWORK_ID="${ZEKO_TEST_L1_NETWORK_ID:-mainnet}"
 
@@ -245,13 +246,13 @@ wait_for_port 8603 $signer_da3_pid
 run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id "$ZEKO_TEST_L1_NETWORK_ID" --block-period 9999999 &
 l1_pid=$!
 
-run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8555 --healthcheck-port 8558 --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
+run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8555 --healthcheck-port 8558 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
 da1_pid=$!
 
-run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8556 --healthcheck-port 8559 --network-id zeko-testnet --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 &
+run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8556 --healthcheck-port 8559 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 &
 da2_pid=$!
 
-run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8557 --healthcheck-port 8560 --network-id zeko-testnet --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 &
+run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8557 --healthcheck-port 8560 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 &
 da3_pid=$!
 
 # Launch provers
