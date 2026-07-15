@@ -101,11 +101,12 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
     let outer_state : Rollup_state.Outer_state.t =
       Utils.value_of_zkapp_state Rollup_state.Outer_state.typ outer_account
     in
-    let ({ Rollup_state.Outer_state.inner_action_state = committed_inner_action_state
+    let ({ Rollup_state.Outer_state.inner_action_state =
+             committed_inner_action_state
          ; status_flags
          ; _
-         } :
-          Rollup_state.Outer_state.t ) =
+         }
+          : Rollup_state.Outer_state.t ) =
       outer_state
     in
     let emergency_mode =
@@ -193,12 +194,17 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
         ~slot_range ~emergency_mode
     in
     let%map settlement_export =
-      Ethereum_settlement_export.create
-        ~signature_kind:executor.signature_kind ~body ~calls ~state_before:outer_state
-        ~proof
-        ~inner_action_batch:
-          (Ethereum_settlement_export.inner_action_batch_json ~archive
-             new_inner_action_records )
+      match Is_compile_simple_real.is_compile_simple_real with
+      | None ->
+          Deferred.Or_error.return None
+      | Some _ ->
+          Ethereum_settlement_export.create
+            ~signature_kind:executor.signature_kind ~body ~calls
+            ~state_before:outer_state ~proof
+            ~inner_action_batch:
+              (Ethereum_settlement_export.inner_action_batch_json ~archive
+                 new_inner_action_records )
+          >>| Option.some
     in
     (* see #286 *)
     ( Utils.attach_proof_to_forest ~signature_kind:executor.signature_kind
@@ -261,7 +267,8 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
             ~commit_fee witness
         in
         let%bind _hash =
-          Executor.send_zkapp_command ~logger ~settlement_export executor command
+          Executor.send_zkapp_command ~logger ?settlement_export executor
+            command
         in
         recommit_next target_ledger_hash
   in

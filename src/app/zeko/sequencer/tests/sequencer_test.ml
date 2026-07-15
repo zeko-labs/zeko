@@ -10,6 +10,9 @@ open Test_spec
 open Handle.Operator
 open Unsigned_extended
 module Field = Snark_params.Tick.Field
+module Graphql_cohttp_async =
+  Init.Graphql_internal.Make (Graphql_async.Schema) (Cohttp_async.Io)
+    (Cohttp_async.Body)
 
 let constraint_constants = Zeko_constants.constraint_constants
 
@@ -65,10 +68,45 @@ let bridge_export_only =
     ~default:false
     ~f:(String.Caseless.equal "true")
 
+let bridge_live_sdk =
+  Option.value_map
+    (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_BRIDGE_LIVE_SDK")
+    ~default:false
+    ~f:(String.Caseless.equal "true")
+
 let bridge_commit_validity_period =
   Option.value_map
     (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_COMMIT_VALIDITY_PERIOD")
     ~default:20 ~f:Int.of_string
+
+let start_graphql_server ~port sequencer ~l1_executor ~l2_executor =
+  let graphql_callback =
+    Graphql_cohttp_async.make_callback
+      (fun ~with_seq_no:_ _req ->
+        Gql.Context.{ sequencer; l1_executor; l2_executor } )
+      (Gql.schema ~proof_cache_db:sequencer.bridge_prover.proof_cache_db)
+  in
+  Cohttp_async.Server.create_expert
+    ~on_handler_error:
+      (`Call
+        (fun _ exn ->
+          [%log error] "Unhandled bridge SDK GraphQL exception: %s"
+            (Exn.to_string exn) ) )
+    (Tcp.Where_to_listen.bind_to Tcp.Bind_to_address.Localhost
+       (Tcp.Bind_to_port.On_port port) )
+    (fun ~body _sock req -> graphql_callback () req body)
+  >>| fun _server ->
+  printf "Live bridge SDK sequencer listening on port %d\n%!" port
+
+let wait_for_file ~timeout path =
+  let deadline = Time.add (Time.now ()) timeout in
+  let rec loop () =
+    if Stdlib.Sys.file_exists path then return ()
+    else if Time.(Time.now () >= deadline) then
+      failwithf "Timed out waiting for live bridge SDK marker %s" path ()
+    else Clock.after (Time.Span.of_sec 1.) >>= loop
+  in
+  loop ()
 
 let () =
   if bridge_export_only then (
@@ -143,8 +181,9 @@ let () =
         printf "L2 bridge VK hash from prover: %s\n%!"
           (Field.to_string prover_bridge_vk_hash) ;
         if
-          (not (Field.equal local_bridge_vk_hash compiled_bridge_vk_hash))
-          || not (Field.equal local_bridge_vk_hash prover_bridge_vk_hash)
+          Option.is_some Is_compile_simple_real.is_compile_simple_real
+          && ( (not (Field.equal local_bridge_vk_hash compiled_bridge_vk_hash))
+             || not (Field.equal local_bridge_vk_hash prover_bridge_vk_hash) )
         then
           failwithf
             "L2 bridge VK mismatch: genesis %s, local compile %s, real prover \
@@ -180,10 +219,13 @@ let () =
           ; amount = Currency.Amount.of_mina_int_exn 5
           }
         in
+        let bridge_scenario_directory () =
+          Option.first_some
+            (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_BRIDGE_SCENARIO_DIR")
+            (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_DIR")
+        in
         let write_genesis_ledger () =
-          match
-            Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_DIR"
-          with
+          match bridge_scenario_directory () with
           | None ->
               ()
           | Some directory ->
@@ -198,9 +240,7 @@ let () =
         in
         let write_scenario_manifest ~outer_action_state_before
             ~outer_action_state_after =
-          match
-            Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_SETTLEMENT_FIXTURE_DIR"
-          with
+          match bridge_scenario_directory () with
           | None ->
               ()
           | Some directory ->
@@ -531,6 +571,87 @@ let () =
               |> Or_error.ok_exn ))
           >>| Or_error.ok_exn
         in
+        let run_live_sdk () =
+          let directory = Sys.getenv_exn "ZEKO_ETHEREUM_BRIDGE_LIVE_DIR" in
+          let port =
+            Option.value_map
+              (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_BRIDGE_LIVE_PORT")
+              ~default:8082 ~f:Int.of_string
+          in
+          let ready_path = Filename.concat directory "ready.json" in
+          let complete_path = Filename.concat directory "operations-complete" in
+          run (fun () ->
+              start_graphql_server ~port !sequencer ~l1_executor ~l2_executor ) ;
+          let manifest =
+            `Assoc
+              [ ("schemaVersion", `Int 1)
+              ; ( "sequencerGraphqlUrl"
+                , `String (sprintf "http://127.0.0.1:%d/graphql" port) )
+              ; ("l1GraphqlUrl", `String (Uri.to_string gql_uri))
+              ; ( "outerPublicKey"
+                , `String
+                    (Public_key.Compressed.to_base58_check
+                       (Public_key.compress outer_kp.public_key) ) )
+              ; ( "recipientPublicKey"
+                , `String
+                    (Public_key.Compressed.to_base58_check
+                       (Public_key.compress recipient.public_key) ) )
+              ; ("completionMarker", `String complete_path)
+              ]
+          in
+          Out_channel.write_all ready_path
+            ~data:(Yojson.Safe.pretty_to_string manifest ^ "\n") ;
+          printf "Live bridge SDK harness ready: %s\n%!" ready_path ;
+          run (fun () ->
+              wait_for_file ~timeout:(Time.Span.of_min 45.) complete_path ) ;
+          let helper_account =
+            Sequencer.get_account !sequencer
+              (Public_key.compress recipient.public_key)
+              (Account_id.derive_token_id
+                 ~owner:
+                   (Account_id.of_public_key
+                      (Public_key.decompress_exn
+                         Zeko_circuits_config.Inputs.holder_account_l2 ) ) )
+            |> Option.value_exn
+                 ~message:
+                   "Live SDK deposit finalization did not create the helper \
+                    account"
+          in
+          let next_deposit =
+            Account.zkapp helper_account
+            |> Option.value_exn
+                 ~message:"Live SDK helper account is not a zkApp"
+            |> fun zkapp ->
+            let (next_deposit :: _ : F.t Zkapp_state.V.t) =
+              Zkapp_account.Poly.app_state zkapp
+            in
+            UInt32.of_string (Field.to_string next_deposit)
+          in
+          if not (UInt32.equal next_deposit UInt32.one) then
+            failwithf "Live SDK finalized an unexpected next deposit index: %s"
+              (UInt32.to_string next_deposit)
+              () ;
+          let withdrawal_aux =
+            Utils.value_to_hash ~init:Zeko_constants.withdrawal_salt
+              C.Bridge_state.Withdrawal_params_base.typ withdrawal_params
+          in
+          match
+            Archive.find_ethereum_withdrawal !sequencer.archive
+              ~aux:withdrawal_aux
+          with
+          | Some withdrawal
+            when Public_key.Compressed.equal withdrawal.recipient
+                   withdrawal_params.recipient
+                 && Currency.Amount.equal withdrawal.amount
+                      withdrawal_params.amount ->
+              print_endline
+                "Live SDK finalized the deposit and submitted the native \
+                 withdrawal"
+          | _ ->
+              failwith
+                "Live SDK withdrawal request was not recorded in the OCaml \
+                 archive"
+        in
         let outer_action_state_before =
           run (fun () ->
               Gql_client.fetch_action_state gql_uri
@@ -559,10 +680,12 @@ let () =
         print_endline
           "(* Synchronize the accepting commit into the inner account *)" ;
         run synchronize_accepting_commit ;
-        print_endline "(* Finalize deposit on L2 *)" ;
-        run (fun () -> finalize_deposit () >>| ignore) ;
-        print_endline "(* Submit native withdrawal on L2 *)" ;
-        run (fun () -> submit_withdrawal () >>| ignore) ;
+        if bridge_live_sdk then run_live_sdk ()
+        else (
+          print_endline "(* Finalize deposit on L2 *)" ;
+          run (fun () -> finalize_deposit () >>| ignore) ;
+          print_endline "(* Submit native withdrawal on L2 *)" ;
+          run (fun () -> submit_withdrawal () >>| ignore) ) ;
         run (fun () -> commit_and_check "Commit inner withdrawal action") ;
         let[@warning "-26"] sequencer = free_sequencer sequencer in
         run (fun () ->

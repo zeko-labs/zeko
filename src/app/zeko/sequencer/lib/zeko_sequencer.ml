@@ -180,7 +180,7 @@ module Sequencer = struct
                   ~commit_fee:config.commit_fee commit_witness
               in
               let%bind _hash =
-                Executor.send_zkapp_command ~logger ~settlement_export executor
+                Executor.send_zkapp_command ~logger ?settlement_export executor
                   command
               in
               State.Last_committed_ledger.set sequencer_state
