@@ -33,6 +33,16 @@ let get_signature t ~ledger_hash =
           [%log error] "Failed to sign DA receipt: %s" (Error.to_string_hum err) ;
           None )
 
+let get_heads t =
+  let diffs = Db.all_diffs t.db in
+  let is_source ledger_hash =
+    List.exists diffs ~f:(fun (_, diff) ->
+        Ledger_hash.equal ledger_hash
+          (Diff.Stable.Latest.source_ledger_hash diff) )
+  in
+  List.filter_map diffs ~f:(fun (target, _) ->
+      if is_source target then None else Some target )
+
 let get_ledger_hashes_chain t
     ({ source = source_opt; target; max_length = max_length_opt } :
       Rpc_def.Get_ledger_hashes_chain.V1.Query.t ) =
@@ -115,6 +125,9 @@ let implementations t =
             let pk = Signer_service.Signer.public_key t.signer in
             let%map signature = get_signature t ~ledger_hash:query in
             Option.map signature ~f:(fun s -> (pk, s)) )
+      ; (* Get_heads *)
+        Async.Rpc.Rpc.implement Rpc_def.Get_heads.V1.t (fun () () ->
+            return (get_heads t) )
       ; (* Get_ledger_hashes_chain *)
         Rpc.Rpc.implement Rpc_def.Get_ledger_hashes_chain.V1.t (fun () query ->
             get_ledger_hashes_chain t query )
@@ -216,9 +229,65 @@ let start_healthcheck_server ~logger ~bind_address ~port =
   in
   [%log info] "Healthcheck server started on port %d" port
 
-let create_server ?healthcheck_port
-    ?(bind_address = Tcp.Bind_to_address.All_addresses) ~chain ~port ~logger
-    ~db_dir ~signer ~no_migrations () =
+let restore_from_peer ~logger t ~peer ~target =
+  let node_location : Host_and_port.t Cli_lib.Flag.Types.with_name =
+    { name = "restore-from-peer"; value = peer }
+  in
+  let%bind target =
+    match target with
+    | Some target ->
+        return target
+    | None -> (
+        match%bind Client.Rpc.get_heads ~logger ~node_location () with
+        | Error error ->
+            Error.raise error
+        | Ok [ target ] ->
+            return target
+        | Ok [] ->
+            failwith "restore peer has no DA ledger head"
+        | Ok heads ->
+            failwithf
+              "restore peer has %d DA heads; pass --restore-target-ledger-hash"
+              (List.length heads) () )
+  in
+  let source =
+    Diff.empty_ledger_hash ~depth:constraint_constants.ledger_depth
+  in
+  let%bind hashes, diffs =
+    Deferred.both
+      (Client.Rpc.get_ledger_hashes_chain ~logger ~node_location
+         ~source:`Genesis ~target () )
+      (Client.Rpc.get_diffs_chain ~logger ~node_location ~source:`Genesis
+         ~target () )
+    >>| fun (hashes, diffs) -> (Or_error.ok_exn hashes, Or_error.ok_exn diffs)
+  in
+  if List.length hashes <> List.length diffs then
+    failwith "restore peer returned mismatched DA hash and diff chains" ;
+  let final_source =
+    List.fold2_exn hashes diffs ~init:source
+      ~f:(fun expected_source target diff ->
+        if
+          not
+            (Ledger_hash.equal expected_source
+               (Diff.Stable.Latest.source_ledger_hash diff) )
+        then failwith "restore peer returned a discontinuous DA diff chain" ;
+        ( match Db.add_diff t.db ~ledger_hash:target ~diff with
+        | `Added | `Already_existed ->
+            () ) ;
+        target )
+  in
+  if not (Ledger_hash.equal final_source target) then
+    failwith "restore peer chain did not reach the selected DA head" ;
+  [%log warn]
+    "Restored %d DA diffs through trusted peer %s; continuity was checked, but \
+     peer recovery does not independently recompute ledger roots"
+    (List.length diffs)
+    (Host_and_port.to_string peer) ;
+  return ()
+
+let create_server ?healthcheck_port ?restore_from_peer:restore_peer
+    ?restore_target ?(bind_address = Tcp.Bind_to_address.All_addresses) ~chain
+    ~port ~logger ~db_dir ~signer ~no_migrations () =
   let where_to_listen =
     Tcp.Where_to_listen.bind_to bind_address (On_port port)
   in
@@ -237,6 +306,17 @@ let create_server ?healthcheck_port
     Db.set_migration t.db ~migration:Migrations.latest_migration ;
 
   if not no_migrations then Migrations.run_migrations ~logger t.db ;
+
+  let%bind () =
+    match (Db.all_diffs t.db, restore_peer) with
+    | [], Some peer ->
+        restore_from_peer ~logger t ~peer ~target:restore_target
+    | [], None | _ :: _, None ->
+        return ()
+    | _ :: _, Some _ ->
+        [%log info] "Skipping DA peer restore because the local DB has diffs" ;
+        return ()
+  in
 
   let implementations = implementations t in
   let%bind () =

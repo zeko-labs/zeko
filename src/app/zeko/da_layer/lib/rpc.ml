@@ -129,6 +129,20 @@ module Get_signature = struct
   end
 end
 
+(* Return every current tip. A healthy sequencer produces one linear tip; more
+   than one means the node retained competing uncommitted branches. *)
+module Get_heads = struct
+  module V1 = struct
+    module Response = struct
+      type t = Ledger_hash.Stable.V1.t list [@@deriving bin_io_unversioned]
+    end
+
+    let t : (unit, Ledger_hash.t list) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_heads" ~version:1 ~bin_query:Unit.bin_t
+        ~bin_response:Response.bin_t
+  end
+end
+
 (* val get_ledger_hashes_chain : source:Ledger_hash.t option -> target:Ledger_hash.t -> Ledger_hash.t list *)
 module Get_ledger_hashes_chain = struct
   module V1 = struct

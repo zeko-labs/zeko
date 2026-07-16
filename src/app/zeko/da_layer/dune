@@ -2,7 +2,8 @@
  (name cli)
  (libraries
  da_layer
-  signer_service
+ signer_service
+  mina_base
   ;; mina ;;
   cli_lib
   ;; opam libraries ;;
