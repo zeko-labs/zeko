@@ -16,17 +16,26 @@ rollup deployment using protected Zeko protocol-layer code. This applies
 whether those rollups settle to the same settlement layer, different settlement
 layers, or are structured as L3s on top of a Zeko L2.
 
-## Agent Bundle Production Deployments
+## Independent Agent Protocol Deployments
 
 - $1,000/year per deploying legal entity per Deployment Network.
 - Custom ecosystem, foundation, or enterprise pricing available by contacting
   partnerships@zeko.io.
 
-If one legal entity deploys one or more Agent Bundle components on one
-Deployment Network, the fee is $1,000/year for that Deployment Network. If the
-same legal entity deploys the Agent Bundle on five Deployment Networks, the fee
-is $5,000/year. Separate legal entities operating separate production
+If one legal entity independently deploys one or more protected Agent Protocol
+Bundle components on one Deployment Network outside an Official Agent Protocol
+Deployment, the fee is $1,000/year for that Deployment Network. If the same
+legal entity deploys the Agent Protocol Bundle on five Deployment Networks, the
+fee is $5,000/year. Separate legal entities operating separate production
 deployments each require their own commercial deployment license.
+
+Using official Zeko-operated or Zeko-authorized Agent Protocol Bundle
+applications, services, APIs, relays, facilitators, verifiers, marketplaces,
+payment rails, authorization rails, coordination rails, or settlement endpoints
+does not require a separate commercial deployment license. Users and
+integrators may still pay the ordinary service, usage, transaction, marketplace,
+network, gas, prover, bridge, or other fees applicable to those official
+deployments.
 
 ## Payment Timing
 
