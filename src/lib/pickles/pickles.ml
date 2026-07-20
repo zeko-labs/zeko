@@ -240,12 +240,58 @@ module Make_str (_ : Wire_types.Concrete) = struct
 
       let of_compiled tag = of_compiled_promise tag |> Promise.to_deferred
 
-      let to_serde_json (t : t) =
-        t.wrap_vk
-        |> Result.of_option
-             ~error:(Error.of_string "side-loaded verification key has no wrap index")
-        |> Result.map
-             ~f:Kimchi_bindings.Protocol.VerifierIndex.Fq.to_serde_json
+      let to_yojson_full (t : t) =
+        let open Or_error.Let_syntax in
+        let%map wrap_vk =
+          t.wrap_vk
+          |> Result.of_option
+               ~error:
+                 (Error.of_string
+                    "side-loaded verification key has no wrap index" )
+        in
+        let { Plonk_verification_key_evals.sigma_comm
+            ; coefficients_comm
+            ; generic_comm
+            ; psm_comm
+            ; complete_add_comm
+            ; mul_comm
+            ; emul_comm
+            ; endomul_scalar_comm
+            } =
+          t.wrap_index
+        in
+        let point (x, y) =
+          `List [ Tick.Field.to_yojson x; Tick.Field.to_yojson y ]
+        in
+        let points xs =
+          xs |> Vector.to_list |> List.map ~f:point |> fun xs -> `List xs
+        in
+        `Assoc
+          [ ("schemaVersion", `Int 1)
+          ; ( "maxProofsVerified"
+            , `Int (Pickles_base.Proofs_verified.to_int t.max_proofs_verified)
+            )
+          ; ( "actualWrapDomainSize"
+            , `Int
+                (Pickles_base.Proofs_verified.to_int t.actual_wrap_domain_size)
+            )
+          ; ("wrapDomainLog2", `Int wrap_vk.domain.log_size_of_group)
+          ; ("maxPolySize", `Int wrap_vk.max_poly_size)
+          ; ("publicInputs", `Int wrap_vk.public)
+          ; ("prevChallenges", `Int wrap_vk.prev_challenges)
+          ; ("zkRows", `Int wrap_vk.zk_rows)
+          ; ( "commitments"
+            , `Assoc
+                [ ("sigmaComm", points sigma_comm)
+                ; ("coefficientsComm", points coefficients_comm)
+                ; ("genericComm", point generic_comm)
+                ; ("psmComm", point psm_comm)
+                ; ("completeAddComm", point complete_add_comm)
+                ; ("mulComm", point mul_comm)
+                ; ("emulComm", point emul_comm)
+                ; ("endomulScalarComm", point endomul_scalar_comm)
+                ] )
+          ]
 
       module Max_width = Width.Max
     end
@@ -270,7 +316,7 @@ module Make_str (_ : Wire_types.Concrete) = struct
 
       let of_proof : _ Proof.t -> t = Wrap_hack.pad_proof
 
-      let to_serde_json = Wrap_hack.proof_to_serde_json
+      let accumulator_to_yojson = Wrap_hack.accumulator_to_yojson
     end
 
     let verify_promise (type t) ~(typ : (_, t) Impls.Step.Typ.t)

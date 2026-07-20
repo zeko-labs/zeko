@@ -197,8 +197,38 @@ let app_statement_json ~signature_kind ~body ~calls =
   |> List.map ~f:(fun field -> `String (field_to_hex field))
   |> fun fields -> Yojson.Safe.to_string (`List fields)
 
-let kimchi_proof_json (proof : Pickles.Side_loaded.Proof.t) =
-  Pickles.Side_loaded.Proof.to_serde_json proof
+let verification_key_json
+    (verification_key : Pickles.Side_loaded.Verification_key.t) =
+  Pickles.Side_loaded.Verification_key.to_yojson_full verification_key
+  |> Result.map ~f:Yojson.Safe.to_string
+
+let proof_wire_json (proof : Pickles.Side_loaded.Proof.t) =
+  let side_loaded_proof = Pickles.Side_loaded.Proof.to_yojson_full proof in
+  let wrap_proof, public_input_skeleton =
+    match side_loaded_proof with
+    | `Assoc fields ->
+        let wrap_proof =
+          List.find_map fields ~f:(fun (name, json) ->
+              if String.equal name "proof" then Some json else None )
+          |> Option.value_exn
+        in
+        let public_input_skeleton =
+          `Assoc
+            (List.filter fields ~f:(fun (name, _) ->
+                 not (String.equal name "proof") ) )
+        in
+        (wrap_proof, public_input_skeleton)
+    | _ ->
+        failwith "side-loaded proof JSON must be an object"
+  in
+  let proof_wire =
+    `Assoc
+      [ ("schemaVersion", `Int 1)
+      ; ("proof", wrap_proof)
+      ; ("prevChallenges", Pickles.Side_loaded.Proof.accumulator_to_yojson proof)
+      ]
+  in
+  (Yojson.Safe.to_string proof_wire, Yojson.Safe.to_string public_input_skeleton)
 
 let create_with_verification_key ?inner_action_batch ~signature_kind
     ~(body : Account_update.Body.t) ~calls ~state_before
@@ -216,16 +246,14 @@ let create_with_verification_key ?inner_action_batch ~signature_kind
          ~error:(Error.of_string "cannot export a fake verification key")
     |> Deferred.return
   in
-  let%map vk_json =
-    Pickles.Side_loaded.Verification_key.to_serde_json verification_key
-    |> Deferred.return
+  let proof_json, public_input_skeleton_json = proof_wire_json proof in
+  let%map vk_json = verification_key_json verification_key |> Deferred.return
   and binding =
     binding_json ~signature_kind ~body ~state_before |> Deferred.return
   in
   { vk_json
-  ; proof_json = kimchi_proof_json proof
-  ; public_input_skeleton_json =
-      Pickles.Side_loaded.Proof.to_yojson_full proof |> Yojson.Safe.to_string
+  ; proof_json
+  ; public_input_skeleton_json
   ; app_statement_json = app_statement_json ~signature_kind ~body ~calls
   ; outer_account_public_key =
       Signature_lib.Public_key.Compressed.to_base58_check body.public_key

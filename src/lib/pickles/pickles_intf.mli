@@ -334,7 +334,7 @@ module type S = sig
 
       val of_compiled : _ Tag.t -> t Deferred.t
 
-      val to_serde_json : t -> string Or_error.t
+      val to_yojson_full : t -> Yojson.Safe.t Or_error.t
 
       module Max_width = Nat.N2
     end
@@ -361,7 +361,7 @@ module type S = sig
 
       val to_yojson_full : t -> Yojson.Safe.t
 
-      val to_serde_json : t -> string
+      val accumulator_to_yojson : t -> Yojson.Safe.t
     end
 
     val create :

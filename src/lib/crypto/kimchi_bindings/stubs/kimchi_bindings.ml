@@ -325,9 +325,6 @@ module Protocol = struct
 
       external deep_copy : t -> t
         = "caml_pasta_fq_plonk_verifier_index_deep_copy"
-
-      external to_serde_json : t -> string
-        = "caml_pasta_fq_plonk_verifier_index_to_serde_json"
     end
   end
 
@@ -588,12 +585,6 @@ module Protocol = struct
            , Pasta_bindings.Fq.t )
            Kimchi_types.proof_with_public
         = "caml_pasta_fq_plonk_proof_deep_copy"
-
-      external to_serde_json :
-           ( Pasta_bindings.Fp.t Kimchi_types.or_infinity
-           , Pasta_bindings.Fq.t )
-           Kimchi_types.proof_with_public
-        -> string = "caml_pasta_fq_plonk_proof_to_serde_json"
     end
   end
 end
