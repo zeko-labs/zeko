@@ -45,6 +45,13 @@ module Z = struct
 
   module Inner = struct
     let initial_accounts () =
+      (* Pickles tags must be compiled in the same dependency order in every
+         process.  Compiling only these two tags first can produce a different
+         side-loaded VK from the prover, which compiles the complete circuit
+         set before serving requests. *)
+      let%bind () =
+        Zeko_prover.Compile_circuits.compile_all ~logger:(Logger.null ()) ()
+      in
       let%bind inner_vk =
         Compile_simple.Verification_key.of_tag (Lazy.force Inner_rules_inst.tag)
         |> Promise.to_deferred

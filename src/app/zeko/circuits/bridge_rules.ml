@@ -5,6 +5,8 @@ open Bridge_state
 module Make_mina (Inputs : sig
   val holder_accounts_l1 : PC.t list
 
+  val ethereum_holder_account_l1 : PC.t option
+
   val holder_account_l2 : PC.t
 
   val helper_token_owner_l1 : PC.t
@@ -39,6 +41,8 @@ struct
     Check_accepted_make.Make
       (struct
         let holder_accounts_l1 = Inputs.holder_accounts_l1
+
+        let ethereum_holder_account_l1 = Inputs.ethereum_holder_account_l1
 
         let token_owner_l1 = None
 
@@ -134,6 +138,8 @@ module Make_custom (Inputs : sig
 
   val holder_accounts_l1 : PC.t list
 
+  val ethereum_holder_account_l1 : PC.t option
+
   val zeko_l1 : PC.t
 
   val zeko_l2 : PC.t
@@ -166,6 +172,8 @@ struct
     Check_accepted_make.Make
       (struct
         let holder_accounts_l1 = Inputs.holder_accounts_l1
+
+        let ethereum_holder_account_l1 = Inputs.ethereum_holder_account_l1
 
         let token_owner_l1 = Some Inputs.token_owner_l1
 

@@ -221,7 +221,8 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
 
       print_endline "(* Post genesis batch *)" ;
       let%bind () =
-        if List.length da_nodes = 0 || old_and_new_ledger_same then return ()
+        if List.length da_nodes = 0 then return ()
+        else if old_ledger_exists && old_and_new_ledger_same then return ()
         else if old_ledger_exists then
           let () =
             print_endline "(* Post only diff with updated inner account *)"

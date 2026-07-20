@@ -52,6 +52,8 @@ module Verification_key = struct
   let hash_var { Checked.vk_hash; witness = _ } = vk_hash
 
   let of_pickles x = Real_vk x
+
+  let to_pickles = function Fake_vk _ -> None | Real_vk vk -> Some vk
 end
 
 module Proof = struct
@@ -61,6 +63,8 @@ module Proof = struct
   [@@deriving yojson]
 
   let of_pickles x = Real_proof x
+
+  let to_pickles = function Fake_proof _ -> None | Real_proof proof -> Some proof
 end
 
 let force_tag _ = Promise.return ()

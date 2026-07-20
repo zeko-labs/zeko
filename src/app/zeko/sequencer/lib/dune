@@ -3,6 +3,7 @@
  (inline_tests)
  (libraries
   is_compile_simple_real
+  compile_simple
   signer_service
   kvdb_base
   da_layer

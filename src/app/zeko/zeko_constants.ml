@@ -43,6 +43,10 @@ let da_layer_check_salt = "zeko da layer check"
 
 let deposit_salt = "Deposit_params - qFB3jXP*)"
 
+(* Domain for an Ethereum-custodied native deposit. Unlike the Mina L1 bridge
+   action, this action has no Mina child call forest. *)
+let ethereum_deposit_salt = "Ethereum deposit V1"
+
 let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
 
 let bridge_prover_cache = "bridge prover cache"

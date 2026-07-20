@@ -14,6 +14,7 @@ type t =
   ; max_valid_while_size : Zeko_circuits.Zeko_util.Slot.t
   ; multisig_key : Zeko_circuits.Multisig.t
   ; holder_accounts_l1 : Public_key.Compressed.t list
+  ; ethereum_holder_account_l1 : Public_key.Compressed.t option [@default None]
   ; helper_token_owner_l1 : Public_key.Compressed.t
   ; zeko_l1 : Public_key.Compressed.t
   ; emergency_da_public_key : Public_key.Compressed.t
@@ -23,6 +24,38 @@ type t =
   ; outer_account_creation_fee : Currency.Fee.t
   }
 [@@deriving yojson]
+
+let ethereum_address_to_public_key address =
+  let address = String.lowercase address in
+  let hex = String.chop_prefix_if_exists address ~prefix:"0x" in
+  if String.length hex <> 40 then
+    failwithf
+      "Ethereum bridge address must contain exactly 20 bytes, got %d hex \
+       characters"
+      (String.length hex) () ;
+  let is_hex_digit = function '0' .. '9' | 'a' .. 'f' -> true | _ -> false in
+  if not (String.for_all hex ~f:is_hex_digit) then
+    failwith "Ethereum bridge address contains a non-hexadecimal character" ;
+  if String.for_all hex ~f:(Char.equal '0') then
+    failwith "Ethereum bridge address must not be the zero address" ;
+  (* The Kimchi field JSON decoder passes hexadecimal values through the
+     fixed-width Bigint256 byte decoder.  Ethereum addresses therefore need
+     twelve leading zero bytes before they can be interpreted as a Pasta
+     field element. *)
+  let field_hex = String.make 24 '0' ^ hex in
+  let x =
+    match Snark_params.Tick.Field.of_yojson (`String ("0x" ^ field_hex)) with
+    | Ok x ->
+        x
+    | Error error ->
+        failwithf "Failed to encode Ethereum bridge address: %s" error ()
+  in
+  ({ x; is_odd = false } : Public_key.Compressed.t)
+
+let with_ethereum_holder_address t address =
+  { t with
+    ethereum_holder_account_l1 = Some (ethereum_address_to_public_key address)
+  }
 
 module Deploy = struct
   type t =
@@ -77,6 +110,7 @@ let (t, deploy_config) : t * Deploy.t option =
             ; quorum = Snark_params.Tick.Field.of_int 1
             }
         ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
+        ; ethereum_holder_account_l1 = None
         ; helper_token_owner_l1 = fst helper_token_owner_l1
         ; zeko_l1 = fst zeko_l1
         ; emergency_da_public_key = fst emergency_da
@@ -109,6 +143,13 @@ let (t, deploy_config) : t * Deploy.t option =
       | Error err ->
           failwithf "Failed to parse Zeko circuits config: %s" err () )
 
+let t =
+  match Sys.getenv_opt "ZEKO_ETHEREUM_BRIDGE_ADDRESS" with
+  | None ->
+      t
+  | Some address ->
+      with_ethereum_holder_address t address
+
 module Inputs = struct
   let inner_public_key = Zeko_constants.inner_public_key
 
@@ -124,6 +165,8 @@ module Inputs = struct
   let multisig_key = t.multisig_key
 
   let holder_accounts_l1 = t.holder_accounts_l1
+
+  let ethereum_holder_account_l1 = t.ethereum_holder_account_l1
 
   let holder_account_l2 = Zeko_constants.inner_holder_key
 

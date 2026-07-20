@@ -91,11 +91,42 @@ module Account_update_actions = struct
   [@@deriving sexp, yojson]
 end
 
+module Ethereum_withdrawal = struct
+  type t =
+    { recipient : Signature_lib.Public_key.Compressed.t
+    ; amount : Currency.Amount.t
+    }
+
+  let to_yojson { recipient = { x; is_odd }; amount } =
+    `Assoc
+      [ ("recipientX", `String (Field.to_string x))
+      ; ("recipientIsOdd", `Bool is_odd)
+      ; ( "amount"
+        , `String
+            (Currency.Amount.to_uint64 amount |> Unsigned.UInt64.to_string) )
+      ]
+
+  let of_yojson json =
+    let open Yojson.Safe.Util in
+    try
+      Ok
+        { recipient =
+            { x = json |> member "recipientX" |> to_string |> Field.of_string
+            ; is_odd = json |> member "recipientIsOdd" |> to_bool
+            }
+        ; amount =
+            json |> member "amount" |> to_string |> Unsigned.UInt64.of_string
+            |> Currency.Amount.of_uint64
+        }
+    with exn -> Error (Exn.to_string exn)
+end
+
 module Kvdb = struct
   module Key_value = struct
     type _ t =
       | Events : (Account_id.t * Account_update_events.t list) t
       | Actions : (Account_id.t * Account_update_actions.t list) t
+      | Ethereum_withdrawal : (Field.t * Ethereum_withdrawal.t) t
 
     let serialize_key : type k v. (k * v) t -> k -> Bigstring.t =
      fun pair_type key ->
@@ -120,6 +151,9 @@ module Kvdb = struct
                   ^ "-"
                   ^ Token_id.to_string (Account_id.token_id key) )
               ])
+      | Ethereum_withdrawal ->
+          Bigstring.of_string
+            ("ethereum-withdrawal-" ^ Field.to_string key)
 
     let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
      fun pair_type value ->
@@ -130,6 +164,9 @@ module Kvdb = struct
       | Actions ->
           Bigstring.of_string @@ Yojson.Safe.to_string
           @@ `List (List.map value ~f:Account_update_actions.to_yojson)
+      | Ethereum_withdrawal ->
+          Bigstring.of_string @@ Yojson.Safe.to_string
+          @@ Ethereum_withdrawal.to_yojson value
 
     let deserialize_value : type k v. (k * v) t -> Bigstring.t -> v =
      fun pair_type data ->
@@ -144,6 +181,9 @@ module Kvdb = struct
           |> Yojson.Safe.Util.to_list
           |> List.map ~f:(fun action ->
                  ok_exn @@ Account_update_actions.of_yojson action )
+      | Ethereum_withdrawal ->
+          Bigstring.to_string data |> Yojson.Safe.from_string
+          |> Ethereum_withdrawal.of_yojson |> ok_exn
   end
 
   include Kvdb_base.Make (Key_value)
@@ -165,6 +205,12 @@ module Archive = struct
 
   let store_actions t account_id actions =
     Kvdb.set t Actions ~key:account_id ~data:actions
+
+  let store_ethereum_withdrawal t ~aux withdrawal =
+    Kvdb.set t Ethereum_withdrawal ~key:aux ~data:withdrawal
+
+  let find_ethereum_withdrawal t ~aux =
+    Kvdb.get t Ethereum_withdrawal ~key:aux
 
   let add_actions t ?(height = 0) account_update_id
       (account_update : Account_update.t) transaction_info (account : Account.t)

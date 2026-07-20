@@ -46,6 +46,7 @@ dune exec ./run.exe -- \
     --fee-modifier <float?> \
     --minimum-fee <float?> \
     --slot-acceptance <float?> \
+    --slot-duration <int?> \
     --commit-validity-period <int?>
 ```
 

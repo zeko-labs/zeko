@@ -18,6 +18,8 @@ module Make (Inputs : sig
 
   val holder_accounts_l1 : PC.t list
 
+  val ethereum_holder_account_l1 : PC.t option
+
   val zeko_l1 : PC.t
 
   val chain_l1 : Mina_signature_kind.t
@@ -35,6 +37,8 @@ module Make (Inputs : sig
         Check_accepted_make.Make
           (struct
             let holder_accounts_l1 = holder_accounts_l1
+
+            let ethereum_holder_account_l1 = ethereum_holder_account_l1
 
             let token_owner_l1 = token_owner_l1
 

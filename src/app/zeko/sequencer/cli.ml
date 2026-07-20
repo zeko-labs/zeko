@@ -140,6 +140,9 @@ let generate_circuits_config =
        and deploy_config_output =
          flag "--deploy-config-output" (optional string)
            ~doc:"string Deploy config output"
+       and ethereum_bridge_address =
+         flag "--ethereum-bridge-address" (optional string)
+           ~doc:"string Ethereum bridge proxy address to bind as an L1 holder"
        in
        fun () ->
          let generate_keypair () =
@@ -161,6 +164,9 @@ let generate_circuits_config =
                ; quorum = Field.of_int 1
                }
            ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
+           ; ethereum_holder_account_l1 =
+               Option.map ethereum_bridge_address
+                 ~f:Zeko_circuits_config.ethereum_address_to_public_key
            ; helper_token_owner_l1 = fst helper_token_owner_l1
            ; zeko_l1 = fst zeko_l1
            ; emergency_da_public_key = fst emergency_da

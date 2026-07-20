@@ -20,10 +20,34 @@
   - `dune build ./src/app/zeko/sequencer ./src/app/zeko/da_layer ./src/app/zeko/signer`
 - The build can take longer than 10 seconds; prefer running with a longer timeout (e.g., 120s) in CI or local scripts.
 
+## Submodules
+
+- Initialize submodules recursively after cloning.
+- When enabling recursive Git commands, also make pushes check that referenced
+  submodule commits are published instead of trying to push the superproject
+  branch name into third-party submodule remotes:
+  - `git config --local submodule.recurse true`
+  - `git config --local push.recurseSubmodules check`
+
 ## Testing
 
 - Build the Zeko project first
 - run ./src/app/zeko/tests/run-sequencer-test.sh fake 3 true false
+
+## Ethereum settlement export
+
+- `src/app/zeko/sequencer/lib/ethereum_settlement_export.ml` exports the real
+  Pickles proof bundle consumed by the sibling `ethereum-settlement` repo.
+- Proof and verification-key JSON use a versioned, Zeko-owned OCaml wire. The
+  proof wire contains the wrap proof plus padded recursion accumulators; the
+  VK wire contains the wrap domain metadata and commitments required to
+  reconstruct Kimchi's verifier index.
+- Keep settlement serialization out of the `proof-systems` submodule. Its
+  recorded revision must be fetchable from the configured upstream remote so
+  fresh clones and CI do not depend on an unpublished fork commit.
+- The Rust compatibility decoder is
+  `ethereum-settlement/crates/pickles-verifier/src/wire.rs`; change both sides
+  together and preserve the legacy serde reader while retained fixtures use it.
 
 ## Project language
 
@@ -62,7 +86,10 @@
 - `diff.ml` defines the DA diff format: source ledger hash, changed accounts (index + account), optional command with action-step flags, and a timestamp (V2 adds time; V1 is time-less).
 - `core.ml` validates a posted diff by checking source hash, DB presence/genesis, unique indices, and recomputed target hash; it also validates receipt-chain updates for included commands before signing the target hash and persisting the diff.
 - `rpc.ml` exposes Async.Rpc endpoints for posting diffs, fetching diffs, checking presence, listing keys, and fetching signatures/ledger-hash chains.
-- `node.ml` runs the server with a local KV DB, signs ledger hashes, supports syncing from other nodes, and can return the signature for a target hash.
+- `node.ml` runs the server with a local KV DB, signs ledger hashes, and can
+  return the signature for a target hash. DA nodes receive ordered diffs from
+  the sequencer; they do not restore or synchronize their databases from peer
+  DA nodes.
 - `client.ml` provides RPC helpers with retry logic and (for sequencer usage) enforces ordered posting of diffs; it also includes optional relational DB tables for cached diffs/signatures.
 - `db.ml` is the KV storage for diffs plus an index and migration marker; `migrations.ml` handles version upgrades (e.g., adding the top-level version tag).
 
