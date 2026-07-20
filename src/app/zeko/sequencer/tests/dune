@@ -53,6 +53,11 @@
  (modules commit_schedule_test))
 
 (executable
+ (name slot_duration_test)
+ (libraries utils core_kernel mina_numbers is_compile_simple_real_fake)
+ (modules slot_duration_test))
+
+(executable
  (name imt_benchmark)
  (libraries indexed_merkle_tree yojson)
  (preprocess

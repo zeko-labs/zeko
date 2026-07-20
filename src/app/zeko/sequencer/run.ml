@@ -10,8 +10,8 @@ module Sequencer = Zeko_sequencer.Sequencer
 let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
     ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-    ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee
-    ~inner_sync_period () =
+    ~slot_acceptance ~slot_duration_sec ~commit_validity_period ~commit_fee
+    ~bridge_txn_fee ~inner_sync_period () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
     let genesis_timestamp =
@@ -22,6 +22,7 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ; fork_slot =
         Thread_safe.block_on_async_exn (fun () ->
             Gql_client.fetch_fork_slot ~logger l1_uri >>| Or_error.ok_exn )
+    ; slot_duration_sec
     }
   in
   [%log info] "Current slot: %d"
@@ -140,6 +141,10 @@ let () =
        flag "--slot-acceptance"
          (optional_with_default 60. float)
          ~doc:"float Slot acceptance in minutes"
+     and slot_duration_sec =
+       flag "--slot-duration"
+         (optional_with_default 180 int)
+         ~doc:"int L1 slot duration in seconds"
      and commit_validity_period =
        flag "--commit-validity-period"
          (optional_with_default 20 int)
@@ -156,6 +161,8 @@ let () =
          ~doc:"string Bridge transaction fee in mina"
      in
      let slot_acceptance = Time.Span.of_min slot_acceptance_m in
+     if slot_duration_sec <= 0 then
+       failwith "--slot-duration must be a positive number of seconds" ;
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in
      let da_keys =
        String.split ~on:',' da_keys
@@ -179,6 +186,6 @@ let () =
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
        ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
        ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-       ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee
-       ~inner_sync_period )
+       ~slot_acceptance ~slot_duration_sec ~commit_validity_period ~commit_fee
+       ~bridge_txn_fee ~inner_sync_period )
   |> Command_unix.run
