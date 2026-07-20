@@ -245,7 +245,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
   let permitted_holder_accounts =
     match ethereum_holder_account_l1 with
     | Some holder ->
-        holder :: holder_accounts_l1
+        [ holder ]
     | None ->
         holder_accounts_l1
   in
@@ -256,14 +256,6 @@ let deposit_action (type deposit_params_var) ~chain_l1
         |> PC.Checked.equal base_params.holder_account_l1 )
       permitted_holder_accounts
     >>= Boolean.Assert.any
-  in
-  let* is_ethereum_deposit =
-    match ethereum_holder_account_l1 with
-    | Some holder_account ->
-        constant PC.typ holder_account
-        |> PC.Checked.equal base_params.holder_account_l1
-    | None ->
-        Checked.return Boolean.false_
   in
   let@ () = with_label __LOC__ in
   let a =
@@ -312,33 +304,26 @@ let deposit_action (type deposit_params_var) ~chain_l1
           }
         , (a, []) :: Raw custom_params.nested_children )
   in
-  let@ () = with_label __LOC__ in
-  let* children' =
-    Calls.hash ~chain:chain_l1
-      ((a', children) :: (fee_payout, []) :: Raw base_params.children)
-  in
-  let* children' =
+  let* children', aux =
     match ethereum_holder_account_l1 with
     | Some _ ->
-        if_ ~typ:C.typ is_ethereum_deposit
-          ~then_:(constant C.typ []) ~else_:children'
-    | None ->
-        Checked.return children'
-  in
-  let@ () = with_label __LOC__ in
-  let* mina_aux =
-    var_to_hash ~init:Zeko_constants.deposit_salt Deposit_params.typ params
-  in
-  let* aux =
-    match ethereum_holder_account_l1 with
-    | Some _ ->
-        let* ethereum_aux =
+        let* aux =
           var_to_hash ~init:Zeko_constants.ethereum_deposit_salt
             Deposit_params.typ params
         in
-        if_ ~typ:F.typ is_ethereum_deposit ~then_:ethereum_aux ~else_:mina_aux
+        Checked.return (constant C.typ [], aux)
     | None ->
-        Checked.return mina_aux
+        let@ () = with_label __LOC__ in
+        let* children =
+          Calls.hash ~chain:chain_l1
+            ((a', children) :: (fee_payout, []) :: Raw base_params.children)
+        in
+        let@ () = with_label __LOC__ in
+        let* aux =
+          var_to_hash ~init:Zeko_constants.deposit_salt Deposit_params.typ
+            params
+        in
+        Checked.return (children, aux)
   in
   Checked.return
     ( { aux
