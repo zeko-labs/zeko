@@ -86,7 +86,10 @@
 - `diff.ml` defines the DA diff format: source ledger hash, changed accounts (index + account), optional command with action-step flags, and a timestamp (V2 adds time; V1 is time-less).
 - `core.ml` validates a posted diff by checking source hash, DB presence/genesis, unique indices, and recomputed target hash; it also validates receipt-chain updates for included commands before signing the target hash and persisting the diff.
 - `rpc.ml` exposes Async.Rpc endpoints for posting diffs, fetching diffs, checking presence, listing keys, and fetching signatures/ledger-hash chains.
-- `node.ml` runs the server with a local KV DB, signs ledger hashes, supports syncing from other nodes, and can return the signature for a target hash.
+- `node.ml` runs the server with a local KV DB, signs ledger hashes, and can
+  return the signature for a target hash. DA nodes receive ordered diffs from
+  the sequencer; they do not restore or synchronize their databases from peer
+  DA nodes.
 - `client.ml` provides RPC helpers with retry logic and (for sequencer usage) enforces ordered posting of diffs; it also includes optional relational DB tables for cached diffs/signatures.
 - `db.ml` is the KV storage for diffs plus an index and migration marker; `migrations.ml` handles version upgrades (e.g., adding the top-level version tag).
 

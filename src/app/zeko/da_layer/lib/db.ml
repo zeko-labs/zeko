@@ -46,18 +46,6 @@ let add_diff t ~ledger_hash ~diff =
 
 let get_diff t ~ledger_hash = get t Diff ~key:ledger_hash
 
-let all_diffs t =
-  to_alist t
-  |> List.filter_map ~f:(fun (key, value) ->
-         let key = Bigstring.to_string key in
-         match String.chop_prefix key ~prefix:"diff" with
-         | None ->
-             None
-         | Some ledger_hash ->
-             Some
-               ( Ledger_hash.of_decimal_string ledger_hash
-               , Diff.of_bigstring value |> Or_error.ok_exn ) )
-
 let get_migration t = get t Migration ~key:() |> Option.value ~default:0
 
 let set_migration t ~migration = set t Migration ~key:() ~data:migration
@@ -73,6 +61,4 @@ module Async = struct
   let set_migration t ~migration = Async.return (set_migration t ~migration)
 
   let has_diff t ~ledger_hash = Async.return (has_diff t ~ledger_hash)
-
-  let all_diffs t = Async.return (all_diffs t)
 end

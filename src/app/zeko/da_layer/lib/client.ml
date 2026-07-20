@@ -311,12 +311,6 @@ module Rpc = struct
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.V1.t
       ledger_hash
 
-  let get_heads ~logger
-      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) () =
-    [%log debug] "Getting ledger heads from da node %s"
-      (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_heads.V1.t ()
-
   let get_ledger_hashes_chain ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
       ?max_length ~source ~target () =

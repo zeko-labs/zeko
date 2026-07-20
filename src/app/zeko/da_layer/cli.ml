@@ -1,7 +1,6 @@
 open Core
 open Async
 open Cli_lib
-open Mina_base
 
 let run_node =
   ( "run-node"
@@ -32,16 +31,6 @@ let run_node =
          flag "--network-id"
            (optional_with_default "zeko" string)
            ~doc:"string Network id to use as salt for applying receipts"
-       and restore_from_peer =
-         flag "--restore-from-peer" (optional string)
-           ~doc:
-             "HOST:PORT Restore an empty DA database from a trusted surviving \
-              node before serving"
-       and restore_target_ledger_hash =
-         flag "--restore-target-ledger-hash" (optional string)
-           ~doc:
-             "HASH Select a peer head explicitly when the restore peer has \
-              competing uncommitted branches"
        in
        fun () ->
          let logger = Logger.create () in
@@ -56,13 +45,6 @@ let run_node =
                Mina_signature_kind.Other_network network_id
          in
          let signer = Host_and_port.of_string signer in
-         let restore_from_peer =
-           Option.map restore_from_peer ~f:Host_and_port.of_string
-         in
-         let restore_target =
-           Option.map restore_target_ledger_hash
-             ~f:Ledger_hash.of_decimal_string
-         in
          let bind_address =
            if bind_localhost then Tcp.Bind_to_address.Localhost
            else Tcp.Bind_to_address.All_addresses
@@ -73,9 +55,8 @@ let run_node =
          in
          let%bind () =
            Deferred.ignore_m
-           @@ Da_layer.Node.create_server ?restore_from_peer ?restore_target
-                ~chain ~logger ~port ~db_dir ~healthcheck_port ~bind_address
-                ~signer ~no_migrations ()
+           @@ Da_layer.Node.create_server ~chain ~logger ~port ~db_dir
+                ~healthcheck_port ~bind_address ~signer ~no_migrations ()
          in
          [%log info] "Server started on port %d" port ;
          Async.never () ) )
