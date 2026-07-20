@@ -197,6 +197,10 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
       match Is_compile_simple_real.is_compile_simple_real with
       | None ->
           Deferred.Or_error.return None
+      | Some _
+        when Option.is_none
+               Zeko_circuits_config.Inputs.ethereum_holder_account_l1 ->
+          Deferred.Or_error.return None
       | Some _ ->
           Ethereum_settlement_export.create
             ~signature_kind:executor.signature_kind ~body ~calls
