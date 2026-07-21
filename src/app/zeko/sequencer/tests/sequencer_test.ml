@@ -497,7 +497,11 @@ let () =
                 { fee = Currency.Fee.of_mina_string_exn "0.1"
                 ; sender = (source, nonce)
                 ; receiver = Public_key.compress recipient.public_key
-                ; amount = Currency.Amount.of_mina_int_exn 100
+                (* Generated test accounts hold exactly 100 MINA. Keep enough
+                   headroom for this transfer's fee and the source account's
+                   later use while giving the browser operator ample funds for
+                   token deployment and account creation. *)
+                ; amount = Currency.Amount.of_mina_int_exn 50
                 ; actions = None
                 }
               in
