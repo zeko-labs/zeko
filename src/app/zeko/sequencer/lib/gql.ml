@@ -2443,6 +2443,7 @@ module Mutations = struct
             { Archive.Ethereum_withdrawal.recipient =
                 withdrawal_params.recipient
             ; amount = withdrawal_params.amount
+            ; asset = None
             } ;
           return
             (let%bind.Result key, d =

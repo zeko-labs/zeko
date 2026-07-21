@@ -20,6 +20,8 @@ module Make (Inputs : sig
 
   val ethereum_holder_account_l1 : PC.t option
 
+  val ethereum_asset_id : (F.t * F.t) option
+
   val zeko_l1 : PC.t
 
   val chain_l1 : Mina_signature_kind.t
@@ -39,6 +41,8 @@ module Make (Inputs : sig
             let holder_accounts_l1 = holder_accounts_l1
 
             let ethereum_holder_account_l1 = ethereum_holder_account_l1
+
+            let ethereum_asset_id = ethereum_asset_id
 
             let token_owner_l1 = token_owner_l1
 

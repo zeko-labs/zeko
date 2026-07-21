@@ -169,6 +169,25 @@ module Deposit_params_base = struct
   let base (x : var) = x
 
   let custom _ = None
+
+  let ethereum_salt = Zeko_constants.ethereum_deposit_salt
+
+  let asset_id _ = None
+end
+
+module Deposit_params_ethereum_token = struct
+  type t =
+    { asset_id_high : F.t; asset_id_low : F.t; base : Deposit_params_base.t }
+  [@@deriving snarky]
+
+  let base { base; _ } : Deposit_params_base.var = base
+
+  let custom _ = None
+
+  let ethereum_salt = Zeko_constants.ethereum_erc20_deposit_salt
+
+  let asset_id { asset_id_high; asset_id_low; _ } =
+    Some (asset_id_high, asset_id_low)
 end
 
 (* When the token is custom, and we need token owner authorization. *)
@@ -184,6 +203,10 @@ module Deposit_params_custom = struct
   let base { base; _ } : Deposit_params_base.var = base
 
   let custom x = Some x
+
+  let ethereum_salt = Zeko_constants.ethereum_deposit_salt
+
+  let asset_id _ = None
 end
 
 (* When the token is the Mina token. *)
@@ -194,6 +217,12 @@ module Withdrawal_params_base = struct
   let base (x : var) = x
 
   let custom _ = None
+
+  let debit_first = false
+
+  let hash_salt = Zeko_constants.withdrawal_salt
+
+  let asset_id _ = None
 end
 
 (* When the token is custom, and we need token owner authorization. *)
@@ -209,6 +238,35 @@ module Withdrawal_params_custom = struct
   let base { base; _ } : Withdrawal_params_base.var = base
 
   let custom x = Some x
+
+  let debit_first = false
+
+  let hash_salt = Zeko_constants.withdrawal_salt
+
+  let asset_id _ = None
+end
+
+module Withdrawal_params_ethereum_token = struct
+  type t =
+    { asset_id_high : F.t
+    ; asset_id_low : F.t
+    ; custom : Withdrawal_params_custom.t
+    }
+  [@@deriving snarky]
+
+  let base { custom; _ } : Withdrawal_params_base.var = custom.base
+
+  let custom { custom; _ } = Some custom
+
+  (* Mina's FungibleToken.approveBase rejects a positive running balance as
+     flash minting.  The user debit supplied in [nested_children] therefore
+     has to precede the bridge-vault receive synthesized below. *)
+  let debit_first = true
+
+  let hash_salt = Zeko_constants.ethereum_erc20_withdrawal_salt
+
+  let asset_id { asset_id_high; asset_id_low; _ } =
+    Some (asset_id_high, asset_id_low)
 end
 
 module type DEPOSIT_PARAMS = sig
@@ -217,6 +275,10 @@ module type DEPOSIT_PARAMS = sig
   val base : var -> Deposit_params_base.var
 
   val custom : var -> Deposit_params_custom.var option
+
+  val ethereum_salt : string
+
+  val asset_id : var -> (F.var * F.var) option
 end
 
 module type WITHDRAWAL_PARAMS = sig
@@ -225,11 +287,18 @@ module type WITHDRAWAL_PARAMS = sig
   val base : var -> Withdrawal_params_base.var
 
   val custom : var -> Withdrawal_params_custom.var option
+
+  val debit_first : bool
+
+  val hash_salt : string
+
+  val asset_id : var -> (F.var * F.var) option
 end
 
 let deposit_action (type deposit_params_var) ~chain_l1
     ~(holder_accounts_l1 : PC.t list) ~(token_owner_l1 : Account_id.t option)
     ~(ethereum_holder_account_l1 : PC.t option)
+    ~(ethereum_asset_id : (F.t * F.t) option)
     (module Deposit_params : DEPOSIT_PARAMS with type var = deposit_params_var)
     (params : deposit_params_var) ~(bridge_fee_recipient_l1 : PC.var)
     ~(bridge_proof_fee : Currency.Amount.var) :
@@ -241,6 +310,26 @@ let deposit_action (type deposit_params_var) ~chain_l1
      Adding an account is however not a problem.
   *)
   let base_params = Deposit_params.base params in
+  let* () =
+    match
+      ( ethereum_holder_account_l1
+      , ethereum_asset_id
+      , Deposit_params.asset_id params )
+    with
+    | Some _, Some (expected_high, expected_low), Some (actual_high, actual_low)
+      ->
+        let* () =
+          assert_equal ~label:__LOC__ F.typ actual_high
+            (constant F.typ expected_high)
+        in
+        assert_equal ~label:__LOC__ F.typ actual_low
+          (constant F.typ expected_low)
+    | Some _, None, None | None, None, None ->
+        Checked.return ()
+    | _ ->
+        failwith
+          "Ethereum deposit asset schema does not match circuit configuration"
+  in
   let@ () = with_label __LOC__ in
   let permitted_holder_accounts =
     match ethereum_holder_account_l1 with
@@ -308,8 +397,8 @@ let deposit_action (type deposit_params_var) ~chain_l1
     match ethereum_holder_account_l1 with
     | Some _ ->
         let* aux =
-          var_to_hash ~init:Zeko_constants.ethereum_deposit_salt
-            Deposit_params.typ params
+          var_to_hash ~init:Deposit_params.ethereum_salt Deposit_params.typ
+            params
         in
         Checked.return (constant C.typ [], aux)
     | None ->
@@ -334,7 +423,8 @@ let deposit_action (type deposit_params_var) ~chain_l1
 
 let withdrawal_action (type withdrawal_params_var) ~chain_l2
     ~(holder_account_l2 : PC.t) ~(token_owner_l2 : Account_id.t option)
-    ~l2_holder_vk_hash ~bridge_fee_recipient_l2 ~bridge_proof_fee
+    ~(ethereum_asset_id : (F.t * F.t) option) ~l2_holder_vk_hash
+    ~bridge_fee_recipient_l2 ~bridge_proof_fee
     (module Withdrawal_params : WITHDRAWAL_PARAMS
       with type var = withdrawal_params_var ) (params : Withdrawal_params.var) :
     Rollup_state.Inner_action.var Checked.t =
@@ -344,6 +434,20 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
      Adding an account is however not a problem.
   *)
   let base_params = Withdrawal_params.base params in
+  let* () =
+    match (ethereum_asset_id, Withdrawal_params.asset_id params) with
+    | Some (expected_high, expected_low), Some (actual_high, actual_low) ->
+        let* () =
+          assert_equal ~label:__LOC__ F.typ actual_high
+            (constant F.typ expected_high)
+        in
+        assert_equal ~label:__LOC__ F.typ actual_low
+          (constant F.typ expected_low)
+    | None, None ->
+        Checked.return ()
+    | _ ->
+        failwith "Withdrawal asset schema does not match circuit configuration"
+  in
   let a =
     { default_account_update with
       public_key = constant PC.typ holder_account_l2
@@ -376,10 +480,10 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
         constant Account_update.Authorization_kind.typ None_given
     }
   in
-  let a', (children : Calls.t) =
+  let* (a', children) : Account_update.Checked.t * Calls.t =
     match token_owner_l2 with
     | None ->
-        (a, [])
+        Checked.return (a, ([] : Calls.t))
     | Some token_owner_l2 ->
         let custom_params =
           Withdrawal_params.custom params
@@ -388,19 +492,41 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
                  "If token_id isn't default, then Withdrawal_params_custom \
                   must be used."
         in
-        ( { default_account_update with
+        let token_owner =
+          { default_account_update with
             public_key = Account_id.public_key token_owner_l2 |> constant PC.typ
           ; token_id =
               Account_id.token_id token_owner_l2 |> constant Token_id.typ
           ; authorization_kind = custom_params.authorization_kind
           ; call_data = custom_params.call_data
           }
-        , (a, []) :: Raw custom_params.nested_children )
+        in
+        if Withdrawal_params.debit_first then
+          let (debit, debit_children), tail =
+            Zkapp_call_forest.Checked.pop_exn ~signature_kind:chain_l2
+              custom_params.nested_children
+          in
+          let* () =
+            Boolean.Assert.is_true
+              (Zkapp_call_forest.Checked.is_empty debit_children)
+          in
+          let* () =
+            Boolean.Assert.is_true (Zkapp_call_forest.Checked.is_empty tail)
+          in
+          let children : Calls.t =
+            [ (debit.account_update.data, []); (a, []) ]
+          in
+          Checked.return (token_owner, children)
+        else
+          let children : Calls.t =
+            (a, []) :: Raw custom_params.nested_children
+          in
+          Checked.return (token_owner, children)
   in
   let* children' =
     Calls.hash ~chain:chain_l2
       ((a', children) :: (fee_payout, []) :: Raw base_params.children)
   in
-  let hash_prefix = Zeko_constants.withdrawal_salt in
+  let hash_prefix = Withdrawal_params.hash_salt in
   let* aux = var_to_hash ~init:hash_prefix Withdrawal_params.typ params in
   Checked.return ({ aux; children = children' } : Rollup_state.Inner_action.var)

@@ -111,6 +111,33 @@ let configured_ethereum_bridge_address () =
             "ethereum_holder_account_l1 is not an even 160-bit Ethereum address"
       )
 
+let ethereum_withdrawal_preimage_json
+    ({ recipient; amount; asset } : Archive.Ethereum_withdrawal.t) =
+  ethereum_address_of_compressed recipient
+  |> Option.map ~f:(fun recipient ->
+         match asset with
+         | None ->
+             ( "withdrawal"
+             , `Assoc
+                 [ ("recipient", `String recipient)
+                 ; ( "amount"
+                   , `Intlit
+                       ( Currency.Amount.to_uint64 amount
+                       |> Unsigned.UInt64.to_string ) )
+                 ] )
+         | Some { token; asset_id; params_fields } ->
+             ( "tokenWithdrawal"
+             , `Assoc
+                 [ ("token", `String token)
+                 ; ("assetId", `String asset_id)
+                 ; ("recipient", `String recipient)
+                 ; ( "amount"
+                   , `Intlit
+                       ( Currency.Amount.to_uint64 amount
+                       |> Unsigned.UInt64.to_string ) )
+                 ; ("paramsFields", fields_json (Array.of_list params_fields))
+                 ] ) )
+
 let inner_action_batch_json ~(archive : Archive.t)
     (records : Archive.Account_update_actions.t list) =
   let actions =
@@ -123,22 +150,13 @@ let inner_action_batch_json ~(archive : Archive.t)
           failwith "Ethereum settlement requires three-field inner actions" ;
         let withdrawal =
           Archive.find_ethereum_withdrawal archive ~aux:fields.(1)
-          |> Option.bind ~f:(fun { recipient; amount } ->
-                 ethereum_address_of_compressed recipient
-                 |> Option.map ~f:(fun recipient ->
-                        `Assoc
-                          [ ("recipient", `String recipient)
-                          ; ( "amount"
-                            , `Intlit
-                                ( Currency.Amount.to_uint64 amount
-                                |> Unsigned.UInt64.to_string ) )
-                          ] ) )
+          |> Option.bind ~f:ethereum_withdrawal_preimage_json
         in
         let fields = [ ("fields", fields_json fields) ] in
         `Assoc
           ( match withdrawal with
           | Some withdrawal ->
-              ("withdrawal", withdrawal) :: fields
+              withdrawal :: fields
           | None ->
               fields ) )
   in

@@ -47,7 +47,11 @@ let deposit_salt = "Deposit_params - qFB3jXP*)"
    action, this action has no Mina child call forest. *)
 let ethereum_deposit_salt = "Ethereum deposit V1"
 
+let ethereum_erc20_deposit_salt = "Ethereum ERC20 deposit V1"
+
 let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
+
+let ethereum_erc20_withdrawal_salt = "Ethereum ERC20 withdrawal V1"
 
 let bridge_prover_cache = "bridge prover cache"
 

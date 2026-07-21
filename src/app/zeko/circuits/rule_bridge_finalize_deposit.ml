@@ -20,6 +20,8 @@ module Make (Inputs : sig
 
   val ethereum_holder_account_l1 : PC.t option
 
+  val ethereum_asset_id : (F.t * F.t) option
+
   module Deposit_params : DEPOSIT_PARAMS
 
   val zeko_l2 : PC.t
@@ -41,6 +43,8 @@ module Make (Inputs : sig
             let holder_accounts_l1 = holder_accounts_l1
 
             let ethereum_holder_account_l1 = ethereum_holder_account_l1
+
+            let ethereum_asset_id = ethereum_asset_id
 
             let token_owner_l1 = token_owner_l1
 
@@ -255,45 +259,63 @@ struct
       }
     in
     let bridge_proof_fee = constant Currency.Amount.typ bridge_proof_fee in
+    let is_ethereum_custom_token = Option.is_some ethereum_asset_id in
     let* recipient_payout =
-      let* recipient_payout, `Underflow underflow =
-        Currency.Amount.Checked.sub_flagged base_params.amount bridge_proof_fee
-      in
-      let* () = Boolean.Assert.is_true (Boolean.not underflow) in
-      let account_creation_fee =
-        constant Currency.Amount.typ
-          (Currency.Amount.of_fee
-             Zeko_constants.constraint_constants.account_creation_fee )
-      in
-      let* paid_for_helper_account_creation, `Underflow underflow =
-        Currency.Amount.Checked.sub_flagged recipient_payout
-          account_creation_fee
-      in
-      let* () = Boolean.Assert.is_true (Boolean.not underflow) in
-      if_ ~typ:Currency.Amount.typ helper_account_new
-        ~then_:paid_for_helper_account_creation ~else_:recipient_payout
+      if is_ethereum_custom_token then Checked.return base_params.amount
+      else
+        let* recipient_payout, `Underflow underflow =
+          Currency.Amount.Checked.sub_flagged base_params.amount
+            bridge_proof_fee
+        in
+        let* () = Boolean.Assert.is_true (Boolean.not underflow) in
+        let account_creation_fee =
+          constant Currency.Amount.typ
+            (Currency.Amount.of_fee
+               Zeko_constants.constraint_constants.account_creation_fee )
+        in
+        let* paid_for_helper_account_creation, `Underflow underflow =
+          Currency.Amount.Checked.sub_flagged recipient_payout
+            account_creation_fee
+        in
+        let* () = Boolean.Assert.is_true (Boolean.not underflow) in
+        if_ ~typ:Currency.Amount.typ helper_account_new
+          ~then_:paid_for_helper_account_creation ~else_:recipient_payout
     in
 
     let recipient_payout =
       { default_account_update with
         public_key = base_params.recipient
       ; token_id = constant Token_id.typ token_id_l2
-      ; may_use_token = constant May_use_token.typ Parents_own_token
+      ; may_use_token =
+          constant May_use_token.typ
+            ( match token_owner_l2 with
+            | Some _ ->
+                Inherit_from_parent
+            | None ->
+                Parents_own_token )
       ; authorization_kind = constant A.typ None_given
       ; balance_change =
           Currency.Amount.Signed.Checked.of_unsigned recipient_payout
-      ; implicit_account_creation_fee = constant Boolean.typ true
+      ; implicit_account_creation_fee =
+          constant Boolean.typ (not is_ethereum_custom_token)
       }
     in
     let sequencer_fee_payout =
       { default_account_update with
         public_key = constant PC.typ bridge_fee_recipient_l2
       ; token_id = constant Token_id.typ token_id_l2
-      ; may_use_token = constant May_use_token.typ Parents_own_token
+      ; may_use_token =
+          constant May_use_token.typ
+            ( match token_owner_l2 with
+            | Some _ ->
+                Inherit_from_parent
+            | None ->
+                Parents_own_token )
       ; authorization_kind = constant A.typ None_given
       ; balance_change =
           Currency.Amount.Signed.Checked.of_unsigned bridge_proof_fee
-      ; implicit_account_creation_fee = constant Boolean.typ true
+      ; implicit_account_creation_fee =
+          constant Boolean.typ (not is_ethereum_custom_token)
       }
     in
     let@ () = with_label __LOC__ in

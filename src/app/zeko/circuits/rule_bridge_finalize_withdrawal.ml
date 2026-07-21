@@ -16,6 +16,8 @@ module Make (Inputs : sig
 
   val token_owner_l2 : Account_id.t option
 
+  val ethereum_asset_id : (F.t * F.t) option
+
   val helper_token_owner_l1 : PC.t
 
   val zeko_l1 : PC.t
@@ -129,7 +131,7 @@ struct
         let* () =
           let* action =
             withdrawal_action ~chain_l2 ~holder_account_l2 ~token_owner_l2
-              ~l2_holder_vk_hash
+              ~ethereum_asset_id ~l2_holder_vk_hash
               ~bridge_fee_recipient_l2:(constant PC.typ bridge_fee_recipient_l2)
               ~bridge_proof_fee:(constant Currency.Amount.typ bridge_proof_fee)
               (module Withdrawal_params)

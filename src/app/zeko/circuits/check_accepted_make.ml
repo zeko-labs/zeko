@@ -9,8 +9,10 @@ module Make (Inputs : sig
 
   val holder_accounts_l1 : Signature_lib.Public_key.Compressed.t list
 
-  val ethereum_holder_account_l1 :
-    Signature_lib.Public_key.Compressed.t option
+  val ethereum_holder_account_l1 : Signature_lib.Public_key.Compressed.t option
+
+  val ethereum_asset_id :
+    (Snark_params.Tick.Field.t * Snark_params.Tick.Field.t) option
 
   val token_owner_l1 : Account_id.t option
 
@@ -63,6 +65,7 @@ struct
           ~bridge_fee_recipient_l1:(constant PC.typ bridge_fee_recipient_l1)
           ~bridge_proof_fee:(constant Currency.Amount.typ bridge_proof_fee)
           ~holder_accounts_l1 ~token_owner_l1 ~ethereum_holder_account_l1
+          ~ethereum_asset_id
           (module Deposit_params)
           params
       in

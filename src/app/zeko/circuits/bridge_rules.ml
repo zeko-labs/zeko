@@ -44,6 +44,8 @@ struct
 
         let ethereum_holder_account_l1 = Inputs.ethereum_holder_account_l1
 
+        let ethereum_asset_id = None
+
         let token_owner_l1 = None
 
         let chain_l1 = Inputs.chain_l1
@@ -62,6 +64,8 @@ struct
     let token_owner_l1 = None
 
     let token_owner_l2 = None
+
+    let ethereum_asset_id = None
 
     module Deposit_params = Deposit_params_base
     module Withdrawal_params = Withdrawal_params_base
@@ -129,6 +133,97 @@ struct
           () )
 end
 
+module Make_ethereum_token (Inputs : sig
+  val token_owner_l2 : Account_id.t
+
+  val ethereum_holder_account_l1 : PC.t
+
+  val ethereum_asset_id_high : Snark_params.Tick.Field.t
+
+  val ethereum_asset_id_low : Snark_params.Tick.Field.t
+
+  val zeko_l2 : PC.t
+
+  val holder_account_l2 : PC.t
+
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_fee_recipient_l2 : PC.t
+
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
+
+  val multisig_key : Multisig.t
+end)
+() =
+struct
+  let ethereum_asset_id =
+    Some (Inputs.ethereum_asset_id_high, Inputs.ethereum_asset_id_low)
+
+  module Check_accepted =
+    Check_accepted_make.Make
+      (struct
+        let holder_accounts_l1 = []
+
+        let ethereum_holder_account_l1 = Some Inputs.ethereum_holder_account_l1
+
+        let ethereum_asset_id = ethereum_asset_id
+
+        let token_owner_l1 = None
+
+        let chain_l1 = Inputs.chain_l1
+
+        module Deposit_params = Deposit_params_ethereum_token
+
+        let bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+
+        let bridge_proof_fee = Currency.Amount.zero
+      end)
+      ()
+
+  module Circuit_inputs = struct
+    include Inputs
+
+    let holder_accounts_l1 = []
+
+    let ethereum_holder_account_l1 = Some Inputs.ethereum_holder_account_l1
+
+    let ethereum_asset_id = ethereum_asset_id
+
+    let token_owner_l1 = None
+
+    let token_owner_l2 = Some Inputs.token_owner_l2
+
+    let bridge_proof_fee = Currency.Amount.zero
+
+    module Deposit_params = Deposit_params_ethereum_token
+    module Withdrawal_params = Withdrawal_params_ethereum_token
+    module Check_accepted = Check_accepted
+  end
+
+  module Rule_bridge_finalize_deposit =
+    Rule_bridge_finalize_deposit.Make (Circuit_inputs)
+  module Rule_bridge_inner_receive =
+    Rule_bridge_inner_receive.Make (Circuit_inputs)
+
+  module Rule_multisig_update_l2 = Rule_multisig_update.Make (struct
+    let chain = Inputs.chain_l2
+
+    let multisig_key = Inputs.multisig_key
+  end)
+
+  module System_L2 =
+  ( val Compile_simple.compile ~name:"bridge rules for Ethereum ERC20 on l2"
+          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~branches:
+            [ Rule_bridge_finalize_deposit.rule
+            ; Rule_bridge_inner_receive.rule
+            ; Rule_multisig_update_l2.rule
+            ]
+          () )
+end
+
 module Make_custom (Inputs : sig
   val token_owner_l1 : Account_id.t
 
@@ -175,6 +270,8 @@ struct
 
         let ethereum_holder_account_l1 = Inputs.ethereum_holder_account_l1
 
+        let ethereum_asset_id = None
+
         let token_owner_l1 = Some Inputs.token_owner_l1
 
         let chain_l1 = Inputs.chain_l1
@@ -193,6 +290,8 @@ struct
     let token_owner_l1 = Some Inputs.token_owner_l1
 
     let token_owner_l2 = Some Inputs.token_owner_l2
+
+    let ethereum_asset_id = None
 
     module Deposit_params = Deposit_params_custom
     module Withdrawal_params = Withdrawal_params_custom

@@ -520,6 +520,7 @@ let () =
             { Archive.Ethereum_withdrawal.recipient =
                 withdrawal_params.recipient
             ; amount = withdrawal_params.amount
+            ; asset = None
             } ;
           let nonce =
             Sequencer.infer_nonce !sequencer

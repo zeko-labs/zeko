@@ -92,19 +92,41 @@ module Account_update_actions = struct
 end
 
 module Ethereum_withdrawal = struct
+  type asset =
+    { token : string; asset_id : string; params_fields : Field.t list }
+
   type t =
     { recipient : Signature_lib.Public_key.Compressed.t
     ; amount : Currency.Amount.t
+    ; asset : asset option
     }
 
-  let to_yojson { recipient = { x; is_odd }; amount } =
-    `Assoc
+  let to_yojson { recipient = { x; is_odd }; amount; asset } =
+    let fields =
       [ ("recipientX", `String (Field.to_string x))
       ; ("recipientIsOdd", `Bool is_odd)
       ; ( "amount"
-        , `String
-            (Currency.Amount.to_uint64 amount |> Unsigned.UInt64.to_string) )
+        , `String (Currency.Amount.to_uint64 amount |> Unsigned.UInt64.to_string)
+        )
       ]
+    in
+    let fields =
+      match asset with
+      | None ->
+          fields
+      | Some { token; asset_id; params_fields } ->
+          ( "asset"
+          , `Assoc
+              [ ("token", `String token)
+              ; ("assetId", `String asset_id)
+              ; ( "paramsFields"
+                , `List
+                    (List.map params_fields ~f:(fun field ->
+                         `String (Field.to_string field) ) ) )
+              ] )
+          :: fields
+    in
+    `Assoc fields
 
   let of_yojson json =
     let open Yojson.Safe.Util in
@@ -117,6 +139,19 @@ module Ethereum_withdrawal = struct
         ; amount =
             json |> member "amount" |> to_string |> Unsigned.UInt64.of_string
             |> Currency.Amount.of_uint64
+        ; asset =
+            ( match json |> member "asset" with
+            | `Null ->
+                None
+            | asset ->
+                Some
+                  { token = asset |> member "token" |> to_string
+                  ; asset_id = asset |> member "assetId" |> to_string
+                  ; params_fields =
+                      asset |> member "paramsFields" |> to_list
+                      |> List.map ~f:(fun field ->
+                             field |> to_string |> Field.of_string )
+                  } )
         }
     with exn -> Error (Exn.to_string exn)
 end
@@ -152,8 +187,7 @@ module Kvdb = struct
                   ^ Token_id.to_string (Account_id.token_id key) )
               ])
       | Ethereum_withdrawal ->
-          Bigstring.of_string
-            ("ethereum-withdrawal-" ^ Field.to_string key)
+          Bigstring.of_string ("ethereum-withdrawal-" ^ Field.to_string key)
 
     let serialize_value : type k v. (k * v) t -> v -> Bigstring.t =
      fun pair_type value ->
@@ -209,8 +243,7 @@ module Archive = struct
   let store_ethereum_withdrawal t ~aux withdrawal =
     Kvdb.set t Ethereum_withdrawal ~key:aux ~data:withdrawal
 
-  let find_ethereum_withdrawal t ~aux =
-    Kvdb.get t Ethereum_withdrawal ~key:aux
+  let find_ethereum_withdrawal t ~aux = Kvdb.get t Ethereum_withdrawal ~key:aux
 
   let add_actions t ?(height = 0) account_update_id
       (account_update : Account_update.t) transaction_info (account : Account.t)
