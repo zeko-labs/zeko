@@ -30,6 +30,10 @@ struct
           { default_account_update with
             public_key
           ; token_id = constant Token_id.typ token_id_l2
+          ; use_full_commitment =
+              constant Boolean.typ (Option.is_none token_owner_l2)
+          ; implicit_account_creation_fee =
+              constant Boolean.typ (Option.is_none token_owner_l2)
           ; may_use_token =
               constant Account_update.May_use_token.typ Parents_own_token
           ; authorization_kind = authorization_vk_hash vk_hash

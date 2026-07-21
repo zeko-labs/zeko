@@ -459,6 +459,10 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
     { default_account_update with
       public_key = constant PC.typ holder_account_l2
     ; token_id = constant Token_id.typ (token_owner_id token_owner_l2)
+    ; use_full_commitment =
+        constant Boolean.typ (Option.is_none token_owner_l2)
+    ; implicit_account_creation_fee =
+        constant Boolean.typ (Option.is_none token_owner_l2)
     ; balance_change =
         Currency.Amount.Signed.Checked.of_unsigned base_params.amount
     ; may_use_token =

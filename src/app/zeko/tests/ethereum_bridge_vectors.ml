@@ -364,13 +364,26 @@ let erc20_withdrawal_params_fields () =
         }
     }
   in
-  let (_ : Sequencer_lib.Bridge_prover.precomputed_forest) =
+  let precomputed : Sequencer_lib.Bridge_prover.precomputed_forest =
     Sequencer_lib.Bridge_prover.Ethereum_token_withdrawal_request
     .precompute_forest_with_vk_hashes
       ~bridge_ethereum_token_l2_vk_hash:Field.one
       ~inner_rules_vk_hash:(Field.of_int 2) precompute_params
     |> Or_error.ok_exn
   in
+  ( match precomputed with
+  | [ { elt = { calls = { elt = { calls = [ _debit; vault ]; _ }; _ } :: _; _ }
+      ; _
+      }
+    ] ->
+      let vault_body = vault.elt.account_update.body in
+      if vault_body.use_full_commitment then
+        failwith "Ethereum ERC20 withdrawal vault uses the full commitment" ;
+      if vault_body.implicit_account_creation_fee then
+        failwith
+          "Ethereum ERC20 withdrawal vault charges an account-creation fee"
+  | _ ->
+      failwith "unexpected ERC20 precomputed forest" ) ;
   let params_fields =
     Utils.value_to_fields
       Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.typ params
