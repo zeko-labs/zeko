@@ -132,6 +132,7 @@ let () =
       (Sequencer_spec.gen ~logger ~number_of_transactions:0 ~postgres_uri
          ~gql_uri ~da_config:da_config_with3 ~da_keys ~da_quorum ~mq_host
          ~slot_acceptance:(Time.Span.of_min 10.)
+         ~include_bridge_fee_recipient:true
          ~commit_validity_period:
            (Global_slot_span.of_int bridge_commit_validity_period)
          () )
