@@ -509,17 +509,20 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
             (Account_id.token_id token_owner_l2 |> constant Token_id.typ)
         in
         if Withdrawal_params.debit_first then
-          let (debit, debit_children), tail =
-            Zkapp_call_forest.Checked.pop_exn ~signature_kind:chain_l2
-              custom_params.nested_children
+          let* (debit, debit_children), tail =
+            make_checked (fun () ->
+                Zkapp_call_forest.Checked.pop_exn ~signature_kind:chain_l2
+                  custom_params.nested_children )
           in
-          let* () =
-            Boolean.Assert.is_true
-              (Zkapp_call_forest.Checked.is_empty debit_children)
+          let* debit_children_empty =
+            make_checked (fun () ->
+                Zkapp_call_forest.Checked.is_empty debit_children )
           in
-          let* () =
-            Boolean.Assert.is_true (Zkapp_call_forest.Checked.is_empty tail)
+          let* () = Boolean.Assert.is_true debit_children_empty in
+          let* tail_empty =
+            make_checked (fun () -> Zkapp_call_forest.Checked.is_empty tail)
           in
+          let* () = Boolean.Assert.is_true tail_empty in
           let children : Calls.t =
             [ (debit.account_update.data, []); (a, []) ]
           in

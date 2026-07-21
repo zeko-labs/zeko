@@ -333,6 +333,44 @@ let erc20_withdrawal_params_fields () =
   let params : Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.t =
     { asset_id_high = Field.one; asset_id_low = Field.of_int 2; custom }
   in
+  let configured_token_owner =
+    Zeko_circuits_config.Inputs.Ethereum_token.token_owner_l2
+  in
+  let configured_debit =
+    Account_update.with_aux
+      ~body:
+        { debit_body with
+          token_id = Account_id.derive_token_id ~owner:configured_token_owner
+        }
+      ~authorization:Control.Poly.None_given
+  in
+  let precompute_params :
+      Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.t =
+    { Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.asset_id_high =
+        Zeko_circuits_config.Inputs.Ethereum_token.ethereum_asset_id_high
+    ; asset_id_low =
+        Zeko_circuits_config.Inputs.Ethereum_token.ethereum_asset_id_low
+    ; custom =
+        { custom with
+          token_owner_body =
+            { custom.token_owner_body with
+              public_key = Account_id.public_key configured_token_owner
+            ; token_id = Account_id.token_id configured_token_owner
+            }
+        ; nested_children =
+            Zkapp_command.Call_forest.cons
+              ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+              configured_debit []
+        }
+    }
+  in
+  let (_ : Sequencer_lib.Bridge_prover.precomputed_forest) =
+    Sequencer_lib.Bridge_prover.Ethereum_token_withdrawal_request
+    .precompute_forest_with_vk_hashes
+      ~bridge_ethereum_token_l2_vk_hash:Field.one
+      ~inner_rules_vk_hash:(Field.of_int 2) precompute_params
+    |> Or_error.ok_exn
+  in
   let params_fields =
     Utils.value_to_fields
       Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.typ params

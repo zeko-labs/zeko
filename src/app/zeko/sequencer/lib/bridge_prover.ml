@@ -628,46 +628,53 @@ module Ethereum_token_withdrawal_request = struct
   type t =
     { withdrawal_params : Bridge_state.Withdrawal_params_ethereum_token.t }
 
-  let make_inner_action t withdrawal_params =
-    Snark_params.Tick.run_and_check_exn
-      (let open Snark_params.Tick.Checked.Let_syntax in
-      let%bind params =
-        Snark_params.Tick.exists
-          Bridge_state.Withdrawal_params_ethereum_token.typ ~compute:(fun _ ->
-            withdrawal_params )
-      in
-      let%map action =
-        make_checked (fun () ->
-            Run.run_checked
-              (Bridge_state.withdrawal_action
-                 ~chain_l2:Zeko_circuits_config.Inputs.chain_l2
-                 ~holder_account_l2:
-                   Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
-                 ~token_owner_l2:
-                   (Some
-                      Zeko_circuits_config.Inputs.Ethereum_token.token_owner_l2 )
-                 ~ethereum_asset_id:
-                   (Some
-                      ( Zeko_circuits_config.Inputs.Ethereum_token
-                        .ethereum_asset_id_high
-                      , Zeko_circuits_config.Inputs.Ethereum_token
-                        .ethereum_asset_id_low ) )
-                 ~l2_holder_vk_hash:
-                   (Snark_params.Tick.constant F.typ
-                      t.verification_keys.bridge_ethereum_token_l2 )
-                 ~bridge_fee_recipient_l2:
-                   (Snark_params.Tick.constant Public_key.Compressed.typ
-                      Zeko_circuits_config.Inputs.bridge_fee_recipient_l2 )
-                 ~bridge_proof_fee:
-                   (Snark_params.Tick.constant Currency.Amount.typ
-                      Currency.Amount.zero )
-                 (module Bridge_state.Withdrawal_params_ethereum_token)
-                 params ) )
-      in
-      Snark_params.Tick.As_prover.read Rollup_state.Inner_action.typ action)
+  let with_stage stage f = try f () with exn -> Exn.reraise exn stage
 
-  let make_witness t withdrawal_params =
-    let witness = make_inner_action t withdrawal_params in
+  let make_inner_action ~bridge_ethereum_token_l2_vk_hash withdrawal_params =
+    with_stage "run checked ERC20 withdrawal action" (fun () ->
+        Snark_params.Tick.run_and_check_exn
+          (let open Snark_params.Tick.Checked.Let_syntax in
+          let%bind params =
+            Snark_params.Tick.exists
+              Bridge_state.Withdrawal_params_ethereum_token.typ
+              ~compute:(fun _ -> withdrawal_params)
+          in
+          let%map action =
+            make_checked (fun () ->
+                Run.run_checked
+                  (Bridge_state.withdrawal_action
+                     ~chain_l2:Zeko_circuits_config.Inputs.chain_l2
+                     ~holder_account_l2:
+                       Zeko_circuits_config.Inputs.Ethereum_token
+                       .holder_account_l2
+                     ~token_owner_l2:
+                       (Some
+                          Zeko_circuits_config.Inputs.Ethereum_token
+                          .token_owner_l2 )
+                     ~ethereum_asset_id:
+                       (Some
+                          ( Zeko_circuits_config.Inputs.Ethereum_token
+                            .ethereum_asset_id_high
+                          , Zeko_circuits_config.Inputs.Ethereum_token
+                            .ethereum_asset_id_low ) )
+                     ~l2_holder_vk_hash:
+                       (Snark_params.Tick.constant F.typ
+                          bridge_ethereum_token_l2_vk_hash )
+                     ~bridge_fee_recipient_l2:
+                       (Snark_params.Tick.constant Public_key.Compressed.typ
+                          Zeko_circuits_config.Inputs.bridge_fee_recipient_l2 )
+                     ~bridge_proof_fee:
+                       (Snark_params.Tick.constant Currency.Amount.typ
+                          Currency.Amount.zero )
+                     (module Bridge_state.Withdrawal_params_ethereum_token)
+                     params ) )
+          in
+          Snark_params.Tick.As_prover.read Rollup_state.Inner_action.typ action) )
+
+  let make_witness ~bridge_ethereum_token_l2_vk_hash withdrawal_params =
+    let witness =
+      make_inner_action ~bridge_ethereum_token_l2_vk_hash withdrawal_params
+    in
     Bridge.Inner_action_witness.
       { public_key = Zeko_circuits_config.Inputs.inner_public_key
       ; witness =
@@ -678,9 +685,9 @@ module Ethereum_token_withdrawal_request = struct
           }
       }
 
-  let make_inner_receive_witness t amount =
+  let make_inner_receive_witness ~bridge_ethereum_token_l2_vk_hash amount =
     Bridge.Inner_receive_ethereum_token.of_serializable
-      ~vk_hash:t.verification_keys.bridge_ethereum_token_l2
+      ~vk_hash:bridge_ethereum_token_l2_vk_hash
       { public_key =
           Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
       ; amount
@@ -709,16 +716,24 @@ module Ethereum_token_withdrawal_request = struct
         failwith
           "Ethereum token withdrawal has an invalid owner/debit/vault forest"
 
-  let precompute_forest t withdrawal_params =
+  let precompute_forest_with_vk_hashes ~bridge_ethereum_token_l2_vk_hash
+      ~inner_rules_vk_hash withdrawal_params =
     try
-      let action = make_inner_action t withdrawal_params in
+      let action =
+        with_stage "make ERC20 withdrawal action" (fun () ->
+            make_inner_action ~bridge_ethereum_token_l2_vk_hash
+              withdrawal_params )
+      in
       let inner_receive_witness =
-        make_inner_receive_witness t withdrawal_params.custom.base.amount
+        with_stage "make ERC20 inner-receive witness" (fun () ->
+            make_inner_receive_witness ~bridge_ethereum_token_l2_vk_hash
+              withdrawal_params.custom.base.amount )
       in
       let _stmt, (inner_receive_body, _, inner_receive_calls) =
-        run_and_check_exn inner_receive_witness
-          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          Bridge_inst_ethereum_token.Rule_bridge_inner_receive.main
+        with_stage "check ERC20 inner-receive witness" (fun () ->
+            run_and_check_exn inner_receive_witness
+              Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+              Bridge_inst_ethereum_token.Rule_bridge_inner_receive.main )
       in
       let replacement =
         Zkapp_command.Call_forest.cons
@@ -738,24 +753,26 @@ module Ethereum_token_withdrawal_request = struct
              ~f:Account_update.read_all_proofs_from_disk
       in
       let witness =
-        Bridge.Inner_action_witness.of_serializable
-          ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
-          ~vk_hash:t.verification_keys.inner_rules
-          { public_key = Zeko_circuits_config.Inputs.inner_public_key
-          ; witness =
-              { aux = action.aux
-              ; children =
-                  action.children
-                  |> Zkapp_command.Call_forest.map
-                       ~f:Account_update.read_all_proofs_from_disk
-                  |> replace_vault_tree ~replacement
-              }
-          }
+        with_stage "make ERC20 inner-action witness" (fun () ->
+            Bridge.Inner_action_witness.of_serializable
+              ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
+              ~vk_hash:inner_rules_vk_hash
+              { public_key = Zeko_circuits_config.Inputs.inner_public_key
+              ; witness =
+                  { aux = action.aux
+                  ; children =
+                      action.children
+                      |> Zkapp_command.Call_forest.map
+                           ~f:Account_update.read_all_proofs_from_disk
+                      |> replace_vault_tree ~replacement
+                  }
+              } )
       in
       let _stmt, (body, _, calls) =
-        run_and_check_exn witness
-          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
-          Inner_rules_inst.Rule_inner_action_witness_inst.main
+        with_stage "check ERC20 inner-action witness" (fun () ->
+            run_and_check_exn witness
+              Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+              Inner_rules_inst.Rule_inner_action_witness_inst.main )
       in
       Zkapp_command.Call_forest.cons
         ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~calls
@@ -774,6 +791,12 @@ module Ethereum_token_withdrawal_request = struct
            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
       |> Or_error.return
     with exn -> Error (Error.of_exn exn)
+
+  let precompute_forest t withdrawal_params =
+    precompute_forest_with_vk_hashes
+      ~bridge_ethereum_token_l2_vk_hash:
+        t.verification_keys.bridge_ethereum_token_l2
+      ~inner_rules_vk_hash:t.verification_keys.inner_rules withdrawal_params
 
   let key withdrawal_params =
     let (Typ typ) = Bridge_state.Withdrawal_params_ethereum_token.typ in
@@ -811,7 +834,12 @@ module Ethereum_token_withdrawal_request = struct
                     | Error error ->
                         Error.raise error
                   in
-                  let action = make_inner_action t withdrawal_params in
+                  let action =
+                    make_inner_action
+                      ~bridge_ethereum_token_l2_vk_hash:
+                        t.verification_keys.bridge_ethereum_token_l2
+                      withdrawal_params
+                  in
                   let witness =
                     Bridge.Inner_action_witness.
                       { public_key =
