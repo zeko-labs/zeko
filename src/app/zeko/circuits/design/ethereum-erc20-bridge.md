@@ -223,6 +223,9 @@ changes generated today by `finalize_deposit`, `withdrawal_action`, and
 Required invariants:
 
 - `user_wrapped_supply <= ethereum_locked_for_asset` at every accepted state;
+- Solidity rejects deposits whose outstanding per-token liability would exceed
+  an immutable `depositCapByToken`, configured to equal the initial pre-minted
+  L2 vault inventory;
 - a deposit cannot finalize if the vault lacks the net amount;
 - the bounded mint is auditable and routine mint authority is revoked or capped
   after deployment;
