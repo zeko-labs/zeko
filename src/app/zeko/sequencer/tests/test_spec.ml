@@ -450,12 +450,22 @@ module Sequencer_spec = struct
           (Currency.Balance.of_uint64
              (Unsigned.UInt64.of_int64 (Int64.of_float (1000. *. 1e8))) ) )
     in
+    (* Match the production genesis assembled by [Deploy.generate]. The bridge
+       circuits always emit their fee-recipient leaf, including when an ERC20
+       withdrawal's MINA-denominated proof fee is zero, so this protocol-owned
+       account must already exist. *)
+    let bridge_fee_recipient_l2_account =
+      let public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l2 in
+      let aid = Account_id.create public_key Token_id.default in
+      (aid, Account.create aid Currency.Balance.zero)
+    in
     let genesis_accounts =
       ( Account_id.create inner_account.public_key inner_account.token_id
       , inner_account )
       :: ( Account_id.create holder_account.public_key holder_account.token_id
          , holder_account )
       :: signer_l2_account
+      :: bridge_fee_recipient_l2_account
       :: ( Array.concat [ init_ledger; funded_accounts ]
          |> Array.map ~f:(fun (keypair, balance) ->
                 let pk = Signature_lib.Public_key.compress keypair.public_key in
