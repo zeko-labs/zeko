@@ -637,28 +637,32 @@ module Ethereum_token_withdrawal_request = struct
             withdrawal_params )
       in
       let%map action =
-        Bridge_state.withdrawal_action
-          ~chain_l2:Zeko_circuits_config.Inputs.chain_l2
-          ~holder_account_l2:
-            Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
-          ~token_owner_l2:
-            (Some Zeko_circuits_config.Inputs.Ethereum_token.token_owner_l2)
-          ~ethereum_asset_id:
-            (Some
-               ( Zeko_circuits_config.Inputs.Ethereum_token
-                 .ethereum_asset_id_high
-               , Zeko_circuits_config.Inputs.Ethereum_token
-                 .ethereum_asset_id_low ) )
-          ~l2_holder_vk_hash:
-            (Snark_params.Tick.constant F.typ
-               t.verification_keys.bridge_ethereum_token_l2 )
-          ~bridge_fee_recipient_l2:
-            (Snark_params.Tick.constant Public_key.Compressed.typ
-               Zeko_circuits_config.Inputs.bridge_fee_recipient_l2 )
-          ~bridge_proof_fee:
-            (Snark_params.Tick.constant Currency.Amount.typ Currency.Amount.zero)
-          (module Bridge_state.Withdrawal_params_ethereum_token)
-          params
+        make_checked (fun () ->
+            Run.run_checked
+              (Bridge_state.withdrawal_action
+                 ~chain_l2:Zeko_circuits_config.Inputs.chain_l2
+                 ~holder_account_l2:
+                   Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
+                 ~token_owner_l2:
+                   (Some
+                      Zeko_circuits_config.Inputs.Ethereum_token.token_owner_l2 )
+                 ~ethereum_asset_id:
+                   (Some
+                      ( Zeko_circuits_config.Inputs.Ethereum_token
+                        .ethereum_asset_id_high
+                      , Zeko_circuits_config.Inputs.Ethereum_token
+                        .ethereum_asset_id_low ) )
+                 ~l2_holder_vk_hash:
+                   (Snark_params.Tick.constant F.typ
+                      t.verification_keys.bridge_ethereum_token_l2 )
+                 ~bridge_fee_recipient_l2:
+                   (Snark_params.Tick.constant Public_key.Compressed.typ
+                      Zeko_circuits_config.Inputs.bridge_fee_recipient_l2 )
+                 ~bridge_proof_fee:
+                   (Snark_params.Tick.constant Currency.Amount.typ
+                      Currency.Amount.zero )
+                 (module Bridge_state.Withdrawal_params_ethereum_token)
+                 params ) )
       in
       Snark_params.Tick.As_prover.read Rollup_state.Inner_action.typ action)
 
