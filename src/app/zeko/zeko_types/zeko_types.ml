@@ -56,6 +56,14 @@ module Outer_rules_inst = Outer_rules.Make (Zeko_circuits_config.Inputs) ()
 module Bridge_inst_mina =
   Bridge_rules.Make_mina (Zeko_circuits_config.Inputs) ()
 
+module Bridge_inst_ethereum_token =
+  Bridge_rules.Make_ethereum_token
+    (struct
+      include Zeko_circuits_config.Inputs
+      include Zeko_circuits_config.Inputs.Ethereum_token
+    end)
+    ()
+
 module F = struct
   include F
 
@@ -934,6 +942,38 @@ module Bridge = struct
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ()))
   end
 
+  module Deposit_params_ethereum_token = struct
+    type t = Bridge_state.Deposit_params_ethereum_token.t
+
+    type serializable =
+      { asset_id_high : F.t
+      ; asset_id_low : F.t
+      ; base : Deposit_params_base.serializable
+      }
+    [@@deriving yojson]
+
+    let of_serializable ~proof_cache_db
+        ({ asset_id_high; asset_id_low; base } : serializable) : t =
+      { asset_id_high
+      ; asset_id_low
+      ; base = Deposit_params_base.of_serializable ~proof_cache_db base
+      }
+
+    let to_serializable ({ asset_id_high; asset_id_low; base } : t) =
+      { asset_id_high
+      ; asset_id_low
+      ; base = Deposit_params_base.to_serializable base
+      }
+
+    let to_yojson = Fn.compose serializable_to_yojson to_serializable
+
+    let of_yojson json =
+      Ppx_deriving_yojson_runtime.(
+        serializable_of_yojson json
+        >|= of_serializable
+              ~proof_cache_db:(Proof_cache_tag.create_identity_db ()))
+  end
+
   module Check_accepted_mina = struct
     include Bridge_inst_mina.Check_accepted
     include Bridge_inst_mina.Check_accepted.Definition
@@ -988,6 +1028,79 @@ module Bridge = struct
       .make ?proof ~proof_source ~proof_target init excess
   end
 
+  module Check_accepted_ethereum_token = struct
+    include Bridge_inst_ethereum_token.Check_accepted
+    include Bridge_inst_ethereum_token.Check_accepted.Definition
+
+    module Stmt = struct
+      type t = Bridge_inst_ethereum_token.Check_accepted.Definition.Stmt.t =
+        { params : Deposit_params_ethereum_token.t
+        ; action_state : Outer_action_state.t
+        ; deposit_index : Checked32.t
+        ; n_steps : Checked32.t
+        ; is_rejected : bool
+        ; is_accepted : bool
+        }
+      [@@deriving yojson]
+    end
+
+    module Elem = struct
+      type t = Bridge_inst_ethereum_token.Check_accepted.Definition.Elem.t
+
+      include
+        Snarky_serializable_unsafe
+          (Bridge_inst_ethereum_token.Check_accepted.Definition.Elem)
+    end
+
+    module Init = struct
+      type t = Bridge_inst_ethereum_token.Check_accepted.Definition.Init.t =
+        { params : Deposit_params_ethereum_token.t
+        ; original_action_state : Outer_action_state.t
+        ; deposit_index : Checked32.t
+        }
+
+      type serializable =
+        { params : Deposit_params_ethereum_token.serializable
+        ; original_action_state : Outer_action_state.t
+        ; deposit_index : Checked32.t
+        }
+      [@@deriving yojson]
+
+      let of_serializable ~proof_cache_db
+          ({ params; original_action_state; deposit_index } : serializable) : t
+          =
+        { params =
+            Deposit_params_ethereum_token.of_serializable ~proof_cache_db params
+        ; original_action_state
+        ; deposit_index
+        }
+
+      let to_serializable ({ params; original_action_state; deposit_index } : t)
+          =
+        { params = Deposit_params_ethereum_token.to_serializable params
+        ; original_action_state
+        ; deposit_index
+        }
+    end
+
+    type serializable =
+      { proof : Compile_simple.Proof.t option
+      ; proof_source : Stmt.t
+      ; proof_target : Stmt.t
+      ; init : Init.serializable
+      ; excess : Elem.t list
+      }
+    [@@deriving yojson]
+
+    let of_serializable ~proof_cache_db
+        ({ proof; proof_source; proof_target; init; excess } : serializable) =
+      Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit
+      .Check_accepted_inst
+      .make ?proof ~proof_source ~proof_target
+        (Init.of_serializable ~proof_cache_db init)
+        excess
+  end
+
   module Finalize_deposit = struct
     module Ase_inst = Ase.Make_serializable_ase (struct
       module Ase_system = Ase.With_length
@@ -1028,6 +1141,57 @@ module Bridge = struct
       ; inner_authorization_kind
       ; ase = Ase_inst.of_serializable ase
       ; check_accepted = Check_accepted_mina.of_serializable check_accepted
+      ; prev_next_deposit
+      ; prev_nonce =
+          Mina_numbers.Account_nonce.of_string (Checked32.to_string prev_nonce)
+      ; helper_account_new
+      }
+  end
+
+  module Finalize_ethereum_token_deposit = struct
+    module Ase_inst = Ase.Make_serializable_ase (struct
+      module Ase_system = Ase.With_length
+      module Action_state = Outer_action_state.With_length
+
+      module Ase_inst =
+        Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit.Ase_inst
+    end)
+
+    type t = Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t
+      ; may_use_token :
+          Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit.May_use_token
+          .t
+      ; inner_authorization_kind : Rule_bridge_finalize_deposit.A.t
+      ; ase : Ase_inst.serializable
+      ; check_accepted : Check_accepted_ethereum_token.serializable
+      ; prev_next_deposit : Checked32.t
+      ; prev_nonce : Checked32.t
+      ; helper_account_new : bool
+      }
+    [@@deriving yojson]
+
+    let of_serializable ~proof_cache_db
+        ({ public_key
+         ; may_use_token
+         ; inner_authorization_kind
+         ; ase
+         ; check_accepted
+         ; prev_next_deposit
+         ; prev_nonce
+         ; helper_account_new
+         } :
+          serializable ) ~vk_hash : t =
+      { public_key
+      ; vk_hash
+      ; may_use_token
+      ; inner_authorization_kind
+      ; ase = Ase_inst.of_serializable ase
+      ; check_accepted =
+          Check_accepted_ethereum_token.of_serializable ~proof_cache_db
+            check_accepted
       ; prev_next_deposit
       ; prev_nonce =
           Mina_numbers.Account_nonce.of_string (Checked32.to_string prev_nonce)
@@ -1141,6 +1305,93 @@ module Bridge = struct
 
     let of_serializable ({ public_key; amount } : serializable) ~vk_hash : t =
       { public_key; vk_hash; amount }
+  end
+
+  module Inner_receive_ethereum_token = struct
+    type t = Bridge_inst_ethereum_token.Rule_bridge_inner_receive.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t; amount : Currency.Amount.t }
+    [@@deriving yojson]
+
+    let of_serializable ({ public_key; amount } : serializable) ~vk_hash : t =
+      { public_key; vk_hash; amount }
+  end
+
+  module Withdrawal_params_ethereum_token = struct
+    type t = Bridge_state.Withdrawal_params_ethereum_token.t
+
+    type serializable =
+      { asset_id_high : F.t
+      ; asset_id_low : F.t
+      ; token_owner_body : Account_update.Body.Stable.Latest.t
+      ; nested_children :
+          ( Account_update.Stable.Latest.t
+          , Zkapp_command.Digest.Account_update.t
+          , Zkapp_command.Digest.Forest.t )
+          Zkapp_command.Call_forest.t
+      ; children :
+          ( Account_update.Stable.Latest.t
+          , Zkapp_command.Digest.Account_update.t
+          , Zkapp_command.Digest.Forest.t )
+          Zkapp_command.Call_forest.t
+      ; amount : Currency.Amount.t
+      ; recipient : Public_key.Compressed.t
+      }
+    [@@deriving yojson]
+
+    let of_serializable ~proof_cache_db
+        ({ asset_id_high
+         ; asset_id_low
+         ; token_owner_body
+         ; nested_children
+         ; children
+         ; amount
+         ; recipient
+         } :
+          serializable ) : t =
+      let write =
+        Zkapp_command.Call_forest.With_hashes.write_all_proofs_to_disk
+          ~proof_cache_db
+      in
+      { asset_id_high
+      ; asset_id_low
+      ; custom =
+          { token_owner_body
+          ; nested_children = write nested_children
+          ; base = { children = write children; amount; recipient }
+          }
+      }
+
+    let to_serializable
+        ({ asset_id_high
+         ; asset_id_low
+         ; custom =
+             { token_owner_body
+             ; nested_children
+             ; base = { children; amount; recipient }
+             }
+         } :
+          t ) =
+      let read =
+        Zkapp_command.Call_forest.With_hashes.read_all_proofs_from_disk
+      in
+      { asset_id_high
+      ; asset_id_low
+      ; token_owner_body
+      ; nested_children = read nested_children
+      ; children = read children
+      ; amount
+      ; recipient
+      }
+
+    let to_yojson = Fn.compose serializable_to_yojson to_serializable
+
+    let of_yojson json =
+      Ppx_deriving_yojson_runtime.(
+        serializable_of_yojson json
+        >|= of_serializable
+              ~proof_cache_db:(Proof_cache_tag.create_identity_db ()))
   end
 
   module Finalize_withdrawal = struct

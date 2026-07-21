@@ -624,6 +624,228 @@ module Withdrawal_request = struct
               Ok forest ) )
 end
 
+module Ethereum_token_withdrawal_request = struct
+  type t =
+    { withdrawal_params : Bridge_state.Withdrawal_params_ethereum_token.t }
+
+  let make_inner_action t withdrawal_params =
+    Snark_params.Tick.run_and_check_exn
+      (let open Snark_params.Tick.Checked.Let_syntax in
+      let%bind params =
+        Snark_params.Tick.exists
+          Bridge_state.Withdrawal_params_ethereum_token.typ ~compute:(fun _ ->
+            withdrawal_params )
+      in
+      let%map action =
+        Bridge_state.withdrawal_action
+          ~chain_l2:Zeko_circuits_config.Inputs.chain_l2
+          ~holder_account_l2:
+            Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
+          ~token_owner_l2:
+            (Some Zeko_circuits_config.Inputs.Ethereum_token.token_owner_l2)
+          ~ethereum_asset_id:
+            (Some
+               ( Zeko_circuits_config.Inputs.Ethereum_token
+                 .ethereum_asset_id_high
+               , Zeko_circuits_config.Inputs.Ethereum_token
+                 .ethereum_asset_id_low ) )
+          ~l2_holder_vk_hash:
+            (Snark_params.Tick.constant F.typ
+               t.verification_keys.bridge_ethereum_token_l2 )
+          ~bridge_fee_recipient_l2:
+            (Snark_params.Tick.constant Public_key.Compressed.typ
+               Zeko_circuits_config.Inputs.bridge_fee_recipient_l2 )
+          ~bridge_proof_fee:
+            (Snark_params.Tick.constant Currency.Amount.typ Currency.Amount.zero)
+          (module Bridge_state.Withdrawal_params_ethereum_token)
+          params
+      in
+      Snark_params.Tick.As_prover.read Rollup_state.Inner_action.typ action)
+
+  let make_witness t withdrawal_params =
+    let witness = make_inner_action t withdrawal_params in
+    Bridge.Inner_action_witness.
+      { public_key = Zeko_circuits_config.Inputs.inner_public_key
+      ; witness =
+          { aux = witness.aux
+          ; children =
+              Zkapp_command.Call_forest.map witness.children
+                ~f:Account_update.read_all_proofs_from_disk
+          }
+      }
+
+  let make_inner_receive_witness t amount =
+    Bridge.Inner_receive_ethereum_token.of_serializable
+      ~vk_hash:t.verification_keys.bridge_ethereum_token_l2
+      { public_key =
+          Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
+      ; amount
+      }
+
+  let replace_vault_tree ~replacement (forest : precomputed_forest) =
+    match forest with
+    | ( { elt = { calls = debit :: _vault :: rest; _ } as owner_elt; _ } as
+      owner_tree )
+      :: outer_rest ->
+        let replacement =
+          match replacement with
+          | [ replacement ] ->
+              replacement
+          | _ ->
+              failwith
+                "Ethereum token inner-receive proof must contain one tree"
+        in
+        { owner_tree with
+          elt = { owner_elt with calls = debit :: replacement :: rest }
+        }
+        :: outer_rest
+        |> Utils.rehash_forest
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+    | _ ->
+        failwith
+          "Ethereum token withdrawal has an invalid owner/debit/vault forest"
+
+  let precompute_forest t withdrawal_params =
+    try
+      let action = make_inner_action t withdrawal_params in
+      let inner_receive_witness =
+        make_inner_receive_witness t withdrawal_params.custom.base.amount
+      in
+      let _stmt, (inner_receive_body, _, inner_receive_calls) =
+        run_and_check_exn inner_receive_witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Bridge_inst_ethereum_token.Rule_bridge_inner_receive.main
+      in
+      let replacement =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+          ~calls:inner_receive_calls
+          (Account_update.with_aux
+             ~body:
+               ( match Is_compile_simple_real.is_compile_simple_real with
+               | Some _ ->
+                   inner_receive_body
+               | None ->
+                   { inner_receive_body with authorization_kind = None_given }
+               )
+             ~authorization:Control.Poly.None_given )
+          []
+        |> Zkapp_command.Call_forest.map
+             ~f:Account_update.read_all_proofs_from_disk
+      in
+      let witness =
+        Bridge.Inner_action_witness.of_serializable
+          ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
+          ~vk_hash:t.verification_keys.inner_rules
+          { public_key = Zeko_circuits_config.Inputs.inner_public_key
+          ; witness =
+              { aux = action.aux
+              ; children =
+                  action.children
+                  |> Zkapp_command.Call_forest.map
+                       ~f:Account_update.read_all_proofs_from_disk
+                  |> replace_vault_tree ~replacement
+              }
+          }
+      in
+      let _stmt, (body, _, calls) =
+        run_and_check_exn witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Inner_rules_inst.Rule_inner_action_witness_inst.main
+      in
+      Zkapp_command.Call_forest.cons
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~calls
+        (Account_update.with_aux
+           ~body:
+             ( match Is_compile_simple_real.is_compile_simple_real with
+             | Some _ ->
+                 body
+             | None ->
+                 { body with authorization_kind = None_given } )
+           ~authorization:Control.Poly.None_given )
+        []
+      |> Zkapp_command.Call_forest.map
+           ~f:Account_update.read_all_proofs_from_disk
+      |> Utils.rehash_forest
+           ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+      |> Or_error.return
+    with exn -> Error (Error.of_exn exn)
+
+  let key withdrawal_params =
+    let (Typ typ) = Bridge_state.Withdrawal_params_ethereum_token.typ in
+    typ.value_to_fields withdrawal_params
+    |> fst
+    |> Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
+    |> Field.to_string
+
+  let f ~t ~logger ({ withdrawal_params } : t) =
+    if not Zeko_circuits_config.Inputs.Ethereum_token.enabled then
+      Or_error.error_string "Ethereum token bridge is not configured"
+    else
+      let%map.Result (_ : precomputed_forest) =
+        precompute_forest t withdrawal_params
+      in
+      let key = key withdrawal_params in
+      ( key
+      , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
+            let%map result =
+              try_with (fun () ->
+                  let%bind inner_receive_forest =
+                    match%map
+                      Zeko_prover.Client.inner_receive_ethereum_token t.provers
+                        { public_key =
+                            Zeko_circuits_config.Inputs.Ethereum_token
+                            .holder_account_l2
+                        ; amount = withdrawal_params.custom.base.amount
+                        }
+                    with
+                    | Ok ((body, _, calls), proof) ->
+                        Utils.attach_proof_to_forest
+                          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                          ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+                    | Error error ->
+                        Error.raise error
+                  in
+                  let action = make_inner_action t withdrawal_params in
+                  let witness =
+                    Bridge.Inner_action_witness.
+                      { public_key =
+                          Zeko_circuits_config.Inputs.inner_public_key
+                      ; witness =
+                          { aux = action.aux
+                          ; children =
+                              action.children
+                              |> Zkapp_command.Call_forest.map
+                                   ~f:Account_update.read_all_proofs_from_disk
+                              |> replace_vault_tree
+                                   ~replacement:inner_receive_forest
+                          }
+                      }
+                  in
+                  match%map
+                    Zeko_prover.Client.inner_action_witness t.provers witness
+                  with
+                  | Ok ((body, _, calls), proof) ->
+                      Utils.attach_proof_to_forest
+                        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                        ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+                      |> Utils.rehash_forest
+                           ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                  | Error error ->
+                      Error.raise error )
+              >>| Result.map_error ~f:(fun error ->
+                      Error.of_string (Exn.to_string error) )
+            in
+            match result with
+            | Ok forest ->
+                Ok forest
+            | Error error ->
+                [%log warn] "Ethereum token withdrawal proof failed: %s"
+                  (Error.to_string_mach error) ;
+                Error error ) )
+end
+
 module Finalize_deposit = struct
   type t =
     { ase_source : Ase.With_length.Stmt.t
@@ -896,6 +1118,237 @@ module Finalize_deposit = struct
               Error (Error.of_string e)
           | Ok forest ->
               Ok forest ) )
+end
+
+module Finalize_ethereum_token_deposit = struct
+  type t =
+    { ase_source : Ase.With_length.Stmt.t
+    ; check_accepted_init :
+        Bridge_inst_ethereum_token.Check_accepted.Definition.Init.t
+    ; prev_next_deposit : Zeko_util.Checked32.t
+    ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
+    }
+  [@@deriving snarky]
+
+  type t_ =
+    { ase_source : Ase.With_length.Stmt.t
+    ; check_accepted_init :
+        Bridge_inst_ethereum_token.Check_accepted.Definition.Init.t
+    ; prev_next_deposit : Zeko_util.Checked32.t
+    ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
+    ; ase_elems : Field.t list
+    ; check_accepted_elems :
+        Bridge_inst_ethereum_token.Check_accepted.Definition.Elem.t list
+    }
+
+  let deposit_and_rest = function
+    | deposit :: rest ->
+        Ok (deposit, rest)
+    | [] ->
+        Or_error.error_string
+          "Finalize_ethereum_token_deposit: missing deposit witness action"
+
+  let precompute_forest t
+      ({ ase_source
+       ; ase_elems
+       ; check_accepted_init
+       ; check_accepted_elems
+       ; prev_next_deposit
+       ; prev_nonce
+       ; helper_account_new
+       } :
+        t_ ) =
+    let open Or_error.Let_syntax in
+    let%bind deposit, check_accepted_elems =
+      deposit_and_rest check_accepted_elems
+    in
+    let deposit_hash =
+      Zkapp_account.Actions_impl.hash [ Utils.actions_of_outer_action deposit ]
+    in
+    let ase =
+      let target =
+        fold
+          ~init_fn:(Ase.M_with_length.init ~check:None)
+          ~step_fn:Ase.M_with_length.step ~init_typ:Ase.M_with_length.Init.typ
+          ~stmt_typ:Ase.M_with_length.Stmt.typ ~elm_typ:F.typ ase_source
+          ase_elems
+      in
+      Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit.Ase_inst.make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:ase_source ~proof_target:target ase_source []
+    in
+    let check_accepted =
+      let source : Bridge.Check_accepted_ethereum_token.Stmt.t =
+        { params = check_accepted_init.params
+        ; action_state =
+            Zkapp_account.Actions_impl.push_hash
+              (Rollup_state.Outer_action_state.raw
+                 check_accepted_init.original_action_state )
+              deposit_hash
+            |> Rollup_state.Outer_action_state.unsafe_value_of_field
+        ; deposit_index = check_accepted_init.deposit_index
+        ; n_steps = Zeko_util.Checked32.zero
+        ; is_rejected = false
+        ; is_accepted = false
+        }
+      in
+      let target =
+        fold
+          ~init_fn:
+            (Bridge_inst_ethereum_token.Check_accepted.Definition.init
+               ~check:None )
+          ~step_fn:Bridge_inst_ethereum_token.Check_accepted.Definition.step
+          ~init_typ:
+            Bridge_inst_ethereum_token.Check_accepted.Definition.Init.typ
+          ~stmt_typ:
+            Bridge_inst_ethereum_token.Check_accepted.Definition.Stmt.typ
+          ~elm_typ:Bridge_inst_ethereum_token.Check_accepted.Definition.Elem.typ
+          check_accepted_init check_accepted_elems
+      in
+      Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit
+      .Check_accepted_inst
+      .make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:source ~proof_target:target check_accepted_init []
+    in
+    let witness : Bridge.Finalize_ethereum_token_deposit.t =
+      { vk_hash = t.verification_keys.bridge_ethereum_token_l2
+      ; public_key =
+          Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
+      ; may_use_token =
+          Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit.May_use_token
+          .Parents_own_token
+      ; inner_authorization_kind =
+          Zeko_circuits.Rule_bridge_finalize_deposit.A.None_given
+      ; ase
+      ; check_accepted
+      ; prev_next_deposit
+      ; prev_nonce
+      ; helper_account_new
+      }
+    in
+    try
+      let _stmt, (body, _, calls) =
+        run_and_check_exn witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit.main
+      in
+      let account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                body
+            | None ->
+                { body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      Zkapp_command.Call_forest.cons
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~calls
+        account_update []
+      |> Zkapp_command.Call_forest.map
+           ~f:Account_update.read_all_proofs_from_disk
+      |> Utils.rehash_forest
+           ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+      |> Or_error.return
+    with exn -> Error (Error.of_exn exn)
+
+  let key
+      ({ ase_source
+       ; check_accepted_init
+       ; prev_next_deposit
+       ; prev_nonce
+       ; helper_account_new
+       ; ase_elems
+       ; check_accepted_elems
+       } :
+        t_ ) =
+    let (Typ typ) = typ in
+    let (Typ check_accepted_elems_typ) =
+      Bridge_inst_ethereum_token.Check_accepted.Definition.Elem.typ
+    in
+    let fields =
+      typ.value_to_fields
+        { ase_source
+        ; check_accepted_init
+        ; prev_next_deposit
+        ; prev_nonce
+        ; helper_account_new
+        }
+      |> fst
+    in
+    let check_accepted_fields =
+      List.concat_map check_accepted_elems ~f:(fun elem ->
+          check_accepted_elems_typ.value_to_fields elem |> fst |> Array.to_list )
+      |> Array.of_list
+    in
+    Array.concat [ fields; Array.of_list ase_elems; check_accepted_fields ]
+    |> Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
+    |> Field.to_string
+
+  let f ~t ~logger (request : t_) =
+    if not Zeko_circuits_config.Inputs.Ethereum_token.enabled then
+      Or_error.error_string "Ethereum token bridge is not configured"
+    else
+      let%map.Result (_ : precomputed_forest) = precompute_forest t request in
+      let key = key request in
+      ( key
+      , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
+            let%map result =
+              try_with (fun () ->
+                  let deposit, check_accepted_elems =
+                    deposit_and_rest request.check_accepted_elems
+                    |> Or_error.ok_exn
+                  in
+                  let deposit_hash =
+                    Zkapp_account.Actions_impl.hash
+                      [ Utils.actions_of_outer_action deposit ]
+                  in
+                  match%map
+                    Zeko_prover.Client.finalize_ethereum_token_deposit t.provers
+                      ~public_key:
+                        Zeko_circuits_config.Inputs.Ethereum_token
+                        .holder_account_l2
+                      ~may_use_token:
+                        Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit
+                        .May_use_token
+                        .Parents_own_token
+                      ~inner_authorization_kind:
+                        Zeko_circuits.Rule_bridge_finalize_deposit.A.None_given
+                      ~ase:(request.ase_source, request.ase_elems)
+                      ~check_accepted:
+                        ( request.check_accepted_init
+                        , deposit_hash
+                        , check_accepted_elems )
+                      ~prev_next_deposit:request.prev_next_deposit
+                      ~prev_nonce:request.prev_nonce
+                      ~helper_account_new:request.helper_account_new
+                  with
+                  | Error error ->
+                      Error.raise error
+                  | Ok ((body, _, calls), proof) ->
+                      Utils.attach_proof_to_forest
+                        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                        ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+                      |> Utils.rehash_forest
+                           ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 )
+              >>| Result.map_error ~f:(fun error ->
+                      Error.of_string (Exn.to_string error) )
+            in
+            match result with
+            | Ok forest ->
+                Ok forest
+            | Error error ->
+                [%log warn] "Ethereum token deposit proof failed: %s"
+                  (Error.to_string_mach error) ;
+                Error error ) )
 end
 
 module Finalize_cancelled_deposit = struct

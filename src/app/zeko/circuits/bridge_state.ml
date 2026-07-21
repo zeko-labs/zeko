@@ -153,6 +153,14 @@ open struct
 
     type var = Checked.t
   end
+
+  module B = struct
+    type t = Account_update.Body.t
+
+    type var = Account_update.Body.Checked.t
+
+    let typ = Account_update.Body.typ ()
+  end
 end
 
 (* When the token is the Mina token. *)
@@ -228,9 +236,8 @@ end
 (* When the token is custom, and we need token owner authorization. *)
 module Withdrawal_params_custom = struct
   type t =
-    { authorization_kind : A.t
+    { token_owner_body : B.t
     ; nested_children : C.t
-    ; call_data : F.t
     ; base : Withdrawal_params_base.t
     }
   [@@deriving snarky]
@@ -492,14 +499,14 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
                  "If token_id isn't default, then Withdrawal_params_custom \
                   must be used."
         in
-        let token_owner =
-          { default_account_update with
-            public_key = Account_id.public_key token_owner_l2 |> constant PC.typ
-          ; token_id =
-              Account_id.token_id token_owner_l2 |> constant Token_id.typ
-          ; authorization_kind = custom_params.authorization_kind
-          ; call_data = custom_params.call_data
-          }
+        let token_owner = custom_params.token_owner_body in
+        let* () =
+          assert_equal ~label:__LOC__ PC.typ token_owner.public_key
+            (Account_id.public_key token_owner_l2 |> constant PC.typ)
+        in
+        let* () =
+          assert_equal ~label:__LOC__ Token_id.typ token_owner.token_id
+            (Account_id.token_id token_owner_l2 |> constant Token_id.typ)
         in
         if Withdrawal_params.debit_first then
           let (debit, debit_children), tail =

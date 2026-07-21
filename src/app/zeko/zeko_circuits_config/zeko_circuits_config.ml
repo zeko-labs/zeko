@@ -8,6 +8,16 @@ module Mina_signature_kind = struct
   [@@deriving yojson]
 end
 
+module Ethereum_token = struct
+  type t =
+    { asset_id : string
+    ; ethereum_token_address : string
+    ; token_owner_l2 : Public_key.Compressed.t
+    ; holder_account_l2 : Public_key.Compressed.t
+    }
+  [@@deriving yojson]
+end
+
 type t =
   { chain_l1 : Mina_signature_kind.t
   ; chain_l2 : Mina_signature_kind.t
@@ -15,6 +25,7 @@ type t =
   ; multisig_key : Zeko_circuits.Multisig.t
   ; holder_accounts_l1 : Public_key.Compressed.t list
   ; ethereum_holder_account_l1 : Public_key.Compressed.t option [@default None]
+  ; ethereum_token : Ethereum_token.t option [@default None]
   ; helper_token_owner_l1 : Public_key.Compressed.t
   ; zeko_l1 : Public_key.Compressed.t
   ; emergency_da_public_key : Public_key.Compressed.t
@@ -26,8 +37,9 @@ type t =
 [@@deriving yojson]
 
 let ethereum_address_to_public_key address =
-  let address = String.lowercase address in
-  let hex = String.chop_prefix_if_exists address ~prefix:"0x" in
+  let hex =
+    String.lowercase address |> String.chop_prefix_if_exists ~prefix:"0x"
+  in
   if String.length hex <> 40 then
     failwithf
       "Ethereum bridge address must contain exactly 20 bytes, got %d hex \
@@ -52,10 +64,55 @@ let ethereum_address_to_public_key address =
   in
   ({ x; is_odd = false } : Public_key.Compressed.t)
 
+let normalize_ethereum_address_exn ~label address =
+  let hex =
+    String.lowercase address |> String.chop_prefix_if_exists ~prefix:"0x"
+  in
+  let is_hex_digit = function '0' .. '9' | 'a' .. 'f' -> true | _ -> false in
+  if String.length hex <> 40 then
+    failwithf "%s must contain exactly 20 bytes" label ()
+  else if not (String.for_all hex ~f:is_hex_digit) then
+    failwithf "%s contains a non-hexadecimal character" label ()
+  else if String.for_all hex ~f:(Char.equal '0') then
+    failwithf "%s must not be zero" label ()
+  else "0x" ^ hex
+
 let with_ethereum_holder_address t address =
   { t with
     ethereum_holder_account_l1 = Some (ethereum_address_to_public_key address)
   }
+
+let normalize_bytes32_exn ~label value =
+  let hex =
+    String.lowercase value |> String.chop_prefix_if_exists ~prefix:"0x"
+  in
+  let is_hex_digit = function '0' .. '9' | 'a' .. 'f' -> true | _ -> false in
+  if String.length hex <> 64 then
+    failwithf "%s must contain exactly 32 bytes" label ()
+  else if not (String.for_all hex ~f:is_hex_digit) then
+    failwithf "%s contains a non-hexadecimal character" label ()
+  else if String.for_all hex ~f:(Char.equal '0') then
+    failwithf "%s must not be zero" label ()
+  else "0x" ^ hex
+
+let field_of_uint128_hex_exn ~label hex =
+  match
+    Snark_params.Tick.Field.of_yojson (`String ("0x" ^ String.make 32 '0' ^ hex))
+  with
+  | Ok field ->
+      field
+  | Error error ->
+      failwithf "Failed to decode %s: %s" label error ()
+
+let asset_id_limbs_exn asset_id =
+  let asset_id =
+    normalize_bytes32_exn ~label:"Ethereum token asset ID" asset_id
+  in
+  let hex = String.drop_prefix asset_id 2 in
+  ( field_of_uint128_hex_exn ~label:"Ethereum token asset ID high limb"
+      (String.prefix hex 32)
+  , field_of_uint128_hex_exn ~label:"Ethereum token asset ID low limb"
+      (String.drop_prefix hex 32) )
 
 module Deploy = struct
   type t =
@@ -111,6 +168,7 @@ let (t, deploy_config) : t * Deploy.t option =
             }
         ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
         ; ethereum_holder_account_l1 = None
+        ; ethereum_token = None
         ; helper_token_owner_l1 = fst helper_token_owner_l1
         ; zeko_l1 = fst zeko_l1
         ; emergency_da_public_key = fst emergency_da
@@ -167,6 +225,54 @@ module Inputs = struct
   let holder_accounts_l1 = t.holder_accounts_l1
 
   let ethereum_holder_account_l1 = t.ethereum_holder_account_l1
+
+  module Ethereum_token = struct
+    let enabled = Option.is_some t.ethereum_token
+
+    let config =
+      Option.value t.ethereum_token
+        ~default:
+          { Ethereum_token.asset_id =
+              "0x0000000000000000000000000000000000000000000000000000000000000001"
+          ; ethereum_token_address =
+              "0x0000000000000000000000000000000000000001"
+          ; token_owner_l2 = Zeko_constants.inner_holder_key
+          ; holder_account_l2 = Zeko_constants.inner_holder_key
+          }
+
+    let () =
+      if
+        enabled
+        && Public_key.Compressed.equal config.token_owner_l2
+             config.holder_account_l2
+      then failwith "Ethereum token owner and bridge vault must be distinct"
+
+    let asset_id =
+      normalize_bytes32_exn ~label:"Ethereum token asset ID" config.asset_id
+
+    let ethereum_token_address =
+      normalize_ethereum_address_exn ~label:"Ethereum token address"
+        config.ethereum_token_address
+
+    let ethereum_asset_id_high, ethereum_asset_id_low =
+      asset_id_limbs_exn asset_id
+
+    let token_owner_l2 =
+      Account_id.create config.token_owner_l2 Token_id.default
+
+    let holder_account_l2 = config.holder_account_l2
+
+    let ethereum_holder_account_l1 =
+      match (enabled, t.ethereum_holder_account_l1) with
+      | true, None ->
+          failwith
+            "ethereum_token requires ethereum_holder_account_l1 (or \
+             ZEKO_ETHEREUM_BRIDGE_ADDRESS)"
+      | _, Some holder ->
+          holder
+      | false, None ->
+          Zeko_constants.inner_holder_key
+  end
 
   let holder_account_l2 = Zeko_constants.inner_holder_key
 

@@ -143,6 +143,18 @@ let generate_circuits_config =
        and ethereum_bridge_address =
          flag "--ethereum-bridge-address" (optional string)
            ~doc:"string Ethereum bridge proxy address to bind as an L1 holder"
+       and ethereum_token_asset_id =
+         flag "--ethereum-token-asset-id" (optional string)
+           ~doc:"bytes32 Immutable ERC20 bridge asset ID"
+       and ethereum_token_address =
+         flag "--ethereum-token-address" (optional string)
+           ~doc:"address Canonical ERC20 contract address"
+       and ethereum_token_owner_l2 =
+         flag "--ethereum-token-owner-l2" (optional string)
+           ~doc:"public-key Mina FungibleToken owner public key"
+       and ethereum_token_vault_l2 =
+         flag "--ethereum-token-vault-l2" (optional string)
+           ~doc:"public-key Proof-controlled ERC20 bridge vault public key"
        in
        fun () ->
          let generate_keypair () =
@@ -155,6 +167,43 @@ let generate_circuits_config =
          let emergency_da = generate_keypair () in
          let bridge_fee_recipient_l1 = generate_keypair () in
          let bridge_fee_recipient_l2 = generate_keypair () in
+         let ethereum_token =
+           match
+             ( ethereum_token_asset_id
+             , ethereum_token_address
+             , ethereum_token_owner_l2
+             , ethereum_token_vault_l2 )
+           with
+           | None, None, None, None ->
+               None
+           | ( Some asset_id
+             , Some ethereum_token_address
+             , Some token_owner_l2
+             , Some holder_account_l2 ) ->
+               if Option.is_none ethereum_bridge_address then
+                 failwith
+                   "--ethereum-bridge-address is required when configuring an \
+                    Ethereum token"
+               else
+                 Some
+                   { Zeko_circuits_config.Ethereum_token.asset_id =
+                       Zeko_circuits_config.normalize_bytes32_exn
+                         ~label:"Ethereum token asset ID" asset_id
+                   ; ethereum_token_address =
+                       Zeko_circuits_config.normalize_ethereum_address_exn
+                         ~label:"Ethereum token address" ethereum_token_address
+                   ; token_owner_l2 =
+                       Public_key.Compressed.of_base58_check_exn token_owner_l2
+                   ; holder_account_l2 =
+                       Public_key.Compressed.of_base58_check_exn
+                         holder_account_l2
+                   }
+           | _ ->
+               failwith
+                 "--ethereum-token-asset-id, --ethereum-token-owner-l2, and \
+                  --ethereum-token-vault-l2 must be supplied together with \
+                  --ethereum-token-address"
+         in
          let t : Zeko_circuits_config.t =
            { chain_l1 = Testnet
            ; chain_l2 = Testnet
@@ -167,6 +216,7 @@ let generate_circuits_config =
            ; ethereum_holder_account_l1 =
                Option.map ethereum_bridge_address
                  ~f:Zeko_circuits_config.ethereum_address_to_public_key
+           ; ethereum_token
            ; helper_token_owner_l1 = fst helper_token_owner_l1
            ; zeko_l1 = fst zeko_l1
            ; emergency_da_public_key = fst emergency_da

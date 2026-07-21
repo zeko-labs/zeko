@@ -380,6 +380,16 @@ let check_accepted_mina t input =
   | _ ->
       failwith "Unexpected response from prover"
 
+let check_accepted_ethereum_token t input =
+  send t (Prover.Input.Folder (Check_accepted_ethereum_token input))
+  >>| function
+  | Prover.Output.Folder (Check_accepted_ethereum_token check_accepted) ->
+      Ok check_accepted
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
 let inner_sync t ~public_key ~ase_source ~ase_elms =
   let%bind.Deferred.Result ase =
     let%map.Deferred.Result proof, target, excess =
@@ -568,6 +578,73 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
   | _ ->
       failwith "Unexpected response from prover"
 
+let finalize_ethereum_token_deposit t ~public_key ~may_use_token
+    ~inner_authorization_kind ~(ase : Ase.With_length.Stmt.t * Field.t list)
+    ~(check_accepted :
+       Bridge.Check_accepted_ethereum_token.Init.t
+       * Field.t
+       * Bridge.Check_accepted_ethereum_token.Elem.t list ) ~prev_next_deposit
+    ~prev_nonce ~helper_account_new =
+  let%bind.Deferred.Result ase =
+    let ase_source, ase_elms = ase in
+    let%map.Deferred.Result proof, target, excess =
+      ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
+        ~max_excess:Zeko_constants.Max_excess_actions.Finalize_deposit.outer
+        (ase_with_length ~sendfn:send)
+    in
+    Bridge.Finalize_ethereum_token_deposit.Ase_inst.
+      { proof; proof_target = target; init = ase_source; excess }
+  in
+  let%bind.Deferred.Result check_accepted =
+    let init, deposit_hash, elems = check_accepted in
+    let source : Bridge.Check_accepted_ethereum_token.Stmt.t =
+      { params = init.params
+      ; action_state =
+          Zkapp_account.Actions_impl.push_hash
+            (Rollup_state.Outer_action_state.raw init.original_action_state)
+            deposit_hash
+          |> Rollup_state.Outer_action_state.unsafe_value_of_field
+      ; deposit_index = init.deposit_index
+      ; n_steps = Zeko_util.Checked32.zero
+      ; is_rejected = false
+      ; is_accepted = false
+      }
+    in
+    let%map.Deferred.Result proof, target, excess =
+      check_accepted_folder t ~source ~elems
+        ~max_excess:
+          Zeko_constants.Max_excess_actions.Finalize_deposit.check_accepted
+        check_accepted_ethereum_token
+    in
+    ( { proof
+      ; proof_source = source
+      ; proof_target = target
+      ; init = Bridge.Check_accepted_ethereum_token.Init.to_serializable init
+      ; excess
+      }
+      : Bridge.Check_accepted_ethereum_token.serializable )
+  in
+  send t
+    Prover.Input.(
+      Bridge
+        (Finalize_ethereum_token_deposit
+           { public_key
+           ; may_use_token
+           ; inner_authorization_kind
+           ; ase
+           ; check_accepted
+           ; prev_next_deposit
+           ; prev_nonce
+           ; helper_account_new
+           } ))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
 let finalize_cancelled_deposit t ~public_key ~may_use_token
     ~outer_authorization_kind ~commit ~before_commit
     ~(commit_ase : Ase.Without_length.Stmt.t * Field.t list)
@@ -668,6 +745,16 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
 
 let inner_receive t witness =
   send t Prover.Input.(Bridge (Inner_receive witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let inner_receive_ethereum_token t witness =
+  send t Prover.Input.(Bridge (Inner_receive_ethereum_token witness))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)

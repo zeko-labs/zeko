@@ -318,9 +318,13 @@ let erc20_withdrawal_params_fields () =
     }
   in
   let custom : Zeko_circuits.Bridge_state.Withdrawal_params_custom.t =
-    { authorization_kind = Proof Field.one
+    { token_owner_body =
+        { Account_update.Body.dummy with
+          public_key = Account_id.public_key token_owner
+        ; token_id = Account_id.token_id token_owner
+        ; authorization_kind = Proof Field.one
+        }
     ; nested_children = debit_forest
-    ; call_data = Field.zero
     ; base
     }
   in
@@ -360,8 +364,10 @@ let () =
   if
     not
       (String.equal withdrawal_aux
-         "24c550ad1d37bd8711148b1b4ad5f1724c521a62aec4b978a1a19a7629bd59cf" )
-  then failwith "Ethereum ERC20 withdrawal circuit/settlement aux mismatch" ;
+         "350ed8b22bbaac628364ea5d8ee44a8f12d7814dc9c1432264ece93ccd5b364d" )
+  then
+    failwithf "Ethereum ERC20 withdrawal circuit/settlement aux mismatch: %s"
+      withdrawal_aux () ;
   let token_preimage : Sequencer_lib.Archive.Ethereum_withdrawal.t =
     { recipient = { x = Field.of_int 0x01020304; is_odd = false }
     ; amount = amount "2000000"
