@@ -260,6 +260,8 @@ let check_erc20_finalize_deposit () =
       (Currency.Amount.Signed.equal vault.balance_change
          Currency.Amount.Signed.(of_unsigned base.amount |> negate) )
   then failwith "Ethereum ERC20 deposit vault debit mismatch" ;
+  if vault.implicit_account_creation_fee then
+    failwith "Ethereum ERC20 vault charged an implicit MINA fee" ;
   match Zkapp_command.Call_forest.to_account_updates calls with
   | [ _helper; _inner_witness; recipient; zero_fee ] ->
       if not (Token_id.equal recipient.body.token_id token_id) then

@@ -246,12 +246,15 @@ struct
         Typ.(Checked32.typ * Deposit_params.typ)
         (deposit_index, params)
     in
+    let is_ethereum_custom_token = Option.is_some ethereum_asset_id in
     let account_update =
       { default_account_update with
         public_key
       ; token_id = constant Token_id.typ token_id_l2
       ; may_use_token
       ; authorization_kind = authorization_vk_hash vk_hash
+      ; implicit_account_creation_fee =
+          constant Boolean.typ (not is_ethereum_custom_token)
       ; balance_change =
           Currency.Amount.Signed.Checked.(
             of_unsigned base_params.amount |> negate)
@@ -259,7 +262,6 @@ struct
       }
     in
     let bridge_proof_fee = constant Currency.Amount.typ bridge_proof_fee in
-    let is_ethereum_custom_token = Option.is_some ethereum_asset_id in
     let* recipient_payout =
       if is_ethereum_custom_token then Checked.return base_params.amount
       else
