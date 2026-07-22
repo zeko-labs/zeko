@@ -583,6 +583,38 @@ module Sequencer_spec = struct
             ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
             ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
     in
+    let deployed_outer_vk_hash =
+      run (fun () ->
+          let%map account =
+            Gql_client.fetch_account ~logger gql_uri
+              (Account_id.create
+                 (Public_key.compress outer_kp.public_key)
+                 Token_id.default )
+            >>| Or_error.ok_exn
+          in
+          let account =
+            Option.value_exn account
+              ~message:"deployed outer account is missing"
+          in
+          let zkapp =
+            Account.zkapp account
+            |> Option.value_exn ~message:"deployed outer account is not a zkApp"
+          in
+          Option.value_exn zkapp.verification_key
+            ~message:"deployed outer account is missing its verification key"
+          |> With_hash.hash )
+    in
+    let prover_outer_vk_hash =
+      sequencer.bridge_prover.verification_keys.outer_rules
+    in
+    if
+      Option.is_some Is_compile_simple_real.is_compile_simple_real
+      && not (Field.equal deployed_outer_vk_hash prover_outer_vk_hash)
+    then
+      failwithf "outer VK mismatch: deployed %s, real prover %s"
+        (Field.to_string deployed_outer_vk_hash)
+        (Field.to_string prover_outer_vk_hash)
+        () ;
     let l1_executor =
       Executor.create ~kind:(`L1 gql_uri)
         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ()

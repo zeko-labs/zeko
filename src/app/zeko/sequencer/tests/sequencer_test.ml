@@ -994,11 +994,12 @@ let () =
               account_creation_fee
             @@ Zkapp_command.Call_forest.cons
                  ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-                 Deploy_account_update.account_update
+                 (Lazy.force Deploy_account_update.account_update)
             @@ Zkapp_command.Call_forest.cons_tree
-                 Initialize_account_update.account_update
+                 (Lazy.force Initialize_account_update.account_update)
             @@ Zkapp_command.Call_forest.cons_tree
-                 Update_state_account_update.account_update []
+                 (Lazy.force Update_state_account_update.account_update)
+                 []
           in
           User_command.Zkapp_command
             (Utils.sign_zkapp_command
