@@ -92,6 +92,13 @@
  (modules ethereum_bridge_vectors))
 
 (executable
+ (name compile_ethereum_immediate_deposit)
+ (libraries zeko_types compile_simple_real zeko_circuits_config)
+ (preprocess
+  (pps ppx_jane))
+ (modules compile_ethereum_immediate_deposit))
+
+(executable
  (name test_pause_fake)
  (libraries zeko_circuits compile_simple_fake)
  (instrumentation

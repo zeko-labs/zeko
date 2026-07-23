@@ -171,6 +171,8 @@ module Input = struct
       | Outer_action_witness of Bridge.Outer_action_witness.serializable
       | Inner_action_witness of Bridge.Inner_action_witness.serializable
       | Finalize_deposit of Bridge.Finalize_deposit.serializable
+      | Finalize_deposit_ethereum of
+          Bridge.Finalize_deposit_ethereum.serializable
       | Finalize_cancelled_deposit of
           Bridge.Finalize_cancelled_deposit.serializable
       | Inner_receive of Bridge.Inner_receive.serializable
@@ -211,6 +213,7 @@ module Verification_key_hashes = struct
     ; bridge_mina_l1 : F.t
     ; bridge_mina_token_owner : F.t
     ; bridge_mina_l2 : F.t
+    ; bridge_ethereum_l2 : F.t option
     }
   [@@deriving yojson]
 end
@@ -454,20 +457,75 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
               (Zkapp_command.Call_forest.map
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
-  | Bridge (Finalize_deposit input) ->
-      let Compile_simple.[ prove; _; _ ] =
-        Lazy.force Bridge_inst_mina.System_L2.provers
+  | Bridge (Finalize_deposit input) -> (
+      match Zeko_circuits_config.Inputs.ethereum_holder_account_l1 with
+      | None ->
+          let Compile_simple.[ prove; _; _ ] =
+            Lazy.force Bridge_inst_mina.System_L2.provers
+          in
+          let%bind vk_hash =
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_mina.System_L2.tag)
+            |> Promise.to_deferred
+            (* To make fake tests work *)
+            >>| Compile_simple.Verification_key.hash
+          in
+          let%map (_stmt, parent_with_calls), proof =
+            time ?fake_proving_time ~logger
+              "Bridge_mina.System_L2.finalize_deposit"
+              ( prove (Bridge.Finalize_deposit.of_serializable ~vk_hash input)
+              |> Promise.to_deferred )
+          in
+          Output.Call_forest
+            ( Tuple3.map_trd parent_with_calls
+                ~f:
+                  (Zkapp_command.Call_forest.map
+                     ~f:Account_update.read_all_proofs_from_disk )
+            , proof )
+      | Some _ ->
+          let Compile_simple.[ prove; _; _; _ ] =
+            Lazy.force Bridge_inst_ethereum.System_L2.provers
+          in
+          let%bind vk_hash =
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_ethereum.System_L2.tag)
+            |> Promise.to_deferred
+            (* To make fake tests work *)
+            >>| Compile_simple.Verification_key.hash
+          in
+          let%map (_stmt, parent_with_calls), proof =
+            time ?fake_proving_time ~logger
+              "Bridge_ethereum.System_L2.finalize_deposit"
+              ( prove (Bridge.Finalize_deposit.of_serializable ~vk_hash input)
+              |> Promise.to_deferred )
+          in
+          Output.Call_forest
+            ( Tuple3.map_trd parent_with_calls
+                ~f:
+                  (Zkapp_command.Call_forest.map
+                     ~f:Account_update.read_all_proofs_from_disk )
+            , proof ) )
+  | Bridge (Finalize_deposit_ethereum input) ->
+      let (_ : Signature_lib.Public_key.Compressed.t) =
+        Option.value_exn Zeko_circuits_config.Inputs.ethereum_holder_account_l1
+          ~message:
+            "Ethereum deposit finalization requires an Ethereum bridge holder"
+      in
+      let Compile_simple.[ _; prove; _; _ ] =
+        Lazy.force Bridge_inst_ethereum.System_L2.provers
       in
       let%bind vk_hash =
         Compile_simple.Verification_key.of_tag
-          (Lazy.force Bridge_inst_mina.System_L2.tag)
+          (Lazy.force Bridge_inst_ethereum.System_L2.tag)
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
       in
       let%map (_stmt, parent_with_calls), proof =
-        time ?fake_proving_time ~logger "Bridge_mina.System_L2.finalize_deposit"
-          ( prove (Bridge.Finalize_deposit.of_serializable ~vk_hash input)
+        time ?fake_proving_time ~logger
+          "Bridge_ethereum.System_L2.finalize_deposit"
+          ( prove
+              (Bridge.Finalize_deposit_ethereum.of_serializable ~vk_hash input)
           |> Promise.to_deferred )
       in
       Output.Call_forest
@@ -508,28 +566,54 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
               (Zkapp_command.Call_forest.map
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
-  | Bridge (Inner_receive input) ->
-      let Compile_simple.[ _; prove; _ ] =
-        Lazy.force Bridge_inst_mina.System_L2.provers
-      in
-      let%bind vk_hash =
-        Compile_simple.Verification_key.of_tag
-          (Lazy.force Bridge_inst_mina.System_L2.tag)
-        |> Promise.to_deferred
-        (* To make fake tests work *)
-        >>| Compile_simple.Verification_key.hash
-      in
-      let%map (_stmt, parent_with_calls), proof =
-        time ?fake_proving_time ~logger "Bridge_mina.System_L2.inner_receive"
-          ( prove (Bridge.Inner_receive.of_serializable ~vk_hash input)
-          |> Promise.to_deferred )
-      in
-      Output.Call_forest
-        ( Tuple3.map_trd parent_with_calls
-            ~f:
-              (Zkapp_command.Call_forest.map
-                 ~f:Account_update.read_all_proofs_from_disk )
-        , proof )
+  | Bridge (Inner_receive input) -> (
+      match Zeko_circuits_config.Inputs.ethereum_holder_account_l1 with
+      | None ->
+          let Compile_simple.[ _; prove; _ ] =
+            Lazy.force Bridge_inst_mina.System_L2.provers
+          in
+          let%bind vk_hash =
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_mina.System_L2.tag)
+            |> Promise.to_deferred
+            (* To make fake tests work *)
+            >>| Compile_simple.Verification_key.hash
+          in
+          let%map (_stmt, parent_with_calls), proof =
+            time ?fake_proving_time ~logger
+              "Bridge_mina.System_L2.inner_receive"
+              ( prove (Bridge.Inner_receive.of_serializable ~vk_hash input)
+              |> Promise.to_deferred )
+          in
+          Output.Call_forest
+            ( Tuple3.map_trd parent_with_calls
+                ~f:
+                  (Zkapp_command.Call_forest.map
+                     ~f:Account_update.read_all_proofs_from_disk )
+            , proof )
+      | Some _ ->
+          let Compile_simple.[ _; _; prove; _ ] =
+            Lazy.force Bridge_inst_ethereum.System_L2.provers
+          in
+          let%bind vk_hash =
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_ethereum.System_L2.tag)
+            |> Promise.to_deferred
+            (* To make fake tests work *)
+            >>| Compile_simple.Verification_key.hash
+          in
+          let%map (_stmt, parent_with_calls), proof =
+            time ?fake_proving_time ~logger
+              "Bridge_ethereum.System_L2.inner_receive"
+              ( prove (Bridge.Inner_receive.of_serializable ~vk_hash input)
+              |> Promise.to_deferred )
+          in
+          Output.Call_forest
+            ( Tuple3.map_trd parent_with_calls
+                ~f:
+                  (Zkapp_command.Call_forest.map
+                     ~f:Account_update.read_all_proofs_from_disk )
+            , proof ) )
   | Bridge (Finalize_withdrawal input) ->
       let Compile_simple.[ _; prove; _; _ ] =
         Lazy.force Bridge_inst_mina.System_L1_enabled.provers
@@ -549,8 +633,13 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         >>| Compile_simple.Verification_key.hash
       in
       let%bind l2_holder_vk_hash =
-        Compile_simple.Verification_key.of_tag
-          (Lazy.force Bridge_inst_mina.System_L2.tag)
+        ( match Zeko_circuits_config.Inputs.ethereum_holder_account_l1 with
+        | None ->
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_mina.System_L2.tag)
+        | Some _ ->
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_ethereum.System_L2.tag) )
         |> Promise.to_deferred
         (* To make fake tests work *)
         >>| Compile_simple.Verification_key.hash
@@ -612,6 +701,15 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         Compile_simple.Verification_key.of_tag
           (Lazy.force Bridge_inst_mina.System_L2.tag)
         |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+      and bridge_ethereum_l2 =
+        match Zeko_circuits_config.Inputs.ethereum_holder_account_l1 with
+        | None ->
+            return None
+        | Some _ ->
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_ethereum.System_L2.tag)
+            |> Promise.to_deferred
+            >>| Fn.compose Option.some Compile_simple.Verification_key.hash
       in
       return
         (Output.Verification_keys
@@ -620,6 +718,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
            ; bridge_mina_l1
            ; bridge_mina_token_owner
            ; bridge_mina_l2
+           ; bridge_ethereum_l2
            } )
 
 let run ?fake_proving_time ~logger ~mq_host () =

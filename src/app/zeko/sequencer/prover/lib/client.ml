@@ -568,6 +568,43 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
   | _ ->
       failwith "Unexpected response from prover"
 
+let finalize_deposit_ethereum t ~public_key ~may_use_token
+    ~inner_authorization_kind ~(ase : Ase.With_length.Stmt.t * Field.t list)
+    ~params ~original_action_state ~deposit_index ~prev_next_deposit ~prev_nonce
+    ~helper_account_new =
+  let%bind.Deferred.Result ase =
+    let ase_source, ase_elms = ase in
+    let%map.Deferred.Result proof, target, excess =
+      ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
+        ~max_excess:Zeko_constants.Max_excess_actions.Finalize_deposit.outer
+        (ase_with_length ~sendfn:send)
+    in
+    Bridge.Finalize_deposit_ethereum.Ase_inst.
+      { proof; proof_target = target; init = ase_source; excess }
+  in
+  send t
+    Prover.Input.(
+      Bridge
+        (Finalize_deposit_ethereum
+           { public_key
+           ; may_use_token
+           ; inner_authorization_kind
+           ; ase
+           ; params
+           ; original_action_state
+           ; deposit_index
+           ; prev_next_deposit
+           ; prev_nonce
+           ; helper_account_new
+           } ))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
 let finalize_cancelled_deposit t ~public_key ~may_use_token
     ~outer_authorization_kind ~commit ~before_commit
     ~(commit_ase : Ase.Without_length.Stmt.t * Field.t list)

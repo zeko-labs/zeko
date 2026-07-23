@@ -39,6 +39,13 @@ let compile_all ~logger () =
   in
   let%bind () = compile_tag (Lazy.force Bridge_inst_mina.System_L2.tag) in
   let%bind () =
+    match Zeko_circuits_config.Inputs.ethereum_holder_account_l1 with
+    | None ->
+        return ()
+    | Some _ ->
+        compile_tag (Lazy.force Bridge_inst_ethereum.System_L2.tag)
+  in
+  let%bind () =
     compile_tag (Lazy.force Bridge_inst_mina.System_L1_token_owner.tag)
   in
   [%log info] "Compiled circuits in %s"

@@ -56,6 +56,36 @@ module Outer_rules_inst = Outer_rules.Make (Zeko_circuits_config.Inputs) ()
 module Bridge_inst_mina =
   Bridge_rules.Make_mina (Zeko_circuits_config.Inputs) ()
 
+module Bridge_inst_ethereum = struct
+  module Inputs = struct
+    include Zeko_circuits_config.Inputs
+
+    let token_owner_l1 = None
+
+    let token_owner_l2 = None
+
+    module Deposit_params = Bridge_state.Deposit_params_base
+  end
+
+  module Rule_bridge_finalize_deposit =
+    Bridge_inst_mina.Rule_bridge_finalize_deposit
+  module Rule_bridge_finalize_deposit_ethereum =
+    Rule_bridge_finalize_deposit_ethereum.Make (Inputs)
+  module Rule_bridge_inner_receive = Bridge_inst_mina.Rule_bridge_inner_receive
+  module Rule_multisig_update_l2 = Bridge_inst_mina.Rule_multisig_update_l2
+
+  module System_L2 =
+  ( val Compile_simple.compile ~name:"bridge rules for ethereum l2"
+          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~branches:
+            [ Rule_bridge_finalize_deposit.rule
+            ; Rule_bridge_finalize_deposit_ethereum.rule
+            ; Rule_bridge_inner_receive.rule
+            ; Rule_multisig_update_l2.rule
+            ]
+          () )
+end
+
 module F = struct
   include F
 
@@ -1028,6 +1058,63 @@ module Bridge = struct
       ; inner_authorization_kind
       ; ase = Ase_inst.of_serializable ase
       ; check_accepted = Check_accepted_mina.of_serializable check_accepted
+      ; prev_next_deposit
+      ; prev_nonce =
+          Mina_numbers.Account_nonce.of_string (Checked32.to_string prev_nonce)
+      ; helper_account_new
+      }
+  end
+
+  module Finalize_deposit_ethereum = struct
+    module Ase_inst = Ase.Make_serializable_ase (struct
+      module Ase_system = Ase.With_length
+      module Action_state = Outer_action_state.With_length
+
+      module Ase_inst =
+        Bridge_inst_ethereum.Rule_bridge_finalize_deposit_ethereum.Ase_inst
+    end)
+
+    type t =
+      Bridge_inst_ethereum.Rule_bridge_finalize_deposit_ethereum.Witness.t
+
+    type serializable =
+      { public_key : Public_key.Compressed.t
+      ; may_use_token :
+          Bridge_inst_ethereum.Rule_bridge_finalize_deposit_ethereum
+          .May_use_token
+          .t
+      ; inner_authorization_kind : Rule_bridge_finalize_deposit_ethereum.A.t
+      ; ase : Ase_inst.serializable
+      ; params : Deposit_params_base.t
+      ; original_action_state : Outer_action_state.t
+      ; deposit_index : Checked32.t
+      ; prev_next_deposit : Checked32.t
+      ; prev_nonce : Checked32.t
+      ; helper_account_new : bool
+      }
+    [@@deriving yojson]
+
+    let of_serializable
+        ({ public_key
+         ; may_use_token
+         ; inner_authorization_kind
+         ; ase
+         ; params
+         ; original_action_state
+         ; deposit_index
+         ; prev_next_deposit
+         ; prev_nonce
+         ; helper_account_new
+         } :
+          serializable ) ~vk_hash : t =
+      { public_key
+      ; vk_hash
+      ; may_use_token
+      ; inner_authorization_kind
+      ; ase = Ase_inst.of_serializable ase
+      ; params
+      ; original_action_state
+      ; deposit_index
       ; prev_next_deposit
       ; prev_nonce =
           Mina_numbers.Account_nonce.of_string (Checked32.to_string prev_nonce)

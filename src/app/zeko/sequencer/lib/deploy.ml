@@ -57,8 +57,13 @@ module Z = struct
         |> Promise.to_deferred
       in
       let%map holder_vk =
-        Compile_simple.Verification_key.of_tag
-          (Lazy.force Bridge_inst_mina.System_L2.tag)
+        ( match Zeko_circuits_config.Inputs.ethereum_holder_account_l1 with
+        | None ->
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_mina.System_L2.tag)
+        | Some _ ->
+            Compile_simple.Verification_key.of_tag
+              (Lazy.force Bridge_inst_ethereum.System_L2.tag) )
         |> Promise.to_deferred
       in
       let inner_account =

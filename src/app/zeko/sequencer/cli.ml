@@ -509,8 +509,14 @@ let update_inner_verification_keys =
            Lazy.force Inner_rules_inst.tag
            |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
          and bridge_holder_vk =
-           Lazy.force Bridge_inst_mina.System_L2.tag
-           |> Compile_simple.Verification_key.of_tag |> Promise.to_deferred
+           ( match Zeko_circuits_config.Inputs.ethereum_holder_account_l1 with
+           | None ->
+               Compile_simple.Verification_key.of_tag
+                 (Lazy.force Bridge_inst_mina.System_L2.tag)
+           | Some _ ->
+               Compile_simple.Verification_key.of_tag
+                 (Lazy.force Bridge_inst_ethereum.System_L2.tag) )
+           |> Promise.to_deferred
          in
          let inner =
            ( inner_vk

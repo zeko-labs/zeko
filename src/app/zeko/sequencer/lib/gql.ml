@@ -1878,6 +1878,74 @@ module Types = struct
               ]
       end
 
+      module Finalize_deposit_ethereum = struct
+        module Deposit = struct
+          type input =
+            { params : Zeko_circuits.Bridge_state.Deposit_params_base.t
+            ; original_action_state :
+                Zeko_circuits.Rollup_state.Outer_action_state.t
+            ; deposit_index : Zeko_circuits.Zeko_util.Checked32.t
+            }
+
+          let arg_typ ~proof_cache_db =
+            obj "EthereumDepositFinalizationWitnessInput"
+              ~coerce:(fun params original_action_state deposit_index ->
+                { params
+                ; original_action_state =
+                    Zeko_circuits.Rollup_state.Outer_action_state
+                    .unsafe_value_of_field
+                    @@ Field.of_string original_action_state
+                ; deposit_index
+                } )
+              ~split:(fun f (x : input) ->
+                f x.params
+                  ( Field.to_string
+                  @@ Zeko_circuits.Rollup_state.Outer_action_state.raw
+                       x.original_action_state )
+                  x.deposit_index )
+              ~fields:
+                [ arg "params"
+                    ~typ:(non_null @@ Deposit_params.arg_typ ~proof_cache_db)
+                ; arg "originalActionState" ~typ:(non_null string)
+                ; arg "depositIndex" ~typ:(non_null UInt32.arg_typ)
+                ]
+        end
+
+        type input =
+          { ase : Ase.With_length.Stmt.t * Field.t list
+          ; deposit : Deposit.input
+          ; prev_next_deposit : Unsigned.uint32
+          ; prev_nonce : Unsigned.uint32
+          ; helper_account_new : bool
+          ; helper_account_signature : Signature.t
+          }
+
+        let arg_typ ~proof_cache_db =
+          obj "FinalizeEthereumDepositInput"
+            ~coerce:(fun ase deposit prev_next_deposit prev_nonce
+                         helper_account_new helper_account_signature ->
+              { ase
+              ; deposit
+              ; prev_next_deposit
+              ; prev_nonce
+              ; helper_account_new
+              ; helper_account_signature =
+                  Result.ok_or_failwith helper_account_signature
+              } )
+            ~split:(fun f (x : input) ->
+              f x.ase x.deposit x.prev_next_deposit x.prev_nonce
+                x.helper_account_new (Raw x.helper_account_signature) )
+            ~fields:
+              [ arg "ase" ~typ:(non_null Folder.Ase_with_length.arg_typ)
+              ; arg "deposit" ~typ:(non_null @@ Deposit.arg_typ ~proof_cache_db)
+              ; arg "prevNextDeposit" ~typ:(non_null UInt32.arg_typ)
+              ; arg "prevNonce" ~typ:(non_null UInt32.arg_typ)
+              ; arg "helperAccountNew" ~typ:(non_null bool)
+              ; arg "helperAccountSignature"
+                  ~typ:(non_null SignatureInput.arg_typ)
+              ]
+      end
+
       module Finalize_cancelled_deposit = struct
         type input =
           { public_key : Public_key.Compressed.t
@@ -2507,6 +2575,66 @@ module Mutations = struct
              in
              don't_wait_for d ; Ok key ) )
 
+    let finalize_deposit_ethereum ~proof_cache_db =
+      io_field "finalizeEthereumDeposit"
+        ~doc:"Finalize an Ethereum deposit after inner synchronization"
+        ~typ:(non_null Types.Payload.proof_key)
+        ~args:
+          Arg.
+            [ arg "input"
+                ~typ:
+                  ( non_null
+                  @@ Types.Input.Provers.Finalize_deposit_ethereum.arg_typ
+                       ~proof_cache_db )
+            ]
+        ~resolve:(fun { ctx = Context.{ sequencer; l2_executor; _ }; _ } ()
+                      witness ->
+          let { Types.Input.Provers.Finalize_deposit_ethereum.ase =
+                  ase_source, ase_elems
+              ; deposit = { params; original_action_state; deposit_index }
+              ; prev_next_deposit
+              ; prev_nonce
+              ; helper_account_new
+              ; helper_account_signature
+              } =
+            witness
+          in
+          let%bind.Deferred.Result () =
+            return
+              ( match Zeko_circuits_config.Inputs.ethereum_holder_account_l1 with
+              | Some _ ->
+                  Ok ()
+              | None ->
+                  Error
+                    "Ethereum deposit finalization is not enabled in the \
+                     circuit configuration" )
+          in
+          let logger = Zeko_sequencer.(sequencer.logger) in
+          let t = Zeko_sequencer.(sequencer.bridge_prover) in
+          return
+            (let%bind.Result key, d =
+               Bridge_prover.Finalize_deposit_ethereum.f
+                 ~t:Zeko_sequencer.(sequencer.bridge_prover)
+                 ~logger:Zeko_sequencer.(sequencer.logger)
+                 { ase_source
+                 ; ase_elems
+                 ; params
+                 ; original_action_state
+                 ; deposit_index
+                 ; prev_next_deposit
+                 ; prev_nonce
+                 ; helper_account_new
+                 }
+                 helper_account_signature
+               |> Result.map_error ~f:Error.to_string_hum
+             in
+             let d =
+               Bridge_prover.execute_request t ~logger ~executor:l2_executor
+                 (key, d)
+               >>| ignore
+             in
+             don't_wait_for d ; Ok key ) )
+
     let finalize_withdrawal ~proof_cache_db =
       io_field "finalizeWithdrawal" ~doc:"Finalize a withdrawal"
         ~typ:(non_null Types.Payload.proof_key)
@@ -2633,6 +2761,7 @@ module Mutations = struct
       [ deposit_request ~proof_cache_db
       ; withdrawal_request ~proof_cache_db
       ; finalize_deposit ~proof_cache_db
+      ; finalize_deposit_ethereum ~proof_cache_db
       ; finalize_withdrawal ~proof_cache_db
       ; cancel_deposit ~proof_cache_db
       ]

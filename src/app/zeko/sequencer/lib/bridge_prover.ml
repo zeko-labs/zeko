@@ -97,6 +97,10 @@ let create ~provers ~proof_cache_db ~preverify_l1 ~preverify_l2 ~bridge_txn_fee
   ; bridge_txn_fee
   }
 
+let l2_holder_vk_hash t =
+  Option.value t.verification_keys.bridge_ethereum_l2
+    ~default:t.verification_keys.bridge_mina_l2
+
 (** For [Finalize_cancelled_deposit] and [Finalize_withdrawal] the helper
     account update lives at [forest[0].calls[0].calls[0]] (nested inside the
     helper_token_owner). [precompute_commitments] returns it with
@@ -439,8 +443,7 @@ module Withdrawal_request = struct
 
   let make_inner_receive_witness t
       (withdrawal_params : Bridge_state.Withdrawal_params_base.t) =
-    Bridge.Inner_receive.of_serializable
-      ~vk_hash:t.verification_keys.bridge_mina_l2
+    Bridge.Inner_receive.of_serializable ~vk_hash:(l2_holder_vk_hash t)
       { public_key = Zeko_circuits_config.Inputs.holder_account_l2
       ; amount = withdrawal_params.amount
       }
@@ -706,7 +709,7 @@ module Finalize_deposit = struct
         ~proof_source:source ~proof_target:target check_accepted_init []
     in
     let witness : Bridge.Finalize_deposit.t =
-      { vk_hash = t.verification_keys.bridge_mina_l2
+      { vk_hash = l2_holder_vk_hash t
       ; public_key = Zeko_circuits_config.Inputs.holder_account_l2
       ; may_use_token =
           Bridge_inst_mina.Rule_bridge_finalize_deposit.May_use_token.No
@@ -869,6 +872,229 @@ module Finalize_deposit = struct
                     Error.raise e
                 | Ok ((body, _, calls), proof) ->
                     (* Attach helper account signature *)
+                    let calls =
+                      match calls with
+                      | helper_account :: remaining_calls ->
+                          Zkapp_command.Call_forest.cons
+                            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                            ~calls:helper_account.elt.calls
+                            { helper_account.elt.account_update with
+                              authorization =
+                                Control.Poly.Signature helper_account_signature
+                            }
+                            remaining_calls
+                      | _ ->
+                          failwith "shouldn't be reachable"
+                    in
+                    Utils.attach_proof_to_forest
+                      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                      ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+                    |> Utils.rehash_forest
+                         ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 )
+            >>| Result.map_error ~f:(fun e -> Exn.to_string e)
+          in
+          match result with
+          | Error e ->
+              [%log warn] "prove failed %s" e ;
+              Error (Error.of_string e)
+          | Ok forest ->
+              Ok forest ) )
+end
+
+module Finalize_deposit_ethereum = struct
+  type t =
+    { ase_source : Ase.With_length.Stmt.t
+    ; params : Bridge_state.Deposit_params_base.t
+    ; original_action_state : Rollup_state.Outer_action_state.t
+    ; deposit_index : Zeko_util.Checked32.t
+    ; prev_next_deposit : Zeko_util.Checked32.t
+    ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
+    }
+  [@@deriving snarky]
+
+  type t_ =
+    { ase_source : Ase.With_length.Stmt.t
+    ; params : Bridge_state.Deposit_params_base.t
+    ; original_action_state : Rollup_state.Outer_action_state.t
+    ; deposit_index : Zeko_util.Checked32.t
+    ; prev_next_deposit : Zeko_util.Checked32.t
+    ; prev_nonce : Zeko_util.Checked32.t
+    ; helper_account_new : Zeko_util.Boolean.t
+    ; ase_elems : Field.t list
+    }
+
+  let precompute_commitments t
+      ({ ase_source
+       ; ase_elems
+       ; params
+       ; original_action_state
+       ; deposit_index
+       ; prev_next_deposit
+       ; prev_nonce
+       ; helper_account_new
+       } :
+        t_ ) =
+    let ase =
+      let target =
+        fold
+          ~init_fn:(Ase.M_with_length.init ~check:None)
+          ~step_fn:Ase.M_with_length.step ~init_typ:Ase.M_with_length.Init.typ
+          ~stmt_typ:Ase.M_with_length.Stmt.typ ~elm_typ:F.typ ase_source
+          ase_elems
+      in
+      Bridge_inst_ethereum.Rule_bridge_finalize_deposit_ethereum.Ase_inst.make
+        ~proof:
+          (Compile_simple.Proof.of_pickles
+             Pickles_types.Nat.(Pickles.Proof.dummy N2.n N2.n ~domain_log2:14) )
+        ~proof_source:ase_source ~proof_target:target ase_source []
+    in
+    let witness : Bridge.Finalize_deposit_ethereum.t =
+      { vk_hash = l2_holder_vk_hash t
+      ; public_key = Zeko_circuits_config.Inputs.holder_account_l2
+      ; may_use_token =
+          Bridge_inst_ethereum.Rule_bridge_finalize_deposit_ethereum
+          .May_use_token
+          .No
+      ; inner_authorization_kind =
+          Zeko_circuits.Rule_bridge_finalize_deposit_ethereum.A.None_given
+      ; ase
+      ; params
+      ; original_action_state
+      ; deposit_index
+      ; prev_next_deposit
+      ; prev_nonce
+      ; helper_account_new
+      }
+    in
+    try
+      let _stmt, (body, _, calls) =
+        run_and_check_exn witness
+          Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          Bridge_inst_ethereum.Rule_bridge_finalize_deposit_ethereum.main
+      in
+      let account_update =
+        Account_update.with_aux
+          ~body:
+            ( match Is_compile_simple_real.is_compile_simple_real with
+            | Some _ ->
+                body
+            | None ->
+                { body with authorization_kind = None_given } )
+          ~authorization:Control.Poly.None_given
+      in
+      let forest =
+        Zkapp_command.Call_forest.cons
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~calls
+          account_update []
+        |> Zkapp_command.Call_forest.map
+             ~f:Account_update.read_all_proofs_from_disk
+        |> Utils.rehash_forest
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+      in
+      let tx_commitment =
+        Zkapp_command.Transaction_commitment.create
+          ~account_updates_hash:(Zkapp_command.Call_forest.hash forest)
+      in
+      Ok (forest, `Commitment tx_commitment)
+    with exn -> Error (Error.of_exn exn)
+
+  let key
+      ({ ase_source
+       ; params
+       ; original_action_state
+       ; deposit_index
+       ; prev_next_deposit
+       ; prev_nonce
+       ; helper_account_new
+       ; ase_elems
+       } :
+        t_ ) =
+    let (Typ typ) = typ in
+    let t =
+      typ.value_to_fields
+        { ase_source
+        ; params
+        ; original_action_state
+        ; deposit_index
+        ; prev_next_deposit
+        ; prev_nonce
+        ; helper_account_new
+        }
+      |> fst
+    in
+    Array.append t (Array.of_list ase_elems)
+    |> Random_oracle.hash
+         ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
+    |> Field.to_string
+
+  let f ~t ~logger
+      ({ ase_source
+       ; ase_elems
+       ; params
+       ; original_action_state
+       ; deposit_index
+       ; prev_next_deposit
+       ; prev_nonce
+       ; helper_account_new
+       } as request :
+        t_ ) (helper_account_signature : Signature.t) =
+    let%bind.Result forest, `Commitment commitment =
+      precompute_commitments t request
+    in
+    let top_tree, helper, rest_calls =
+      match forest with
+      | [ ({ elt = { calls = helper :: rest; _ }; _ } as top) ] ->
+          (top, helper, rest)
+      | _ ->
+          failwith
+            "Finalize_deposit_ethereum: unexpected precomputed forest layout"
+    in
+    let helper_pk = helper.elt.account_update.body.public_key in
+    let%map.Result () =
+      verify_signature ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+        ~tx_commitment:commitment ~public_key:helper_pk helper_account_signature
+    in
+    let key = key request in
+    ( key
+    , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
+          let%map result =
+            try_with (fun () ->
+                let forest =
+                  let new_calls =
+                    Zkapp_command.Call_forest.cons
+                      ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                      ~calls:helper.elt.calls
+                      { helper.elt.account_update with
+                        authorization =
+                          Control.Poly.Signature helper_account_signature
+                      }
+                      rest_calls
+                  in
+                  [ { top_tree with
+                      elt = { top_tree.elt with calls = new_calls }
+                    }
+                  ]
+                  |> Utils.rehash_forest
+                       ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                in
+                let%bind () = t.preverify_l2 forest >>| Or_error.ok_exn in
+                match%map
+                  Zeko_prover.Client.finalize_deposit_ethereum t.provers
+                    ~public_key:Zeko_circuits_config.Inputs.holder_account_l2
+                    ~may_use_token:
+                      Bridge_inst_ethereum.Rule_bridge_finalize_deposit_ethereum
+                      .May_use_token
+                      .No
+                    ~inner_authorization_kind:
+                      Zeko_circuits.Rule_bridge_finalize_deposit_ethereum.A
+                      .None_given ~ase:(ase_source, ase_elems) ~params
+                    ~original_action_state ~deposit_index ~prev_next_deposit
+                    ~prev_nonce ~helper_account_new
+                with
+                | Error e ->
+                    Error.raise e
+                | Ok ((body, _, calls), proof) ->
                     let calls =
                       match calls with
                       | helper_account :: remaining_calls ->
@@ -1487,7 +1713,7 @@ module Finalize_withdrawal = struct
       ; withdrawal_params
       ; helper_token_owner_l1_vk_hash =
           t.verification_keys.bridge_mina_token_owner
-      ; l2_holder_vk_hash = t.verification_keys.bridge_mina_l2
+      ; l2_holder_vk_hash = l2_holder_vk_hash t
       ; prev_nonce
       ; helper_account_new
       }
