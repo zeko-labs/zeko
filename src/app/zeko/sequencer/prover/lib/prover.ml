@@ -87,10 +87,10 @@ struct
          | `Full of System.Stmt.t ] ) ~elems : out_t Promise.t =
     match elems with
     | [] -> (
-        (* No need for folding, everything goes to excess *)
         match source with
         | `Full source ->
-            Promise.return (None, source)
+            let%map.Promise trans, proof = System.leaf_option ([], source) in
+            (Some proof, trans.target)
         | `Extend (trans, proof) ->
             Promise.return (Some proof, trans.target) )
     | elems_to_prove ->

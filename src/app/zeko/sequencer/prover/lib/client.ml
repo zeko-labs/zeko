@@ -266,6 +266,7 @@ let map_to_cached_source (type trans stmt) t
           (`Extend (trans, proof), List.drop elems extension_length) )
 
 let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
+    ?(prove_empty = false)
     (module Folder_iterations : Zeko_constants.FOLDER_ITERATIONS)
     ~(map_to_cached_source :
        source:stmt -> elems:elem list -> ('source * elem list) Deferred.t )
@@ -289,7 +290,7 @@ let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
         r )
   in
   match elems_to_prove with
-  | [] ->
+  | [] when not prove_empty ->
       return (Ok (None, source, excess))
   | elems_to_prove -> (
       let%bind input = map_to_cached_source ~source ~elems:elems_to_prove in
@@ -299,10 +300,10 @@ let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
       | Ok (proof, target) ->
           let%bind () =
             match proof with
-            | Some proof ->
+            | Some proof when not (List.is_empty elems_to_prove) ->
                 cache_ase_proof t ~source ~target ~proof
                   ~extension_length:(List.length elems_to_prove)
-            | None ->
+            | Some _ | None ->
                 return ()
           in
           return (Ok (proof, target, excess)) )
@@ -327,8 +328,8 @@ let ethereum_asset_registry_folder t =
     ~cache_ase_proof:(fun _ ~source:_ ~target:_ ~proof:_ ~extension_length:_ ->
       return () )
 
-let ase_cached_folder_with_length t =
-  folder' t
+let ase_cached_folder_with_length ?(prove_empty = false) t =
+  folder' t ~prove_empty
     (module Zeko_constants.Folder_iterations.Ase.With_length)
     ~map_to_cached_source:
       (map_to_cached_source t
@@ -337,8 +338,8 @@ let ase_cached_folder_with_length t =
          ~find_ase_by_source:Ase_cache_with_length_table.find_ase_by_source )
     ~cache_ase_proof:cache_ase_with_length
 
-let ase_cached_folder_without_length t =
-  folder' t
+let ase_cached_folder_without_length ?(prove_empty = false) t =
+  folder' t ~prove_empty
     (module Zeko_constants.Folder_iterations.Ase.Without_length)
     ~map_to_cached_source:
       (map_to_cached_source t
@@ -464,8 +465,10 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
   (* Counting length of inner action state *)
   let%bind.Deferred.Result inner_ase =
     let%map.Deferred.Result proof, target, excess =
+      (* Pickles aggregation can reject conditional dummy proofs while wrapping.
+         Generate a zero-length leaf proof when there are no new actions. *)
       ase_cached_folder_with_length t ~source:inner_ase_source
-        ~elems:new_inner_actions
+        ~elems:new_inner_actions ~prove_empty:true
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.inner
         (ase_with_length ~sendfn:send_with_priority)
     in
@@ -482,8 +485,10 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
       Rollup_state.Outer_action_state.With_length.raw outer_action_state
     in
     let%map.Deferred.Result proof, target, excess =
+      (* See the inner ASE above: give the two-proof aggregator a concrete
+         predecessor for an empty transition too. *)
       ase_cached_folder_without_length t ~source:action_state
-        ~elems:unprocessed_actions
+        ~elems:unprocessed_actions ~prove_empty:true
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.outer
         (ase_without_length ~sendfn:send_with_priority)
     in
