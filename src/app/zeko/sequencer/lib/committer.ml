@@ -93,6 +93,33 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   in
   let old_inner_acc, old_inner_acc_path = get_inner_acc old_inner_ledger in
   let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
+  let ethereum_asset_registry_state ledger =
+    if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+      let account_id =
+        Account_id.create
+          Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+          Token_id.default
+      in
+      let index = Sparse_ledger.find_index_exn ledger account_id in
+      let account = Sparse_ledger.get_exn ledger index in
+      let app_state =
+        (Option.value_exn account.zkapp).app_state |> Zkapp_state.V.to_list
+      in
+      ( List.nth_exn app_state 0
+      , List.nth_exn app_state 1
+      , List.nth_exn app_state 2 )
+    else (Field.zero, Field.zero, Field.zero)
+  in
+  let ( old_ethereum_asset_registry_root
+      , old_ethereum_asset_registry_count
+      , old_ethereum_asset_registry_schema ) =
+    ethereum_asset_registry_state old_inner_ledger
+  in
+  let ( ethereum_asset_registry_root
+      , ethereum_asset_registry_count
+      , ethereum_asset_registry_schema ) =
+    ethereum_asset_registry_state new_inner_ledger
+  in
   let%bind outer_state, inner_ase_source, emergency_mode =
     let%map outer_account =
       Gql_client.infer_state ~logger l1_uri ~zkapp_pk
@@ -191,7 +218,8 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
       Zeko_prover.Client.outer_commit provers ~txn_snark ~public_key:zkapp_pk
         ~inner_ase_source ~new_inner_actions ~old_inner_acc ~old_inner_acc_path
         ~new_inner_acc ~new_inner_acc_path ~unprocessed_actions ~da_multisig
-        ~slot_range ~emergency_mode
+        ~slot_range ~emergency_mode ~ethereum_asset_registry_root
+        ~ethereum_asset_registry_count ~ethereum_asset_registry_schema
     in
     let%map settlement_export =
       match Is_compile_simple_real.is_compile_simple_real with
@@ -208,6 +236,16 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
             ~inner_action_batch:
               (Ethereum_settlement_export.inner_action_batch_json ~archive
                  new_inner_action_records )
+            ?asset_registry_batch:
+              ( if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+                Ethereum_settlement_export.asset_registry_batch_json ~archive
+                  ~old_root:old_ethereum_asset_registry_root
+                  ~old_count:old_ethereum_asset_registry_count
+                  ~old_schema:old_ethereum_asset_registry_schema
+                  ~new_root:ethereum_asset_registry_root
+                  ~new_count:ethereum_asset_registry_count
+                  ~new_schema:ethereum_asset_registry_schema
+              else None )
           >>| Option.some
     in
     (* see #286 *)

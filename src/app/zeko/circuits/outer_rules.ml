@@ -12,6 +12,9 @@ module Make (Inputs : sig
   val max_sequencer_inactivity : int
 
   val emergency_da_public_key : Signature_lib.Public_key.Compressed.t
+
+  val ethereum_asset_registry_public_key :
+    Signature_lib.Public_key.Compressed.t option
 end)
 () =
 struct

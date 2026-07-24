@@ -68,14 +68,14 @@ belongs in the admin contract and bridge-vault verification key.
 
 ## L2 account topology
 
-For one registered ERC-20 asset:
+For every registered ERC-20 asset:
 
 | Role | Mina account ID | Authorization and purpose |
 | --- | --- | --- |
 | Token owner | `(ft_owner_pk, TokenId.default)` | Unmodified `FungibleToken`; owns `ft_token_id = derive_token_id(owner_account_id)` and runs `approveBase`. |
 | Token admin | `(ft_admin_pk, TokenId.default)` | Separate admin contract. For the vault model it authorizes only the bounded deployment mint, pause/resume, and governed upgrades. |
 | Circulation account | `(ft_owner_pk, ft_token_id)` | Reserved by the standard for supply accounting. Never use it as the bridge vault. |
-| Bridge vault | `(holder_account_l2, ft_token_id)` | Holds the pre-minted bridge inventory and uses the custom bridge L2 verification key. This is `Inputs.holder_account_l2` under `Inputs.token_owner_l2`. |
+| Bridge vault | `(shared_vault_l2, ft_token_id)` | Holds that asset's pre-minted inventory and uses the universal bridge verification key. Every asset shares the public key and VK but has a distinct derived token ID/account/balance. |
 | User balance | `(user_pk, ft_token_id)` | Ordinary standard fungible-token account. |
 | Deposit replay helper | `(user_pk, derive_token_id(bridge_vault_account_id))` | Stores `next_deposit`; it is a subtoken of the bridge vault, not an FT balance. |
 | Rollup inner account | `(zeko_l2, TokenId.default)` | Existing rollup state and synchronized Ethereum action checkpoint. |
@@ -85,10 +85,11 @@ the derived token ID. The existing helper `token_owner_id` performs that
 derivation for custom assets
 ([`zeko_util.ml`, lines 433-437](../zeko_util.ml#L433-L437)).
 
-Each supported ERC-20 gets its own token owner, token ID, vault, circuit
-instance/verification key, fee policy, and asset registry entry. A single
-generic proof can be considered later, but the current circuits take these
-values as compile-time inputs.
+Each supported ERC-20 gets its own token owner, derived token ID, inventory,
+fee policy, and immutable registry entry. The owner and token ID are dynamic
+verified-record values. All assets use the same registry-configured vault public
+key and universal bridge circuit/verification key; the derived token ID keeps
+their vault balances and replay helpers independent.
 
 ## Asset and amount binding
 
@@ -326,12 +327,15 @@ This branch implements the security-critical cross-chain seam:
 
 The executable Mina Fungible Token orchestration follows the same boundary:
 
-- the sequencer config accepts one immutable asset ID, Ethereum token address,
-  L2 token owner, derived token ID, and vault, and compiles the corresponding
-  `Make_ethereum_token` check-accepted and L2 systems;
-- public bridge types, prover jobs, VK responses, and proof dispatch carry the
-  Ethereum-token instance explicitly rather than falling through the native
-  Mina instance;
+- the sequencer config accepts the registry account, schema, approved MFT
+  standard VK ID, shared vault public key, and universal bridge VK ID;
+- public bridge types, prover jobs, VK responses, and proof dispatch carry a
+  verified asset record plus membership path through one
+  `Make_ethereum_assets` circuit family;
+- registration uses the existing recursive folder pattern to scan every dense
+  old leaf at the next exact index, reject duplicate Ethereum token, asset ID,
+  owner, or derived token ID, verify an empty append slot, and commit the
+  incremented root/count;
 - GraphQL exposes proof-only token deposit-finalization and withdrawal-request
   mutations plus the immutable public token configuration;
 - withdrawal input carries the complete standard token-owner account-update
@@ -340,34 +344,34 @@ The executable Mina Fungible Token orchestration follows the same boundary:
 - the bridge SDK checks the returned vault forest and owner public input, grafts
   the genuine standard-token proof/signature authorizations, and only then
   submits the complete L2 transaction; and
-- the operator deployment helper validates the Solidity registry/cap and Zeko
-  configuration, deploys unmodified `FungibleToken`/`FungibleTokenAdmin`, locks
-  the separate bridge vault to the circuit VK with proof-authorized sends, and
-  mints exactly the registered cap.
+- the operator deployment helper validates each pending Solidity record and
+  Zeko membership, deploys unmodified `FungibleToken`/`FungibleTokenAdmin`,
+  locks each token-specific shared-vault account to the universal VK with
+  proof-authorized sends, and mints exactly the registered cap.
 
-The current runtime remains deliberately one-asset-per-circuit. Supporting
-multiple ERC-20s in one sequencer requires explicit circuit/VK routing rather
-than weakening these immutable bindings.
+The archive and Actions indexer reconstruct immutable records and refreshed
+membership paths after later appends. They are availability aids, not security
+boundaries: the circuit authenticates the registry account root/count, and the
+settlement guest binds the OCaml Poseidon transition to the same ordered
+canonical records activated by Solidity.
 
-The archive is an availability aid, not a security boundary. The settlement
-guest must recompute the versioned leaf from proof-bound action fields and reject
-archive metadata that does not match.
 
 ## Deployment and upgrade policy
 
-Deploy one asset atomically where possible:
+Onboard one asset atomically where possible:
 
-1. publish the immutable asset registry entry and canonical action schema;
+1. propose the exact immutable Solidity record in `Pending` state;
 2. deploy the admin and unmodified `FungibleToken`, initialize decimals and
    circulation, and verify the expected standard verification keys;
-3. create the custom-token bridge vault with the enabled bridge VK and proof
-   permissions;
+3. create the token-specific account at the shared vault public key with the
+   universal bridge VK and locked proof permissions;
 4. mint the bounded inventory to the vault, then revoke or enforce the configured
    mint cap;
 5. fund all default-token account-creation costs and helper sponsorship policy;
-6. register the exact asset ID, L2 token owner/token ID, circuit VK ID, decimals,
-   and limits in Solidity and settlement configuration; and
-7. unpause only after a cross-chain deposit/withdrawal/cancellation rehearsal.
+6. append the canonical record through the exhaustive Zeko registry transition,
+   settle the new root/count and ordered record batch, and activate exactly that
+   pending Solidity proposal; and
+7. enable deposits only after a cross-chain deposit/withdrawal rehearsal.
 
 For the strongest first deployment, set the standard token owner's
 `allowUpdates` to false. If upgrades are required, use the standard's supported
@@ -384,23 +388,25 @@ the derived token ID
 
 The branch now has these executable gates:
 
-1. OCaml, Rust, and TypeScript share the asset-bound ERC-20 deposit vector and
-   the OCaml withdrawal vector binds the complete owner body and debit-first
-   forest.
-2. Circuit-vector tests exercise accepted deposit finalization, helper-account
-   progression, custom-token denomination, token inheritance, and withdrawal
+1. OCaml, Rust, Solidity, and TypeScript share canonical record, asset/action,
+   registry-transition, and settlement receipt encodings.
+2. Registry vectors cover empty, populated, and maximum-size scans plus wrong
+   roots/counts, repeated/skipped/reordered leaves, non-empty append slots, and
+   every uniqueness dimension.
+3. Universal circuit vectors exercise two dynamic owners through one circuit
+   tag/VK, registry membership rejection, accepted deposit finalization,
+   helper-account progression, denomination, token inheritance, and withdrawal
    action/export fields.
-3. The bridge SDK rejects malformed/wrong-asset/wrong-owner/wrong-VK forests and
+4. The bridge SDK rejects malformed/wrong-asset/wrong-owner/wrong-VK forests and
    runs a local ledger roundtrip through the unmodified standard owner's
    `approveBase`: exact-cap vault provisioning, vault-to-user deposit, then
    user-to-vault withdrawal.
-4. Settlement guest, gateway, and Solidity tests cover the canonical V2 deposit
-   leaf, V3 withdrawal leaf, immutable registry, cap/liability accounting,
-   replay rejection, and delayed ERC-20 release.
-
-A combined live Anvil-to-real-sequencer rehearsal remains a release/deployment
-gate. It must preserve the same immutable circuit/VK manifest and should include
-vault exhaustion, duplicate index, pause, and unsupported-token cases.
+5. Settlement guest, gateway, and Solidity tests cover V4 batched registry
+   synchronization, pending/activation status, V2 deposits, V3 withdrawals,
+   per-token caps/liabilities, replay rejection, and delayed release.
+6. The full local gate uses the real sequencer/prover, three DA nodes, Actions
+   services, two unmodified token owners, one shared vault key/VK, Anvil custody,
+   and exact claims without generating an SP1 proof.
 
 After implementation, run the repository gates from a persistent `tmux` session
 for the heavy commands:

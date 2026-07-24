@@ -136,6 +136,8 @@ module Make (Inputs : sig
   val max_sequencer_inactivity : int
 
   val emergency_da_public_key : PC.t
+
+  val ethereum_asset_registry_public_key : PC.t option
 end) =
 struct
   open Inputs
@@ -163,6 +165,9 @@ struct
       ; da_multisig : Multisig.Witness.t
       ; slot_range : Slot_range.t
       ; emergency_mode : Zeko_util.Boolean.t
+      ; ethereum_asset_registry_root : F.t
+      ; ethereum_asset_registry_count : F.t
+      ; ethereum_asset_registry_schema : F.t
       }
     [@@deriving snarky]
   end
@@ -214,6 +219,9 @@ struct
          ; da_multisig
          ; slot_range
          ; emergency_mode
+         ; ethereum_asset_registry_root
+         ; ethereum_asset_registry_count
+         ; ethereum_asset_registry_schema
          }
           : Base_witness.var ) =
       w
@@ -537,6 +545,36 @@ struct
       ; use_full_commitment = Boolean.true_
       }
     in
+    let ethereum_asset_registry_account_update_opt =
+      Option.map Inputs.ethereum_asset_registry_public_key
+        ~f:(fun registry_public_key ->
+          let registry_state : Asset_registry.Registry_state.var =
+            { root = ethereum_asset_registry_root
+            ; leaf_count =
+                Zeko_util.Checked32.Checked.Unsafe.of_field
+                  ethereum_asset_registry_count
+            ; schema_version =
+                Zeko_util.Checked32.Checked.Unsafe.of_field
+                  ethereum_asset_registry_schema
+            }
+          in
+          { default_account_update with
+            public_key = constant PC.typ registry_public_key
+          ; preconditions =
+              { default_account_update.preconditions with
+                account =
+                  { default_account_update.preconditions.account with
+                    state =
+                      Asset_registry.Registry_state.fine
+                        { root = Some registry_state.root
+                        ; leaf_count = Some registry_state.leaf_count
+                        ; schema_version = Some registry_state.schema_version
+                        }
+                      |> var_to_precondition_fine
+                  }
+              }
+          } )
+    in
     let emergency_da_account_update_opt =
       match da_mode with
       | Emergency emergency_da_stmt ->
@@ -560,15 +598,25 @@ struct
     in
 
     (* Assemble some stuff to help the prover and calculate public output *)
+    let calls : Calls.t =
+      match
+        ( ethereum_asset_registry_account_update_opt
+        , emergency_da_account_update_opt )
+      with
+      | None, None ->
+          [ (sequencer_account_update, []) ]
+      | Some registry, None ->
+          [ (sequencer_account_update, []); (registry, []) ]
+      | None, Some emergency_da ->
+          [ (sequencer_account_update, []); (emergency_da, []) ]
+      | Some registry, Some emergency_da ->
+          [ (sequencer_account_update, [])
+          ; (registry, [])
+          ; (emergency_da, [])
+          ]
+    in
     let*| out =
-      make_outputs ~chain:chain_l1 account_update
-        ( (sequencer_account_update, [])
-        ::
-        ( match emergency_da_account_update_opt with
-        | None ->
-            []
-        | Some emergency_da_au ->
-            [ (emergency_da_au, []) ] ) )
+      make_outputs ~chain:chain_l1 account_update calls
     in
     out
 

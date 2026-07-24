@@ -57,10 +57,10 @@ module Bridge_inst_mina =
   Bridge_rules.Make_mina (Zeko_circuits_config.Inputs) ()
 
 module Bridge_inst_ethereum_token =
-  Bridge_rules.Make_ethereum_token
+  Bridge_rules.Make_ethereum_assets
     (struct
       include Zeko_circuits_config.Inputs
-      include Zeko_circuits_config.Inputs.Ethereum_token
+      include Zeko_circuits_config.Inputs.Ethereum_assets
     end)
     ()
 
@@ -782,6 +782,9 @@ module Outer_commit = struct
       ; new_inner_acc_path : Path.t
       ; da_multisig : Multisig.Witness.t
       ; slot_range : Slot_range.t
+      ; ethereum_asset_registry_root : F.t
+      ; ethereum_asset_registry_count : F.t
+      ; ethereum_asset_registry_schema : F.t
       ; verify_both_ases : Verify_both_ases.serializable
       }
     [@@deriving yojson]
@@ -797,6 +800,9 @@ module Outer_commit = struct
          ; new_inner_acc_path
          ; da_multisig
          ; slot_range
+         ; ethereum_asset_registry_root
+         ; ethereum_asset_registry_count
+         ; ethereum_asset_registry_schema
          } :
           serializable ) ~vk_hash : t =
       { base_witness =
@@ -809,6 +815,9 @@ module Outer_commit = struct
           ; new_inner_acc_path
           ; da_multisig
           ; slot_range
+          ; ethereum_asset_registry_root
+          ; ethereum_asset_registry_count
+          ; ethereum_asset_registry_schema
           }
       ; txn_snark = Txn_snark.of_serializable txn_snark
       ; verify_both_ases = Verify_both_ases.of_serializable verify_both_ases
@@ -1101,6 +1110,68 @@ module Bridge = struct
         excess
   end
 
+  module Ethereum_asset_registry = struct
+    module Registry = Bridge_inst_ethereum_token.Registry
+
+    module Scan = struct
+      include Registry.Scan
+      include Registry.Scan.Definition
+
+      module Stmt = struct
+        type t = Registry.Scan.Definition.Stmt.t =
+          { old_root : F.t
+          ; leaf_count : Checked32.t
+          ; candidate : Asset_registry.Asset_record.t
+          ; next_expected_index : Checked32.t
+          ; traversed_count : Checked32.t
+          }
+        [@@deriving yojson]
+      end
+
+      module Elem = struct
+        type t = Registry.Scan.Definition.Elem.t =
+          { active : bool
+          ; record : Asset_registry.Asset_record.t
+          ; path : Asset_registry.Path.t
+          }
+        [@@deriving yojson]
+      end
+
+      module Init = struct
+        type t = Registry.Scan.Definition.Init.t =
+          { old_state : Asset_registry.Registry_state.t
+          ; candidate : Asset_registry.Asset_record.t
+          }
+        [@@deriving yojson]
+      end
+    end
+
+    type serializable =
+      { proof : Compile_simple.Proof.t option
+      ; proof_source : Scan.Stmt.t
+      ; proof_target : Scan.Stmt.t
+      ; init : Scan.Init.t
+      ; excess : Scan.Elem.t list
+      ; append_path : Asset_registry.Path.t
+      }
+    [@@deriving yojson]
+
+    let of_serializable ~registry_vk_hash
+        ({ proof
+         ; proof_source
+         ; proof_target
+         ; init
+         ; excess
+         ; append_path
+         } :
+          serializable ) : Registry.Register.Witness.t =
+      { scan =
+          Registry.Scan_inst.make ?proof ~proof_source ~proof_target init excess
+      ; append_path
+      ; registry_vk_hash
+      }
+  end
+
   module Finalize_deposit = struct
     module Ase_inst = Ase.Make_serializable_ase (struct
       module Ase_system = Ase.With_length
@@ -1137,6 +1208,7 @@ module Bridge = struct
           serializable ) ~vk_hash : t =
       { public_key
       ; vk_hash
+      ; asset = ()
       ; may_use_token
       ; inner_authorization_kind
       ; ase = Ase_inst.of_serializable ase
@@ -1161,6 +1233,7 @@ module Bridge = struct
 
     type serializable =
       { public_key : Public_key.Compressed.t
+      ; asset : Bridge_inst_ethereum_token.Registry.Membership_witness.t
       ; may_use_token :
           Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit.May_use_token
           .t
@@ -1175,6 +1248,7 @@ module Bridge = struct
 
     let of_serializable ~proof_cache_db
         ({ public_key
+         ; asset
          ; may_use_token
          ; inner_authorization_kind
          ; ase
@@ -1186,6 +1260,7 @@ module Bridge = struct
           serializable ) ~vk_hash : t =
       { public_key
       ; vk_hash
+      ; asset
       ; may_use_token
       ; inner_authorization_kind
       ; ase = Ase_inst.of_serializable ase
@@ -1304,18 +1379,22 @@ module Bridge = struct
     [@@deriving yojson]
 
     let of_serializable ({ public_key; amount } : serializable) ~vk_hash : t =
-      { public_key; vk_hash; amount }
+      { public_key; vk_hash; asset = (); amount }
   end
 
   module Inner_receive_ethereum_token = struct
     type t = Bridge_inst_ethereum_token.Rule_bridge_inner_receive.Witness.t
 
     type serializable =
-      { public_key : Public_key.Compressed.t; amount : Currency.Amount.t }
+      { public_key : Public_key.Compressed.t
+      ; asset : Bridge_inst_ethereum_token.Registry.Membership_witness.t
+      ; amount : Currency.Amount.t
+      }
     [@@deriving yojson]
 
-    let of_serializable ({ public_key; amount } : serializable) ~vk_hash : t =
-      { public_key; vk_hash; amount }
+    let of_serializable ({ public_key; asset; amount } : serializable) ~vk_hash :
+        t =
+      { public_key; vk_hash; asset; amount }
   end
 
   module Withdrawal_params_ethereum_token = struct

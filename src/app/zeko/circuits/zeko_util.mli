@@ -53,6 +53,12 @@ module F : sig
   val typ : (var, t) Typ.t
 
   val pp : Format.formatter -> Pasta_bindings.Fp.t -> unit
+
+  val equal : t -> t -> bool
+
+  val to_yojson : t -> Yojson.Safe.t
+
+  val of_yojson : Yojson.Safe.t -> (t, string) Result.t
 end
 
 module type SnarkType = sig

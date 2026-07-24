@@ -51,7 +51,7 @@ let point_of_string value =
     to_affine_exn @@ point_near_x @@ Field.of_string value)
   |> Signature_lib.Public_key.compress
 
-let erc20_deposit_params () =
+let erc20_deposit_params ?(asset_id_low = Field.of_int 2) () =
   let base : Zeko_circuits.Bridge_state.Deposit_params_base.t =
     { children = []
     ; holder_account_l1 = ({ x = Field.one; is_odd = false } : PC.t)
@@ -60,7 +60,7 @@ let erc20_deposit_params () =
     ; timeout = Mina_numbers.Global_slot_since_genesis.max_value
     }
   in
-  ( { asset_id_high = Field.one; asset_id_low = Field.of_int 2; base }
+  ( { asset_id_high = Field.one; asset_id_low; base }
     : Zeko_circuits.Bridge_state.Deposit_params_ethereum_token.t )
 
 let run_erc20_deposit_action ~expected_asset_low =
@@ -109,21 +109,23 @@ let check_erc20_deposit_witness_action () =
   then failwith "Ethereum ERC20 deposit circuit accepted the wrong asset"
 
 module Ethereum_token_bridge =
-  Zeko_circuits.Bridge_rules.Make_ethereum_token
+  Zeko_circuits.Bridge_rules.Make_ethereum_assets
     (struct
-      let token_owner_l2 =
-        Mina_base.Account_id.create (point_of_string "344213")
-          Mina_base.Token_id.default
+      let registry_public_key = point_of_string "22222"
+
+      let registry_schema_version =
+        Zeko_circuits.Zeko_util.Checked32.of_int
+          Zeko_constants.Ethereum_asset_registry.schema_version
+
+      let approved_mft_standard_vk_id = Field.of_int 777
+
+      let universal_bridge_vk_id = Field.of_int 778
+
+      let vault_public_key = point_of_string "11111"
 
       let ethereum_holder_account_l1 : PC.t = { x = Field.one; is_odd = false }
 
-      let ethereum_asset_id_high = Field.one
-
-      let ethereum_asset_id_low = Field.of_int 2
-
       let zeko_l2 = point_of_string "39921"
-
-      let holder_account_l2 = point_of_string "11111"
 
       let bridge_fee_recipient_l1 = point_of_string "765431"
 
@@ -138,11 +140,79 @@ module Ethereum_token_bridge =
     end)
     ()
 
-let check_erc20_finalize_deposit () =
+let registered_asset index token_owner_l2 asset_id_low =
+  let open Mina_base in
+  let owner = Account_id.create token_owner_l2 Token_id.default in
+  ({ schema_version =
+       Zeko_circuits.Zeko_util.Checked32.of_int
+         Zeko_constants.Ethereum_asset_registry.schema_version
+   ; registry_index = Zeko_circuits.Zeko_util.Checked32.of_int index
+   ; asset_id_high = Field.one
+   ; asset_id_low
+   ; ethereum_token_address = Field.of_int (5000 + index)
+   ; token_owner_l2
+   ; token_id_l2 = Account_id.derive_token_id ~owner
+   ; decimals = Zeko_circuits.Zeko_util.Checked32.of_int 6
+   ; inventory_cap = amount "100000000"
+   ; mft_standard_vk_id = Field.of_int 777
+   ; vault_public_key = point_of_string "11111"
+   ; universal_bridge_vk_id = Field.of_int 778
+   } :
+    Zeko_circuits.Asset_registry.Asset_record.t )
+
+let first_registered_asset =
+  registered_asset 0 (point_of_string "344213") (Field.of_int 2)
+
+let first_registry_tree =
+  Zeko_circuits.Asset_registry.Merkle_list.empty ()
+  |> fun tree ->
+  Zeko_circuits.Asset_registry.Merkle_list.append_exn tree
+    first_registered_asset
+
+let first_membership : Ethereum_token_bridge.Registry.Membership_witness.t =
+  { state =
+      { root =
+          Zeko_circuits.Asset_registry.Merkle_list.root first_registry_tree
+      ; leaf_count = Zeko_circuits.Zeko_util.Checked32.one
+      ; schema_version =
+          Zeko_circuits.Zeko_util.Checked32.of_int
+            Zeko_constants.Ethereum_asset_registry.schema_version
+      }
+  ; record = first_registered_asset
+  ; path =
+      Zeko_circuits.Asset_registry.Merkle_list.path first_registry_tree ~index:0
+  }
+
+let second_registered_asset =
+  registered_asset 1 (point_of_string "344214") (Field.of_int 3)
+
+let second_registry_tree =
+  Zeko_circuits.Asset_registry.Merkle_list.append_exn first_registry_tree
+    second_registered_asset
+
+let second_membership : Ethereum_token_bridge.Registry.Membership_witness.t =
+  { state =
+      { root =
+          Zeko_circuits.Asset_registry.Merkle_list.root second_registry_tree
+      ; leaf_count = Zeko_circuits.Zeko_util.Checked32.of_int 2
+      ; schema_version =
+          Zeko_circuits.Zeko_util.Checked32.of_int
+            Zeko_constants.Ethereum_asset_registry.schema_version
+      }
+  ; record = second_registered_asset
+  ; path =
+      Zeko_circuits.Asset_registry.Merkle_list.path second_registry_tree ~index:1
+  }
+
+let check_erc20_finalize_deposit
+    ~(membership : Ethereum_token_bridge.Registry.Membership_witness.t) =
   let open Mina_base in
   let open Zeko_circuits in
   let open Zeko_util in
-  let params = erc20_deposit_params () in
+  let registered_asset = membership.record in
+  let params =
+    erc20_deposit_params ~asset_id_low:registered_asset.asset_id_low ()
+  in
   let base = params.base in
   let witness : Rollup_state.Outer_action.Witness.t =
     { aux =
@@ -235,8 +305,9 @@ let check_erc20_finalize_deposit () =
     Promise.block_on_async_exn
     @@ fun () ->
     finalize_deposit
-      { public_key = point_of_string "11111"
+      { public_key = registered_asset.vault_public_key
       ; vk_hash
+      ; asset = membership
       ; may_use_token = Parents_own_token
       ; inner_authorization_kind = Rule_bridge_finalize_deposit.A.None_given
       ; ase =
@@ -249,10 +320,7 @@ let check_erc20_finalize_deposit () =
       ; helper_account_new = true
       }
   in
-  let token_owner =
-    Account_id.create (point_of_string "344213") Token_id.default
-  in
-  let token_id = Account_id.derive_token_id ~owner:token_owner in
+  let token_id = registered_asset.token_id_l2 in
   if not (Token_id.equal vault.token_id token_id) then
     failwith "Ethereum ERC20 deposit debited the wrong vault token" ;
   if
@@ -263,7 +331,15 @@ let check_erc20_finalize_deposit () =
   if vault.implicit_account_creation_fee then
     failwith "Ethereum ERC20 vault charged an implicit MINA fee" ;
   match Zkapp_command.Call_forest.to_account_updates calls with
-  | [ _helper; _inner_witness; recipient; zero_fee ] ->
+  | [ helper; _inner_witness; recipient; zero_fee; registry ] ->
+      let expected_helper_token =
+        Account_id.create registered_asset.vault_public_key token_id
+        |> fun owner -> Account_id.derive_token_id ~owner
+      in
+      if not (Token_id.equal helper.body.token_id expected_helper_token) then
+        failwith
+          "Ethereum ERC20 replay helper did not derive from the full vault \
+           account ID" ;
       if not (Token_id.equal recipient.body.token_id token_id) then
         failwith "Ethereum ERC20 deposit credited the wrong token" ;
       if
@@ -282,7 +358,12 @@ let check_erc20_finalize_deposit () =
         not
           (Currency.Amount.Signed.equal zero_fee.body.balance_change
              Currency.Amount.Signed.zero )
-      then failwith "Ethereum ERC20 circuit emitted a token-denominated fee"
+      then failwith "Ethereum ERC20 circuit emitted a token-denominated fee" ;
+      if
+        not
+          (PC.equal registry.body.public_key (point_of_string "22222"))
+      then failwith "Ethereum ERC20 circuit did not authenticate the registry" ;
+      helper.body.token_id
   | _ ->
       failwith "Ethereum ERC20 finalize-deposit forest shape mismatch"
 
@@ -333,57 +414,33 @@ let erc20_withdrawal_params_fields () =
   let params : Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.t =
     { asset_id_high = Field.one; asset_id_low = Field.of_int 2; custom }
   in
-  let configured_token_owner =
-    Zeko_circuits_config.Inputs.Ethereum_token.token_owner_l2
+  let Compile_simple.[ _finalize; inner_receive; _multisig ] =
+    Lazy.force Ethereum_token_bridge.System_L2.provers
   in
-  let configured_debit =
-    Account_update.with_aux
-      ~body:
-        { debit_body with
-          token_id = Account_id.derive_token_id ~owner:configured_token_owner
-        }
-      ~authorization:Control.Poly.None_given
-  in
-  let precompute_params :
-      Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.t =
-    { Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.asset_id_high =
-        Zeko_circuits_config.Inputs.Ethereum_token.ethereum_asset_id_high
-    ; asset_id_low =
-        Zeko_circuits_config.Inputs.Ethereum_token.ethereum_asset_id_low
-    ; custom =
-        { custom with
-          token_owner_body =
-            { custom.token_owner_body with
-              public_key = Account_id.public_key configured_token_owner
-            ; token_id = Account_id.token_id configured_token_owner
-            }
-        ; nested_children =
-            Zkapp_command.Call_forest.cons
-              ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-              configured_debit []
-        }
-    }
-  in
-  let precomputed : Sequencer_lib.Bridge_prover.precomputed_forest =
-    Sequencer_lib.Bridge_prover.Ethereum_token_withdrawal_request
-    .precompute_forest_with_vk_hashes
-      ~bridge_ethereum_token_l2_vk_hash:Field.one
-      ~inner_rules_vk_hash:(Field.of_int 2) precompute_params
-    |> Or_error.ok_exn
-  in
-  ( match precomputed with
-  | [ { elt = { calls = { elt = { calls = [ _debit; vault ]; _ }; _ } :: _; _ }
-      ; _
+  let (_statement, (vault_body, _digest, registry_calls)), _proof =
+    Promise.block_on_async_exn
+    @@ fun () ->
+    inner_receive
+      { public_key = first_registered_asset.vault_public_key
+      ; vk_hash = Field.one
+      ; asset = first_membership
+      ; amount = withdrawal_amount
       }
-    ] ->
-      let vault_body = vault.elt.account_update.body in
-      if vault_body.use_full_commitment then
-        failwith "Ethereum ERC20 withdrawal vault uses the full commitment" ;
-      if vault_body.implicit_account_creation_fee then
-        failwith
-          "Ethereum ERC20 withdrawal vault charges an account-creation fee"
+  in
+  if vault_body.use_full_commitment then
+    failwith "Ethereum ERC20 withdrawal vault uses the full commitment" ;
+  if vault_body.implicit_account_creation_fee then
+    failwith "Ethereum ERC20 withdrawal vault charges an account-creation fee" ;
+  if not (Token_id.equal vault_body.token_id first_registered_asset.token_id_l2)
+  then failwith "Ethereum ERC20 withdrawal used the wrong registered token" ;
+  ( match Zkapp_command.Call_forest.to_account_updates registry_calls with
+  | [ registry ] ->
+      if
+        not
+          (PC.equal registry.body.public_key (point_of_string "22222"))
+      then failwith "Ethereum ERC20 withdrawal did not authenticate the registry"
   | _ ->
-      failwith "unexpected ERC20 precomputed forest" ) ;
+      failwith "unexpected ERC20 registry precondition forest" ) ;
   let params_fields =
     Utils.value_to_fields
       Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.typ params
@@ -410,7 +467,14 @@ let () =
     Lazy.force Ethereum_token_bridge.System_L2.provers
   in
   check_erc20_deposit_witness_action () ;
-  check_erc20_finalize_deposit () ;
+  let first_helper_token =
+    check_erc20_finalize_deposit ~membership:first_membership
+  in
+  let second_helper_token =
+    check_erc20_finalize_deposit ~membership:second_membership
+  in
+  if Mina_base.Token_id.equal first_helper_token second_helper_token then
+    failwith "distinct registered assets reused a replay-helper token ID" ;
   let withdrawal_params_fields, withdrawal_aux =
     erc20_withdrawal_params_fields ()
   in

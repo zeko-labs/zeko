@@ -18,6 +18,16 @@ module Ethereum_token = struct
   [@@deriving yojson]
 end
 
+module Ethereum_assets = struct
+  type t =
+    { registry_public_key : Public_key.Compressed.t
+    ; vault_public_key : Public_key.Compressed.t
+    ; approved_mft_standard_vk_id : string
+    ; universal_bridge_vk_id : string
+    }
+  [@@deriving yojson]
+end
+
 type t =
   { chain_l1 : Mina_signature_kind.t
   ; chain_l2 : Mina_signature_kind.t
@@ -26,6 +36,7 @@ type t =
   ; holder_accounts_l1 : Public_key.Compressed.t list
   ; ethereum_holder_account_l1 : Public_key.Compressed.t option [@default None]
   ; ethereum_token : Ethereum_token.t option [@default None]
+  ; ethereum_assets : Ethereum_assets.t option [@default None]
   ; helper_token_owner_l1 : Public_key.Compressed.t
   ; zeko_l1 : Public_key.Compressed.t
   ; emergency_da_public_key : Public_key.Compressed.t
@@ -169,6 +180,7 @@ let (t, deploy_config) : t * Deploy.t option =
         ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
         ; ethereum_holder_account_l1 = None
         ; ethereum_token = None
+        ; ethereum_assets = None
         ; helper_token_owner_l1 = fst helper_token_owner_l1
         ; zeko_l1 = fst zeko_l1
         ; emergency_da_public_key = fst emergency_da
@@ -273,6 +285,48 @@ module Inputs = struct
       | false, None ->
           Zeko_constants.inner_holder_key
   end
+
+  module Ethereum_assets = struct
+    let enabled = Option.is_some t.ethereum_assets
+
+    let config =
+      Option.value t.ethereum_assets
+        ~default:
+          { Ethereum_assets.registry_public_key = Zeko_constants.inner_holder_key
+          ; vault_public_key = Zeko_constants.inner_holder_key
+          ; approved_mft_standard_vk_id = "1"
+          ; universal_bridge_vk_id = "2"
+          }
+
+    let registry_public_key = config.registry_public_key
+
+    let registry_schema_version =
+      Zeko_circuits.Zeko_util.Checked32.of_int
+        Zeko_constants.Ethereum_asset_registry.schema_version
+
+    let approved_mft_standard_vk_id =
+      Snark_params.Tick.Field.of_string config.approved_mft_standard_vk_id
+
+    let universal_bridge_vk_id =
+      Snark_params.Tick.Field.of_string config.universal_bridge_vk_id
+
+    let vault_public_key = config.vault_public_key
+
+    let ethereum_holder_account_l1 =
+      match (enabled, t.ethereum_holder_account_l1) with
+      | true, None ->
+          failwith
+            "ethereum_assets requires ethereum_holder_account_l1 (or \
+             ZEKO_ETHEREUM_BRIDGE_ADDRESS)"
+      | _, Some holder ->
+          holder
+      | false, None ->
+          Zeko_constants.inner_holder_key
+  end
+
+  let ethereum_asset_registry_public_key =
+    if Ethereum_assets.enabled then Some Ethereum_assets.registry_public_key
+    else None
 
   let holder_account_l2 = Zeko_constants.inner_holder_key
 

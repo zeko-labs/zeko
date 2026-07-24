@@ -9,6 +9,16 @@ module C = Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
 
+let committed_account_ids () =
+  Zeko_constants.inner_account_id
+  ::
+  if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+    [ Account_id.create
+        Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+        Token_id.default
+    ]
+  else []
+
 module Sequencer = struct
   let constraint_constants = Zeko_constants.constraint_constants
 
@@ -811,7 +821,7 @@ module Sequencer = struct
               let target_ledger =
                 Sparse_ledger.of_ledger_subset_exn
                   L.(of_database t.ledger)
-                  [ Zeko_constants.inner_account_id ]
+                  (committed_account_ids ())
               in
               let () =
                 match t.config.checkpoints_dir with
@@ -1031,7 +1041,7 @@ module Sequencer = struct
     let sparse_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.ledger)
-        [ Zeko_constants.inner_account_id ]
+        (committed_account_ids ())
     in
     State.Last_committed_ledger.set t.state ~data:sparse_ledger ;
     return ()

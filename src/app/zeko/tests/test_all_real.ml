@@ -1875,6 +1875,7 @@ open struct
               Compile_simple.Verification_key.of_tag
                 (Lazy.force Bridge.System_L2.tag) )
               |> Compile_simple.Verification_key.hash
+          ; asset = ()
           ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
           ; inner_authorization_kind = Rule_bridge_finalize_deposit.A.None_given
           ; ase =

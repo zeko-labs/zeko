@@ -320,6 +320,13 @@ let check_accepted_folder t =
     ~cache_ase_proof:(fun _ ~source:_ ~target:_ ~proof:_ ~extension_length:_ ->
       return () )
 
+let ethereum_asset_registry_folder t =
+  folder' t
+    (module Zeko_constants.Folder_iterations.Ethereum_asset_registry_scan)
+    ~map_to_cached_source:(fun ~source ~elems -> return (source, elems))
+    ~cache_ase_proof:(fun _ ~source:_ ~target:_ ~proof:_ ~extension_length:_ ->
+      return () )
+
 let ase_cached_folder_with_length t =
   folder' t
     (module Zeko_constants.Folder_iterations.Ase.With_length)
@@ -390,6 +397,16 @@ let check_accepted_ethereum_token t input =
   | _ ->
       failwith "Unexpected response from prover"
 
+let ethereum_asset_registry_scan t input =
+  send t (Prover.Input.Folder (Ethereum_asset_registry_scan input))
+  >>| function
+  | Prover.Output.Folder (Ethereum_asset_registry_scan scan) ->
+      Ok scan
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
 let inner_sync t ~public_key ~ase_source ~ase_elms =
   let%bind.Deferred.Result ase =
     let%map.Deferred.Result proof, target, excess =
@@ -442,7 +459,8 @@ let verify_check_accepted_and_ase_cancelled_deposit t input =
 let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
     ~unprocessed_actions ~(old_inner_acc : Account.t) ~old_inner_acc_path
     ~(new_inner_acc : Account.t) ~new_inner_acc_path ~da_multisig ~slot_range
-    ~emergency_mode =
+    ~emergency_mode ~ethereum_asset_registry_root
+    ~ethereum_asset_registry_count ~ethereum_asset_registry_schema =
   (* Counting length of inner action state *)
   let%bind.Deferred.Result inner_ase =
     let%map.Deferred.Result proof, target, excess =
@@ -487,6 +505,9 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
        ; new_inner_acc_path
        ; da_multisig
        ; slot_range
+       ; ethereum_asset_registry_root
+       ; ethereum_asset_registry_count
+       ; ethereum_asset_registry_schema
        } )
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
@@ -578,7 +599,7 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
   | _ ->
       failwith "Unexpected response from prover"
 
-let finalize_ethereum_token_deposit t ~public_key ~may_use_token
+let finalize_ethereum_token_deposit t ~public_key ~asset ~may_use_token
     ~inner_authorization_kind ~(ase : Ase.With_length.Stmt.t * Field.t list)
     ~(check_accepted :
        Bridge.Check_accepted_ethereum_token.Init.t
@@ -629,6 +650,7 @@ let finalize_ethereum_token_deposit t ~public_key ~may_use_token
       Bridge
         (Finalize_ethereum_token_deposit
            { public_key
+           ; asset
            ; may_use_token
            ; inner_authorization_kind
            ; ase
@@ -755,6 +777,40 @@ let inner_receive t witness =
 
 let inner_receive_ethereum_token t witness =
   send t Prover.Input.(Bridge (Inner_receive_ethereum_token witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let register_ethereum_asset t
+    ~(init : Bridge.Ethereum_asset_registry.Scan.Init.t)
+    ~(elems : Bridge.Ethereum_asset_registry.Scan.Elem.t list) ~append_path =
+  let source : Bridge.Ethereum_asset_registry.Scan.Stmt.t =
+    { old_root = init.old_state.root
+    ; leaf_count = init.old_state.leaf_count
+    ; candidate = init.candidate
+    ; next_expected_index = Zeko_util.Checked32.zero
+    ; traversed_count = Zeko_util.Checked32.zero
+    }
+  in
+  let%bind.Deferred.Result proof, proof_target, excess =
+    ethereum_asset_registry_folder t ~source ~elems ~max_excess:0
+      ethereum_asset_registry_scan
+  in
+  send t
+    Prover.Input.(
+      Bridge
+        (Register_ethereum_asset
+           { proof
+           ; proof_source = source
+           ; proof_target
+           ; init
+           ; excess
+           ; append_path
+           } ))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)

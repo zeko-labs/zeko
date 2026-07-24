@@ -331,7 +331,9 @@ let deposit_action (type deposit_params_var) ~chain_l1
         in
         assert_equal ~label:__LOC__ F.typ actual_low
           (constant F.typ expected_low)
-    | Some _, None, None | None, None, None ->
+    | Some _, None, Some _
+    | Some _, None, None
+    | None, None, None ->
         Checked.return ()
     | _ ->
         failwith
