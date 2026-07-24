@@ -27,6 +27,13 @@ module Z = struct
     ; access = Proof
     }
 
+  (* Mina checks [access] even for precondition-only account updates.  Zeko
+     circuits use [None_given] calls to authenticate account state without
+     mutating it, so these accounts must admit that read path.  The individual
+     mutation permissions remain unchanged. *)
+  let proof_permissions_with_unconditional_access : Permissions.t =
+    { proof_permissions with access = None }
+
   let none_permissions : Permissions.t =
     { edit_state = None
     ; send = None
@@ -78,7 +85,7 @@ module Z = struct
             ( if
               (* see #286 *)
               Option.is_some Is_compile_simple_real.is_compile_simple_real
-            then { proof_permissions with access = None }
+            then proof_permissions_with_unconditional_access
             else none_permissions )
         ; zkapp =
             Some
@@ -140,7 +147,7 @@ module Z = struct
                 ( if
                   Option.is_some
                     Is_compile_simple_real.is_compile_simple_real
-                then proof_permissions
+                then proof_permissions_with_unconditional_access
                 else none_permissions )
             ; zkapp =
                 Some
@@ -207,7 +214,7 @@ module Z = struct
               ( if
                 (* see #286 *)
                 Option.is_some Is_compile_simple_real.is_compile_simple_real
-              then { proof_permissions with access = None }
+              then proof_permissions_with_unconditional_access
               else none_permissions )
         }
       in
@@ -232,7 +239,7 @@ module Z = struct
               ( if
                 (* see #286 *)
                 Option.is_some Is_compile_simple_real.is_compile_simple_real
-              then { proof_permissions with access = None }
+              then proof_permissions_with_unconditional_access
               else none_permissions )
         }
       in

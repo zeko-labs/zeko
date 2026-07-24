@@ -363,6 +363,14 @@ let check_erc20_finalize_deposit
         not
           (PC.equal registry.body.public_key (point_of_string "22222"))
       then failwith "Ethereum ERC20 circuit did not authenticate the registry" ;
+      if
+        not
+          (Mina_base.Account_update.Authorization_kind.equal
+             registry.body.authorization_kind None_given )
+      then
+        failwith
+          "Ethereum ERC20 registry precondition unexpectedly requires \
+           authorization" ;
       helper.body.token_id
   | _ ->
       failwith "Ethereum ERC20 finalize-deposit forest shape mismatch"
@@ -463,6 +471,17 @@ let erc20_withdrawal_params_fields () =
   (params_fields, withdrawal_aux)
 
 let () =
+  let expected_registry_permissions : Mina_base.Permissions.t =
+    { Sequencer_lib.Deploy.Z.proof_permissions with access = None }
+  in
+  if
+    not
+      (Mina_base.Permissions.equal
+         Sequencer_lib.Deploy.Z.proof_permissions_with_unconditional_access
+         expected_registry_permissions )
+  then
+    failwith
+      "Ethereum asset registry permissions reject precondition-only access" ;
   let Compile_simple.[ _; _; _ ] =
     Lazy.force Ethereum_token_bridge.System_L2.provers
   in
