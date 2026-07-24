@@ -502,6 +502,12 @@ let print_membership_json () =
   |> Yojson.Safe.to_string |> printf "%s\n%!"
 
 let () =
+  ( match Registry.Scan.Definition.wrap_domain with
+  | Some `N14 ->
+      ()
+  | _ ->
+      failwith
+        "asset registry scan must use the real Pickles N14 wrap domain" ) ;
   check_append_only_paths () ;
   check_membership () ;
   check_exhaustive_scan_step () ;

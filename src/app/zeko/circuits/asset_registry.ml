@@ -519,7 +519,7 @@ module Make (Config : CONFIG) () = struct
 
     let name = "Ethereum asset registry exhaustive scan"
 
-    let wrap_domain = Some `N15
+    let wrap_domain = Some `N14
   end
 
   module Scan = struct

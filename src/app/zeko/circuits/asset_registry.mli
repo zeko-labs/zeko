@@ -176,6 +176,8 @@ module Make (Config : CONFIG) () : sig
       val extend_iterations : int
 
       val extend_option_iterations : int
+
+      val wrap_domain : [ `N13 | `N14 | `N15 ] option
     end
 
     type trans =
