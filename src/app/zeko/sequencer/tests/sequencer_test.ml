@@ -1055,7 +1055,9 @@ let () =
               in
               let expected_next_deposits =
                 List.init (List.length ethereum_asset_records) ~f:(fun index ->
-                    UInt32.of_int (index + 1) )
+                    (* The registry checkpoint precedes the two ERC20 deposits
+                       in the shared outer action stream. *)
+                    UInt32.of_int (index + 2) )
               in
               if
                 not
