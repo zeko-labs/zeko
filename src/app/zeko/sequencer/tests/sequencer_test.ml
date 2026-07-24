@@ -933,7 +933,7 @@ let () =
           Out_channel.write_all operations_ready_path ~data:"ready\n" ;
           run (fun () ->
               wait_for_file ~timeout:(Time.Span.of_min 45.) complete_path ) ;
-          let validate_helper_account ~expected_next_deposit helper_owner =
+          let helper_next_deposit helper_owner =
             let helper_account =
               Sequencer.get_account !sequencer
                 (Public_key.compress recipient.public_key)
@@ -953,6 +953,10 @@ let () =
               in
               UInt32.of_string (Field.to_string next_deposit)
             in
+            next_deposit
+          in
+          let validate_helper_account ~expected_next_deposit helper_owner =
+            let next_deposit = helper_next_deposit helper_owner in
             if not (UInt32.equal next_deposit expected_next_deposit) then
               failwithf
                 "Live SDK finalized deposit index %s, expected %s"
@@ -987,16 +991,14 @@ let () =
                     "Live SDK withdrawal request was not recorded in the OCaml \
                      archive" )
           | Ethereum_token ->
-              List.iteri ethereum_asset_records ~f:(fun index record ->
+              List.mapi ethereum_asset_records ~f:(fun index record ->
                   let token_id = record.token_id_l2 in
                   let helper_owner =
                     Account_id.create
                       Zeko_circuits_config.Inputs.Ethereum_assets
                       .vault_public_key token_id
                   in
-                  validate_helper_account
-                    ~expected_next_deposit:(UInt32.of_int (index + 1))
-                    helper_owner ;
+                  let next_deposit = helper_next_deposit helper_owner in
                   let vault =
                     Sequencer.get_account !sequencer
                       Zeko_circuits_config.Inputs.Ethereum_assets
@@ -1045,7 +1047,26 @@ let () =
                       index
                       (UInt64.to_string vault_balance)
                       (UInt64.to_string recipient_balance)
-                      () ) ;
+                      () ;
+                  next_deposit )
+              |> fun next_deposits ->
+              let next_deposits =
+                List.sort next_deposits ~compare:UInt32.compare
+              in
+              let expected_next_deposits =
+                List.init (List.length ethereum_asset_records) ~f:(fun index ->
+                    UInt32.of_int (index + 1) )
+              in
+              if
+                not
+                  (List.equal UInt32.equal next_deposits
+                     expected_next_deposits )
+              then
+                failwithf
+                  "Live SDK finalized unexpected ERC20 deposit indices: %s"
+                  (List.map next_deposits ~f:UInt32.to_string
+                  |> String.concat ~sep:"," )
+                  () ;
               print_endline
                 "Live SDK deployed two standard tokens, finalized both ERC20 \
                  deposits, and submitted both ERC20 withdrawals"
