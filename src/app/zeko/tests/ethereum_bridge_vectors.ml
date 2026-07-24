@@ -452,6 +452,19 @@ let erc20_withdrawal_params_fields () =
         not
           (PC.equal registry.body.public_key (point_of_string "22222"))
       then failwith "Ethereum ERC20 withdrawal did not authenticate the registry"
+      else if not registry.body.use_full_commitment then
+        failwith "Ethereum ERC20 registry precondition omitted the full commitment"
+      else if not registry.body.implicit_account_creation_fee then
+        failwith
+          "Ethereum ERC20 registry precondition omitted the account-creation fee"
+      else if
+        not
+          (String.equal
+             (field_to_hex
+                (Account_update.Body.digest
+                   ~signature_kind:Mina_signature_kind.Testnet registry.body ) )
+             "2c383e7260ea384af96f3c833feee18b10a1d614f852076287c1cb513e5b47d6" )
+      then failwith "Ethereum ERC20 registry precondition body vector mismatch"
   | _ ->
       failwith "unexpected ERC20 registry precondition forest" ) ;
   let params_fields =
