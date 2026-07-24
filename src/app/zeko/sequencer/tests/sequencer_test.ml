@@ -212,7 +212,8 @@ let () =
           | Ethereum_token ->
               if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
                 failwith
-                  "BRIDGE_ASSET=erc20 requires an ethereum_assets circuits config" ;
+                  "BRIDGE_ASSET=erc20 requires an ethereum_assets circuits \
+                   config" ;
               let verification_key =
                 run (fun () ->
                     Compile_simple.Verification_key.of_tag
@@ -229,13 +230,15 @@ let () =
               if not (Field.equal expected_hash actual_hash) then
                 failwithf
                   "Ethereum token bridge VK mismatch: local %s, prover %s"
-                  (Field.to_string actual_hash) (Field.to_string expected_hash)
+                  (Field.to_string actual_hash)
+                  (Field.to_string expected_hash)
                   () ;
               let pickles_verification_key =
                 Compile_simple.Verification_key.to_pickles verification_key
                 |> Option.value_exn
                      ~message:
-                       "Real ERC20 live integration requires a Pickles verification key"
+                       "Real ERC20 live integration requires a Pickles \
+                        verification key"
               in
               Some
                 ( Pickles.Side_loaded.Verification_key.to_base64
@@ -282,27 +285,28 @@ let () =
                       Account_id.create token_owner_l2 Token_id.default
                     in
                     ( { schema_version =
-                        Zeko_circuits_config.Inputs.Ethereum_assets
+                          Zeko_circuits_config.Inputs.Ethereum_assets
                           .registry_schema_version
-                    ; registry_index =
-                        Zeko_circuits.Zeko_util.Checked32.of_int registry_index
-                    ; asset_id_high
-                    ; asset_id_low
-                    ; ethereum_token_address = ethereum_token_address.x
-                    ; token_owner_l2
-                    ; token_id_l2 = Account_id.derive_token_id ~owner
-                    ; decimals = Zeko_circuits.Zeko_util.Checked32.of_int 9
-                    ; inventory_cap =
-                        Currency.Amount.of_uint64
-                          (Unsigned.UInt64.of_string (env "DEPOSIT_CAP"))
-                    ; mft_standard_vk_id =
-                        Zeko_circuits_config.Inputs.Ethereum_assets
+                      ; registry_index =
+                          Zeko_circuits.Zeko_util.Checked32.of_int
+                            registry_index
+                      ; asset_id_high
+                      ; asset_id_low
+                      ; ethereum_token_address = ethereum_token_address.x
+                      ; token_owner_l2
+                      ; token_id_l2 = Account_id.derive_token_id ~owner
+                      ; decimals = Zeko_circuits.Zeko_util.Checked32.of_int 9
+                      ; inventory_cap =
+                          Currency.Amount.of_uint64
+                            (Unsigned.UInt64.of_string (env "DEPOSIT_CAP"))
+                      ; mft_standard_vk_id =
+                          Zeko_circuits_config.Inputs.Ethereum_assets
                           .approved_mft_standard_vk_id
-                    ; vault_public_key =
-                        Zeko_circuits_config.Inputs.Ethereum_assets
+                      ; vault_public_key =
+                          Zeko_circuits_config.Inputs.Ethereum_assets
                           .vault_public_key
-                    ; universal_bridge_vk_id =
-                        Zeko_circuits_config.Inputs.Ethereum_assets
+                      ; universal_bridge_vk_id =
+                          Zeko_circuits_config.Inputs.Ethereum_assets
                           .universal_bridge_vk_id
                       }
                       : Zeko_circuits.Asset_registry.Asset_record.t ) )
@@ -321,12 +325,13 @@ let () =
           | Native ->
               []
           | Ethereum_token ->
-              List.map ethereum_asset_records ~f:(fun record ->
-                  ( { asset_id_high = record.asset_id_high
+              List.map ethereum_asset_records
+                ~f:(fun record : C.Bridge_state.Deposit_params_ethereum_token.t
+                   ->
+                  { asset_id_high = record.asset_id_high
                   ; asset_id_low = record.asset_id_low
                   ; base = deposit_params
-                    }
-                    : C.Bridge_state.Deposit_params_ethereum_token.t ) )
+                  } )
         in
         ( match bridge_asset with
         | Native ->
@@ -345,8 +350,10 @@ let () =
                   failwithf
                     "ERC20_TOKEN_%d_DEPOSIT_AMOUNT %s does not match scenario \
                      amount %s"
-                    index (UInt64.to_string configured_amount)
-                    (UInt64.to_string scenario_amount) () ) ) ;
+                    index
+                    (UInt64.to_string configured_amount)
+                    (UInt64.to_string scenario_amount)
+                    () ) ) ;
         let deposit_auxes () =
           match ethereum_token_deposit_params with
           | [] ->
@@ -430,76 +437,78 @@ let () =
                       , `String
                           (Public_key.Compressed.to_base58_check
                              Zeko_circuits_config.Inputs.Ethereum_assets
-                               .registry_public_key ) )
+                             .registry_public_key ) )
                     ; ( "ethereumSharedVaultL2"
                       , `String
                           (Public_key.Compressed.to_base58_check
                              Zeko_circuits_config.Inputs.Ethereum_assets
-                               .vault_public_key ) )
+                             .vault_public_key ) )
                     ; ( "ethereumMftStandardVkId"
                       , `String
                           (Field.to_string
                              Zeko_circuits_config.Inputs.Ethereum_assets
-                               .approved_mft_standard_vk_id ) )
+                             .approved_mft_standard_vk_id ) )
                     ; ( "ethereumUniversalBridgeVkId"
                       , `String
                           (Field.to_string
                              Zeko_circuits_config.Inputs.Ethereum_assets
-                               .universal_bridge_vk_id ) )
+                             .universal_bridge_vk_id ) )
                     ]
               in
               let json =
                 `Assoc
                   ( [ ("schemaVersion", `Int 3)
-                  ; ("commitValidityPeriod", `Int bridge_commit_validity_period)
-                  ; ( "zekoRecipient"
-                    , `String
-                        (Ethereum_settlement_export.field_to_hex recipient.x) )
-                  ; ( "zekoRecipientPublicKey"
-                    , `String (Public_key.Compressed.to_base58_check recipient)
-                    )
-                  ; ("zekoRecipientIsOdd", `Bool recipient.is_odd)
-                  ; ( "depositAmountZeko"
-                    , `String
-                        ( Currency.Amount.to_uint64 deposit_params.amount
-                        |> Unsigned.UInt64.to_string ) )
-                  ; ( "depositTimeout"
-                    , `String
-                        ( Global_slot_since_genesis.to_uint32
-                            deposit_params.timeout
-                        |> Unsigned.UInt32.to_string ) )
-                  ; ( "depositAux"
-                    , `String (Ethereum_settlement_export.field_to_hex aux) )
-                  ; ( "depositAuxes"
-                    , Ethereum_settlement_export.fields_json
-                        (Array.of_list auxes) )
-                  ; ( "outerActionStateBeforeDeposit"
-                    , `String
-                        (Ethereum_settlement_export.field_to_hex
-                           outer_action_state_before ) )
-                  ; ( "outerActionStateBeforeRegistration"
-                    , `String
-                        (Ethereum_settlement_export.field_to_hex
-                           outer_action_state_before_registration ) )
-                  ; ( "outerActionStateAfterDeposit"
-                    , `String
-                        (Ethereum_settlement_export.field_to_hex
-                           outer_action_state_after ) )
-                  ; ("withdrawalRecipient", `String withdrawal_recipient)
-                  ; ( "withdrawalAmountZeko"
-                    , `String
-                        ( Currency.Amount.to_uint64 withdrawal_params.amount
-                        |> Unsigned.UInt64.to_string ) )
-                  ; ( "daPublicKeys"
-                    , `List
-                        (List.map da_keys ~f:(fun public_key ->
-                             `String
-                               (Public_key.Compressed.to_base58_check public_key) )
-                        ) )
-                  ; ( "sequencerPublicKey"
-                    , `String (Public_key.Compressed.to_base58_check signer_pk)
-                    )
-                  ]
+                    ; ( "commitValidityPeriod"
+                      , `Int bridge_commit_validity_period )
+                    ; ( "zekoRecipient"
+                      , `String
+                          (Ethereum_settlement_export.field_to_hex recipient.x)
+                      )
+                    ; ( "zekoRecipientPublicKey"
+                      , `String
+                          (Public_key.Compressed.to_base58_check recipient) )
+                    ; ("zekoRecipientIsOdd", `Bool recipient.is_odd)
+                    ; ( "depositAmountZeko"
+                      , `String
+                          ( Currency.Amount.to_uint64 deposit_params.amount
+                          |> Unsigned.UInt64.to_string ) )
+                    ; ( "depositTimeout"
+                      , `String
+                          ( Global_slot_since_genesis.to_uint32
+                              deposit_params.timeout
+                          |> Unsigned.UInt32.to_string ) )
+                    ; ( "depositAux"
+                      , `String (Ethereum_settlement_export.field_to_hex aux) )
+                    ; ( "depositAuxes"
+                      , Ethereum_settlement_export.fields_json
+                          (Array.of_list auxes) )
+                    ; ( "outerActionStateBeforeDeposit"
+                      , `String
+                          (Ethereum_settlement_export.field_to_hex
+                             outer_action_state_before ) )
+                    ; ( "outerActionStateBeforeRegistration"
+                      , `String
+                          (Ethereum_settlement_export.field_to_hex
+                             outer_action_state_before_registration ) )
+                    ; ( "outerActionStateAfterDeposit"
+                      , `String
+                          (Ethereum_settlement_export.field_to_hex
+                             outer_action_state_after ) )
+                    ; ("withdrawalRecipient", `String withdrawal_recipient)
+                    ; ( "withdrawalAmountZeko"
+                      , `String
+                          ( Currency.Amount.to_uint64 withdrawal_params.amount
+                          |> Unsigned.UInt64.to_string ) )
+                    ; ( "daPublicKeys"
+                      , `List
+                          (List.map da_keys ~f:(fun public_key ->
+                               `String
+                                 (Public_key.Compressed.to_base58_check
+                                    public_key ) ) ) )
+                    ; ( "sequencerPublicKey"
+                      , `String
+                          (Public_key.Compressed.to_base58_check signer_pk) )
+                    ]
                   @ asset_fields )
               in
               Out_channel.write_all
@@ -562,20 +571,37 @@ let () =
               let payment : Transaction_spec.t =
                 { fee = Currency.Fee.of_mina_string_exn "0.1"
                 ; sender = (source, nonce)
-                ; receiver = Public_key.compress recipient.public_key
-                (* Generated test accounts hold exactly 100 MINA. Keep enough
-                   headroom for this transfer's fee and the source account's
-                   later use while giving the browser operator ample funds for
-                   token deployment and account creation. *)
+                ; receiver =
+                    Public_key.compress recipient.public_key
+                    (* Generated test accounts hold exactly 100 MINA. Keep enough
+                       headroom for this transfer's fee and the source account's
+                       later use while giving the browser operator ample funds for
+                       token deployment and account creation. *)
                 ; amount = Currency.Amount.of_mina_int_exn 50
                 ; actions = None
                 }
               in
               apply_user_command !sequencer
                 (Signed_command
-                   (command_send
-                      ~chain:Zeko_circuits_config.Inputs.chain_l2 payment ) )
+                   (command_send ~chain:Zeko_circuits_config.Inputs.chain_l2
+                      payment ) )
               >>| Or_error.ok_exn
+        in
+        let require_live_sdk_fee_payer () =
+          match bridge_asset with
+          | Native ->
+              ()
+          | Ethereum_token ->
+              let (_ : Account.t) =
+                Sequencer.get_account !sequencer
+                  (Public_key.compress recipient.public_key)
+                  Token_id.default
+                |> Option.value_exn
+                     ~message:
+                       "Live SDK fee payer must be funded on L2 before the \
+                        readiness manifest is published"
+              in
+              ()
         in
         let commit_and_check label =
           printf "(* %s *)\n%!" label ;
@@ -832,22 +858,22 @@ let () =
           let manifest =
             `Assoc
               ( [ ("schemaVersion", `Int 3)
-              ; ( "sequencerGraphqlUrl"
-                , `String (sprintf "http://127.0.0.1:%d/graphql" port) )
-              ; ("l1GraphqlUrl", `String (Uri.to_string gql_uri))
-              ; ( "outerPublicKey"
-                , `String
-                    (Public_key.Compressed.to_base58_check
-                       (Public_key.compress outer_kp.public_key) ) )
-              ; ( "recipientPublicKey"
-                , `String
-                    (Public_key.Compressed.to_base58_check
-                    (Public_key.compress recipient.public_key) ) )
-              ; ("completionMarker", `String complete_path)
-              ; ( "registrationCompletionMarker"
-                , `String registration_complete_path )
-              ; ("operationsReadyMarker", `String operations_ready_path)
-              ]
+                ; ( "sequencerGraphqlUrl"
+                  , `String (sprintf "http://127.0.0.1:%d/graphql" port) )
+                ; ("l1GraphqlUrl", `String (Uri.to_string gql_uri))
+                ; ( "outerPublicKey"
+                  , `String
+                      (Public_key.Compressed.to_base58_check
+                         (Public_key.compress outer_kp.public_key) ) )
+                ; ( "recipientPublicKey"
+                  , `String
+                      (Public_key.Compressed.to_base58_check
+                         (Public_key.compress recipient.public_key) ) )
+                ; ("completionMarker", `String complete_path)
+                ; ( "registrationCompletionMarker"
+                  , `String registration_complete_path )
+                ; ("operationsReadyMarker", `String operations_ready_path)
+                ]
               @ token_verification_key_fields )
           in
           Out_channel.write_all ready_path
@@ -885,10 +911,11 @@ let () =
             if not (UInt32.equal next_deposit UInt32.one) then
               failwithf
                 "Live SDK finalized an unexpected next deposit index: %s"
-                (UInt32.to_string next_deposit) ()
+                (UInt32.to_string next_deposit)
+                ()
           in
-          ( match bridge_asset with
-          | Native ->
+          match bridge_asset with
+          | Native -> (
               validate_helper_account
                 (Account_id.of_public_key
                    (Public_key.decompress_exn
@@ -897,10 +924,10 @@ let () =
                 Utils.value_to_hash ~init:Zeko_constants.withdrawal_salt
                   C.Bridge_state.Withdrawal_params_base.typ withdrawal_params
               in
-              ( match
-                  Archive.find_ethereum_withdrawal !sequencer.archive
-                    ~aux:withdrawal_aux
-                with
+              match
+                Archive.find_ethereum_withdrawal !sequencer.archive
+                  ~aux:withdrawal_aux
+              with
               | Some withdrawal
                 when Public_key.Compressed.equal withdrawal.recipient
                        withdrawal_params.recipient
@@ -919,15 +946,13 @@ let () =
                   let helper_owner =
                     Account_id.create
                       Zeko_circuits_config.Inputs.Ethereum_assets
-                        .vault_public_key
-                      token_id
+                      .vault_public_key token_id
                   in
                   validate_helper_account helper_owner ;
                   let vault =
                     Sequencer.get_account !sequencer
                       Zeko_circuits_config.Inputs.Ethereum_assets
-                        .vault_public_key
-                      token_id
+                      .vault_public_key token_id
                     |> Option.value_exn
                          ~message:
                            "Live SDK did not install an ERC20 bridge vault"
@@ -951,8 +976,7 @@ let () =
                     Currency.Amount.to_uint64 withdrawal_params.amount
                   in
                   let expected_vault =
-                    UInt64.add (UInt64.sub cap deposit_amount)
-                      withdrawal_amount
+                    UInt64.add (UInt64.sub cap deposit_amount) withdrawal_amount
                   in
                   let expected_recipient =
                     UInt64.sub deposit_amount withdrawal_amount
@@ -970,11 +994,13 @@ let () =
                     failwithf
                       "Unexpected live ERC20[%d] balances: vault=%s \
                        recipient=%s"
-                      index (UInt64.to_string vault_balance)
-                      (UInt64.to_string recipient_balance) () ) ;
+                      index
+                      (UInt64.to_string vault_balance)
+                      (UInt64.to_string recipient_balance)
+                      () ) ;
               print_endline
                 "Live SDK deployed two standard tokens, finalized both ERC20 \
-                 deposits, and submitted both ERC20 withdrawals" )
+                 deposits, and submitted both ERC20 withdrawals"
         in
         let outer_action_state_before_registration =
           run (fun () ->
@@ -984,6 +1010,8 @@ let () =
               >>| Or_error.ok_exn )
         in
         write_genesis_ledger () ;
+        run fund_ethereum_token_operator ;
+        require_live_sdk_fee_payer () ;
         if bridge_live_sdk then start_live_sdk () ;
         ( match bridge_asset with
         | Ethereum_token ->
@@ -1002,14 +1030,13 @@ let () =
         print_endline "(* Append synthetic Ethereum deposit actions *)" ;
         run (fun () ->
             let%bind () =
-              Deferred.List.iter (deposit_auxes ())
-                ~f:(fun aux -> submit_ethereum_deposit aux >>| ignore)
+              Deferred.List.iter (deposit_auxes ()) ~f:(fun aux ->
+                  submit_ethereum_deposit aux >>| ignore )
             in
             let%map _created =
               Gql_client.For_tests.create_new_block ~logger gql_uri
             in
             () ) ;
-        run fund_ethereum_token_operator ;
         let outer_action_state_after =
           run (fun () ->
               Gql_client.fetch_action_state gql_uri
@@ -1018,24 +1045,23 @@ let () =
               >>| Or_error.ok_exn )
         in
         write_scenario_manifest ~outer_action_state_before_registration
-          ~outer_action_state_before
-          ~outer_action_state_after ;
+          ~outer_action_state_before ~outer_action_state_after ;
         run (fun () -> commit_and_check "Commit synchronized deposit") ;
         print_endline
           "(* Synchronize the accepting commit into the inner account *)" ;
         run synchronize_accepting_commit ;
         ( if bridge_live_sdk then run_live_sdk ()
-          else
-            match bridge_asset with
-            | Native ->
-                print_endline "(* Finalize deposit on L2 *)" ;
-                run (fun () -> finalize_deposit () >>| ignore) ;
-                print_endline "(* Submit native withdrawal on L2 *)" ;
-                run (fun () -> submit_withdrawal () >>| ignore)
-            | Ethereum_token ->
-                failwith
-                  "BRIDGE_ASSET=erc20 requires \
-                   ZEKO_ETHEREUM_BRIDGE_LIVE_SDK=true" ) ;
+        else
+          match bridge_asset with
+          | Native ->
+              print_endline "(* Finalize deposit on L2 *)" ;
+              run (fun () -> finalize_deposit () >>| ignore) ;
+              print_endline "(* Submit native withdrawal on L2 *)" ;
+              run (fun () -> submit_withdrawal () >>| ignore)
+          | Ethereum_token ->
+              failwith
+                "BRIDGE_ASSET=erc20 requires ZEKO_ETHEREUM_BRIDGE_LIVE_SDK=true"
+        ) ;
         run (fun () -> commit_and_check "Commit inner withdrawal action") ;
         let[@warning "-26"] sequencer = free_sequencer sequencer in
         run (fun () ->
