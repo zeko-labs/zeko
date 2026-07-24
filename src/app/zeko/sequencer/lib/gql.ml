@@ -2398,24 +2398,32 @@ module Types = struct
           ; token_id : Token_id.t option
           ; from_action_state : Field.t option
           ; end_action_state : Field.t option
+          ; from_block : int option
+          ; to_block : int option
           }
 
         let arg_typ =
           obj "ActionFilterOptionsInput"
-            ~coerce:(fun address token_id from_action_state end_action_state ->
+            ~coerce:(fun address token_id from_action_state end_action_state
+                         from_block to_block ->
               ( address
               , token_id
               , Option.map from_action_state ~f:Field.of_string
-              , Option.map end_action_state ~f:Field.of_string ) )
+              , Option.map end_action_state ~f:Field.of_string
+              , from_block
+              , to_block ) )
             ~split:(fun f (x : input) ->
               f x.address x.token_id
                 (Option.map x.from_action_state ~f:Field.to_string)
-                (Option.map x.end_action_state ~f:Field.to_string) )
+                (Option.map x.end_action_state ~f:Field.to_string)
+                x.from_block x.to_block )
             ~fields:
               [ arg "address" ~typ:(non_null PublicKey.arg_typ)
               ; arg "tokenId" ~typ:TokenId.arg_typ
               ; arg "fromActionState" ~typ:string
               ; arg "endActionState" ~typ:string
+              ; arg "from" ~typ:int
+              ; arg "to" ~typ:int
               ]
       end
 
@@ -3432,13 +3440,24 @@ module Queries = struct
                   (non_null Types.Input.Archive.ActionFilterOptionsInput.arg_typ)
             ]
         ~resolve:(fun { ctx = { sequencer; _ }; _ } ()
-                      (public_key, token_id, from_action_state, end_action_state)
-                      ->
+                      ( public_key
+                      , token_id
+                      , from_action_state
+                      , end_action_state
+                      , from_block
+                      , to_block ) ->
           let token_id = Option.value ~default:Token_id.default token_id in
-          return
-          @@ Archive.get_actions sequencer.archive
-               (Account_id.create public_key token_id)
-               ~from:from_action_state ~to_:end_action_state )
+          Archive.get_actions sequencer.archive
+            (Account_id.create public_key token_id)
+            ~from:from_action_state ~to_:end_action_state
+          |> Result.map ~f:
+               (List.filter ~f:(fun (action : Archive.Account_update_actions.t) ->
+                    Option.for_all action.block_info ~f:(fun block_info ->
+                        Option.for_all from_block ~f:(fun from_block ->
+                            block_info.height >= from_block )
+                        && Option.for_all to_block ~f:(fun to_block ->
+                               block_info.height < to_block ) ) ) )
+          |> return )
 
     let events =
       field "events"

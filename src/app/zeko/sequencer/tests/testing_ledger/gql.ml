@@ -1337,15 +1337,36 @@ module Types = struct
       module EventFilterOptionsInput = struct
         module Field = Snark_params.Tick.Field
 
-        type input = { address : Account.key; token_id : Token_id.t option }
+        type chain_status = Canonical | Pending | Orphaned
+
+        let chain_status =
+          enum "ArchiveChainStatus"
+            ~values:
+              [ enum_value "CANONICAL" ~value:Canonical
+              ; enum_value "PENDING" ~value:Pending
+              ; enum_value "ORPHANED" ~value:Orphaned
+              ]
+
+        type input =
+          { address : Account.key
+          ; token_id : Token_id.t option
+          ; from_block : int option
+          ; to_block : int option
+          ; status : chain_status option
+          }
 
         let arg_typ =
           obj "EventFilterOptionsInput"
-            ~coerce:(fun address token_id -> (address, token_id))
-            ~split:(fun f (x : input) -> f x.address x.token_id)
+            ~coerce:(fun address token_id from_block to_block status ->
+              (address, token_id, from_block, to_block, status) )
+            ~split:(fun f (x : input) ->
+              f x.address x.token_id x.from_block x.to_block x.status )
             ~fields:
               [ arg "address" ~typ:(non_null PublicKey.arg_typ)
               ; arg "tokenId" ~typ:TokenId.arg_typ
+              ; arg "from" ~typ:int
+              ; arg "to" ~typ:int
+              ; arg "status" ~typ:chain_status
               ]
       end
     end
@@ -2016,13 +2037,20 @@ module Queries = struct
                       , token_id
                       , from_action_state
                       , end_action_state
-                      , _from_block
-                      , _to_block ) ->
+                      , from_block
+                      , to_block ) ->
           let token_id = Option.value ~default:Token_id.default token_id in
-          return
-          @@ Archive.get_actions t.archive
-               (Account_id.create public_key token_id)
-               ~from:from_action_state ~to_:end_action_state )
+          Archive.get_actions t.archive
+            (Account_id.create public_key token_id)
+            ~from:from_action_state ~to_:end_action_state
+          |> Result.map ~f:
+               (List.filter ~f:(fun (action : Archive.Account_update_actions.t) ->
+                    Option.for_all action.block_info ~f:(fun block_info ->
+                        Option.for_all from_block ~f:(fun from_block ->
+                            block_info.height >= from_block )
+                        && Option.for_all to_block ~f:(fun to_block ->
+                               block_info.height < to_block ) ) ) )
+          |> return )
 
     let events =
       field "events"
@@ -2033,10 +2061,16 @@ module Queries = struct
                 ~typ:
                   (non_null Types.Input.Archive.EventFilterOptionsInput.arg_typ)
             ]
-        ~resolve:(fun { ctx = t; _ } () (public_key, token_id) ->
+        ~resolve:(fun { ctx = t; _ } ()
+                      (public_key, token_id, from_block, to_block, _status) ->
           let token_id = Option.value ~default:Token_id.default token_id in
           Archive.get_events t.archive (Account_id.create public_key token_id)
-          )
+          |> List.filter ~f:(fun event ->
+                 Option.for_all event.block_info ~f:(fun block_info ->
+                     Option.for_all from_block ~f:(fun from_block ->
+                         block_info.height >= from_block )
+                     && Option.for_all to_block ~f:(fun to_block ->
+                            block_info.height < to_block ) ) ) )
 
     let commands = [ actions; events ]
   end
