@@ -56,10 +56,19 @@ module Z = struct
         Compile_simple.Verification_key.of_tag (Lazy.force Inner_rules_inst.tag)
         |> Promise.to_deferred
       in
-      let%map holder_vk =
+      let%bind holder_vk =
         Compile_simple.Verification_key.of_tag
           (Lazy.force Bridge_inst_mina.System_L2.tag)
         |> Promise.to_deferred
+      in
+      let%map registry_vk =
+        if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+          Compile_simple.Verification_key.of_tag
+            (Lazy.force
+               Bridge_inst_ethereum_token.Registry.registry_tag )
+          |> Promise.to_deferred
+          >>| Option.some
+        else return None
       in
       let inner_account =
         { Account.empty with
@@ -114,7 +123,48 @@ module Z = struct
               }
         }
       in
-      (`Inner inner_account, `Holder holder_account)
+      let registry_account =
+        Option.map registry_vk ~f:(fun registry_vk ->
+            let registry_state : Asset_registry.Registry_state.t =
+              { root = Asset_registry.Merkle_list.empty_root
+              ; leaf_count = Zeko_util.Checked32.of_int 0
+              ; schema_version =
+                  Zeko_circuits_config.Inputs.Ethereum_assets
+                    .registry_schema_version
+              }
+            in
+            { Account.empty with
+              public_key =
+                Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+            ; permissions =
+                ( if
+                  Option.is_some
+                    Is_compile_simple_real.is_compile_simple_real
+                then proof_permissions
+                else none_permissions )
+            ; zkapp =
+                Some
+                  { Zkapp_account.default with
+                    app_state =
+                      Utils.value_to_zkapp_state Fn.id Field.zero
+                        Asset_registry.Registry_state.typ registry_state
+                  ; verification_key =
+                      Some
+                        (Verification_key_wire.Stable.Latest.M.of_binable
+                           ( match
+                               Is_compile_simple_real.is_compile_simple_real
+                             with
+                           | Some eq ->
+                               let _, vk_eq = Type_equal.detuple2 eq in
+                               Type_equal.conv vk_eq registry_vk
+                           | None ->
+                               Pickles.Side_loaded.Verification_key.dummy ) )
+                  }
+            } )
+      in
+      ( `Inner inner_account
+      , `Holder holder_account
+      , `Ethereum_asset_registry registry_account )
   end
 
   module Outer = struct
@@ -231,7 +281,9 @@ let deploy_holder_exn ~signature_kind ~(signer : Keypair.t)
     ~(account_creation_fee : Currency.Fee.t) () =
   let%map _, `Holder holder_update, _ =
     L.with_ephemeral_ledger ~depth:35 ~f:(fun ledger ->
-        let%bind `Inner inner_account, `Holder holder_account =
+        let%bind ( `Inner inner_account
+                  , `Holder holder_account
+                  , `Ethereum_asset_registry _ ) =
           Z.Inner.initial_accounts ()
         in
         List.iter [ inner_account; holder_account ] ~f:(fun acc ->
@@ -303,7 +355,9 @@ let deploy_token_owner_exn ~signature_kind ~(signer : Keypair.t)
     ~(nonce : Account.Nonce.t) ~(account_creation_fee : Currency.Fee.t) () =
   let%map _, _, `Token_owner token_owner_update =
     L.with_ledger ~depth:35 ~f:(fun ledger ->
-        let%bind `Inner inner_account, `Holder holder_account =
+        let%bind ( `Inner inner_account
+                  , `Holder holder_account
+                  , `Ethereum_asset_registry _ ) =
           Z.Inner.initial_accounts ()
         in
         List.iter [ inner_account; holder_account ] ~f:(fun acc ->

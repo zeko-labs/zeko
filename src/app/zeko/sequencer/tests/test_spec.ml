@@ -437,7 +437,9 @@ module Sequencer_spec = struct
           (Keypair.create (), Int64.of_float (1000. *. 1e8)) )
     in
 
-    let `Inner inner_account, `Holder holder_account =
+    let ( `Inner inner_account
+        , `Holder holder_account
+        , `Ethereum_asset_registry registry_account ) =
       run Deploy.Z.Inner.initial_accounts
     in
     (* Pre-fund the sequencer's signer on L2 so the bridge prover's
@@ -463,13 +465,17 @@ module Sequencer_spec = struct
         [ (aid, Account.create aid Currency.Balance.zero) ]
       else []
     in
+    let registry_accounts =
+      Option.to_list registry_account
+      |> List.map ~f:(fun account -> (Account.identifier account, account))
+    in
     let genesis_accounts =
       ( Account_id.create inner_account.public_key inner_account.token_id
       , inner_account )
       :: ( Account_id.create holder_account.public_key holder_account.token_id
          , holder_account )
       :: signer_l2_account
-      :: ( bridge_fee_recipient_l2_accounts
+      :: ( registry_accounts @ bridge_fee_recipient_l2_accounts
          @ ( Array.concat [ init_ledger; funded_accounts ]
            |> Array.map ~f:(fun (keypair, balance) ->
                   let pk =

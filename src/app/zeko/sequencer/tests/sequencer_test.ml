@@ -205,6 +205,51 @@ let () =
             (Field.to_string compiled_bridge_vk_hash)
             (Field.to_string prover_bridge_vk_hash)
             () ;
+        if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then (
+          let local_registry_vk_hash =
+            Sequencer.get_account !sequencer
+              Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+              Token_id.default
+            |> Option.bind ~f:Account.zkapp
+            |> Option.bind ~f:(fun zkapp -> zkapp.verification_key)
+            |> Option.map ~f:With_hash.hash
+            |> Option.value_exn
+                 ~message:
+                   "Ethereum asset registry is missing its verification key"
+          in
+          let prover_registry_vk_hash =
+            !sequencer.bridge_prover.verification_keys.ethereum_asset_registry
+          in
+          let compiled_registry_vk_hash =
+            run (fun () ->
+                Compile_simple.Verification_key.of_tag
+                  (Lazy.force
+                     Bridge_inst_ethereum_token.Registry.registry_tag )
+                |> Promise.to_deferred
+                >>| Compile_simple.Verification_key.hash )
+          in
+          printf "Ethereum asset registry VK hash in genesis: %s\n%!"
+            (Field.to_string local_registry_vk_hash) ;
+          printf "Ethereum asset registry VK hash compiled locally: %s\n%!"
+            (Field.to_string compiled_registry_vk_hash) ;
+          printf "Ethereum asset registry VK hash from prover: %s\n%!"
+            (Field.to_string prover_registry_vk_hash) ;
+          if
+            Option.is_some Is_compile_simple_real.is_compile_simple_real
+            && ( (not
+                    (Field.equal local_registry_vk_hash
+                       compiled_registry_vk_hash ) )
+               || not
+                    (Field.equal local_registry_vk_hash
+                       prover_registry_vk_hash ) )
+          then
+            failwithf
+              "Ethereum asset registry VK mismatch: genesis %s, local compile \
+               %s, real prover %s"
+              (Field.to_string local_registry_vk_hash)
+              (Field.to_string compiled_registry_vk_hash)
+              (Field.to_string prover_registry_vk_hash)
+              () ) ;
         let ethereum_token_bridge_verification_key =
           match bridge_asset with
           | Native ->

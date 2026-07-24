@@ -50,7 +50,9 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
       let%bind nonce =
         Gql_client.infer_nonce ~logger l1_uri sender_pk >>| Or_error.ok_exn
       in
-      let%bind `Inner inner_account, `Holder holder_account =
+      let%bind ( `Inner inner_account
+                , `Holder holder_account
+                , `Ethereum_asset_registry registry_account ) =
         Sequencer_lib.Deploy.Z.Inner.initial_accounts ()
       in
       let old_ledger_witness, new_ledger, imt_hash, imt =
@@ -68,11 +70,9 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
               }
             in
             let genesis_accounts =
-              [ inner_account
-              ; holder_account
-              ; sequencer_account
-              ; fee_recipient_account
-              ]
+              [ inner_account; holder_account ]
+              @ Option.to_list registry_account
+              @ [ sequencer_account; fee_recipient_account ]
               @ ( match prefund_account with
                 | Some (signer, amount) ->
                     [ { Account.empty with
@@ -135,10 +135,25 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
             List.iteri [ inner_account; holder_account ] ~f:(fun i acc ->
                 L.set_at_index_exn ledger i acc ) ;
 
+            let registry_account_diff =
+              Option.bind registry_account ~f:(fun registry_account ->
+                  let account_id = Account.identifier registry_account in
+                  match L.location_of_account ledger account_id with
+                  | Some _ ->
+                      None
+                  | None ->
+                      L.create_new_account_exn ledger account_id
+                        registry_account ;
+                      Some
+                        ( L.index_of_account_exn ledger account_id
+                        , registry_account ) )
+            in
             let accounts_diff =
               (0, inner_account) :: (1, holder_account)
               ::
-              ( match faucet_aid with
+              ( Option.to_list registry_account_diff
+              @
+              match faucet_aid with
               | None ->
                   []
               | Some faucet_aid ->
