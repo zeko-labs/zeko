@@ -227,6 +227,33 @@ module Types = struct
               Time.now () |> Time.to_string_iso8601_basic ~zone:Time.Zone.utc )
         ] )
 
+  module MaxBlockHeight = struct
+    type t =
+      { canonical_max_block_height : int; pending_max_block_height : int }
+
+    let t : ('context, t option) typ =
+      obj "MaxBlockHeight" ~fields:(fun _ ->
+          [ field "canonicalMaxBlockHeight" ~typ:(non_null int)
+              ~args:Arg.[]
+              ~resolve:(fun _ value -> value.canonical_max_block_height)
+          ; field "pendingMaxBlockHeight" ~typ:(non_null int)
+              ~args:Arg.[]
+              ~resolve:(fun _ value -> value.pending_max_block_height)
+          ] )
+  end
+
+  module NetworkState = struct
+    type t = { max_block_height : MaxBlockHeight.t }
+
+    let t : ('context, t option) typ =
+      obj "NetworkState" ~fields:(fun _ ->
+          [ field "maxBlockHeight"
+              ~typ:(non_null MaxBlockHeight.t)
+              ~args:Arg.[]
+              ~resolve:(fun _ value -> value.max_block_height)
+          ] )
+  end
+
   module AccountObj = struct
     module AnnotatedBalance = struct
       type t =
@@ -2395,15 +2422,36 @@ module Types = struct
       module EventFilterOptionsInput = struct
         module Field = Snark_params.Tick.Field
 
-        type input = { address : Account.key; token_id : Token_id.t option }
+        type chain_status = Canonical | Pending | Orphaned
+
+        let chain_status =
+          enum "ArchiveChainStatus"
+            ~values:
+              [ enum_value "CANONICAL" ~value:Canonical
+              ; enum_value "PENDING" ~value:Pending
+              ; enum_value "ORPHANED" ~value:Orphaned
+              ]
+
+        type input =
+          { address : Account.key
+          ; token_id : Token_id.t option
+          ; from_block : int option
+          ; to_block : int option
+          ; status : chain_status option
+          }
 
         let arg_typ =
           obj "EventFilterOptionsInput"
-            ~coerce:(fun address token_id -> (address, token_id))
-            ~split:(fun f (x : input) -> f x.address x.token_id)
+            ~coerce:(fun address token_id from_block to_block status ->
+              (address, token_id, from_block, to_block, status) )
+            ~split:(fun f (x : input) ->
+              f x.address x.token_id x.from_block x.to_block x.status )
             ~fields:
               [ arg "address" ~typ:(non_null PublicKey.arg_typ)
               ; arg "tokenId" ~typ:TokenId.arg_typ
+              ; arg "from" ~typ:int
+              ; arg "to" ~typ:int
+              ; arg "status" ~typ:chain_status
               ]
       end
     end
@@ -3230,6 +3278,16 @@ module Queries = struct
       ~typ:(non_null Types.genesis_constants)
       ~resolve:(fun _ () -> ())
 
+  let network_state =
+    field "networkState" ~doc:"Embedded archive block-height compatibility"
+      ~args:Arg.[]
+      ~typ:(non_null Types.NetworkState.t)
+      ~resolve:(fun _ () ->
+        let max_block_height : Types.MaxBlockHeight.t =
+          { canonical_max_block_height = 0; pending_max_block_height = 0 }
+        in
+        { Types.NetworkState.max_block_height } )
+
   let proving_result =
     io_field "provingResult" ~doc:"Query proving result in a JSON format"
       ~typ:string
@@ -3391,10 +3449,21 @@ module Queries = struct
                 ~typ:
                   (non_null Types.Input.Archive.EventFilterOptionsInput.arg_typ)
             ]
-        ~resolve:(fun { ctx = { sequencer; _ }; _ } () (public_key, token_id) ->
+        ~resolve:(fun { ctx = { sequencer; _ }; _ } ()
+                      ( public_key
+                      , token_id
+                      , from_block
+                      , to_block
+                      , _status ) ->
           let token_id = Option.value ~default:Token_id.default token_id in
           Archive.get_events sequencer.archive
-            (Account_id.create public_key token_id) )
+            (Account_id.create public_key token_id)
+          |> List.filter ~f:(fun event ->
+                 Option.for_all event.block_info ~f:(fun block_info ->
+                     Option.for_all from_block ~f:(fun from_block ->
+                         block_info.height >= from_block )
+                     && Option.for_all to_block ~f:(fun to_block ->
+                            block_info.height < to_block ) ) ) )
 
     let commands = [ actions; events ]
   end
@@ -3407,6 +3476,7 @@ module Queries = struct
     ; accounts_for_pk
     ; token_accounts
     ; genesis_constants
+    ; network_state
     ; proving_result
     ; state_hashes
     ; token_owner
