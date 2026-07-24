@@ -933,7 +933,7 @@ let () =
           Out_channel.write_all operations_ready_path ~data:"ready\n" ;
           run (fun () ->
               wait_for_file ~timeout:(Time.Span.of_min 45.) complete_path ) ;
-          let validate_helper_account helper_owner =
+          let validate_helper_account ~expected_next_deposit helper_owner =
             let helper_account =
               Sequencer.get_account !sequencer
                 (Public_key.compress recipient.public_key)
@@ -953,15 +953,16 @@ let () =
               in
               UInt32.of_string (Field.to_string next_deposit)
             in
-            if not (UInt32.equal next_deposit UInt32.one) then
+            if not (UInt32.equal next_deposit expected_next_deposit) then
               failwithf
-                "Live SDK finalized an unexpected next deposit index: %s"
+                "Live SDK finalized deposit index %s, expected %s"
                 (UInt32.to_string next_deposit)
+                (UInt32.to_string expected_next_deposit)
                 ()
           in
           match bridge_asset with
           | Native -> (
-              validate_helper_account
+              validate_helper_account ~expected_next_deposit:UInt32.one
                 (Account_id.of_public_key
                    (Public_key.decompress_exn
                       Zeko_circuits_config.Inputs.holder_account_l2 ) ) ;
@@ -993,7 +994,9 @@ let () =
                       Zeko_circuits_config.Inputs.Ethereum_assets
                       .vault_public_key token_id
                   in
-                  validate_helper_account helper_owner ;
+                  validate_helper_account
+                    ~expected_next_deposit:(UInt32.of_int (index + 1))
+                    helper_owner ;
                   let vault =
                     Sequencer.get_account !sequencer
                       Zeko_circuits_config.Inputs.Ethereum_assets
