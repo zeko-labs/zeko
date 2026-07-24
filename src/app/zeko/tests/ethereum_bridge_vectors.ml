@@ -441,6 +441,11 @@ let erc20_withdrawal_params_fields () =
     failwith "Ethereum ERC20 withdrawal vault charges an account-creation fee" ;
   if not (Token_id.equal vault_body.token_id first_registered_asset.token_id_l2)
   then failwith "Ethereum ERC20 withdrawal used the wrong registered token" ;
+  if
+    not
+      (String.equal (field_to_hex vault_body.call_data)
+         "19a86bb8c106848e3bab8dd79491cbc4589f28b33227007eb60409efa56e12d0" )
+  then failwith "Ethereum ERC20 bridge call-data vector mismatch" ;
   ( match Zkapp_command.Call_forest.to_account_updates registry_calls with
   | [ registry ] ->
       if
