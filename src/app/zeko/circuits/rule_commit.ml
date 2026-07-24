@@ -538,42 +538,31 @@ struct
       }
     in
 
+    (* Ethereum settlement needs the L2 registry checkpoint in the Pickles-bound
+       call forest, but Mina L1 has no registry account whose state can satisfy
+       an executable precondition. Bind the checkpoint into the signed
+       sequencer child's inert call data instead. *)
+    let* ethereum_asset_registry_call_data =
+      match Inputs.ethereum_asset_registry_public_key with
+      | None ->
+          Checked.return (constant F.typ Field.zero)
+      | Some registry_public_key ->
+          var_to_hash
+            ~init:Zeko_constants.ethereum_asset_registry_checkpoint_salt
+            Typ.(array ~length:4 F.typ)
+            [| constant F.typ registry_public_key.x
+             ; ethereum_asset_registry_root
+             ; ethereum_asset_registry_count
+             ; ethereum_asset_registry_schema
+            |]
+    in
     let sequencer_account_update =
       { default_account_update with
         public_key = Even_PC.to_pc_var sequencer
+      ; call_data = ethereum_asset_registry_call_data
       ; authorization_kind = authorization_signed ()
       ; use_full_commitment = Boolean.true_
       }
-    in
-    let ethereum_asset_registry_account_update_opt =
-      Option.map Inputs.ethereum_asset_registry_public_key
-        ~f:(fun registry_public_key ->
-          let registry_state : Asset_registry.Registry_state.var =
-            { root = ethereum_asset_registry_root
-            ; leaf_count =
-                Zeko_util.Checked32.Checked.Unsafe.of_field
-                  ethereum_asset_registry_count
-            ; schema_version =
-                Zeko_util.Checked32.Checked.Unsafe.of_field
-                  ethereum_asset_registry_schema
-            }
-          in
-          { default_account_update with
-            public_key = constant PC.typ registry_public_key
-          ; preconditions =
-              { default_account_update.preconditions with
-                account =
-                  { default_account_update.preconditions.account with
-                    state =
-                      Asset_registry.Registry_state.fine
-                        { root = Some registry_state.root
-                        ; leaf_count = Some registry_state.leaf_count
-                        ; schema_version = Some registry_state.schema_version
-                        }
-                      |> var_to_precondition_fine
-                  }
-              }
-          } )
     in
     let emergency_da_account_update_opt =
       match da_mode with
@@ -599,21 +588,11 @@ struct
 
     (* Assemble some stuff to help the prover and calculate public output *)
     let calls : Calls.t =
-      match
-        ( ethereum_asset_registry_account_update_opt
-        , emergency_da_account_update_opt )
-      with
-      | None, None ->
+      match emergency_da_account_update_opt with
+      | None ->
           [ (sequencer_account_update, []) ]
-      | Some registry, None ->
-          [ (sequencer_account_update, []); (registry, []) ]
-      | None, Some emergency_da ->
+      | Some emergency_da ->
           [ (sequencer_account_update, []); (emergency_da, []) ]
-      | Some registry, Some emergency_da ->
-          [ (sequencer_account_update, [])
-          ; (registry, [])
-          ; (emergency_da, [])
-          ]
     in
     let*| out =
       make_outputs ~chain:chain_l1 account_update calls

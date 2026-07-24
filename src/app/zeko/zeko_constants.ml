@@ -57,6 +57,8 @@ let ethereum_asset_registry_leaf_salt = "Ethereum asset registry leaf V1"
 
 let ethereum_asset_registry_node_salt = "Ethereum asset registry node V1"
 
+let ethereum_asset_registry_checkpoint_salt = "Zeko registry checkpoint V1"
+
 let ethereum_asset_bridge_call_salt = "Ethereum asset bridge call V1"
 
 let bridge_prover_cache = "bridge prover cache"
