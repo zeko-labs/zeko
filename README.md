@@ -26,8 +26,8 @@ official network and services.
 
 Standard self-serve pricing is published in [PRICING.md](./PRICING.md):
 
-- Protocol Layer Production Deployments: $1,000/year per production rollup for
-  1-10 production rollups; 11+ production rollups use custom pricing.
+- Protocol Layer Production Deployments: $0/year per production rollup under
+  the current published self-serve pricing.
 
 The self-serve commercial deployment license covers license rights only.
 Managed deployment, enterprise support, compliance review, SLAs, custom

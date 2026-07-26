@@ -43,9 +43,9 @@ for:
 2. any other production deployment of protected Zeko protocol-layer code that
    is not covered by the Additional Free Uses above.
 
-Commercial deployment fees are payable to Zeko Labs, Inc. or its successor or
-assigns. For payment, billing, commercial licensing, ecosystem agreements, or
-other inquiries, contact partnerships@zeko.io.
+Commercial deployment fees, if any, are payable to Zeko Labs, Inc. or its
+successor or assigns. For payment, billing, commercial licensing, ecosystem
+agreements, or other inquiries, contact partnerships@zeko.io.
 
 ## 3. Definitions
 

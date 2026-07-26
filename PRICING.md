@@ -6,9 +6,7 @@ specific pricing schedule, ecosystem exception, or written authorization applies
 
 ## Protocol Layer Production Deployments
 
-- 1-10 production rollups: $1,000/year per production rollup.
-- 11+ production rollups: custom pricing available by contacting
-  partnerships@zeko.io.
+- Current standard self-serve fee: $0/year per production rollup.
 
 A production rollup includes each production L2, L3, sovereign rollup,
 appchain, application-specific chain, or substantially similar production
@@ -18,11 +16,12 @@ layers, or are structured as L3s on top of a Zeko L2.
 
 ## Payment Timing
 
-The self-serve commercial deployment fee is pro-rated for the first calendar
-year of a new production deployment. Fees renew annually on a calendar-year
-basis. Payment is due to Zeko Labs, Inc. or its successor or assigns within the
-first 30 days of each calendar year, or within 30 days after a new production
-deployment first goes live, whichever applies.
+Because the current standard self-serve fee is $0/year, no payment is due under
+this pricing schedule.
+
+If Zeko Labs publishes a successor pricing schedule or separate written
+authorization with a non-zero fee, payment timing will be specified in that
+successor schedule or written authorization.
 
 For payment, billing, commercial licensing, ecosystem agreements, or other
 inquiries, contact partnerships@zeko.io.

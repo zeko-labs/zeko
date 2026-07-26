@@ -42,13 +42,16 @@ Network.
 
 ## Payment
 
-Commercial deployment fees are payable to Zeko Labs, Inc. or its successor or
-assigns.
+Commercial deployment fees, if any, are payable to Zeko Labs, Inc. or its
+successor or assigns.
 
-The self-serve commercial deployment fee is pro-rated for the first calendar
-year of a new production deployment. Fees renew annually on a calendar-year
-basis. Payment is due within the first 30 days of each calendar year, or within
-30 days after a new production deployment first goes live, whichever applies.
+The current standard self-serve commercial deployment fee for Protocol Layer
+Production Deployments is $0/year per production rollup. No payment is due
+under the current pricing schedule.
+
+If Zeko Labs publishes a successor pricing schedule or separate written
+authorization with a non-zero fee, payment timing will be specified in that
+successor schedule or written authorization.
 
 For payment, billing, commercial licensing, ecosystem agreements, or other
 inquiries, contact partnerships@zeko.io.
