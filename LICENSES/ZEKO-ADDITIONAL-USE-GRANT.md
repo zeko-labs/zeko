@@ -16,30 +16,23 @@ and operate the Licensed Work for the following purposes:
 2. Building, deploying, operating, or interacting with applications, zkApps,
    agents, wallets, indexers, relayers, dashboards, clients, contracts, bridges,
    SDKs, adapters, connectors, workflows, or settlement integrations that submit
-   to, interoperate with, or otherwise use the Official Zeko Network or an
-   Official Agent Protocol Deployment.
+   to, interoperate with, or otherwise use the Official Zeko Network.
 3. Commercially operating applications, agents, workflows, or integrations that
-   use the Official Zeko Network or an Official Agent Protocol Deployment,
-   provided that you do not operate an Independent Production Deployment of the
-   Licensed Work or an Independent Agent Protocol Deployment.
+   use the Official Zeko Network, provided that you do not operate an
+   Independent Production Deployment of the Licensed Work.
 4. Operating infrastructure as an authorized participant, operator, prover,
    sequencer, validator, relayer, settlement operator, or service provider for
    the Official Zeko Network, where such role has been approved, authorized, or
    designated by Zeko Labs or the applicable Zeko governance process.
-5. Using official hosted or public Zeko applications, services, APIs, relays,
-   facilitators, verifiers, marketplaces, payment rails, authorization rails,
-   coordination rails, or settlement endpoints powered by an Official Agent
-   Protocol Deployment.
-6. Using any file, package, directory, SDK, specification, example, interface,
+5. Using any file, package, directory, SDK, specification, example, interface,
    ABI, documentation, test vector, or template that is expressly marked as
    licensed under Apache-2.0, MIT, or another permissive license, subject to
    that separate license.
 
 These Additional Free Uses do not waive ordinary network, gas, transaction,
 bridge, prover, marketplace, service, or usage fees charged by the Official
-Zeko Network or Official Agent Protocol Deployments. They only clarify that no
-separate commercial deployment license is required for that official-network or
-official-service use.
+Zeko Network. They only clarify that no separate commercial deployment license
+is required for that official-network use.
 
 ## 2. Commercial Deployment License Required
 
@@ -47,8 +40,7 @@ Except as expressly permitted above, a commercial deployment license is required
 for:
 
 1. an Independent Production Deployment of the Zeko protocol layer;
-2. an Independent Agent Protocol Deployment; or
-3. any other production deployment of protected protocol/product-layer code that
+2. any other production deployment of protected Zeko protocol-layer code that
    is not covered by the Additional Free Uses above.
 
 Commercial deployment fees are payable to Zeko Labs, Inc. or its successor or
@@ -74,41 +66,6 @@ Independent Production Deployments include production rollups, sovereign
 rollups, appchains, L2s, L3s, sequencer networks, prover networks, settlement
 networks, hosted proof services, bridges, protocol deployments, or substantially
 similar production infrastructure using protected Zeko protocol-layer code.
-
-### Agent Protocol Bundle
-
-Agent Protocol Bundle means the protected Zeko product/protocol components for
-agent-native coordination, authorization, payments, and commerce, including
-SantaClawz, ZK x402, Mission-Bound Auth, Magic City when designated by Zeko
-Labs, and related protected orchestration, verifier, authorization, payment,
-settlement, coordination, marketplace, relay, facilitator, application, API, and
-service components.
-
-### Official Agent Protocol Deployment
-
-Official Agent Protocol Deployment means any Agent Protocol Bundle deployment,
-hosted service, application, API, relay, verifier, facilitator, marketplace,
-authorization layer, payment layer, coordination layer, settlement endpoint, or
-related infrastructure operated by Zeko Labs, authorized by Zeko Labs, or
-designated by the applicable Zeko governance process as part of the official
-Zeko ecosystem.
-
-### Independent Agent Protocol Deployment
-
-Independent Agent Protocol Deployment means a production deployment or operation
-of one or more protected Agent Protocol Bundle components, or modified versions
-or derivative works of those components, by or on behalf of a legal entity on a
-Deployment Network, outside an Official Agent Protocol Deployment.
-
-The Agent Protocol Bundle fee applies only to production deployment or operation
-of protected Agent Protocol Bundle code, or modified versions or derivative
-works of that code, outside an Official Agent Protocol Deployment. It does not
-apply to use of official Zeko-operated or Zeko-authorized applications,
-services, APIs, relays, facilitators, verifiers, marketplaces, payment rails,
-authorization rails, coordination rails, or settlement endpoints. It also does
-not apply to independently developed implementations that do not copy, modify,
-derive from, or substantially incorporate protected Agent Protocol Bundle code,
-even if they implement similar concepts, protocols, or workflows.
 
 ### Deployment Network
 
@@ -141,8 +98,8 @@ production users, or material interaction with mainnet state.
 ## 4. No Trademark Rights
 
 This Additional Use Grant does not grant any right to use the names, logos, or
-trademarks of Zeko Labs, Zeko, SantaClawz, Magic City, or any related brand,
-except as separately authorized in writing.
+trademarks of Zeko Labs, Zeko, or any related brand, except as separately
+authorized in writing.
 
 ## 5. Separate Commercial Services
 

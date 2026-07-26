@@ -1,7 +1,7 @@
 # Zeko Commercial Terms
 
 This document summarizes the self-serve commercial deployment terms for
-protected Zeko protocol/product-layer code licensed under BUSL-1.1 with the
+protected Zeko protocol-layer code licensed under BUSL-1.1 with the
 Zeko Additional Use Grant. The controlling license terms are in `LICENSE` and
 `LICENSES/ZEKO-ADDITIONAL-USE-GRANT.md`.
 
@@ -13,17 +13,13 @@ is free only when expressly permitted by the Zeko Additional Use Grant.
 A commercial deployment license is required for:
 
 - Independent Production Deployments of protected Zeko protocol-layer code.
-- Independent Agent Protocol Deployments.
-- Production deployments of protected protocol/product-layer code that are not
+- Production deployments of protected Zeko protocol-layer code that are not
   covered by the Additional Free Uses in the Zeko Additional Use Grant.
 
-Using the Official Zeko Network or official Zeko-operated or Zeko-authorized
-Agent Protocol Bundle applications, services, APIs, relays, facilitators,
-verifiers, marketplaces, payment rails, authorization rails, coordination rails,
-or settlement endpoints does not require a separate commercial deployment
-license. Users and integrators may still pay the ordinary network, gas,
-transaction, bridge, prover, marketplace, service, or usage fees applicable to
-those official deployments.
+Using or building on the Official Zeko Network does not require a separate
+commercial deployment license. Users and integrators may still pay the ordinary
+network, gas, transaction, bridge, prover, marketplace, service, or usage fees
+applicable to the official network and services.
 
 ## Production And Non-Production
 
