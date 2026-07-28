@@ -4,6 +4,25 @@ open Zeko_util
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
 
+module Ethereum_address = struct
+  let bit_length = 160
+
+  let validate ({ PC.Poly.x; is_odd } : PC.t) =
+    if is_odd then
+      Or_error.error_string "Ethereum withdrawal recipient must be even"
+    else if List.drop (Field.to_bits x) bit_length |> List.exists ~f:Fn.id then
+      Or_error.error_string
+        "Ethereum withdrawal recipient x-coordinate must fit 160 bits"
+    else Ok ()
+
+  let assert_valid ({ PC.Poly.x; is_odd } : PC.var) =
+    let* () = Boolean.Assert.is_false is_odd in
+    let* (_ : Boolean.var list) =
+      Field.Checked.choose_preimage_var x ~length:bit_length
+    in
+    Checked.return ()
+end
+
 module Outer_bridge_state = struct
   type t =
     { disable_offset_lower : Slot.t
@@ -532,6 +551,7 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
             Checked32.typ encoding_version
             (Checked32.Checked.constant (Checked32.of_int 2))
         in
+        let* () = Ethereum_address.assert_valid base_params.recipient in
         let* () =
           assert_equal ~label:"Ethereum ERC20 withdrawal registry index"
             Checked32.typ actual_index

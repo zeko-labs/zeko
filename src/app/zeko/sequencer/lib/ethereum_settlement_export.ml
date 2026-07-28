@@ -227,9 +227,11 @@ let asset_registry_batch_json ~(archive : Archive.t) ~old_root ~old_count
       (`Assoc
         [ ( "registryPublicKey"
           , `String
-              (field_to_hex
-                 Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
-                   .x ) )
+              (packed_public_key_hex
+                 Zeko_circuits_config.Inputs.Ethereum_assets
+                   .registry_public_key ) )
+        ; ( "checkpointVersion"
+          , `Int Asset_registry.Checkpoint.version )
         ; ("root", `String (field_to_hex new_root))
         ; ("count", `Int new_count)
         ; ("schemaVersion", `Int new_schema)
@@ -239,16 +241,15 @@ let asset_registry_batch_json ~(archive : Archive.t) ~old_root ~old_count
         ] )
 
 let ethereum_address_of_compressed
-    ({ Signature_lib.Public_key.Compressed.Poly.x; is_odd } :
-      Signature_lib.Public_key.Compressed.t ) =
-  if is_odd then None
-  else
+    (({ Signature_lib.Public_key.Compressed.Poly.x; _ } :
+       Signature_lib.Public_key.Compressed.t ) as recipient) =
+  match Bridge_state.Ethereum_address.validate recipient with
+  | Error _ ->
+      None
+  | Ok () ->
     let hex = field_to_hex x |> String.chop_prefix_if_exists ~prefix:"0x" in
     let hex = String.make (64 - String.length hex) '0' ^ hex in
-    let high = String.prefix hex 24 in
-    if String.for_all high ~f:(Char.equal '0') then
-      Some ("0x" ^ String.suffix hex 40)
-    else None
+    Some ("0x" ^ String.suffix hex 40)
 
 let configured_ethereum_bridge_address () =
   match Zeko_circuits_config.t.ethereum_holder_account_l1 with
@@ -272,30 +273,35 @@ let configured_ethereum_bridge_address () =
 
 let ethereum_withdrawal_preimage_json
     ({ recipient; amount; asset } : Archive.Ethereum_withdrawal.t) =
-  ethereum_address_of_compressed recipient
-  |> Option.map ~f:(fun recipient ->
-         match asset with
-         | None ->
-             ( "withdrawal"
-             , `Assoc
-                 [ ("recipient", `String recipient)
-                 ; ( "amount"
-                   , `Intlit
-                       ( Currency.Amount.to_uint64 amount
-                       |> Unsigned.UInt64.to_string ) )
-                 ] )
-         | Some { token; asset_id; params_fields } ->
-             ( "tokenWithdrawal"
-             , `Assoc
-                 [ ("token", `String token)
-                 ; ("assetId", `String asset_id)
-                 ; ("recipient", `String recipient)
-                 ; ( "amount"
-                   , `Intlit
-                       ( Currency.Amount.to_uint64 amount
-                       |> Unsigned.UInt64.to_string ) )
-                 ; ("paramsFields", fields_json (Array.of_list params_fields))
-                 ] ) )
+  let recipient =
+    ethereum_address_of_compressed recipient
+    |> Option.value_exn
+         ~message:
+           "Ethereum settlement withdrawal recipient is not an even 160-bit \
+            address"
+  in
+  match asset with
+  | None ->
+      ( "withdrawal"
+      , `Assoc
+          [ ("recipient", `String recipient)
+          ; ( "amount"
+            , `Intlit
+                ( Currency.Amount.to_uint64 amount
+                |> Unsigned.UInt64.to_string ) )
+          ] )
+  | Some { token; asset_id; params_fields } ->
+      ( "tokenWithdrawal"
+      , `Assoc
+          [ ("token", `String token)
+          ; ("assetId", `String asset_id)
+          ; ("recipient", `String recipient)
+          ; ( "amount"
+            , `Intlit
+                ( Currency.Amount.to_uint64 amount
+                |> Unsigned.UInt64.to_string ) )
+          ; ("paramsFields", fields_json (Array.of_list params_fields))
+          ] )
 
 let inner_action_batch_json ~(archive : Archive.t)
     (records : Archive.Account_update_actions.t list) =
@@ -309,15 +315,16 @@ let inner_action_batch_json ~(archive : Archive.t)
           failwith "Ethereum settlement requires three-field inner actions" ;
         let withdrawal =
           Archive.find_ethereum_withdrawal archive ~aux:fields.(1)
-          |> Option.bind ~f:ethereum_withdrawal_preimage_json
+          |> Option.value_exn
+               ~message:
+                 (sprintf
+                    "Ethereum settlement archive has no withdrawal preimage \
+                     for action auxiliary %s"
+                    (field_to_hex fields.(1)) )
+          |> ethereum_withdrawal_preimage_json
         in
         let fields = [ ("fields", fields_json fields) ] in
-        `Assoc
-          ( match withdrawal with
-          | Some withdrawal ->
-              withdrawal :: fields
-          | None ->
-              fields ) )
+        `Assoc (withdrawal :: fields) )
   in
   `Assoc
     [ ("bridgeAddress", `String (configured_ethereum_bridge_address ()))

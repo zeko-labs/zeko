@@ -61,7 +61,7 @@ let ethereum_asset_registry_leaf_salt = "Ethereum asset registry leaf V1"
 
 let ethereum_asset_registry_node_salt = "Ethereum asset registry node V1"
 
-let ethereum_asset_registry_checkpoint_salt = "Zeko registry checkpoint V1"
+let ethereum_asset_registry_checkpoint_v2_salt = "Zeko registry checkpoint V2"
 
 let ethereum_asset_registry_registration_salt = "Ethereum asset reg V1"
 

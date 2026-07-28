@@ -76,6 +76,38 @@ module Registry_state = struct
     }
 end
 
+module Checkpoint = struct
+  let version = 2
+
+  let fields ~(registry_public_key : PC.t) (state : Registry_state.t) =
+    [| registry_public_key.x
+     ; (if registry_public_key.is_odd then Field.one else Field.zero)
+     ; state.root
+     ; Checked32.to_field state.leaf_count
+     ; Checked32.to_field state.schema_version
+    |]
+
+  let commitment ~registry_public_key state =
+    Random_oracle.hash
+      ~init:
+        (Hash_prefix_create.salt
+           Zeko_constants.ethereum_asset_registry_checkpoint_v2_salt )
+      (fields ~registry_public_key state)
+
+  let commitment_var ~(registry_public_key : PC.t)
+      (state : Registry_state.var) =
+    var_to_hash
+      ~init:Zeko_constants.ethereum_asset_registry_checkpoint_v2_salt
+      Typ.(array ~length:5 F.typ)
+      [| constant F.typ registry_public_key.x
+       ; constant F.typ
+           (if registry_public_key.is_odd then Field.one else Field.zero)
+       ; state.root
+       ; Checked32.Checked.to_field state.leaf_count
+       ; Checked32.Checked.to_field state.schema_version
+      |]
+end
+
 module Path = struct
   include
     SnarkList

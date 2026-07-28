@@ -1025,14 +1025,8 @@ struct
       | None, None ->
           Checked.return (constant F.typ Field.zero)
       | Some registry_public_key, Some registry_state ->
-          var_to_hash
-            ~init:Zeko_constants.ethereum_asset_registry_checkpoint_salt
-            Typ.(array ~length:4 F.typ)
-            [| constant F.typ registry_public_key.x
-             ; registry_state.root
-             ; Checked32.Checked.to_field registry_state.leaf_count
-             ; Checked32.Checked.to_field registry_state.schema_version
-            |]
+          Asset_registry.Checkpoint.commitment_var ~registry_public_key
+            registry_state
       | _ ->
           failwith "inconsistent Ethereum asset registry circuit configuration"
     in

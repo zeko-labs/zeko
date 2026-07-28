@@ -368,6 +368,13 @@ boundaries: the circuit authenticates the registry account root/count, and the
 settlement guest binds the OCaml Poseidon transition to the same ordered
 canonical records activated by Solidity.
 
+Registry settlement uses checkpoint wire version 2. Its Poseidon input order is
+`registry_public_key.x`, `registry_public_key.is_odd`, `root`, `count`,
+`schema_version` under the `Zeko registry checkpoint V2` domain. Settlement
+JSON reports `checkpointVersion: 2` and encodes `registryPublicKey` as the
+64-digit Mina compressed x-coordinate with parity in the high bit, matching
+`tokenOwnerL2` and `vaultPublicKey`. Version 1 omitted parity and must not be
+accepted as a version-2 checkpoint.
 
 ## Deployment and post-registration policy
 
@@ -413,7 +420,9 @@ The active PoC gate is limited to focused builds and fake/vector proofs:
    tag/VK, authenticate the final empty-controller admin, reject retaining the
    live provisioning signer, reject invalid registry membership, and cover
    accepted deposit finalization, helper progression, denomination, token
-   inheritance, and withdrawal action/export fields.
+   inheritance, checkpoint key parity, 160-bit even withdrawal recipients,
+   withdrawal action/export fields, and the one-pending-registration admission
+   limit before and after a commit.
 
 ```bash
 dune build ./src/app/zeko/tests/asset_registry_vectors.exe ./src/app/zeko/tests/ethereum_bridge_vectors.exe

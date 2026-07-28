@@ -1690,6 +1690,9 @@ module Types = struct
             ~coerce:(fun encoding_version registry_index record_commitment
                          asset_id_high asset_id_low token_owner sender_debit
                          amount recipient ->
+              let%map.Result () =
+                Zeko_circuits.Bridge_state.Ethereum_address.validate recipient
+              in
               Zeko_types.Bridge.Withdrawal_params_ethereum_token.of_serializable
                 ~proof_cache_db
                 { encoding_version =
@@ -2878,14 +2881,6 @@ module Mutations = struct
               Zeko_circuits.Bridge_state.Withdrawal_params_base.typ
               withdrawal_params
           in
-          Archive.store_ethereum_withdrawal
-            Zeko_sequencer.(sequencer.archive)
-            ~aux:withdrawal_aux
-            { Archive.Ethereum_withdrawal.recipient =
-                withdrawal_params.recipient
-            ; amount = withdrawal_params.amount
-            ; asset = None
-            } ;
           return
             (let%bind.Result key, d =
                Bridge_prover.Withdrawal_request.f
@@ -2894,6 +2889,14 @@ module Mutations = struct
                  { withdrawal_params; transferrer }
                |> Result.map_error ~f:Error.to_string_hum
              in
+             Archive.store_ethereum_withdrawal
+               Zeko_sequencer.(sequencer.archive)
+               ~aux:withdrawal_aux
+               { Archive.Ethereum_withdrawal.recipient =
+                   withdrawal_params.recipient
+               ; amount = withdrawal_params.amount
+               ; asset = None
+               } ;
              let d =
                Bridge_prover.execute_request t ~logger ~executor:l2_executor
                  (key, d)
@@ -2926,25 +2929,14 @@ module Mutations = struct
                 withdrawal_params
               |> Array.to_list
             in
-            Archive.store_ethereum_withdrawal
-              Zeko_sequencer.(sequencer.archive)
-              ~aux:
-                (Utils.value_to_hash
-                   ~init:
-                     Zeko_circuits.Bridge_state
-                     .Withdrawal_params_ethereum_token.hash_salt
-                   Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token
-                   .typ withdrawal_params )
-              { Archive.Ethereum_withdrawal.recipient =
-                  withdrawal_params.custom.base.recipient
-              ; amount = withdrawal_params.custom.base.amount
-              ; asset =
-                  Some
-                    { token = ethereum_token_address_of_record asset.record
-                    ; asset_id = ethereum_asset_id_of_record asset.record
-                    ; params_fields
-                    }
-              } ;
+            let withdrawal_aux =
+              Utils.value_to_hash
+                ~init:
+                  Zeko_circuits.Bridge_state
+                  .Withdrawal_params_ethereum_token.hash_salt
+                Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.typ
+                withdrawal_params
+            in
             let logger = Zeko_sequencer.(sequencer.logger) in
             let t = Zeko_sequencer.(sequencer.bridge_prover) in
             return
@@ -2953,6 +2945,19 @@ module Mutations = struct
                    { withdrawal_params; asset }
                  |> Result.map_error ~f:Error.to_string_hum
                in
+               Archive.store_ethereum_withdrawal
+                 Zeko_sequencer.(sequencer.archive)
+                 ~aux:withdrawal_aux
+                 { Archive.Ethereum_withdrawal.recipient =
+                     withdrawal_params.custom.base.recipient
+                 ; amount = withdrawal_params.custom.base.amount
+                 ; asset =
+                     Some
+                       { token = ethereum_token_address_of_record asset.record
+                       ; asset_id = ethereum_asset_id_of_record asset.record
+                       ; params_fields
+                       }
+                 } ;
                don't_wait_for proving ; key ) )
 
     let register_ethereum_asset =
