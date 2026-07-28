@@ -62,9 +62,11 @@ The maintained reference implementation has the properties this bridge needs:
   accounts in the same transaction
   ([deployment guide](https://minafoundation.github.io/mina-fungible-token/deploy.html)).
 
-Do not fork `FungibleToken` to add bridge behavior. The standard's interoperability
-benefit comes from using the same owner implementation; bridge-specific policy
-belongs in the admin contract and bridge-vault verification key.
+Do not fork `FungibleToken` to add bridge behavior. The standard's
+interoperability benefit comes from using the same owner implementation. For
+the bounded-inventory model, the admin is used only during deployment;
+bridge-specific runtime policy belongs in the bridge and bridge-vault
+verification key.
 
 ## L2 account topology
 
@@ -73,7 +75,7 @@ For every registered ERC-20 asset:
 | Role | Mina account ID | Authorization and purpose |
 | --- | --- | --- |
 | Token owner | `(ft_owner_pk, TokenId.default)` | Unmodified `FungibleToken`; owns `ft_token_id = derive_token_id(owner_account_id)` and runs `approveBase`. |
-| Token admin | `(ft_admin_pk, TokenId.default)` | Separate admin contract. For the vault model it authorizes only the bounded deployment mint, pause/resume, and governed upgrades. |
+| Token admin | `(ft_admin_pk, TokenId.default)` | Unmodified separate admin contract. It authorizes the bounded deployment mint, then its controller is permanently set to `Public_key.Compressed.empty`; it provides no post-registration administration. |
 | Circulation account | `(ft_owner_pk, ft_token_id)` | Reserved by the standard for supply accounting. Never use it as the bridge vault. |
 | Bridge vault | `(shared_vault_l2, ft_token_id)` | Holds that asset's pre-minted inventory and uses the universal bridge verification key. Every asset shares the public key and VK but has a distinct derived token ID/account/balance. |
 | User balance | `(user_pk, ft_token_id)` | Ordinary standard fungible-token account. |
@@ -231,8 +233,8 @@ Required invariants:
 - the bounded mint is auditable and the final standard admin controller is the
   fixed non-signing `Public_key.Compressed.empty`;
 - no path can transfer from the reserved circulation account; and
-- emergency pause covers Solidity deposits/releases and L2 standard-token
-  transfers coherently.
+- rollup commit freezing and the Ethereum bridge pause stop cross-chain
+  progress; ordinary L2 standard-token transfers remain enabled.
 
 The tradeoff is supply reporting: the standard circulation account counts the
 pre-minted vault inventory even while it is idle, so `getCirculating()` is not
@@ -356,7 +358,7 @@ settlement guest binds the OCaml Poseidon transition to the same ordered
 canonical records activated by Solidity.
 
 
-## Deployment and upgrade policy
+## Deployment and post-registration policy
 
 Onboard one asset atomically where possible:
 
@@ -373,16 +375,14 @@ Onboard one asset atomically where possible:
    pending Solidity proposal; and
 7. enable deposits only after a cross-chain deposit/withdrawal rehearsal.
 
-For the strongest first deployment, set the standard token owner's
-`allowUpdates` to false. If upgrades are required, use the standard's supported
-admin/verification-key path behind a timelocked multisig and treat a token-owner,
-admin, vault, circuit VK, settlement VK, or Solidity registry change as one
-cross-chain migration. Pause both directions before changing any member of that
-set. Existing holder enable/disable circuits can still rotate the vault's send
-permission/VK on their scheduled windows; the custom version differs by using
-the derived token ID
-([`rule_bridge_disable.ml`, lines 25-111](../rule_bridge_disable.ml#L25-L111),
-[`rule_bridge_enable.ml`, lines 25-111](../rule_bridge_enable.ml#L25-L111)).
+Set the standard token owner's `allowUpdates` to false. Registration permanently
+revokes the standard admin controller, so token-level `pause`, `resume`,
+`setAdmin`, and authorized verification-key upgrades are unavailable afterward.
+The supported emergency controls are rollup commit freezing and the Ethereum
+bridge pause; neither disables ordinary L2 standard-token transfers. A future
+token-owner, admin, vault, circuit, settlement, or Solidity registry change
+requires a separately reviewed cross-chain migration rather than the revoked
+standard-admin path.
 
 ## Verification coverage
 

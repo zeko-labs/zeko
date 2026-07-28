@@ -139,8 +139,6 @@ module Make (Inputs : sig
 
   val ethereum_asset_registry_public_key : PC.t option
 
-  val ethereum_asset_registration_authority : PC.t
-
   val ethereum_asset_registry_schema_version : Checked32.t
 
   val ethereum_asset_approved_mft_standard_vk_id : F.t

@@ -82,8 +82,6 @@ module Commit_rule = Zeko_circuits.Rule_commit.Make (struct
 
   let ethereum_asset_registry_public_key = Some commit_registry_public_key
 
-  let ethereum_asset_registration_authority = commit_registration_authority
-
   let ethereum_asset_registry_schema_version =
     Zeko_circuits.Zeko_util.Checked32.of_int
       Zeko_constants.Ethereum_asset_registry.schema_version

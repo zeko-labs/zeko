@@ -35,8 +35,6 @@ module Outer_rules_inst =
 
       let ethereum_asset_registry_public_key = None
 
-      let ethereum_asset_registration_authority = inner_public_key
-
       let ethereum_asset_registry_schema_version = Zeko_util.Checked32.zero
 
       let ethereum_asset_approved_mft_standard_vk_id = Field.zero

@@ -348,9 +348,6 @@ module Inputs = struct
     if Ethereum_assets.enabled then Some Ethereum_assets.registry_public_key
     else None
 
-  let ethereum_asset_registration_authority =
-    Ethereum_assets.registration_authority
-
   let ethereum_asset_registry_schema_version =
     Ethereum_assets.registry_schema_version
 

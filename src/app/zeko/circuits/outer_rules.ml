@@ -16,9 +16,6 @@ module Make (Inputs : sig
   val ethereum_asset_registry_public_key :
     Signature_lib.Public_key.Compressed.t option
 
-  val ethereum_asset_registration_authority :
-    Signature_lib.Public_key.Compressed.t
-
   val ethereum_asset_registry_schema_version : Zeko_util.Checked32.t
 
   val ethereum_asset_approved_mft_standard_vk_id : Snark_params.Tick.Field.t

@@ -20,10 +20,10 @@ module Test_module = struct
 
   let account_id = Account_id.create pk_compressed Token_id.default
 
-  (* This fixture is also linked into the Zeko sequencer integration test. Keep
-     its independent Pickles compilation lazy so an executable can establish
-     the dependency order of its own recursive circuits before the fixture is
-     first used. *)
+  (* ZEKO NOTE: This fixture is also linked into the Zeko sequencer integration
+     test. Keep its independent Pickles compilation lazy so an executable can
+     establish the dependency order of its own recursive circuits before the
+     fixture is first used. *)
   let compiled =
     lazy
       (let tag, _, _, Pickles.Provers.[ initialize_prover; update_state_prover ]
