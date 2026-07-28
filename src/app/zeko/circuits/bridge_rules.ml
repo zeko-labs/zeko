@@ -36,6 +36,8 @@ struct
     | None ->
         None
 
+  let registry_binding () = Checked.return None
+
   let authenticated_registry_call () = None
 
   let call_data () _ = Checked.return (constant F.typ Field.zero)
@@ -110,14 +112,13 @@ struct
 
     let ethereum_asset_id = None
 
-    module Asset =
-      Static_asset (struct
-        let holder_account_l2 = Inputs.holder_account_l2
+    module Asset = Static_asset (struct
+      let holder_account_l2 = Inputs.holder_account_l2
 
-        let token_owner_l2 = None
+      let token_owner_l2 = None
 
-        let ethereum_asset_id = None
-      end)
+      let ethereum_asset_id = None
+    end)
 
     module Deposit_params = Deposit_params_base
     module Withdrawal_params = Withdrawal_params_base
@@ -226,7 +227,7 @@ struct
 
         let chain_l1 = Inputs.chain_l1
 
-        module Deposit_params = Deposit_params_ethereum_token
+        module Deposit_params = Deposit_params_ethereum_token_v1
 
         let bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
 
@@ -249,17 +250,16 @@ struct
 
     let bridge_proof_fee = Currency.Amount.zero
 
-    module Asset =
-      Static_asset (struct
-        let holder_account_l2 = Inputs.holder_account_l2
+    module Asset = Static_asset (struct
+      let holder_account_l2 = Inputs.holder_account_l2
 
-        let token_owner_l2 = Some Inputs.token_owner_l2
+      let token_owner_l2 = Some Inputs.token_owner_l2
 
-        let ethereum_asset_id = ethereum_asset_id
-      end)
+      let ethereum_asset_id = ethereum_asset_id
+    end)
 
-    module Deposit_params = Deposit_params_ethereum_token
-    module Withdrawal_params = Withdrawal_params_ethereum_token
+    module Deposit_params = Deposit_params_ethereum_token_v1
+    module Withdrawal_params = Withdrawal_params_ethereum_token_v1
     module Check_accepted = Check_accepted
   end
 
@@ -287,6 +287,8 @@ end
 
 module Make_ethereum_assets (Inputs : sig
   val registry_public_key : PC.t
+
+  val registration_authority : PC.t
 
   val registry_schema_version : Checked32.t
 
@@ -317,10 +319,11 @@ struct
       (struct
         let registry_public_key = Inputs.registry_public_key
 
+        let registration_authority = Inputs.registration_authority
+
         let schema_version = Inputs.registry_schema_version
 
-        let approved_mft_standard_vk_id =
-          Inputs.approved_mft_standard_vk_id
+        let approved_mft_standard_vk_id = Inputs.approved_mft_standard_vk_id
 
         let universal_bridge_vk_id = Inputs.universal_bridge_vk_id
 
@@ -339,14 +342,18 @@ struct
 
     let record = Registry.Verified_asset.record
 
-    let vault_public_key verified =
-      (record verified).vault_public_key
+    let vault_public_key verified = (record verified).vault_public_key
 
     let token_id_l2 = Registry.Verified_asset.token_id
 
     let ethereum_asset_id verified =
       let record = record verified in
       Some (record.asset_id_high, record.asset_id_low)
+
+    let registry_binding verified =
+      let record = record verified in
+      let* commitment = Asset_registry.Asset_record.commitment_var record in
+      Checked.return (Some (record.registry_index, commitment))
 
     let authenticated_registry_call verified =
       Some (Registry.Verified_asset.authenticated_registry_call verified)
@@ -366,8 +373,7 @@ struct
       (struct
         let holder_accounts_l1 = []
 
-        let ethereum_holder_account_l1 =
-          Some Inputs.ethereum_holder_account_l1
+        let ethereum_holder_account_l1 = Some Inputs.ethereum_holder_account_l1
 
         (* Asset identity is dynamic here and is constrained against the
            verified registry record in finalization. *)
@@ -390,8 +396,7 @@ struct
 
     let holder_accounts_l1 = []
 
-    let ethereum_holder_account_l1 =
-      Some Inputs.ethereum_holder_account_l1
+    let ethereum_holder_account_l1 = Some Inputs.ethereum_holder_account_l1
 
     let ethereum_asset_id = None
 
@@ -496,14 +501,13 @@ struct
 
     let ethereum_asset_id = None
 
-    module Asset =
-      Static_asset (struct
-        let holder_account_l2 = Inputs.holder_account_l2
+    module Asset = Static_asset (struct
+      let holder_account_l2 = Inputs.holder_account_l2
 
-        let token_owner_l2 = Some Inputs.token_owner_l2
+      let token_owner_l2 = Some Inputs.token_owner_l2
 
-        let ethereum_asset_id = None
-      end)
+      let ethereum_asset_id = None
+    end)
 
     module Deposit_params = Deposit_params_custom
     module Withdrawal_params = Withdrawal_params_custom

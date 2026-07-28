@@ -24,8 +24,9 @@ module type ASSET = sig
 
   val ethereum_asset_id : verified -> (F.var * F.var) option
 
-  val authenticated_registry_call :
-    verified -> Account_update.Checked.t option
+  val registry_binding : verified -> (Checked32.var * F.var) option Checked.t
+
+  val authenticated_registry_call : verified -> Account_update.Checked.t option
 
   val is_custom_token : bool
 
@@ -162,9 +163,7 @@ struct
     let* helper_token_id =
       make_checked
       @@ fun () ->
-      let account_id =
-        Account_id.Checked.create public_key token_id_l2
-      in
+      let account_id = Account_id.Checked.create public_key token_id_l2 in
       Account_id.Checked.derive_token_id ~owner:account_id
     in
     let@ () = with_label __LOC__ in
@@ -201,6 +200,26 @@ struct
     in
     let@ () = with_label __LOC__ in
     let base_params = Deposit_params.base params in
+    let* expected_registry_binding = Asset.registry_binding verified_asset in
+    let* () =
+      match
+        (expected_registry_binding, Deposit_params.registry_binding params)
+      with
+      | None, None ->
+          Checked.return ()
+      | ( Some (expected_index, expected_commitment)
+        , Some (_, actual_index, actual_commitment) ) ->
+          let* () =
+            assert_equal ~label:"bridge registry index" Checked32.typ
+              expected_index actual_index
+          in
+          assert_equal ~label:"bridge registry record commitment" F.typ
+            expected_commitment actual_commitment
+      | _ ->
+          failwith
+            "Deposit registry binding does not match the verified registry \
+             record"
+    in
     let* () =
       match
         (Asset.ethereum_asset_id verified_asset, Deposit_params.asset_id params)
@@ -335,9 +354,8 @@ struct
       ; token_id = token_id_l2
       ; may_use_token =
           constant May_use_token.typ
-            ( if Asset.is_custom_token then
-                Inherit_from_parent
-              else Parents_own_token )
+            ( if Asset.is_custom_token then Inherit_from_parent
+            else Parents_own_token )
       ; authorization_kind = constant A.typ None_given
       ; balance_change =
           Currency.Amount.Signed.Checked.of_unsigned recipient_payout
@@ -351,9 +369,8 @@ struct
       ; token_id = token_id_l2
       ; may_use_token =
           constant May_use_token.typ
-            ( if Asset.is_custom_token then
-                Inherit_from_parent
-              else Parents_own_token )
+            ( if Asset.is_custom_token then Inherit_from_parent
+            else Parents_own_token )
       ; authorization_kind = constant A.typ None_given
       ; balance_change =
           Currency.Amount.Signed.Checked.of_unsigned bridge_proof_fee
@@ -378,9 +395,7 @@ struct
           ; (sequencer_fee_payout, [])
           ]
     in
-    let*| out =
-      make_outputs ~chain:chain_l2 account_update calls
-    in
+    let*| out = make_outputs ~chain:chain_l2 account_update calls in
     Compile_simple.
       { prevs = Two_prevs (verify_check_accepted, verify_ase); out }
 

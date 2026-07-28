@@ -21,9 +21,13 @@ end
 module Ethereum_assets = struct
   type t =
     { registry_public_key : Public_key.Compressed.t
+    ; registration_authority : Public_key.Compressed.t
     ; vault_public_key : Public_key.Compressed.t
     ; approved_mft_standard_vk_id : string
+    ; approved_mft_token_vk_hash : string
+    ; approved_mft_admin_vk_hash : string
     ; universal_bridge_vk_id : string
+    ; universal_bridge_vk_hash : string
     }
   [@@deriving yojson]
 end
@@ -292,13 +296,20 @@ module Inputs = struct
     let config =
       Option.value t.ethereum_assets
         ~default:
-          { Ethereum_assets.registry_public_key = Zeko_constants.inner_holder_key
+          { Ethereum_assets.registry_public_key =
+              Zeko_constants.inner_holder_key
+          ; registration_authority = Zeko_constants.inner_holder_key
           ; vault_public_key = Zeko_constants.inner_holder_key
           ; approved_mft_standard_vk_id = "1"
+          ; approved_mft_token_vk_hash = "3"
+          ; approved_mft_admin_vk_hash = "4"
           ; universal_bridge_vk_id = "2"
+          ; universal_bridge_vk_hash = "5"
           }
 
     let registry_public_key = config.registry_public_key
+
+    let registration_authority = config.registration_authority
 
     let registry_schema_version =
       Zeko_circuits.Zeko_util.Checked32.of_int
@@ -307,8 +318,17 @@ module Inputs = struct
     let approved_mft_standard_vk_id =
       Snark_params.Tick.Field.of_string config.approved_mft_standard_vk_id
 
+    let approved_mft_token_vk_hash =
+      Snark_params.Tick.Field.of_string config.approved_mft_token_vk_hash
+
+    let approved_mft_admin_vk_hash =
+      Snark_params.Tick.Field.of_string config.approved_mft_admin_vk_hash
+
     let universal_bridge_vk_id =
       Snark_params.Tick.Field.of_string config.universal_bridge_vk_id
+
+    let universal_bridge_vk_hash =
+      Snark_params.Tick.Field.of_string config.universal_bridge_vk_hash
 
     let vault_public_key = config.vault_public_key
 
@@ -327,6 +347,29 @@ module Inputs = struct
   let ethereum_asset_registry_public_key =
     if Ethereum_assets.enabled then Some Ethereum_assets.registry_public_key
     else None
+
+  let ethereum_asset_registration_authority =
+    Ethereum_assets.registration_authority
+
+  let ethereum_asset_registry_schema_version =
+    Ethereum_assets.registry_schema_version
+
+  let ethereum_asset_approved_mft_standard_vk_id =
+    Ethereum_assets.approved_mft_standard_vk_id
+
+  let ethereum_asset_approved_mft_token_vk_hash =
+    Ethereum_assets.approved_mft_token_vk_hash
+
+  let ethereum_asset_approved_mft_admin_vk_hash =
+    Ethereum_assets.approved_mft_admin_vk_hash
+
+  let ethereum_asset_universal_bridge_vk_id =
+    Ethereum_assets.universal_bridge_vk_id
+
+  let ethereum_asset_universal_bridge_vk_hash =
+    Ethereum_assets.universal_bridge_vk_hash
+
+  let ethereum_asset_vault_public_key = Ethereum_assets.vault_public_key
 
   let holder_account_l2 = Zeko_constants.inner_holder_key
 

@@ -1121,10 +1121,16 @@ module Types = struct
     module Ethereum_assets = struct
       type t =
         { registry_public_key : Public_key.Compressed.t
+        ; registration_authority : Public_key.Compressed.t
         ; vault_public_key : Public_key.Compressed.t
+        ; registry_root : Snark_params.Tick.Field.t
+        ; registry_count : int
         ; registry_schema_version : int
         ; approved_mft_standard_vk_id : Snark_params.Tick.Field.t
+        ; approved_mft_token_vk_hash : Snark_params.Tick.Field.t
+        ; approved_mft_admin_vk_hash : Snark_params.Tick.Field.t
         ; universal_bridge_vk_id : Snark_params.Tick.Field.t
+        ; universal_bridge_vk_hash : Snark_params.Tick.Field.t
         ; bridge_verification_key_hash : Snark_params.Tick.Field.t
         ; registry_verification_key_hash : Snark_params.Tick.Field.t
         }
@@ -1134,9 +1140,19 @@ module Types = struct
             [ field "registryPublicKey" ~typ:(non_null public_key)
                 ~args:Arg.[]
                 ~resolve:(fun _ t -> t.registry_public_key)
+            ; field "registrationAuthority" ~typ:(non_null public_key)
+                ~args:Arg.[]
+                ~resolve:(fun _ t -> t.registration_authority)
             ; field "vaultPublicKey" ~typ:(non_null public_key)
                 ~args:Arg.[]
                 ~resolve:(fun _ t -> t.vault_public_key)
+            ; field "registryRoot" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ t ->
+                  Snark_params.Tick.Field.to_string t.registry_root )
+            ; field "registryCount" ~typ:(non_null int)
+                ~args:Arg.[]
+                ~resolve:(fun _ t -> t.registry_count)
             ; field "registrySchemaVersion" ~typ:(non_null int)
                 ~args:Arg.[]
                 ~resolve:(fun _ t -> t.registry_schema_version)
@@ -1145,10 +1161,25 @@ module Types = struct
                 ~resolve:(fun _ t ->
                   Snark_params.Tick.Field.to_string
                     t.approved_mft_standard_vk_id )
+            ; field "approvedMftTokenVkHash" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ t ->
+                  Snark_params.Tick.Field.to_string t.approved_mft_token_vk_hash
+                  )
+            ; field "approvedMftAdminVkHash" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ t ->
+                  Snark_params.Tick.Field.to_string t.approved_mft_admin_vk_hash
+                  )
             ; field "universalBridgeVkId" ~typ:(non_null string)
                 ~args:Arg.[]
                 ~resolve:(fun _ t ->
                   Snark_params.Tick.Field.to_string t.universal_bridge_vk_id )
+            ; field "universalBridgeVkHash" ~typ:(non_null string)
+                ~args:Arg.[]
+                ~resolve:(fun _ t ->
+                  Snark_params.Tick.Field.to_string t.universal_bridge_vk_hash
+                  )
             ; field "bridgeVerificationKeyHash" ~typ:(non_null string)
                 ~args:Arg.[]
                 ~resolve:(fun _ t ->
@@ -1559,19 +1590,33 @@ module Types = struct
 
         let arg_typ ~proof_cache_db =
           obj "EthereumTokenDepositParamsInput"
-            ~coerce:(fun asset_id_high asset_id_low base : input ->
+            ~coerce:(fun encoding_version registry_index record_commitment
+                         asset_id_high asset_id_low base : input ->
               { Zeko_circuits.Bridge_state.Deposit_params_ethereum_token
-                .asset_id_high = Field.of_string asset_id_high
+                .encoding_version =
+                  Zeko_circuits.Zeko_util.Checked32.of_string
+                    (Unsigned.UInt32.to_string encoding_version)
+              ; registry_index =
+                  Zeko_circuits.Zeko_util.Checked32.of_string
+                    (Unsigned.UInt32.to_string registry_index)
+              ; record_commitment = Field.of_string record_commitment
+              ; asset_id_high = Field.of_string asset_id_high
               ; asset_id_low = Field.of_string asset_id_low
               ; base
               } )
             ~split:(fun f (x : input) ->
               f
+                (Zeko_circuits.Zeko_util.Checked32.to_uint32 x.encoding_version)
+                (Zeko_circuits.Zeko_util.Checked32.to_uint32 x.registry_index)
+                (Field.to_string x.record_commitment)
                 (Field.to_string x.asset_id_high)
                 (Field.to_string x.asset_id_low)
                 x.base )
             ~fields:
-              [ arg "assetIdHigh" ~typ:(non_null string)
+              [ arg "encodingVersion" ~typ:(non_null UInt32.arg_typ)
+              ; arg "registryIndex" ~typ:(non_null UInt32.arg_typ)
+              ; arg "recordCommitment" ~typ:(non_null string)
+              ; arg "assetIdHigh" ~typ:(non_null string)
               ; arg "assetIdLow" ~typ:(non_null string)
               ; arg "base"
                   ~typ:(non_null @@ Deposit_params.arg_typ ~proof_cache_db)
@@ -1642,11 +1687,19 @@ module Types = struct
 
         let arg_typ ~proof_cache_db =
           obj "EthereumTokenWithdrawalParamsInput"
-            ~coerce:(fun asset_id_high asset_id_low token_owner sender_debit
+            ~coerce:(fun encoding_version registry_index record_commitment
+                         asset_id_high asset_id_low token_owner sender_debit
                          amount recipient ->
               Zeko_types.Bridge.Withdrawal_params_ethereum_token.of_serializable
                 ~proof_cache_db
-                { asset_id_high = Field.of_string asset_id_high
+                { encoding_version =
+                    Zeko_circuits.Zeko_util.Checked32.of_string
+                      (Unsigned.UInt32.to_string encoding_version)
+                ; registry_index =
+                    Zeko_circuits.Zeko_util.Checked32.of_string
+                      (Unsigned.UInt32.to_string registry_index)
+                ; record_commitment = Field.of_string record_commitment
+                ; asset_id_high = Field.of_string asset_id_high
                 ; asset_id_low = Field.of_string asset_id_low
                 ; token_owner_body = single_account_update_body token_owner
                 ; nested_children =
@@ -1668,6 +1721,9 @@ module Types = struct
                 .to_serializable x
               in
               f
+                (Zeko_circuits.Zeko_util.Checked32.to_uint32 x.encoding_version)
+                (Zeko_circuits.Zeko_util.Checked32.to_uint32 x.registry_index)
+                (Field.to_string x.record_commitment)
                 (Field.to_string x.asset_id_high)
                 (Field.to_string x.asset_id_low)
                 (account_update_body_to_json x.token_owner_body)
@@ -1677,7 +1733,10 @@ module Types = struct
                 (Currency.Amount.to_uint64 x.amount)
                 x.recipient )
             ~fields:
-              [ arg "assetIdHigh" ~typ:(non_null string)
+              [ arg "encodingVersion" ~typ:(non_null UInt32.arg_typ)
+              ; arg "registryIndex" ~typ:(non_null UInt32.arg_typ)
+              ; arg "recordCommitment" ~typ:(non_null string)
+              ; arg "assetIdHigh" ~typ:(non_null string)
               ; arg "assetIdLow" ~typ:(non_null string)
               ; arg "tokenOwner" ~typ:(non_null string)
               ; arg "senderDebit" ~typ:(non_null string)
@@ -1687,8 +1746,7 @@ module Types = struct
       end
 
       module Ethereum_asset_membership = struct
-        type input =
-          Bridge_inst_ethereum_token.Registry.Membership_witness.t
+        type input = Bridge_inst_ethereum_token.Registry.Membership_witness.t
 
         let arg_typ =
           scalar "EthereumAssetMembershipInput"
@@ -1704,8 +1762,8 @@ module Types = struct
                   Error "Expected a JSON-encoded Ethereum asset membership" )
             ~to_json:(fun membership ->
               `String
-                (Bridge_inst_ethereum_token.Registry.Membership_witness
-                 .to_yojson membership
+                ( Bridge_inst_ethereum_token.Registry.Membership_witness
+                  .to_yojson membership
                 |> Yojson.Safe.to_string ) )
       end
 
@@ -2200,8 +2258,7 @@ module Types = struct
 
         let arg_typ ~proof_cache_db =
           obj "EthereumTokenWithdrawalRequestInput"
-            ~coerce:(fun withdrawal_params asset ->
-              { withdrawal_params; asset } )
+            ~coerce:(fun withdrawal_params asset -> { withdrawal_params; asset })
             ~split:(fun f (x : input) -> f x.withdrawal_params x.asset)
             ~fields:
               [ arg "withdrawalParams"
@@ -2229,7 +2286,7 @@ module Types = struct
                   Error "Expected a JSON-encoded asset registration witness" )
             ~to_json:(fun witness ->
               `String
-                (Bridge_prover.Register_ethereum_asset.to_yojson witness
+                ( Bridge_prover.Register_ethereum_asset.to_yojson witness
                 |> Yojson.Safe.to_string ) )
       end
 
@@ -2881,10 +2938,8 @@ module Mutations = struct
               ; amount = withdrawal_params.custom.base.amount
               ; asset =
                   Some
-                    { token =
-                        ethereum_token_address_of_record asset.record
-                    ; asset_id =
-                        ethereum_asset_id_of_record asset.record
+                    { token = ethereum_token_address_of_record asset.record
+                    ; asset_id = ethereum_asset_id_of_record asset.record
                     ; params_fields
                     }
               } ;
@@ -3385,25 +3440,58 @@ module Queries = struct
         ; bridge_fee_recipient_l2 = Inputs.bridge_fee_recipient_l2
         ; bridge_proof_fee = Inputs.bridge_proof_fee
         ; ethereum_assets =
-            ( if Inputs.Ethereum_assets.enabled then
+            ( if Inputs.Ethereum_assets.enabled then (
+              let registry_state =
+                Zeko_sequencer.get_account sequencer
+                  Inputs.Ethereum_assets.registry_public_key Token_id.default
+                |> Option.bind ~f:(fun account -> account.zkapp)
+                |> Option.map ~f:(fun zkapp ->
+                       Zeko_circuits.Asset_registry.Registry_state
+                       .value_of_app_state zkapp.app_state )
+                |> Option.value_exn
+                     ~message:
+                       "Configured Ethereum asset registry account is missing"
+              in
+              if
+                not
+                  (Snark_params.Tick.Field.equal
+                     Inputs.Ethereum_assets.universal_bridge_vk_hash
+                     sequencer.bridge_prover.verification_keys
+                       .bridge_ethereum_token_l2 )
+              then
+                failwith
+                  "Configured universal Ethereum bridge VK hash does not match \
+                   the compiled circuit" ;
               Some
                 { Types.Circuits_config.Ethereum_assets.registry_public_key =
                     Inputs.Ethereum_assets.registry_public_key
+                ; registration_authority =
+                    Inputs.Ethereum_assets.registration_authority
                 ; vault_public_key = Inputs.Ethereum_assets.vault_public_key
+                ; registry_root = registry_state.root
+                ; registry_count =
+                    Zeko_circuits.Zeko_util.Checked32.to_int
+                      registry_state.leaf_count
                 ; registry_schema_version =
                     Zeko_circuits.Zeko_util.Checked32.to_int
                       Inputs.Ethereum_assets.registry_schema_version
                 ; approved_mft_standard_vk_id =
                     Inputs.Ethereum_assets.approved_mft_standard_vk_id
+                ; approved_mft_token_vk_hash =
+                    Inputs.Ethereum_assets.approved_mft_token_vk_hash
+                ; approved_mft_admin_vk_hash =
+                    Inputs.Ethereum_assets.approved_mft_admin_vk_hash
                 ; universal_bridge_vk_id =
                     Inputs.Ethereum_assets.universal_bridge_vk_id
+                ; universal_bridge_vk_hash =
+                    Inputs.Ethereum_assets.universal_bridge_vk_hash
                 ; bridge_verification_key_hash =
                     sequencer.bridge_prover.verification_keys
                       .bridge_ethereum_token_l2
                 ; registry_verification_key_hash =
                     sequencer.bridge_prover.verification_keys
                       .ethereum_asset_registry
-                }
+                } )
             else None )
         } )
 
@@ -3450,13 +3538,15 @@ module Queries = struct
           Archive.get_actions sequencer.archive
             (Account_id.create public_key token_id)
             ~from:from_action_state ~to_:end_action_state
-          |> Result.map ~f:
-               (List.filter ~f:(fun (action : Archive.Account_update_actions.t) ->
-                    Option.for_all action.block_info ~f:(fun block_info ->
-                        Option.for_all from_block ~f:(fun from_block ->
-                            block_info.height >= from_block )
-                        && Option.for_all to_block ~f:(fun to_block ->
-                               block_info.height < to_block ) ) ) )
+          |> Result.map
+               ~f:
+                 (List.filter
+                    ~f:(fun (action : Archive.Account_update_actions.t) ->
+                      Option.for_all action.block_info ~f:(fun block_info ->
+                          Option.for_all from_block ~f:(fun from_block ->
+                              block_info.height >= from_block )
+                          && Option.for_all to_block ~f:(fun to_block ->
+                                 block_info.height < to_block ) ) ) )
           |> return )
 
     let events =
@@ -3469,11 +3559,7 @@ module Queries = struct
                   (non_null Types.Input.Archive.EventFilterOptionsInput.arg_typ)
             ]
         ~resolve:(fun { ctx = { sequencer; _ }; _ } ()
-                      ( public_key
-                      , token_id
-                      , from_block
-                      , to_block
-                      , _status ) ->
+                      (public_key, token_id, from_block, to_block, _status) ->
           let token_id = Option.value ~default:Token_id.default token_id in
           Archive.get_events sequencer.archive
             (Account_id.create public_key token_id)

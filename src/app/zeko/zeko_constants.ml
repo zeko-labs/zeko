@@ -49,15 +49,21 @@ let ethereum_deposit_salt = "Ethereum deposit V1"
 
 let ethereum_erc20_deposit_salt = "Ethereum ERC20 deposit V1"
 
+let ethereum_erc20_deposit_v2_salt = "Ethereum ERC20 deposit V2"
+
 let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
 
 let ethereum_erc20_withdrawal_salt = "Ethereum ERC20 withdrawal V1"
+
+let ethereum_erc20_withdrawal_v2_salt = "Ethereum ERC20 withdrawal V2"
 
 let ethereum_asset_registry_leaf_salt = "Ethereum asset registry leaf V1"
 
 let ethereum_asset_registry_node_salt = "Ethereum asset registry node V1"
 
 let ethereum_asset_registry_checkpoint_salt = "Zeko registry checkpoint V1"
+
+let ethereum_asset_registry_registration_salt = "Ethereum asset reg V1"
 
 let ethereum_asset_bridge_call_salt = "Ethereum asset bridge call V1"
 

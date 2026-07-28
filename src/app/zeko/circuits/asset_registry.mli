@@ -3,8 +3,8 @@
 open Mina_base
 open Snark_params.Tick
 open Zeko_util
-
 module PC = Signature_lib.Public_key.Compressed
+
 module Token_id : sig
   include module type of Mina_base.Token_id
 
@@ -50,6 +50,8 @@ module Registry_state : sig
     }
 
   val fine : fine -> Fine.t
+
+  val value_of_app_state : F.t Zkapp_state.V.t -> t
 end
 
 module Path : sig
@@ -64,6 +66,9 @@ module Path : sig
   val of_yojson : Yojson.Safe.t -> (t, string) Result.t
 end
 
+val implied_root_var :
+  leaf:F.var -> index:Checked32.var -> Path.var -> F.var Checked.t
+
 module Output : sig
   type calls =
     ( Account_update.t
@@ -72,9 +77,7 @@ module Output : sig
     Zkapp_command.Call_forest.t
 
   type auxiliary =
-    Account_update.Body.t
-    * Zkapp_command.Digest.Account_update.t
-    * calls
+    Account_update.Body.t * Zkapp_command.Digest.Account_update.t * calls
 
   type t = Zkapp_statement.t * auxiliary
 end
@@ -102,6 +105,8 @@ end
 
 module type CONFIG = sig
   val registry_public_key : PC.t
+
+  val registration_authority : PC.t
 
   val schema_version : Checked32.t
 
@@ -151,19 +156,16 @@ module Make (Config : CONFIG) () : sig
       end
 
       module Elem : sig
-        type t =
-          { active : Boolean.t; record : Asset_record.t; path : Path.t }
+        type t = { active : Boolean.t; record : Asset_record.t; path : Path.t }
         [@@deriving snarky]
       end
 
       module Init : sig
-        type t =
-          { old_state : Registry_state.t; candidate : Asset_record.t }
+        type t = { old_state : Registry_state.t; candidate : Asset_record.t }
         [@@deriving snarky]
       end
 
-      val init :
-        check:Boolean.var option -> Init.var -> Stmt.var Checked.t
+      val init : check:Boolean.var option -> Init.var -> Stmt.var Checked.t
 
       val step : Elem.var -> Stmt.var -> Stmt.var Checked.t
 
@@ -180,8 +182,7 @@ module Make (Config : CONFIG) () : sig
       val wrap_domain : [ `N13 | `N14 | `N15 ] option
     end
 
-    type trans =
-      { source : Definition.Stmt.t; target : Definition.Stmt.t }
+    type trans = { source : Definition.Stmt.t; target : Definition.Stmt.t }
 
     type t := trans * Proof.t
 
@@ -246,19 +247,14 @@ module Make (Config : CONFIG) () : sig
   module Register : sig
     module Witness : sig
       type t =
-        { scan : Scan_inst.t
-        ; append_path : Path.t
-        ; registry_vk_hash : F.t
-        }
+        { scan : Scan_inst.t; append_path : Path.t; registry_vk_hash : F.t }
       [@@deriving snarky]
     end
-
   end
 
   type registry_tag_var
 
   val registry_tag : registry_tag_var Compile_simple.tag lazy_t
 
-  val register :
-    (Register.Witness.t -> (Output.t * Proof.t) Promise.t) lazy_t
+  val register : (Register.Witness.t -> (Output.t * Proof.t) Promise.t) lazy_t
 end

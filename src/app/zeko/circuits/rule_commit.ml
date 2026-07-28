@@ -138,6 +138,22 @@ module Make (Inputs : sig
   val emergency_da_public_key : PC.t
 
   val ethereum_asset_registry_public_key : PC.t option
+
+  val ethereum_asset_registration_authority : PC.t
+
+  val ethereum_asset_registry_schema_version : Checked32.t
+
+  val ethereum_asset_approved_mft_standard_vk_id : F.t
+
+  val ethereum_asset_approved_mft_token_vk_hash : F.t
+
+  val ethereum_asset_approved_mft_admin_vk_hash : F.t
+
+  val ethereum_asset_universal_bridge_vk_id : F.t
+
+  val ethereum_asset_universal_bridge_vk_hash : F.t
+
+  val ethereum_asset_vault_public_key : PC.t
 end) =
 struct
   open Inputs
@@ -154,6 +170,123 @@ struct
         let length = Account_set.height
       end)
 
+  module Registry_path = struct
+    module Step = struct
+      type t = { hash_other : F.t; is_right : Zeko_util.Boolean.t }
+      [@@deriving snarky]
+
+      let to_yojson ({ hash_other; is_right } : t) =
+        `Assoc
+          [ ("hash_other", Field.to_yojson hash_other)
+          ; ("is_right", `Bool is_right)
+          ]
+
+      let of_yojson json =
+        let open Yojson.Safe.Util in
+        try
+          let hash_other =
+            match member "hash_other" json |> Field.of_yojson with
+            | Ok hash ->
+                hash
+            | Error error ->
+                failwith error
+          in
+          Ok ({ hash_other; is_right = member "is_right" json |> to_bool } : t)
+        with exn -> Error (Exn.to_string exn)
+    end
+
+    include
+      SnarkList
+        (Step)
+        (struct
+          let length = Zeko_constants.constraint_constants.ledger_depth
+        end)
+
+    let to_yojson path = `List (List.map path ~f:Step.to_yojson)
+
+    let of_yojson = function
+      | `List values ->
+          List.fold_right values ~init:(Ok []) ~f:(fun value acc ->
+              match (Step.of_yojson value, acc) with
+              | Ok value, Ok rest ->
+                  Ok (value :: rest)
+              | Error error, _ | _, Error error ->
+                  Error error )
+      | _ ->
+          Error "registry account path must be a JSON list"
+  end
+
+  module Registration_witness = struct
+    type t =
+      { did_append : Zeko_util.Boolean.t
+      ; candidate : Asset_registry.Asset_record.t
+      ; append_path : Asset_registry.Path.t
+      ; token_owner_acc : Account.t
+      ; token_owner_path : Registry_path.t
+      ; admin_acc : Account.t
+      ; admin_path : Registry_path.t
+      ; vault_acc : Account.t
+      ; vault_path : Registry_path.t
+      ; circulation_acc : Account.t
+      ; circulation_path : Registry_path.t
+      }
+    [@@deriving snarky]
+
+    let to_yojson
+        ({ did_append
+         ; candidate
+         ; append_path
+         ; token_owner_acc
+         ; token_owner_path
+         ; admin_acc
+         ; admin_path
+         ; vault_acc
+         ; vault_path
+         ; circulation_acc
+         ; circulation_path
+         } :
+          t ) =
+      `Assoc
+        [ ("did_append", `Bool did_append)
+        ; ("candidate", Asset_registry.Asset_record.to_yojson candidate)
+        ; ("append_path", Asset_registry.Path.to_yojson append_path)
+        ; ("token_owner_acc", Account.to_yojson token_owner_acc)
+        ; ("token_owner_path", Registry_path.to_yojson token_owner_path)
+        ; ("admin_acc", Account.to_yojson admin_acc)
+        ; ("admin_path", Registry_path.to_yojson admin_path)
+        ; ("vault_acc", Account.to_yojson vault_acc)
+        ; ("vault_path", Registry_path.to_yojson vault_path)
+        ; ("circulation_acc", Account.to_yojson circulation_acc)
+        ; ("circulation_path", Registry_path.to_yojson circulation_path)
+        ]
+
+    let of_yojson json =
+      let open Yojson.Safe.Util in
+      let get parse name =
+        match member name json |> parse with
+        | Ok value ->
+            value
+        | Error error ->
+            failwith error
+      in
+      try
+        Ok
+          ( { did_append = member "did_append" json |> to_bool
+            ; candidate = get Asset_registry.Asset_record.of_yojson "candidate"
+            ; append_path = get Asset_registry.Path.of_yojson "append_path"
+            ; token_owner_acc = get Account.of_yojson "token_owner_acc"
+            ; token_owner_path = get Registry_path.of_yojson "token_owner_path"
+            ; admin_acc = get Account.of_yojson "admin_acc"
+            ; admin_path = get Registry_path.of_yojson "admin_path"
+            ; vault_acc = get Account.of_yojson "vault_acc"
+            ; vault_path = get Registry_path.of_yojson "vault_path"
+            ; circulation_acc = get Account.of_yojson "circulation_acc"
+            ; circulation_path = get Registry_path.of_yojson "circulation_path"
+            }
+            : t )
+      with exn -> Error (Exn.to_string exn)
+  end
+
   module Base_witness = struct
     type t =
       { public_key : PC.t  (** Our public key on the L2 *)
@@ -165,9 +298,11 @@ struct
       ; da_multisig : Multisig.Witness.t
       ; slot_range : Slot_range.t
       ; emergency_mode : Zeko_util.Boolean.t
-      ; ethereum_asset_registry_root : F.t
-      ; ethereum_asset_registry_count : F.t
-      ; ethereum_asset_registry_schema : F.t
+      ; old_ethereum_asset_registry_acc : Account.t
+      ; old_ethereum_asset_registry_path : Registry_path.t
+      ; new_ethereum_asset_registry_acc : Account.t
+      ; new_ethereum_asset_registry_path : Registry_path.t
+      ; ethereum_asset_registration : Registration_witness.t
       }
     [@@deriving snarky]
   end
@@ -186,6 +321,15 @@ struct
     Checked.List.foldi path ~init ~f:(fun height acc PathElt.{ right_side } ->
         make_checked @@ fun () -> Ledger_hash.merge_var ~height acc right_side )
 
+  let implied_registry_root (account : Account.var) (path : Registry_path.var) :
+      F.var Checked.t =
+    let* init = Account.Checked.digest account in
+    Checked.List.foldi path ~init
+      ~f:(fun height acc Registry_path.Step.{ hash_other; is_right } ->
+        let* left = Field.Checked.if_ is_right ~then_:hash_other ~else_:acc in
+        let* right = Field.Checked.if_ is_right ~then_:acc ~else_:hash_other in
+        make_checked @@ fun () -> Ledger_hash.merge_var ~height left right )
+
   let get_zkapp (a : Account.var) : Zkapp_account.Checked.t Checked.t =
     let hash, content = a.zkapp in
     let* content =
@@ -201,6 +345,304 @@ struct
       with_label __LOC__ (fun () -> Field.Checked.Assert.equal hash digest)
     in
     content
+
+  let checked32_of_field field =
+    let* value =
+      exists Checked32.typ
+        ~compute:
+          (let+| value = As_prover.read_var field in
+           Field.to_string value |> Checked32.of_string )
+    in
+    let*| () =
+      assert_equal ~label:"32-bit registry account state" F.typ field
+        (Checked32.Checked.to_field value)
+    in
+    value
+
+  let registry_state_of_account ~registry_public_key (account : Account.var) =
+    let* () =
+      PC.Checked.Assert.equal account.public_key
+        (constant PC.typ registry_public_key)
+    in
+    let* () =
+      assert_equal ~label:"registry account token ID" Token_id.typ
+        account.token_id
+        (constant Token_id.typ Token_id.default)
+    in
+    let* zkapp = get_zkapp account in
+    let (root :: leaf_count_field :: schema_version_field :: _) =
+      zkapp.app_state
+    in
+    let* leaf_count = checked32_of_field leaf_count_field in
+    let* schema_version = checked32_of_field schema_version_field in
+    let* () =
+      assert_equal ~label:"registry account schema" Checked32.typ schema_version
+        (Checked32.Checked.constant
+           (Checked32.of_int
+              Zeko_constants.Ethereum_asset_registry.schema_version ) )
+    in
+    let* has_valid_count =
+      Checked32.Checked.(
+        leaf_count
+        < constant
+            (Checked32.of_int
+               (Zeko_constants.Ethereum_asset_registry.max_assets + 1) ))
+    in
+    let*| () = Boolean.Assert.is_true has_valid_count in
+    ( { Asset_registry.Registry_state.root; leaf_count; schema_version }
+      : Asset_registry.Registry_state.var )
+
+  let assert_equal_if ~label condition typ left right =
+    let* equal = var_equal typ left right in
+    with_label label (fun () ->
+        let open Boolean.Expr in
+        ((not !condition) || equal) |> assert_ )
+
+  let assert_true_if ~label condition value =
+    with_label label (fun () ->
+        let open Boolean.Expr in
+        ((not !condition) || !value) |> assert_ )
+
+  let authenticate_account_if ~label ~ledger_root ~active account path =
+    let* root = implied_registry_root account path in
+    assert_equal_if ~label active Ledger_hash.typ ledger_root
+      (Ledger_hash.var_of_hash_packed root)
+
+  let immutable_vk_permission =
+    (Permissions.Auth_required.Impossible, Mina_numbers.Txn_version.current)
+
+  let expected_token_owner_permissions : Permissions.t =
+    { Permissions.user_default with
+      access = Proof
+    ; set_permissions = Impossible
+    ; set_verification_key = immutable_vk_permission
+    }
+
+  let expected_token_admin_permissions : Permissions.t =
+    { Permissions.user_default with
+      set_permissions = Impossible
+    ; set_verification_key = immutable_vk_permission
+    }
+
+  let expected_vault_permissions : Permissions.t =
+    { Permissions.user_default with
+      send = Proof
+    ; set_permissions = Impossible
+    ; set_verification_key = immutable_vk_permission
+    }
+
+  let expected_circulation_permissions : Permissions.t =
+    { Permissions.user_default with send = None; set_permissions = Impossible }
+
+  let assert_vk_hash_if ~label active zkapp expected =
+    let verification_key = zkapp.Zkapp_account.Poly.verification_key in
+    let* () =
+      assert_true_if ~label:(label ^ " installed") active
+        (Zkapp_basic.Flagged_option.is_some verification_key)
+    in
+    assert_equal_if ~label active F.typ
+      (Data_as_hash.hash (Zkapp_basic.Flagged_option.data verification_key))
+      (constant F.typ expected)
+
+  let validate_registration_accounts ~target_ledger
+      ~(old_state : Asset_registry.Registry_state.var)
+      ~(new_state : Asset_registry.Registry_state.var)
+      (registration : Registration_witness.var) =
+    let active = registration.did_append in
+    let candidate = registration.candidate in
+    let* expected_count =
+      Checked32.Checked.succ_if old_state.leaf_count active
+    in
+    let* () =
+      assert_equal ~label:"registry count advances by at most one" Checked32.typ
+        new_state.leaf_count expected_count
+    in
+    let* candidate_leaf =
+      Asset_registry.Asset_record.commitment_var candidate
+    in
+    let* old_root =
+      Asset_registry.implied_root_var
+        ~leaf:(constant F.typ Field.zero)
+        ~index:old_state.leaf_count registration.append_path
+    in
+    let* appended_root =
+      Asset_registry.implied_root_var ~leaf:candidate_leaf
+        ~index:old_state.leaf_count registration.append_path
+    in
+    let* expected_root =
+      Field.Checked.if_ active ~then_:appended_root ~else_:old_state.root
+    in
+    let* () =
+      assert_equal ~label:"registry append root transition" F.typ new_state.root
+        expected_root
+    in
+    let* () =
+      assert_equal_if ~label:"registry empty append slot" active F.typ
+        old_state.root old_root
+    in
+    let* () =
+      assert_equal_if ~label:"registry append index" active Checked32.typ
+        candidate.registry_index old_state.leaf_count
+    in
+    let* () =
+      assert_equal_if ~label:"registry append schema" active Checked32.typ
+        candidate.schema_version
+        (Checked32.Checked.constant
+           Inputs.ethereum_asset_registry_schema_version )
+    in
+    let* () =
+      assert_equal_if ~label:"registry append MFT standard ID" active F.typ
+        candidate.mft_standard_vk_id
+        (constant F.typ Inputs.ethereum_asset_approved_mft_standard_vk_id)
+    in
+    let* () =
+      assert_equal_if ~label:"registry append universal bridge ID" active F.typ
+        candidate.universal_bridge_vk_id
+        (constant F.typ Inputs.ethereum_asset_universal_bridge_vk_id)
+    in
+    let* () =
+      assert_equal_if ~label:"registry append shared vault" active PC.typ
+        candidate.vault_public_key
+        (constant PC.typ Inputs.ethereum_asset_vault_public_key)
+    in
+    let owner_id =
+      Account_id.Checked.create candidate.token_owner_l2
+        (constant Token_id.typ Token_id.default)
+    in
+    let* derived_token_id =
+      make_checked (fun () ->
+          Account_id.Checked.derive_token_id ~owner:owner_id )
+    in
+    let* () =
+      assert_equal_if ~label:"registry append derived token ID" active
+        Token_id.typ candidate.token_id_l2 derived_token_id
+    in
+    let* () =
+      authenticate_account_if ~label:"registered token owner ledger opening"
+        ~ledger_root:target_ledger ~active registration.token_owner_acc
+        registration.token_owner_path
+    in
+    let* () =
+      assert_equal_if ~label:"registered token owner public key" active PC.typ
+        registration.token_owner_acc.public_key candidate.token_owner_l2
+    in
+    let* () =
+      assert_equal_if ~label:"registered token owner token ID" active
+        Token_id.typ registration.token_owner_acc.token_id
+        (constant Token_id.typ Token_id.default)
+    in
+    let* () =
+      assert_equal_if ~label:"registered token owner permissions" active
+        Permissions.typ registration.token_owner_acc.permissions
+        (constant Permissions.typ expected_token_owner_permissions)
+    in
+    let* token_owner_zkapp = get_zkapp registration.token_owner_acc in
+    let* () =
+      assert_vk_hash_if ~label:"registered token owner VK" active
+        token_owner_zkapp Inputs.ethereum_asset_approved_mft_token_vk_hash
+    in
+    let (owner_decimals :: admin_x :: admin_is_odd_field :: paused :: _) =
+      token_owner_zkapp.app_state
+    in
+    let* () =
+      assert_equal_if ~label:"registered token decimals" active F.typ
+        owner_decimals
+        (Checked32.Checked.to_field candidate.decimals)
+    in
+    let* admin_is_odd = Boolean.of_field admin_is_odd_field in
+    let admin_public_key : PC.var = { x = admin_x; is_odd = admin_is_odd } in
+    let* () =
+      assert_equal_if ~label:"registered token is unpaused" active F.typ paused
+        (constant F.typ Field.zero)
+    in
+    let* () =
+      authenticate_account_if ~label:"registered token admin ledger opening"
+        ~ledger_root:target_ledger ~active registration.admin_acc
+        registration.admin_path
+    in
+    let* () =
+      assert_equal_if ~label:"registered token admin public key" active PC.typ
+        registration.admin_acc.public_key admin_public_key
+    in
+    let* () =
+      assert_equal_if ~label:"registered token admin token ID" active
+        Token_id.typ registration.admin_acc.token_id
+        (constant Token_id.typ Token_id.default)
+    in
+    let* () =
+      assert_equal_if ~label:"registered token admin permissions" active
+        Permissions.typ registration.admin_acc.permissions
+        (constant Permissions.typ expected_token_admin_permissions)
+    in
+    let* admin_zkapp = get_zkapp registration.admin_acc in
+    let* () =
+      assert_vk_hash_if ~label:"registered token admin VK" active admin_zkapp
+        Inputs.ethereum_asset_approved_mft_admin_vk_hash
+    in
+    let (authority_x :: authority_is_odd :: _) = admin_zkapp.app_state in
+    let configured_authority = Inputs.ethereum_asset_registration_authority in
+    let* () =
+      assert_equal_if ~label:"registered token admin authority x" active F.typ
+        authority_x
+        (constant F.typ configured_authority.x)
+    in
+    let* () =
+      assert_equal_if ~label:"registered token admin authority parity" active
+        F.typ authority_is_odd
+        (constant F.typ
+           (if configured_authority.is_odd then Field.one else Field.zero) )
+    in
+    let* () =
+      authenticate_account_if ~label:"registered vault ledger opening"
+        ~ledger_root:target_ledger ~active registration.vault_acc
+        registration.vault_path
+    in
+    let* () =
+      assert_equal_if ~label:"registered vault public key" active PC.typ
+        registration.vault_acc.public_key candidate.vault_public_key
+    in
+    let* () =
+      assert_equal_if ~label:"registered vault token ID" active Token_id.typ
+        registration.vault_acc.token_id derived_token_id
+    in
+    let* () =
+      assert_equal_if ~label:"registered vault inventory" active
+        Currency.Amount.typ
+        (Currency.Balance.Checked.to_amount registration.vault_acc.balance)
+        candidate.inventory_cap
+    in
+    let* () =
+      assert_equal_if ~label:"registered vault permissions" active
+        Permissions.typ registration.vault_acc.permissions
+        (constant Permissions.typ expected_vault_permissions)
+    in
+    let* vault_zkapp = get_zkapp registration.vault_acc in
+    let* () =
+      assert_vk_hash_if ~label:"registered vault VK" active vault_zkapp
+        Inputs.ethereum_asset_universal_bridge_vk_hash
+    in
+    let* () =
+      authenticate_account_if ~label:"registered circulation ledger opening"
+        ~ledger_root:target_ledger ~active registration.circulation_acc
+        registration.circulation_path
+    in
+    let* () =
+      assert_equal_if ~label:"registered circulation public key" active PC.typ
+        registration.circulation_acc.public_key candidate.token_owner_l2
+    in
+    let* () =
+      assert_equal_if ~label:"registered circulation token ID" active
+        Token_id.typ registration.circulation_acc.token_id derived_token_id
+    in
+    let* () =
+      assert_equal_if ~label:"registered circulation supply" active
+        Currency.Amount.typ
+        (Currency.Balance.Checked.to_amount registration.circulation_acc.balance)
+        candidate.inventory_cap
+    in
+    assert_equal_if ~label:"registered circulation permissions" active
+      Permissions.typ registration.circulation_acc.permissions
+      (constant Permissions.typ expected_circulation_permissions)
 
   type da_mode = Multisig | Emergency of Emergency_da_folder.Stmt.var
 
@@ -219,9 +661,11 @@ struct
          ; da_multisig
          ; slot_range
          ; emergency_mode
-         ; ethereum_asset_registry_root
-         ; ethereum_asset_registry_count
-         ; ethereum_asset_registry_schema
+         ; old_ethereum_asset_registry_acc
+         ; old_ethereum_asset_registry_path
+         ; new_ethereum_asset_registry_acc
+         ; new_ethereum_asset_registry_path
+         ; ethereum_asset_registration
          }
           : Base_witness.var ) =
       w
@@ -249,6 +693,43 @@ struct
          }
           : Txn_state.Zeko_stmt.var ) =
       txn_stmt
+    in
+    let* ethereum_asset_registry_state =
+      match Inputs.ethereum_asset_registry_public_key with
+      | None ->
+          Checked.return None
+      | Some registry_public_key ->
+          let* old_registry_root =
+            implied_registry_root old_ethereum_asset_registry_acc
+              old_ethereum_asset_registry_path
+          in
+          let* new_registry_root =
+            implied_registry_root new_ethereum_asset_registry_acc
+              new_ethereum_asset_registry_path
+          in
+          let* () =
+            assert_equal ~label:"source registry account ledger opening"
+              Ledger_hash.typ source_ledger
+              (Ledger_hash.var_of_hash_packed old_registry_root)
+          in
+          let* () =
+            assert_equal ~label:"target registry account ledger opening"
+              Ledger_hash.typ target_ledger
+              (Ledger_hash.var_of_hash_packed new_registry_root)
+          in
+          let* old_state =
+            registry_state_of_account ~registry_public_key
+              old_ethereum_asset_registry_acc
+          in
+          let* new_state =
+            registry_state_of_account ~registry_public_key
+              new_ethereum_asset_registry_acc
+          in
+          let* () =
+            validate_registration_accounts ~target_ledger ~old_state ~new_state
+              ethereum_asset_registration
+          in
+          Checked.return (Some new_state)
     in
     with_label __LOC__
     @@ fun () ->
@@ -543,18 +1024,23 @@ struct
        an executable precondition. Bind the checkpoint into the signed
        sequencer child's inert call data instead. *)
     let* ethereum_asset_registry_call_data =
-      match Inputs.ethereum_asset_registry_public_key with
-      | None ->
+      match
+        ( Inputs.ethereum_asset_registry_public_key
+        , ethereum_asset_registry_state )
+      with
+      | None, None ->
           Checked.return (constant F.typ Field.zero)
-      | Some registry_public_key ->
+      | Some registry_public_key, Some registry_state ->
           var_to_hash
             ~init:Zeko_constants.ethereum_asset_registry_checkpoint_salt
             Typ.(array ~length:4 F.typ)
             [| constant F.typ registry_public_key.x
-             ; ethereum_asset_registry_root
-             ; ethereum_asset_registry_count
-             ; ethereum_asset_registry_schema
+             ; registry_state.root
+             ; Checked32.Checked.to_field registry_state.leaf_count
+             ; Checked32.Checked.to_field registry_state.schema_version
             |]
+      | _ ->
+          failwith "inconsistent Ethereum asset registry circuit configuration"
     in
     let sequencer_account_update =
       { default_account_update with
@@ -594,9 +1080,7 @@ struct
       | Some emergency_da ->
           [ (sequencer_account_update, []); (emergency_da, []) ]
     in
-    let*| out =
-      make_outputs ~chain:chain_l1 account_update calls
-    in
+    let*| out = make_outputs ~chain:chain_l1 account_update calls in
     out
 
   let rule : _ Compile_simple.branch lazy_t =

@@ -84,7 +84,9 @@ let fields_json fields =
   |> fun fields -> `List fields
 
 let padded_hex_digits field =
-  let digits = field_to_hex field |> String.chop_prefix_if_exists ~prefix:"0x" in
+  let digits =
+    field_to_hex field |> String.chop_prefix_if_exists ~prefix:"0x"
+  in
   String.make (64 - String.length digits) '0' ^ digits
 
 let field_suffix_hex field length =
@@ -95,6 +97,27 @@ let asset_id_hex high low =
   "0x" ^ field_suffix_hex high 32 ^ field_suffix_hex low 32
 
 let ethereum_address_hex field = "0x" ^ field_suffix_hex field 40
+
+let packed_public_key_hex ({ x; is_odd } : Signature_lib.Public_key.Compressed.t)
+    =
+  let digits = padded_hex_digits x in
+  let first =
+    match String.get digits 0 with
+    | '0' .. '9' as digit ->
+        Char.to_int digit - Char.to_int '0'
+    | 'a' .. 'f' as digit ->
+        10 + Char.to_int digit - Char.to_int 'a'
+    | _ ->
+        failwith "invalid field hex digit"
+  in
+  if first >= 8 then
+    failwith "Mina compressed public-key x-coordinate already uses parity bit" ;
+  let first = if is_odd then first + 8 else first in
+  let packed = Bytes.of_string digits in
+  Bytes.set packed 0
+    (Char.lowercase
+       (Char.of_int_exn (if first < 10 then 48 + first else 87 + first)) ) ;
+  "0x" ^ Bytes.to_string packed
 
 let asset_record_of_event fields =
   let (Typ typ) = Asset_registry.Asset_record.typ in
@@ -115,24 +138,21 @@ let canonical_asset_record_json
      ; universal_bridge_vk_id
      } :
       Asset_registry.Asset_record.t ) =
-  if token_owner_l2.is_odd || vault_public_key.is_odd then
-    failwith
-      "Ethereum asset registry export requires even owner and vault public keys" ;
   `Assoc
     [ ("schemaVersion", `Int (Zeko_util.Checked32.to_int schema_version))
     ; ("registryIndex", `Int (Zeko_util.Checked32.to_int registry_index))
     ; ("assetId", `String (asset_id_hex asset_id_high asset_id_low))
     ; ("ethereumToken", `String (ethereum_address_hex ethereum_token_address))
-    ; ("tokenOwnerL2", `String (field_to_hex token_owner_l2.x))
+    ; ("tokenOwnerL2", `String (packed_public_key_hex token_owner_l2))
     ; ( "tokenIdL2"
       , `String (field_to_hex (Token_id.to_field_unsafe token_id_l2)) )
     ; ("decimals", `Int (Zeko_util.Checked32.to_int decimals))
     ; ( "inventoryCap"
       , `Intlit
-          (Currency.Amount.to_uint64 inventory_cap
-          |> Unsigned.UInt64.to_string ) )
+          (Currency.Amount.to_uint64 inventory_cap |> Unsigned.UInt64.to_string)
+      )
     ; ("mftStandardVkId", `String (field_to_hex mft_standard_vk_id))
-    ; ("vaultPublicKey", `String (field_to_hex vault_public_key.x))
+    ; ("vaultPublicKey", `String (packed_public_key_hex vault_public_key))
     ; ("universalBridgeVkId", `String (field_to_hex universal_bridge_vk_id))
     ]
 
@@ -143,8 +163,7 @@ let registry_records_from_archive ~(archive : Archive.t) =
       Token_id.default
   in
   Archive.get_events archive account_id
-  |> List.concat_map ~f:(fun
-                          { Archive.Account_update_events.events; _ } ->
+  |> List.concat_map ~f:(fun { Archive.Account_update_events.events; _ } ->
          events )
   |> List.map ~f:asset_record_of_event
 
@@ -172,8 +191,8 @@ let asset_registry_batch_json ~(archive : Archive.t) ~old_root ~old_count
     let records = registry_records_from_archive ~archive in
     if List.length records < new_count then
       failwithf
-        "Ethereum asset registry archive contains %d records, expected at least \
-         %d"
+        "Ethereum asset registry archive contains %d records, expected at \
+         least %d"
         (List.length records) new_count () ;
     let records = List.take records new_count in
     List.iteri records ~f:(fun index record ->
@@ -183,9 +202,8 @@ let asset_registry_batch_json ~(archive : Archive.t) ~old_root ~old_count
                (Zeko_util.Checked32.to_int record.registry_index)
                index )
         then
-          failwithf
-            "Ethereum asset registry archive is not dense at index %d" index ()
-        ) ;
+          failwithf "Ethereum asset registry archive is not dense at index %d"
+            index () ) ;
     let tree = ref (Asset_registry.Merkle_list.empty ()) in
     List.take records old_count
     |> List.iter ~f:(fun record ->
@@ -195,12 +213,8 @@ let asset_registry_batch_json ~(archive : Archive.t) ~old_root ~old_count
     let appends =
       List.drop records old_count
       |> List.map ~f:(fun record ->
-             let index =
-               Zeko_util.Checked32.to_int record.registry_index
-             in
-             let append_path =
-               Asset_registry.Merkle_list.path !tree ~index
-             in
+             let index = Zeko_util.Checked32.to_int record.registry_index in
+             let append_path = Asset_registry.Merkle_list.path !tree ~index in
              tree := Asset_registry.Merkle_list.append_exn !tree record ;
              `Assoc
                [ ("record", canonical_asset_record_json record)
@@ -214,15 +228,15 @@ let asset_registry_batch_json ~(archive : Archive.t) ~old_root ~old_count
         [ ( "registryPublicKey"
           , `String
               (field_to_hex
-                 Zeko_circuits_config.Inputs.Ethereum_assets
-                   .registry_public_key.x ) )
+                 Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+                   .x ) )
         ; ("root", `String (field_to_hex new_root))
         ; ("count", `Int new_count)
         ; ("schemaVersion", `Int new_schema)
         ; ("oldRoot", `String (field_to_hex old_root))
         ; ("oldCount", `Int old_count)
         ; ("appends", `List appends)
-        ])
+        ] )
 
 let ethereum_address_of_compressed
     ({ Signature_lib.Public_key.Compressed.Poly.x; is_odd } :
@@ -330,9 +344,7 @@ let account_update_body_input_json (body : Account_update.Body.t) =
              [ ("value", `String (field_to_hex value)); ("bits", `Int bits) ] )
   in
   `Assoc
-    [ ("fieldElements", fields_json field_elements)
-    ; ("packed", `List packed)
-    ]
+    [ ("fieldElements", fields_json field_elements); ("packed", `List packed) ]
 
 let rec call_forest_json
     (calls :
@@ -349,7 +361,7 @@ let rec call_forest_json
            [ ( "accountUpdateBody"
              , account_update_body_input_json account_update.body )
            ; ("calls", call_forest_json calls)
-           ] ))
+           ] ) )
 
 let binding_json ~signature_kind ~(body : Account_update.Body.t) ~calls
     ~state_before =
@@ -360,8 +372,7 @@ let binding_json ~signature_kind ~(body : Account_update.Body.t) ~calls
   in
   `Assoc
     [ ("minaSignatureKind", signature_kind)
-    ; ( "accountUpdateBody"
-      , account_update_body_input_json body )
+    ; ("accountUpdateBody", account_update_body_input_json body)
     ; ("actions", `List (List.map body.actions ~f:fields_json))
     ; ("stateBefore", `Assoc [ ("fields", fields_json state_fields) ])
     ; ("callForest", call_forest_json calls)
@@ -416,8 +427,7 @@ let proof_wire_json (proof : Pickles.Side_loaded.Proof.t) =
   (Yojson.Safe.to_string proof_wire, Yojson.Safe.to_string public_input_skeleton)
 
 let create_with_verification_key ?inner_action_batch ?asset_registry_batch
-    ~signature_kind
-    ~(body : Account_update.Body.t) ~calls ~state_before
+    ~signature_kind ~(body : Account_update.Body.t) ~calls ~state_before
     ~(proof : Compile_simple.Proof.t)
     ~(verification_key : Compile_simple.Verification_key.t) =
   let open Deferred.Or_error.Let_syntax in

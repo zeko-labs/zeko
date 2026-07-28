@@ -131,7 +131,8 @@ struct
         let* () =
           let* action =
             withdrawal_action ~chain_l2 ~holder_account_l2 ~token_owner_l2
-              ~ethereum_asset_id ~l2_holder_vk_hash
+              ~ethereum_asset_id ~ethereum_registry_binding:None
+              ~l2_holder_vk_hash
               ~bridge_fee_recipient_l2:(constant PC.typ bridge_fee_recipient_l2)
               ~bridge_proof_fee:(constant Currency.Amount.typ bridge_proof_fee)
               (module Withdrawal_params)

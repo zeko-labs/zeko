@@ -223,10 +223,8 @@ let () =
           let compiled_registry_vk_hash =
             run (fun () ->
                 Compile_simple.Verification_key.of_tag
-                  (Lazy.force
-                     Bridge_inst_ethereum_token.Registry.registry_tag )
-                |> Promise.to_deferred
-                >>| Compile_simple.Verification_key.hash )
+                  (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
+                |> Promise.to_deferred >>| Compile_simple.Verification_key.hash )
           in
           printf "Ethereum asset registry VK hash in genesis: %s\n%!"
             (Field.to_string local_registry_vk_hash) ;
@@ -240,8 +238,8 @@ let () =
                     (Field.equal local_registry_vk_hash
                        compiled_registry_vk_hash ) )
                || not
-                    (Field.equal local_registry_vk_hash
-                       prover_registry_vk_hash ) )
+                    (Field.equal local_registry_vk_hash prover_registry_vk_hash)
+               )
           then
             failwithf
               "Ethereum asset registry VK mismatch: genesis %s, local compile \
@@ -375,6 +373,10 @@ let () =
                    ->
                   { asset_id_high = record.asset_id_high
                   ; asset_id_low = record.asset_id_low
+                  ; encoding_version = C.Zeko_util.Checked32.of_int 2
+                  ; registry_index = record.registry_index
+                  ; record_commitment =
+                      C.Asset_registry.Asset_record.commitment record
                   ; base = deposit_params
                   } )
         in
@@ -958,8 +960,7 @@ let () =
           let validate_helper_account ~expected_next_deposit helper_owner =
             let next_deposit = helper_next_deposit helper_owner in
             if not (UInt32.equal next_deposit expected_next_deposit) then
-              failwithf
-                "Live SDK finalized deposit index %s, expected %s"
+              failwithf "Live SDK finalized deposit index %s, expected %s"
                 (UInt32.to_string next_deposit)
                 (UInt32.to_string expected_next_deposit)
                 ()
@@ -1061,12 +1062,11 @@ let () =
               in
               if
                 not
-                  (List.equal UInt32.equal next_deposits
-                     expected_next_deposits )
+                  (List.equal UInt32.equal next_deposits expected_next_deposits)
               then
                 failwithf
                   "Live SDK finalized unexpected ERC20 deposit indices: %s"
-                  (List.map next_deposits ~f:UInt32.to_string
+                  ( List.map next_deposits ~f:UInt32.to_string
                   |> String.concat ~sep:"," )
                   () ;
               print_endline

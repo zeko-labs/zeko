@@ -655,8 +655,11 @@ module Ethereum_token_withdrawal_request = struct
                      ~holder_account_l2:record.vault_public_key
                      ~token_owner_l2:(Some token_owner_l2)
                      ~ethereum_asset_id:
+                       (Some (record.asset_id_high, record.asset_id_low))
+                     ~ethereum_registry_binding:
                        (Some
-                          (record.asset_id_high, record.asset_id_low))
+                          ( record.registry_index
+                          , Asset_registry.Asset_record.commitment record ) )
                      ~l2_holder_vk_hash:
                        (Snark_params.Tick.constant F.typ
                           bridge_ethereum_token_l2_vk_hash )
@@ -826,8 +829,7 @@ module Ethereum_token_withdrawal_request = struct
                   let%bind inner_receive_forest =
                     match%map
                       Zeko_prover.Client.inner_receive_ethereum_token t.provers
-                        { public_key =
-                            asset.record.vault_public_key
+                        { public_key = asset.record.vault_public_key
                         ; asset
                         ; amount = withdrawal_params.custom.base.amount
                         }
@@ -842,8 +844,7 @@ module Ethereum_token_withdrawal_request = struct
                   let action =
                     make_inner_action
                       ~bridge_ethereum_token_l2_vk_hash:
-                        t.verification_keys.bridge_ethereum_token_l2
-                      ~asset
+                        t.verification_keys.bridge_ethereum_token_l2 ~asset
                       withdrawal_params
                   in
                   let witness =
@@ -888,8 +889,7 @@ module Register_ethereum_asset = struct
   type t =
     { old_state : Asset_registry.Registry_state.t
     ; candidate : Asset_registry.Asset_record.t
-    ; existing :
-        (Asset_registry.Asset_record.t * Asset_registry.Path.t) list
+    ; existing : (Asset_registry.Asset_record.t * Asset_registry.Path.t) list
     ; append_path : Asset_registry.Path.t
     }
   [@@deriving yojson]
@@ -900,12 +900,13 @@ module Register_ethereum_asset = struct
 
   let elems ({ existing; _ } : t) :
       Bridge.Ethereum_asset_registry.Scan.Elem.t list =
-    List.map existing ~f:(fun (record, path) ->
-        ({ active = true; record; path } :
-          Bridge.Ethereum_asset_registry.Scan.Elem.t ) )
+    List.map existing
+      ~f:(fun (record, path) : Bridge.Ethereum_asset_registry.Scan.Elem.t ->
+        { active = true; record; path } )
 
   let key request =
-    to_yojson request |> Yojson.Safe.to_string |> Md5.digest_string |> Md5.to_hex
+    to_yojson request |> Yojson.Safe.to_string |> Md5.digest_string
+    |> Md5.to_hex
 
   let f ~t ~logger request =
     if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then

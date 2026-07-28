@@ -460,8 +460,9 @@ let verify_check_accepted_and_ase_cancelled_deposit t input =
 let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
     ~unprocessed_actions ~(old_inner_acc : Account.t) ~old_inner_acc_path
     ~(new_inner_acc : Account.t) ~new_inner_acc_path ~da_multisig ~slot_range
-    ~emergency_mode ~ethereum_asset_registry_root
-    ~ethereum_asset_registry_count ~ethereum_asset_registry_schema =
+    ~emergency_mode ~old_ethereum_asset_registry_acc
+    ~old_ethereum_asset_registry_path ~new_ethereum_asset_registry_acc
+    ~new_ethereum_asset_registry_path ~ethereum_asset_registration =
   (* Counting length of inner action state *)
   let%bind.Deferred.Result inner_ase =
     let%map.Deferred.Result proof, target, excess =
@@ -510,9 +511,11 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
        ; new_inner_acc_path
        ; da_multisig
        ; slot_range
-       ; ethereum_asset_registry_root
-       ; ethereum_asset_registry_count
-       ; ethereum_asset_registry_schema
+       ; old_ethereum_asset_registry_acc
+       ; old_ethereum_asset_registry_path
+       ; new_ethereum_asset_registry_acc
+       ; new_ethereum_asset_registry_path
+       ; ethereum_asset_registration
        } )
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->

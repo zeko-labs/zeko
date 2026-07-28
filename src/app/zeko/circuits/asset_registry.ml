@@ -3,6 +3,7 @@ open Mina_base
 open Snark_params.Tick
 open Zeko_util
 module PC = Signature_lib.Public_key.Compressed
+
 module Token_id = struct
   include Token_id
 
@@ -66,6 +67,13 @@ module Registry_state = struct
     ; Whole (Checked32.typ, leaf_count)
     ; Whole (Checked32.typ, schema_version)
     ]
+
+  let value_of_app_state
+      (root :: leaf_count :: schema_version :: _ : F.t Zkapp_state.V.t) : t =
+    { root
+    ; leaf_count = Field.to_string leaf_count |> Checked32.of_string
+    ; schema_version = Field.to_string schema_version |> Checked32.of_string
+    }
 end
 
 module Path = struct
@@ -101,9 +109,7 @@ module Output = struct
     Zkapp_command.Call_forest.t
 
   type auxiliary =
-    Account_update.Body.t
-    * Zkapp_command.Digest.Account_update.t
-    * calls
+    Account_update.Body.t * Zkapp_command.Digest.Account_update.t * calls
 
   type t = Zkapp_statement.t * auxiliary
 end
@@ -111,13 +117,13 @@ end
 let merge left right =
   Random_oracle.hash
     ~init:
-      (Hash_prefix_create.salt
-         Zeko_constants.ethereum_asset_registry_node_salt )
+      (Hash_prefix_create.salt Zeko_constants.ethereum_asset_registry_node_salt)
     [| left; right |]
 
 let merge_var left right =
   var_to_hash ~init:Zeko_constants.ethereum_asset_registry_node_salt
-    Typ.(F.typ * F.typ) (left, right)
+    Typ.(F.typ * F.typ)
+    (left, right)
 
 let path_bits_var index =
   Field.Checked.choose_preimage_var
@@ -126,14 +132,9 @@ let path_bits_var index =
 
 let implied_root_var ~leaf ~index (path : Path.var) =
   let* bits = path_bits_var index in
-  foldl (List.zip_exn path bits) ~init:leaf
-    ~f:(fun acc (sibling, is_right) ->
-      let* left =
-        if_ is_right ~typ:F.typ ~then_:sibling ~else_:acc
-      in
-      let* right =
-        if_ is_right ~typ:F.typ ~then_:acc ~else_:sibling
-      in
+  foldl (List.zip_exn path bits) ~init:leaf ~f:(fun acc (sibling, is_right) ->
+      let* left = if_ is_right ~typ:F.typ ~then_:sibling ~else_:acc in
+      let* right = if_ is_right ~typ:F.typ ~then_:acc ~else_:sibling in
       merge_var left right )
 
 let implied_root ~leaf ~index (path : Path.t) =
@@ -157,8 +158,9 @@ module Merkle_list = struct
   let count t = t.count
 
   let next_level level =
-    Array.init (Array.length level / 2) ~f:(fun i ->
-        merge level.(2 * i) level.((2 * i) + 1) )
+    Array.init
+      (Array.length level / 2)
+      ~f:(fun i -> merge level.(2 * i) level.((2 * i) + 1))
 
   let levels t =
     let rec go acc level =
@@ -208,6 +210,8 @@ end
 module type CONFIG = sig
   val registry_public_key : PC.t
 
+  val registration_authority : PC.t
+
   val schema_version : Checked32.t
 
   val approved_mft_standard_vk_id : F.t
@@ -238,10 +242,10 @@ module Make (Config : CONFIG) () = struct
 
   let assert_fits_bits ~label ~length value =
     with_label label (fun () ->
-      let* (_ : Boolean.var list) =
-        Field.Checked.choose_preimage_var value ~length
-      in
-      Checked.return () )
+        let* (_ : Boolean.var list) =
+          Field.Checked.choose_preimage_var value ~length
+        in
+        Checked.return () )
 
   let validate_record ?(check = Boolean.true_) (record : Asset_record.var) =
     let* () =
@@ -253,8 +257,7 @@ module Make (Config : CONFIG) () = struct
       Checked32.Checked.(
         record.registry_index
         < constant
-            (Checked32.of_int
-               Zeko_constants.Ethereum_asset_registry.max_assets ) )
+            (Checked32.of_int Zeko_constants.Ethereum_asset_registry.max_assets))
     in
     let* () = assert_implies check index_in_range in
     let* () =
@@ -264,7 +267,8 @@ module Make (Config : CONFIG) () = struct
     in
     let* () =
       assert_equal_if ~label:"asset registry shared vault" check PC.typ
-        record.vault_public_key (constant PC.typ Config.vault_public_key)
+        record.vault_public_key
+        (constant PC.typ Config.vault_public_key)
     in
     let* () =
       assert_not_equal_if ~label:"asset registry owner/vault separation" check
@@ -278,8 +282,8 @@ module Make (Config : CONFIG) () = struct
       make_checked (fun () -> Account_id.Checked.derive_token_id ~owner)
     in
     let* () =
-      assert_equal_if ~label:"asset registry derived token ID" check Token_id.typ
-        record.token_id_l2 derived_token_id
+      assert_equal_if ~label:"asset registry derived token ID" check
+        Token_id.typ record.token_id_l2 derived_token_id
     in
     let* decimals_supported =
       Checked32.Checked.(record.decimals < constant (Checked32.of_int 10))
@@ -301,8 +305,8 @@ module Make (Config : CONFIG) () = struct
         record.asset_id_low
     in
     let* () =
-      assert_fits_bits ~label:"asset registry Ethereum token address" ~length:160
-        record.ethereum_token_address
+      assert_fits_bits ~label:"asset registry Ethereum token address"
+        ~length:160 record.ethereum_token_address
     in
     let* () =
       let* address_is_zero =
@@ -371,7 +375,8 @@ module Make (Config : CONFIG) () = struct
   let verify ({ state; record; path } : Membership_witness.var) =
     let* () =
       assert_equal ~label:"asset registry state schema" Checked32.typ
-        state.schema_version (Checked32.Checked.constant Config.schema_version)
+        state.schema_version
+        (Checked32.Checked.constant Config.schema_version)
     in
     let* token_id = validate_record record in
     let* record_before_count =
@@ -405,14 +410,12 @@ module Make (Config : CONFIG) () = struct
     end
 
     module Elem = struct
-      type t =
-        { active : Boolean.t; record : Asset_record.t; path : Path.t }
+      type t = { active : Boolean.t; record : Asset_record.t; path : Path.t }
       [@@deriving snarky]
     end
 
     module Init = struct
-      type t =
-        { old_state : Registry_state.t; candidate : Asset_record.t }
+      type t = { old_state : Registry_state.t; candidate : Asset_record.t }
       [@@deriving snarky]
     end
 
@@ -445,13 +448,12 @@ module Make (Config : CONFIG) () = struct
         implied_root_var ~leaf ~index:state.next_expected_index path
       in
       let* () =
-        assert_equal_if ~label:"asset registry scan membership" active F.typ root
-          state.old_root
+        assert_equal_if ~label:"asset registry scan membership" active F.typ
+          root state.old_root
       in
       let* () =
         assert_not_equal_if ~label:"unique Ethereum token address" active F.typ
-          record.ethereum_token_address
-          state.candidate.ethereum_token_address
+          record.ethereum_token_address state.candidate.ethereum_token_address
       in
       let* asset_high_equal =
         Field.Checked.equal record.asset_id_high state.candidate.asset_id_high
@@ -477,8 +479,7 @@ module Make (Config : CONFIG) () = struct
       let* traversed_count =
         Checked32.Checked.succ_if state.traversed_count active
       in
-      Checked.return
-        { state with next_expected_index; traversed_count }
+      Checked.return { state with next_expected_index; traversed_count }
 
     let dummy_elem : Elem.t =
       { active = false
@@ -497,8 +498,8 @@ module Make (Config : CONFIG) () = struct
           ; universal_bridge_vk_id = Field.zero
           }
       ; path =
-          List.init Zeko_constants.Ethereum_asset_registry.depth
-            ~f:(fun _ -> Field.zero)
+          List.init Zeko_constants.Ethereum_asset_registry.depth ~f:(fun _ ->
+              Field.zero )
       }
 
     let leaf_iterations =
@@ -524,6 +525,7 @@ module Make (Config : CONFIG) () = struct
 
   module Scan = struct
     module Definition = Scan_definition
+
     include Folder.Make (Definition) ()
   end
 
@@ -534,10 +536,7 @@ module Make (Config : CONFIG) () = struct
   module Register = struct
     module Witness = struct
       type t =
-        { scan : Scan_inst.t
-        ; append_path : Path.t
-        ; registry_vk_hash : F.t
-        }
+        { scan : Scan_inst.t; append_path : Path.t; registry_vk_hash : F.t }
       [@@deriving snarky]
     end
 
@@ -582,20 +581,19 @@ module Make (Config : CONFIG) () = struct
           target.leaf_count
           < constant
               (Checked32.of_int
-                 Zeko_constants.Ethereum_asset_registry.max_assets ) )
+                 Zeko_constants.Ethereum_asset_registry.max_assets ))
       in
       let* () = Boolean.Assert.is_true has_capacity in
       let* old_root_from_empty =
-        implied_root_var ~leaf:(constant F.typ Field.zero)
+        implied_root_var
+          ~leaf:(constant F.typ Field.zero)
           ~index:target.leaf_count append_path
       in
       let* () =
         assert_equal ~label:"asset registry empty append slot" F.typ
           target.old_root old_root_from_empty
       in
-      let* candidate_leaf =
-        Asset_record.commitment_var target.candidate
-      in
+      let* candidate_leaf = Asset_record.commitment_var target.candidate in
       let* new_root =
         implied_root_var ~leaf:candidate_leaf ~index:target.leaf_count
           append_path
@@ -614,6 +612,12 @@ module Make (Config : CONFIG) () = struct
         }
       in
       let* events = var_to_events Asset_record.typ target.candidate in
+      let* registration_call_data =
+        var_to_hash
+          ~init:Zeko_constants.ethereum_asset_registry_registration_salt
+          Typ.(Registry_state.typ * Registry_state.typ * Asset_record.typ)
+          ((old_state, new_state), target.candidate)
+      in
       let account_update =
         { default_account_update with
           public_key = constant PC.typ Config.registry_public_key
@@ -644,7 +648,24 @@ module Make (Config : CONFIG) () = struct
         ; events
         }
       in
-      let*| out = make_outputs ~chain:Config.chain_l2 account_update [] in
+      (* The PoC mirrors Ethereum bridge governance with a fixed Mina
+         registration authority. Full-commitment signing binds the
+         administrator to the candidate event, exact root/count transition,
+         and every onboarding-account probe in this transaction. Ethereum
+         remains the proposal and activation source of truth. *)
+      let registration_authority =
+        { default_account_update with
+          public_key = constant PC.typ Config.registration_authority
+        ; call_data = registration_call_data
+        ; authorization_kind = authorization_signed ()
+        ; use_full_commitment = Boolean.true_
+        ; implicit_account_creation_fee = Boolean.false_
+        }
+      in
+      let*| out =
+        make_outputs ~chain:Config.chain_l2 account_update
+          [ (registration_authority, []) ]
+      in
       Compile_simple.{ prevs = One_prev verify_scan; out }
 
     let rule : _ Compile_simple.branch lazy_t =
