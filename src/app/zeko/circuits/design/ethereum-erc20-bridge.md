@@ -11,9 +11,12 @@ movement.
 ## Decision
 
 Use the unmodified Mina Foundation `FungibleToken` contract as the L2 token
-owner, a separate admin contract, and a proof-controlled bridge-vault account
-under that token. For the first implementation, pre-mint a bounded inventory to
-the bridge vault and use balanced vault-to-user/user-to-vault transfers.
+owner, two unmodified standard admin instances during provisioning, and a
+proof-controlled bridge-vault account under that token. A live provisioning
+admin authorizes the bounded mint; the owner then installs a separate final
+admin whose controller was deployed as `Public_key.Compressed.empty`. The first
+implementation uses the pre-minted inventory for balanced
+vault-to-user/user-to-vault transfers.
 
 This is the supply model that the current OCaml custom-token rules can be
 adapted to. Exact mint-on-deposit and burn-on-withdrawal are supported by the
@@ -54,6 +57,11 @@ The maintained reference implementation has the properties this bridge needs:
 - `mint` asks the configured admin contract for authorization; `burn` reduces a
   holder balance; both update the reserved circulation account
   ([reference implementation, mint and burn](https://github.com/MinaFoundation/mina-fungible-token/blob/main/FungibleToken.ts#L143-L170)).
+- `FungibleTokenAdmin` sets its controller during deployment, while
+  `FungibleToken.setAdmin` asks the currently installed admin to authorize a
+  replacement admin contract
+  ([standard admin deployment](https://github.com/MinaFoundation/mina-fungible-token/blob/main/FungibleTokenAdmin.ts#L33-L50),
+  [standard admin replacement](https://github.com/MinaFoundation/mina-fungible-token/blob/main/FungibleToken.ts#L122-L128)).
 - The owner stores `decimals` as `UInt8`, while token movements use `UInt64`
   ([standard API](https://minafoundation.github.io/mina-fungible-token/api.html)).
 - Deployment creates a reserved circulation account at the token owner's public
@@ -64,9 +72,9 @@ The maintained reference implementation has the properties this bridge needs:
 
 Do not fork `FungibleToken` to add bridge behavior. The standard's
 interoperability benefit comes from using the same owner implementation. For
-the bounded-inventory model, the admin is used only during deployment;
-bridge-specific runtime policy belongs in the bridge and bridge-vault
-verification key.
+the bounded-inventory model, the live provisioning admin is used only before
+the final admin handoff; bridge-specific runtime policy belongs in the bridge
+and bridge-vault verification key.
 
 ## L2 account topology
 
@@ -75,7 +83,8 @@ For every registered ERC-20 asset:
 | Role | Mina account ID | Authorization and purpose |
 | --- | --- | --- |
 | Token owner | `(ft_owner_pk, TokenId.default)` | Unmodified `FungibleToken`; owns `ft_token_id = derive_token_id(owner_account_id)` and runs `approveBase`. |
-| Token admin | `(ft_admin_pk, TokenId.default)` | Unmodified separate admin contract. It authorizes the bounded deployment mint, then its controller is permanently set to `Public_key.Compressed.empty`; it provides no post-registration administration. |
+| Provisioning admin | `(ft_provisioning_admin_pk, TokenId.default)` | Unmodified `FungibleTokenAdmin` with a live controller. It authorizes the exact bounded mint and the handoff to the final admin, then is no longer referenced by the token owner. |
+| Final token admin | `(ft_admin_pk, TokenId.default)` | Separate unmodified `FungibleTokenAdmin` deployed with controller `Public_key.Compressed.empty`. The token owner points here before registration, so it provides no post-registration administration. |
 | Circulation account | `(ft_owner_pk, ft_token_id)` | Reserved by the standard for supply accounting. Never use it as the bridge vault. |
 | Bridge vault | `(shared_vault_l2, ft_token_id)` | Holds that asset's pre-minted inventory and uses the universal bridge verification key. Every asset shares the public key and VK but has a distinct derived token ID/account/balance. |
 | User balance | `(user_pk, ft_token_id)` | Ordinary standard fungible-token account. |
@@ -217,11 +226,12 @@ with the current bridge circuits.
 
 ### Bounded vault inventory (selected first release)
 
-During deployment the admin mints a fixed bridge capacity to the bridge vault.
-Deposits move inventory vault-to-user; withdrawals return it user-to-vault. The
-standard owner's `approveBase` sees a balanced forest, matching the balance
-changes generated today by `finalize_deposit`, `withdrawal_action`, and
-`inner_receive`.
+During deployment the live provisioning admin authorizes a fixed bridge
+capacity mint to the bridge vault. The final empty-controller admin is installed
+before registration. Deposits move inventory vault-to-user; withdrawals return
+it user-to-vault. The standard owner's `approveBase` sees a balanced forest,
+matching the balance changes generated today by `finalize_deposit`,
+`withdrawal_action`, and `inner_receive`.
 
 Required invariants:
 
@@ -347,9 +357,10 @@ The executable Mina Fungible Token orchestration follows the same boundary:
   the genuine standard-token proof/signature authorizations, and only then
   submits the complete L2 transaction; and
 - the operator deployment helper validates each pending Solidity record and
-  Zeko membership, deploys unmodified `FungibleToken`/`FungibleTokenAdmin`,
-  locks each token-specific shared-vault account to the universal VK with
-  proof-authorized sends, and mints exactly the registered cap.
+  Zeko membership, deploys the unmodified `FungibleToken`, live provisioning
+  admin, and empty-controller final admin, locks each token-specific shared
+  vault account to the universal VK with proof-authorized sends, mints exactly
+  the registered cap, and installs the final admin before registration.
 
 The archive and Actions indexer reconstruct immutable records and refreshed
 membership paths after later appends. They are availability aids, not security
@@ -363,21 +374,28 @@ canonical records activated by Solidity.
 Onboard one asset atomically where possible:
 
 1. propose the exact immutable Solidity record in `Pending` state;
-2. deploy the admin and unmodified `FungibleToken`, initialize decimals and
-   circulation, and verify the expected standard verification keys;
-3. create the token-specific account at the shared vault public key with the
+2. deploy a live-controller provisioning `FungibleTokenAdmin`, a separate
+   `FungibleTokenAdmin` whose controller is `Public_key.Compressed.empty`, and
+   the unmodified `FungibleToken` with `allowUpdates = false`, configured to use
+   the provisioning admin;
+3. initialize decimals and circulation, and verify both standard admin accounts
+   and the token owner use the expected standard verification keys;
+4. create the token-specific account at the shared vault public key with the
    universal bridge VK and locked proof permissions;
-4. mint the bounded inventory to the vault, then rotate the unmodified standard
-   admin controller to the fixed non-signing `Public_key.Compressed.empty`;
-5. fund all default-token account-creation costs and helper sponsorship policy;
-6. append the canonical record through the exhaustive Zeko registry transition,
+5. use the provisioning admin to authorize exactly the registered-cap mint to
+   the vault;
+6. call `FungibleToken.setAdmin` under the provisioning controller to install
+   the already-deployed empty-controller final admin;
+7. fund all default-token account-creation costs and helper sponsorship policy;
+8. append the canonical record through the exhaustive Zeko registry transition,
    settle the new root/count and ordered record batch, and activate exactly that
    pending Solidity proposal; and
-7. enable deposits only after a cross-chain deposit/withdrawal rehearsal.
+9. enable deposits only after a cross-chain deposit/withdrawal rehearsal.
 
-Set the standard token owner's `allowUpdates` to false. Registration permanently
-revokes the standard admin controller, so token-level `pause`, `resume`,
-`setAdmin`, and authorized verification-key upgrades are unavailable afterward.
+The registry commit verifies that the token owner already points to the final
+admin and that the final admin's controller is empty. The provisioning admin
+therefore retains no token authority. Token-level `pause`, `resume`, `setAdmin`,
+and authorized verification-key upgrades are unavailable after registration.
 The supported emergency controls are rollup commit freezing and the Ethereum
 bridge pause; neither disables ordinary L2 standard-token transfers. A future
 token-owner, admin, vault, circuit, settlement, or Solidity registry change
@@ -386,34 +404,28 @@ standard-admin path.
 
 ## Verification coverage
 
-The branch now has these executable gates:
+The active PoC gate is limited to focused builds and fake/vector proofs:
 
-1. OCaml, Rust, Solidity, and TypeScript share canonical record, asset/action,
-   registry-transition, and settlement receipt encodings.
-2. Registry vectors cover empty, populated, and maximum-size scans plus wrong
+1. Registry vectors cover empty, populated, and maximum-size scans plus wrong
    roots/counts, repeated/skipped/reordered leaves, non-empty append slots, and
    every uniqueness dimension.
-3. Universal circuit vectors exercise two dynamic owners through one circuit
-   tag/VK, registry membership rejection, accepted deposit finalization,
-   helper-account progression, denomination, token inheritance, and withdrawal
-   action/export fields.
-4. The bridge SDK rejects malformed/wrong-asset/wrong-owner/wrong-VK forests and
-   runs a local ledger roundtrip through the unmodified standard owner's
-   `approveBase`: exact-cap vault provisioning, vault-to-user deposit, then
-   user-to-vault withdrawal.
-5. Settlement guest, gateway, and Solidity tests cover V4 batched registry
-   synchronization, pending/activation status, V2 deposits, V3 withdrawals,
-   per-token caps/liabilities, replay rejection, and delayed release.
-6. The full local gate uses the real sequencer/prover, three DA nodes, Actions
-   services, two unmodified token owners, one shared vault key/VK, Anvil custody,
-   and exact claims without generating an SP1 proof.
-
-After implementation, run the repository gates from a persistent `tmux` session
-for the heavy commands:
+2. Ethereum bridge vectors exercise two dynamic owners through one circuit
+   tag/VK, authenticate the final empty-controller admin, reject retaining the
+   live provisioning signer, reject invalid registry membership, and cover
+   accepted deposit finalization, helper progression, denomination, token
+   inheritance, and withdrawal action/export fields.
 
 ```bash
-dune build ./src/app/zeko/sequencer ./src/app/zeko/da_layer ./src/app/zeko/signer
+dune build ./src/app/zeko/tests/asset_registry_vectors.exe ./src/app/zeko/tests/ethereum_bridge_vectors.exe
+dune exec ./src/app/zeko/tests/asset_registry_vectors.exe -- --max
 dune exec ./src/app/zeko/tests/ethereum_bridge_vectors.exe
+```
+
+The following real Pickles and non-fake prover commands are future release
+validation only. They are outside the active PoC gate and must not be run for
+this PoC review:
+
+```bash
 dune exec ./src/app/zeko/tests/compile_circuits.exe
 dune exec ./src/app/zeko/tests/test_all_real.exe
 src/app/zeko/sequencer/tests/run-sequencer-test.sh real 1 false true
