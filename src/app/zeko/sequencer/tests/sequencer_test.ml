@@ -410,7 +410,8 @@ let () =
           | params ->
               List.map params ~f:(fun params ->
                   Utils.value_to_hash
-                    ~init:Zeko_constants.ethereum_erc20_deposit_salt
+                    ~init:
+                      C.Bridge_state.Deposit_params_ethereum_token.ethereum_salt
                     C.Bridge_state.Deposit_params_ethereum_token.typ params )
         in
         let withdrawal_params : C.Bridge_state.Withdrawal_params_base.t =

@@ -369,11 +369,11 @@ let make_commit_accounts mutation
         ]
   in
   let admin_zkapp =
+    let revoked_authority = PC.empty in
     zkapp_with_vk ~vk_hash:commit_vk_hash
       ~app_state:
-        [ commit_registration_authority.x
-        ; ( if commit_registration_authority.is_odd then Field.one
-          else Field.zero )
+        [ revoked_authority.x
+        ; (if revoked_authority.is_odd then Field.one else Field.zero)
         ; Field.zero
         ; Field.zero
         ; Field.zero
@@ -468,7 +468,7 @@ let make_commit_accounts mutation
       let bad_admin_zkapp =
         zkapp_with_vk ~vk_hash:commit_vk_hash
           ~app_state:
-            [ Field.(commit_registration_authority.x + one)
+            [ commit_registration_authority.x
             ; ( if commit_registration_authority.is_odd then Field.one
               else Field.zero )
             ; Field.zero
@@ -741,7 +741,7 @@ let check_commit_registration_constraints () =
     ; ("wrong token admin ID", Wrong_admin_id)
     ; ("wrong token admin VK", Wrong_admin_vk)
     ; ("wrong token admin permissions", Wrong_admin_permissions)
-    ; ("wrong token admin authority", Wrong_admin_authority)
+    ; ("live registration signer as token admin", Wrong_admin_authority)
     ; ("wrong vault ID", Wrong_vault_id)
     ; ("wrong vault VK", Wrong_vault_vk)
     ; ("wrong vault permissions", Wrong_vault_permissions)

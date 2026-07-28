@@ -2930,7 +2930,9 @@ module Mutations = struct
               Zeko_sequencer.(sequencer.archive)
               ~aux:
                 (Utils.value_to_hash
-                   ~init:Zeko_constants.ethereum_erc20_withdrawal_salt
+                   ~init:
+                     Zeko_circuits.Bridge_state
+                     .Withdrawal_params_ethereum_token.hash_salt
                    Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token
                    .typ withdrawal_params )
               { Archive.Ethereum_withdrawal.recipient =

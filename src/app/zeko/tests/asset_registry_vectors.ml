@@ -87,16 +87,17 @@ let run_membership witness =
        ( Registry.Verified_asset.token_id verified
        , Registry.Verified_asset.authenticated_registry_call verified ) )
 
-let check_membership () =
-  let tree0 = AR.Merkle_list.empty () in
-  let first = record 0 in
-  let tree1 = AR.Merkle_list.append_exn tree0 first in
-  let witness : Registry.Membership_witness.t =
-    { state = state tree1
-    ; record = first
-    ; path = AR.Merkle_list.path tree1 ~index:0
+let membership_witness record =
+  let tree = AR.Merkle_list.append_exn (AR.Merkle_list.empty ()) record in
+  ( { Registry.Membership_witness.state = state tree
+    ; record
+    ; path = AR.Merkle_list.path tree ~index:0
     }
-  in
+    : Registry.Membership_witness.t )
+
+let check_membership () =
+  let first = record 0 in
+  let witness = membership_witness first in
   let token_id, registry_call = run_membership witness in
   if not (AR.Token_id.equal token_id first.token_id_l2) then
     failwith "verified membership returned the wrong token ID" ;
@@ -146,12 +147,14 @@ let check_membership () =
               state = { witness.state with schema_version = Checked32.of_int 2 }
             }
           : AR.Token_id.t * Account_update.Body.t ) ) ;
-  expect_failure "unsupported decimals" (fun () ->
+  let maximum_decimals = { first with decimals = Checked32.of_int 255 } in
+  ignore
+    ( run_membership (membership_witness maximum_decimals)
+      : AR.Token_id.t * Account_update.Body.t ) ;
+  let overflowing_decimals = { first with decimals = Checked32.of_int 256 } in
+  expect_failure "decimals outside UInt8" (fun () ->
       ignore
-        ( run_membership
-            { witness with
-              record = { first with decimals = Checked32.of_int 10 }
-            }
+        ( run_membership (membership_witness overflowing_decimals)
           : AR.Token_id.t * Account_update.Body.t ) )
 
 let check_append_only_paths () =

@@ -285,10 +285,10 @@ module Make (Config : CONFIG) () = struct
       assert_equal_if ~label:"asset registry derived token ID" check
         Token_id.typ record.token_id_l2 derived_token_id
     in
-    let* decimals_supported =
-      Checked32.Checked.(record.decimals < constant (Checked32.of_int 10))
+    let* () =
+      assert_fits_bits ~label:"asset registry decimals" ~length:8
+        (Checked32.Checked.to_field record.decimals)
     in
-    let* () = assert_implies check decimals_supported in
     let* () =
       let* cap_is_zero =
         Currency.Amount.Checked.equal record.inventory_cap

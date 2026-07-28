@@ -579,18 +579,14 @@ struct
       assert_vk_hash_if ~label:"registered token admin VK" active admin_zkapp
         Inputs.ethereum_asset_approved_mft_admin_vk_hash
     in
-    let (authority_x :: authority_is_odd :: _) = admin_zkapp.app_state in
-    let configured_authority = Inputs.ethereum_asset_registration_authority in
-    let* () =
-      assert_equal_if ~label:"registered token admin authority x" active F.typ
-        authority_x
-        (constant F.typ configured_authority.x)
+    let (authority_x :: authority_is_odd_field :: _) = admin_zkapp.app_state in
+    let* authority_is_odd = Boolean.of_field authority_is_odd_field in
+    let admin_authority : PC.var =
+      { x = authority_x; is_odd = authority_is_odd }
     in
     let* () =
-      assert_equal_if ~label:"registered token admin authority parity" active
-        F.typ authority_is_odd
-        (constant F.typ
-           (if configured_authority.is_odd then Field.one else Field.zero) )
+      assert_equal_if ~label:"registered token admin authority revoked" active
+        PC.typ admin_authority (constant PC.typ PC.empty)
     in
     let* () =
       authenticate_account_if ~label:"registered vault ledger opening"

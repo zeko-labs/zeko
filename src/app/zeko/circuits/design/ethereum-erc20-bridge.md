@@ -228,8 +228,8 @@ Required invariants:
   an immutable `depositCapByToken`, configured to equal the initial pre-minted
   L2 vault inventory;
 - a deposit cannot finalize if the vault lacks the net amount;
-- the bounded mint is auditable and routine mint authority is revoked or capped
-  after deployment;
+- the bounded mint is auditable and the final standard admin controller is the
+  fixed non-signing `Public_key.Compressed.empty`;
 - no path can transfer from the reserved circulation account; and
 - emergency pause covers Solidity deposits/releases and L2 standard-token
   transfers coherently.
@@ -365,8 +365,8 @@ Onboard one asset atomically where possible:
    circulation, and verify the expected standard verification keys;
 3. create the token-specific account at the shared vault public key with the
    universal bridge VK and locked proof permissions;
-4. mint the bounded inventory to the vault, then revoke or enforce the configured
-   mint cap;
+4. mint the bounded inventory to the vault, then rotate the unmodified standard
+   admin controller to the fixed non-signing `Public_key.Compressed.empty`;
 5. fund all default-token account-creation costs and helper sponsorship policy;
 6. append the canonical record through the exhaustive Zeko registry transition,
    settle the new root/count and ordered record batch, and activate exactly that
