@@ -337,13 +337,13 @@ module Sequencer = struct
       (state_of_account account).leaf_count
       |> C.Zeko_util.Checked32.to_int
 
-    let command_updates_count_for_account ~registry_id command =
+    let count_command_updates_for_account ~registry_id command =
       match command with
       | Signed_command _ ->
-          false
+          0
       | Zkapp_command command ->
           Zkapp_command.all_account_updates_list command
-          |> List.exists ~f:(fun update ->
+          |> List.count ~f:(fun update ->
                  Account_id.equal
                    (Account_update.account_id update)
                    registry_id
@@ -354,13 +354,25 @@ module Sequencer = struct
                  | _ ->
                      false )
 
-    let command_updates_count command =
-      Zeko_circuits_config.Inputs.Ethereum_assets.enabled
-      && command_updates_count_for_account ~registry_id:(account_id ()) command
+    let count_command_updates command =
+      if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+        count_command_updates_for_account ~registry_id:(account_id ()) command
+      else 0
+
+    let validate_update_count registry_update_count =
+      if registry_update_count > 1 then
+        Or_error.errorf
+          "PoC settlement permits only one Ethereum asset registration update \
+           per command"
+      else if registry_update_count < 0 then
+        Or_error.error_string
+          "Ethereum asset registration update count cannot be negative"
+      else Ok ()
 
     let validate_counts ~committed_count ~current_count
-        ~updates_registry_count =
-      if not updates_registry_count then Ok ()
+        ~registry_update_count =
+      let%bind.Result () = validate_update_count registry_update_count in
+      if Int.equal registry_update_count 0 then Ok ()
       else if current_count < committed_count then
         Or_error.errorf
           "Ethereum asset registry count regressed from committed %d to %d"
@@ -372,7 +384,9 @@ module Sequencer = struct
       else Ok ()
 
     let validate t command =
-      if not (command_updates_count command) then Ok ()
+      let registry_update_count = count_command_updates command in
+      let%bind.Result () = validate_update_count registry_update_count in
+      if Int.equal registry_update_count 0 then Ok ()
       else
         let registry_id = account_id () in
         let current_account =
@@ -392,7 +406,7 @@ module Sequencer = struct
         in
         validate_counts ~committed_count:(count_of_account committed_account)
           ~current_count:(count_of_account current_account)
-          ~updates_registry_count:true
+          ~registry_update_count
   end
 
   let infer_nonce t public_key =

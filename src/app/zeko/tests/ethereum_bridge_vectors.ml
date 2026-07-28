@@ -1135,7 +1135,107 @@ let run_erc20_withdrawal_action_with_recipient recipient =
      in
      As_prover.return () )
 
-let registry_count_update_command () =
+let run_native_withdrawal_action_with_recipient ~recipient_domain recipient =
+  let open Snark_params.Tick in
+  let module Withdrawal_params = struct
+    include Zeko_circuits.Bridge_state.Withdrawal_params_base
+
+    let recipient_domain = recipient_domain
+  end in
+  let params : Withdrawal_params.t =
+    { children = []; amount = amount "2000000"; recipient }
+  in
+  run_and_check_exn
+    (let%bind.Checked params =
+       exists Withdrawal_params.typ ~compute:(fun _ -> params)
+     in
+     let%map.Checked _action =
+       make_checked (fun () ->
+           Run.run_checked
+             (Zeko_circuits.Bridge_state.withdrawal_action
+                ~chain_l2:Mina_signature_kind.Testnet
+                ~holder_account_l2:(point_of_string "98883")
+                ~token_owner_l2:None ~ethereum_asset_id:None
+                ~ethereum_registry_binding:None
+                ~l2_holder_vk_hash:(constant Field.typ Field.one)
+                ~bridge_fee_recipient_l2:
+                  (constant PC.typ (point_of_string "98884"))
+                ~bridge_proof_fee:
+                  (constant Currency.Amount.typ Currency.Amount.zero)
+                (module Withdrawal_params)
+                params ) )
+     in
+     As_prover.return () )
+
+let run_legacy_erc20_withdrawal_action_with_recipient recipient =
+  let open Mina_base in
+  let open Snark_params.Tick in
+  let chain = Mina_signature_kind.Testnet in
+  let token_owner =
+    Account_id.create (point_of_string "344213") Token_id.default
+  in
+  let token_id = Account_id.derive_token_id ~owner:token_owner in
+  let withdrawal_amount = amount "2000000" in
+  let debit =
+    Account_update.with_aux
+      ~body:
+        { Account_update.Body.dummy with
+          public_key = point_of_string "98881"
+        ; token_id
+        ; balance_change =
+            Currency.Amount.Signed.(of_unsigned withdrawal_amount |> negate)
+        ; may_use_token = Parents_own_token
+        ; authorization_kind = Signature
+        ; use_full_commitment = true
+        }
+      ~authorization:Control.Poly.None_given
+  in
+  let params :
+      Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token_v1.t =
+    { asset_id_high = first_registered_asset.asset_id_high
+    ; asset_id_low = first_registered_asset.asset_id_low
+    ; custom =
+        { token_owner_body =
+            { Account_update.Body.dummy with
+              public_key = Account_id.public_key token_owner
+            ; token_id = Account_id.token_id token_owner
+            ; authorization_kind = Proof Field.one
+            }
+        ; nested_children =
+            Zkapp_command.Call_forest.cons ~signature_kind:chain debit []
+        ; base = { children = []; amount = withdrawal_amount; recipient }
+        }
+    }
+  in
+  run_and_check_exn
+    (let%bind.Checked params =
+       exists
+         Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token_v1.typ
+         ~compute:(fun _ -> params)
+     in
+     let%map.Checked _action =
+       make_checked (fun () ->
+           Run.run_checked
+             (Zeko_circuits.Bridge_state.withdrawal_action ~chain_l2:chain
+                ~holder_account_l2:first_registered_asset.vault_public_key
+                ~token_owner_l2:(Some token_owner)
+                ~ethereum_asset_id:
+                  (Some
+                     ( first_registered_asset.asset_id_high
+                     , first_registered_asset.asset_id_low ) )
+                ~ethereum_registry_binding:None
+                ~l2_holder_vk_hash:(constant Field.typ Field.one)
+                ~bridge_fee_recipient_l2:
+                  (constant PC.typ (point_of_string "98882"))
+                ~bridge_proof_fee:
+                  (constant Currency.Amount.typ Currency.Amount.zero)
+                ( module Zeko_circuits.Bridge_state
+                         .Withdrawal_params_ethereum_token_v1 )
+                params ) )
+     in
+     As_prover.return () )
+
+let registry_count_update_command ?(updates = 1) () =
   let open Mina_base in
   let app_state =
     List.init 8 ~f:(fun index ->
@@ -1143,24 +1243,27 @@ let registry_count_update_command () =
         else Zkapp_basic.Set_or_keep.Keep )
     |> Zkapp_state.V.of_list_exn
   in
-  let update =
-    Account_update.with_aux
-      ~body:
-        { Account_update.Body.dummy with
-          public_key =
-            Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
-        ; update = { Account_update.Update.dummy with app_state }
-        }
-      ~authorization:Control.Poly.None_given
+  let account_updates =
+    List.init updates ~f:(fun _ ->
+        Account_update.with_aux
+          ~body:
+            { Account_update.Body.dummy with
+              public_key =
+                Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+            ; update = { Account_update.Update.dummy with app_state }
+            }
+          ~authorization:Control.Poly.None_given )
+    |> List.fold_right ~init:[] ~f:(fun update forest ->
+           Zkapp_command.Call_forest.cons
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 update forest
+       )
   in
   User_command.Zkapp_command
     { fee_payer =
         Account_update.Fee_payer.make
           ~body:Account_update.Body.Fee_payer.dummy
           ~authorization:Signature.dummy
-    ; account_updates =
-        Zkapp_command.Call_forest.cons
-          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 update []
+    ; account_updates
     ; memo = Signed_command_memo.empty
     }
 
@@ -1201,39 +1304,69 @@ let () =
   let oversized_key : PC.t =
     { x = Field.of_bits (List.init 161 ~f:(Int.equal 160)); is_odd = false }
   in
+  let assert_recipient_rejected label f =
+    if Result.is_ok (Or_error.try_with f) then
+      failwithf "%s accepted an invalid Ethereum recipient" label ()
+  in
   List.iter [ odd_key; oversized_key ] ~f:(fun recipient ->
       if
         Result.is_ok
           (Zeko_circuits.Bridge_state.Ethereum_address.validate recipient)
       then failwith "invalid Ethereum withdrawal recipient was accepted" ;
-      if
-        Result.is_ok
-          (Or_error.try_with (fun () ->
-               run_erc20_withdrawal_action_with_recipient recipient ) )
-      then
-        failwith
-          "ERC20 withdrawal circuit accepted an invalid Ethereum recipient" ) ;
-  run_erc20_withdrawal_action_with_recipient
-    ({ x = Field.of_int 0x01020304; is_odd = false } : PC.t) ;
+      assert_recipient_rejected "registry V2 withdrawal circuit" (fun () ->
+          run_erc20_withdrawal_action_with_recipient recipient ) ;
+      assert_recipient_rejected "legacy V1 withdrawal circuit" (fun () ->
+          run_legacy_erc20_withdrawal_action_with_recipient recipient ) ;
+      assert_recipient_rejected "native Ethereum withdrawal circuit" (fun () ->
+          run_native_withdrawal_action_with_recipient
+            ~recipient_domain:
+              Zeko_circuits.Bridge_state.Withdrawal_recipient_domain.Ethereum
+            recipient ) ;
+      run_native_withdrawal_action_with_recipient
+        ~recipient_domain:
+          Zeko_circuits.Bridge_state.Withdrawal_recipient_domain.Mina
+        recipient ) ;
+  let valid_ethereum_key : PC.t =
+    { x = Field.of_int 0x01020304; is_odd = false }
+  in
+  run_erc20_withdrawal_action_with_recipient valid_ethereum_key ;
+  run_legacy_erc20_withdrawal_action_with_recipient valid_ethereum_key ;
+  run_native_withdrawal_action_with_recipient
+    ~recipient_domain:
+      Zeko_circuits.Bridge_state.Withdrawal_recipient_domain.Ethereum
+    valid_ethereum_key ;
   let module Admission =
     Sequencer_lib.Zeko_sequencer.Sequencer.Ethereum_asset_registry_admission
   in
+  let single_update_count =
+    Admission.count_command_updates_for_account
+      ~registry_id:(Admission.account_id ())
+      (registry_count_update_command ())
+  in
+  let batched_update_count =
+    Admission.count_command_updates_for_account
+      ~registry_id:(Admission.account_id ())
+      (registry_count_update_command ~updates:2 ())
+  in
+  if not (Int.equal single_update_count 1)
+  then failwith "registry count update escaped common admission counting" ;
+  if not (Int.equal batched_update_count 2)
+  then failwith "batched registry count updates collapsed during admission" ;
   if
-    not
-      (Admission.command_updates_count_for_account
-         ~registry_id:(Admission.account_id ())
-         (registry_count_update_command ()) )
-  then failwith "registry count update escaped common admission detection" ;
+    Result.is_ok
+      (Admission.validate_counts ~committed_count:0 ~current_count:0
+         ~registry_update_count:batched_update_count )
+  then failwith "two registry updates in one command were accepted" ;
   Admission.validate_counts ~committed_count:0 ~current_count:0
-    ~updates_registry_count:true
+    ~registry_update_count:single_update_count
   |> Or_error.ok_exn ;
   if
     Result.is_ok
       (Admission.validate_counts ~committed_count:0 ~current_count:1
-         ~updates_registry_count:true )
+         ~registry_update_count:single_update_count )
   then failwith "second pending registry registration was accepted" ;
   Admission.validate_counts ~committed_count:1 ~current_count:1
-    ~updates_registry_count:true
+    ~registry_update_count:single_update_count
   |> Or_error.ok_exn ;
   let expected_registry_permissions : Mina_base.Permissions.t =
     { Sequencer_lib.Deploy.Z.proof_permissions with access = None }

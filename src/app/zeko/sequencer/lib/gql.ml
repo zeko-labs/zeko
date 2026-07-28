@@ -1630,6 +1630,13 @@ module Types = struct
         let arg_typ ~proof_cache_db =
           obj "WithdrawalParamsInput"
             ~coerce:(fun children amount recipient ->
+              let%map.Result () =
+                Zeko_circuits.Bridge_state.Ethereum_address.validate_for
+                  ( Zeko_circuits.Bridge_state.Withdrawal_recipient_domain
+                    .of_ethereum_holder_account
+                      Zeko_circuits_config.Inputs.ethereum_holder_account_l1 )
+                  recipient
+              in
               Zeko_types.Bridge.Finalize_withdrawal.Withdrawal_params_base
               .of_serializable ~proof_cache_db
                 { children =

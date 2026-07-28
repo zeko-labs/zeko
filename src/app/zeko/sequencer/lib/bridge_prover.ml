@@ -557,6 +557,12 @@ module Withdrawal_request = struct
     |> Field.to_string
 
   let f ~t ~logger ({ withdrawal_params; transferrer } : t) =
+    let%bind.Result () =
+      Bridge_state.Ethereum_address.validate_for
+        (Bridge_state.Withdrawal_recipient_domain.of_ethereum_holder_account
+           Zeko_circuits_config.Inputs.ethereum_holder_account_l1 )
+        withdrawal_params.recipient
+    in
     let bridge_fee = Zeko_circuits_config.Inputs.bridge_proof_fee in
     let%bind.Result expected_amount =
       Currency.Amount.add withdrawal_params.amount bridge_fee

@@ -376,6 +376,14 @@ JSON reports `checkpointVersion: 2` and encodes `registryPublicKey` as the
 `tokenOwnerL2` and `vaultPublicKey`. Version 1 omitted parity and must not be
 accepted as a version-2 checkpoint.
 
+Every Ethereum-settlement withdrawal recipient is encoded as an even compressed
+Mina key whose x-coordinate fits 160 bits. The circuit applies that domain to
+native withdrawals when an Ethereum holder is configured and to both legacy V1
+and registry V2 ERC-20 withdrawals unconditionally. GraphQL applies the same
+rule to its native and registry V2 inputs; it exposes no legacy V1 request
+input. Mina-only native and custom-token bridge instances retain ordinary
+compressed Mina recipient semantics.
+
 ## Deployment and post-registration policy
 
 Onboard one asset atomically where possible:
@@ -421,8 +429,8 @@ The active PoC gate is limited to focused builds and fake/vector proofs:
    live provisioning signer, reject invalid registry membership, and cover
    accepted deposit finalization, helper progression, denomination, token
    inheritance, checkpoint key parity, 160-bit even withdrawal recipients,
-   withdrawal action/export fields, and the one-pending-registration admission
-   limit before and after a commit.
+   native/V1/V2 withdrawal action and export fields, two registrations in one
+   command, and separate pending registrations before and after a commit.
 
 ```bash
 dune build ./src/app/zeko/tests/asset_registry_vectors.exe ./src/app/zeko/tests/ethereum_bridge_vectors.exe

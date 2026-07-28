@@ -4,6 +4,16 @@ open Zeko_util
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
 
+module Withdrawal_recipient_domain = struct
+  type t = Mina | Ethereum
+
+  let of_ethereum_holder_account = function
+    | None ->
+        Mina
+    | Some _ ->
+        Ethereum
+end
+
 module Ethereum_address = struct
   let bit_length = 160
 
@@ -21,6 +31,20 @@ module Ethereum_address = struct
       Field.Checked.choose_preimage_var x ~length:bit_length
     in
     Checked.return ()
+
+  let validate_for domain recipient =
+    match domain with
+    | Withdrawal_recipient_domain.Mina ->
+        Ok ()
+    | Withdrawal_recipient_domain.Ethereum ->
+        validate recipient
+
+  let assert_valid_for domain recipient =
+    match domain with
+    | Withdrawal_recipient_domain.Mina ->
+        Checked.return ()
+    | Withdrawal_recipient_domain.Ethereum ->
+        assert_valid recipient
 end
 
 module Outer_bridge_state = struct
@@ -278,6 +302,8 @@ module Withdrawal_params_base = struct
 
   let debit_first = false
 
+  let recipient_domain = Withdrawal_recipient_domain.Mina
+
   let hash_salt = Zeko_constants.withdrawal_salt
 
   let asset_id _ = None
@@ -299,6 +325,8 @@ module Withdrawal_params_custom = struct
   let custom x = Some x
 
   let debit_first = false
+
+  let recipient_domain = Withdrawal_recipient_domain.Mina
 
   let hash_salt = Zeko_constants.withdrawal_salt
 
@@ -324,6 +352,8 @@ module Withdrawal_params_ethereum_token_v1 = struct
      has to precede the bridge-vault receive synthesized below. *)
   let debit_first = true
 
+  let recipient_domain = Withdrawal_recipient_domain.Ethereum
+
   let hash_salt = Zeko_constants.ethereum_erc20_withdrawal_salt
 
   let asset_id { asset_id_high; asset_id_low; _ } =
@@ -348,6 +378,8 @@ module Withdrawal_params_ethereum_token = struct
   let custom { custom; _ } = Some custom
 
   let debit_first = true
+
+  let recipient_domain = Withdrawal_recipient_domain.Ethereum
 
   let hash_salt = Zeko_constants.ethereum_erc20_withdrawal_v2_salt
 
@@ -381,6 +413,8 @@ module type WITHDRAWAL_PARAMS = sig
   val custom : var -> Withdrawal_params_custom.var option
 
   val debit_first : bool
+
+  val recipient_domain : Withdrawal_recipient_domain.t
 
   val hash_salt : string
 
@@ -539,6 +573,10 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
   *)
   let base_params = Withdrawal_params.base params in
   let* () =
+    Ethereum_address.assert_valid_for Withdrawal_params.recipient_domain
+      base_params.recipient
+  in
+  let* () =
     match
       (ethereum_registry_binding, Withdrawal_params.registry_binding params)
     with
@@ -551,7 +589,6 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
             Checked32.typ encoding_version
             (Checked32.Checked.constant (Checked32.of_int 2))
         in
-        let* () = Ethereum_address.assert_valid base_params.recipient in
         let* () =
           assert_equal ~label:"Ethereum ERC20 withdrawal registry index"
             Checked32.typ actual_index

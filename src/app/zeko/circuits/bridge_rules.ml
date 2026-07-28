@@ -121,7 +121,15 @@ struct
     end)
 
     module Deposit_params = Deposit_params_base
-    module Withdrawal_params = Withdrawal_params_base
+
+    module Withdrawal_params = struct
+      include Withdrawal_params_base
+
+      let recipient_domain =
+        Withdrawal_recipient_domain.of_ethereum_holder_account
+          Inputs.ethereum_holder_account_l1
+    end
+
     module Check_accepted = Check_accepted
   end
 
@@ -510,7 +518,15 @@ struct
     end)
 
     module Deposit_params = Deposit_params_custom
-    module Withdrawal_params = Withdrawal_params_custom
+
+    module Withdrawal_params = struct
+      include Withdrawal_params_custom
+
+      let recipient_domain =
+        Withdrawal_recipient_domain.of_ethereum_holder_account
+          Inputs.ethereum_holder_account_l1
+    end
+
     module Check_accepted = Check_accepted
   end
 
