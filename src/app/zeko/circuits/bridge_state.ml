@@ -20,13 +20,13 @@ module Ethereum_address = struct
   let validate ({ PC.Poly.x; is_odd } : PC.t) =
     if is_odd then
       Or_error.error_string "Ethereum withdrawal recipient must be even"
-    else if List.drop (Field.to_bits x) bit_length |> List.exists ~f:Fn.id then
+    else if List.drop (Field.unpack x) bit_length |> List.exists ~f:Fn.id then
       Or_error.error_string
         "Ethereum withdrawal recipient x-coordinate must fit 160 bits"
     else Ok ()
 
   let assert_valid ({ PC.Poly.x; is_odd } : PC.var) =
-    let* () = Boolean.Assert.is_false is_odd in
+    let* () = Boolean.Assert.is_true (Boolean.not is_odd) in
     let* (_ : Boolean.var list) =
       Field.Checked.choose_preimage_var x ~length:bit_length
     in

@@ -2163,6 +2163,7 @@ module Types = struct
         let arg_typ ~proof_cache_db =
           obj "WithdrawalRequestInput"
             ~coerce:(fun withdrawal_params transferrer ->
+              let%map.Result withdrawal_params = withdrawal_params in
               { withdrawal_params; transferrer } )
             ~split:(fun f (x : input) -> f x.withdrawal_params x.transferrer)
             ~fields:
@@ -2268,7 +2269,9 @@ module Types = struct
 
         let arg_typ ~proof_cache_db =
           obj "EthereumTokenWithdrawalRequestInput"
-            ~coerce:(fun withdrawal_params asset -> { withdrawal_params; asset })
+            ~coerce:(fun withdrawal_params asset ->
+              let%map.Result withdrawal_params = withdrawal_params in
+              { withdrawal_params; asset } )
             ~split:(fun f (x : input) -> f x.withdrawal_params x.asset)
             ~fields:
               [ arg "withdrawalParams"
@@ -2399,6 +2402,7 @@ module Types = struct
                          before_withdrawal withdrawal_ase prev_next_withdrawal
                          withdrawal_params prev_nonce helper_account_new
                          helper_account_signature ->
+              let%bind.Result withdrawal_params = withdrawal_params in
               let%map.Result commit =
                 match%bind.Result commit with
                 | Commit commit ->
@@ -2880,7 +2884,10 @@ module Mutations = struct
                        ~proof_cache_db )
             ]
         ~resolve:(fun { ctx = Context.{ sequencer; l2_executor; _ }; _ } ()
-                      { withdrawal_params; transferrer } ->
+                      request ->
+          let%bind.Deferred.Result { withdrawal_params; transferrer } =
+            return (Result.map_error request ~f:Error.to_string_hum)
+          in
           let logger = Zeko_sequencer.(sequencer.logger) in
           let t = Zeko_sequencer.(sequencer.bridge_prover) in
           let withdrawal_aux =
@@ -2925,8 +2932,10 @@ module Mutations = struct
                   @@ Types.Input.Provers.Ethereum_token_withdrawal_request
                      .arg_typ ~proof_cache_db )
             ]
-        ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } ()
-                      { withdrawal_params; asset } ->
+        ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () request ->
+          let%bind.Deferred.Result { withdrawal_params; asset } =
+            return (Result.map_error request ~f:Error.to_string_hum)
+          in
           if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
             return (Error "Ethereum token bridge is not configured")
           else

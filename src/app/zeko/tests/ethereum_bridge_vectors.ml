@@ -1135,12 +1135,13 @@ let run_erc20_withdrawal_action_with_recipient recipient =
      in
      As_prover.return () )
 
-let run_native_withdrawal_action_with_recipient ~recipient_domain recipient =
+let run_native_withdrawal_action_with_recipient ~recipient_domain:domain
+    recipient =
   let open Snark_params.Tick in
   let module Withdrawal_params = struct
     include Zeko_circuits.Bridge_state.Withdrawal_params_base
 
-    let recipient_domain = recipient_domain
+    let recipient_domain = domain
   end in
   let params : Withdrawal_params.t =
     { children = []; amount = amount "2000000"; recipient }
@@ -1235,7 +1236,7 @@ let run_legacy_erc20_withdrawal_action_with_recipient recipient =
      in
      As_prover.return () )
 
-let registry_count_update_command ?(updates = 1) () =
+let registry_count_update_command ?(updates = 1) () : Mina_base.User_command.t =
   let open Mina_base in
   let app_state =
     List.init 8 ~f:(fun index ->
@@ -1302,7 +1303,7 @@ let () =
   Zeko_circuits.Bridge_state.Ethereum_address.validate even_key
   |> Or_error.ok_exn ;
   let oversized_key : PC.t =
-    { x = Field.of_bits (List.init 161 ~f:(Int.equal 160)); is_odd = false }
+    { x = Field.project (List.init 161 ~f:(Int.equal 160)); is_odd = false }
   in
   let assert_recipient_rejected label f =
     if Result.is_ok (Or_error.try_with f) then
@@ -1436,10 +1437,11 @@ let () =
   if
     Result.is_ok
       (Or_error.try_with (fun () ->
-           Sequencer_lib.Ethereum_settlement_export
-           .ethereum_withdrawal_preimage_json
-             { token_preimage with recipient = odd_key }
-           |> ignore ) )
+           ignore
+             ( Sequencer_lib.Ethereum_settlement_export
+               .ethereum_withdrawal_preimage_json
+                 { token_preimage with recipient = odd_key }
+               : string * Yojson.Safe.t ) ) )
   then failwith "invalid withdrawal recipient was silently omitted" ;
   let vectors =
     [ ( "1000000000"

@@ -110,9 +110,9 @@ let check_membership () =
   if
     not
       ([%equal: Field.t list] checked_state
-         [ (state tree1).root
-         ; Checked32.to_field (state tree1).leaf_count
-         ; Checked32.to_field (state tree1).schema_version
+         [ witness.state.root
+         ; Checked32.to_field witness.state.leaf_count
+         ; Checked32.to_field witness.state.schema_version
          ] )
   then failwith "registry account precondition did not bind root/count/version" ;
   let bad_path =

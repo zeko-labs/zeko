@@ -1817,7 +1817,20 @@ open struct
                ~authorization:
                  (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
                  Control.Poly.None_given )
-            []
+            (Zkapp_command.Call_forest.cons ~signature_kind:Inputs.chain_l1
+               (Account_update.with_aux
+                  ~body:
+                    { Mina_base.Account_update.Body.dummy with
+                      use_full_commitment = true
+                    ; public_key = Inputs.bridge_fee_recipient_l1
+                    ; balance_change =
+                        Currency.Amount.Signed.(
+                          of_unsigned Inputs.bridge_proof_fee)
+                    ; may_use_token = Parents_own_token
+                    ; authorization_kind = None_given
+                    }
+                  ~authorization:Control.Poly.None_given )
+               [] )
       ; slot_range = deposit_slot_range
       }
 
@@ -1981,7 +1994,11 @@ open struct
       assert (Public_key.Compressed.equal au.public_key Inputs.holder_account_l2) ;
       let helper_account, witness_inner =
         match Zkapp_command.Call_forest.to_account_updates calls with
-        | [ helper_account; witness_inner ] ->
+        | [ helper_account
+          ; witness_inner
+          ; _recipient_payout
+          ; _sequencer_fee_payout
+          ] ->
             (helper_account, witness_inner)
         | _ ->
             failwith
@@ -2089,7 +2106,20 @@ open struct
                ~authorization:
                  (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
                  Control.Poly.None_given )
-            []
+            (Zkapp_command.Call_forest.cons ~signature_kind:Inputs.chain_l1
+               (Account_update.with_aux
+                  ~body:
+                    { Mina_base.Account_update.Body.dummy with
+                      use_full_commitment = true
+                    ; public_key = Inputs.bridge_fee_recipient_l1
+                    ; balance_change =
+                        Currency.Amount.Signed.(
+                          of_unsigned Inputs.bridge_proof_fee)
+                    ; may_use_token = Parents_own_token
+                    ; authorization_kind = None_given
+                    }
+                  ~authorization:Control.Poly.None_given )
+               [] )
       ; slot_range = deposit_slot_range
       }
 
@@ -2333,6 +2363,8 @@ open struct
             ; _
             }
           ; { elt = { account_update = witness_outer; calls = []; _ }; _ }
+          ; { elt = { calls = []; _ }; _ }
+          ; { elt = { calls = []; _ }; _ }
           ] ->
             ((helper_token_owner, helper_account), witness_outer)
         | _ ->
@@ -2464,7 +2496,20 @@ open struct
                ~authorization:
                  (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
                  Control.Poly.None_given )
-            []
+            (Zkapp_command.Call_forest.cons ~signature_kind:Inputs.chain_l2
+               (Account_update.with_aux
+                  ~body:
+                    { Mina_base.Account_update.Body.dummy with
+                      use_full_commitment = true
+                    ; public_key = Inputs.bridge_fee_recipient_l2
+                    ; balance_change =
+                        Currency.Amount.Signed.(
+                          of_unsigned Inputs.bridge_proof_fee)
+                    ; may_use_token = Parents_own_token
+                    ; authorization_kind = None_given
+                    }
+                  ~authorization:Control.Poly.None_given )
+               [] )
       }
 
     let withdrawal_action =
@@ -2605,6 +2650,8 @@ open struct
             ; _
             }
           ; { elt = { account_update = witness_outer; calls = []; _ }; _ }
+          ; { elt = { calls = []; _ }; _ }
+          ; { elt = { calls = []; _ }; _ }
           ] ->
             ((helper_token_owner, helper_account), witness_outer)
         | _ ->

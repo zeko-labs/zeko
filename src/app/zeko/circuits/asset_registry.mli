@@ -54,6 +54,16 @@ module Registry_state : sig
   val value_of_app_state : F.t Zkapp_state.V.t -> t
 end
 
+module Checkpoint : sig
+  val version : int
+
+  val commitment :
+    registry_public_key:PC.t -> Registry_state.t -> F.t
+
+  val commitment_var :
+    registry_public_key:PC.t -> Registry_state.var -> F.var Checked.t
+end
+
 module Path : sig
   type t = F.t list
 

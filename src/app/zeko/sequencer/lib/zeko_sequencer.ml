@@ -337,7 +337,8 @@ module Sequencer = struct
       (state_of_account account).leaf_count
       |> C.Zeko_util.Checked32.to_int
 
-    let count_command_updates_for_account ~registry_id command =
+    let count_command_updates_for_account ~registry_id
+        (command : User_command.t) =
       match command with
       | Signed_command _ ->
           0
