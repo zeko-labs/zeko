@@ -19,15 +19,29 @@ is free under the Additional Use Grant. Independent Production Deployments of
 the Zeko protocol layer require the self-serve commercial deployment license
 unless an Additional Free Use applies.
 
-Using or building on the Official Zeko Network does not require a separate
+This repository also publishes the shared self-serve framework used by protected
+Zeko Agent Protocol Bundle repos and components that reference these terms.
+Independent Agent Protocol Bundle production deployments are covered by the
+self-serve commercial deployment license. The current published self-serve fee
+is $0/year, subject to the pricing schedule in [PRICING.md](./PRICING.md).
+
+Using or building on the Official Zeko Network or official Zeko-operated or
+Zeko-authorized Agent Protocol Bundle services does not require a separate
 commercial deployment license; users and integrators pay the ordinary network,
-gas, transaction, prover, bridge, service, or usage fees applicable to the
-official network and services.
+gas, transaction, prover, bridge, service, usage, marketplace, or similar fees
+applicable to the official network and services.
 
 Standard self-serve pricing is published in [PRICING.md](./PRICING.md):
 
 - Protocol Layer Production Deployments: $0/year per production rollup under
   the current published self-serve pricing.
+- Independent Agent Protocol Bundle Production Deployments: $0/year per
+  deploying legal entity per Deployment Network under the current published
+  self-serve pricing.
+
+Current self-serve pricing is subject to change by a successor pricing schedule,
+ecosystem exception, enterprise agreement, foundation agreement, or other
+written authorization published or approved by Zeko Labs.
 
 The self-serve commercial deployment license covers license rights only.
 Managed deployment, enterprise support, compliance review, SLAs, custom
