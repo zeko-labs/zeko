@@ -94,10 +94,9 @@ module Checkpoint = struct
            Zeko_constants.ethereum_asset_registry_checkpoint_v2_salt )
       (fields ~registry_public_key state)
 
-  let commitment_var ~(registry_public_key : PC.t)
-      (state : Registry_state.var) =
-    var_to_hash
-      ~init:Zeko_constants.ethereum_asset_registry_checkpoint_v2_salt
+  let commitment_var ~(registry_public_key : PC.t) (state : Registry_state.var)
+      =
+    var_to_hash ~init:Zeko_constants.ethereum_asset_registry_checkpoint_v2_salt
       Typ.(array ~length:5 F.typ)
       [| constant F.typ registry_public_key.x
        ; constant F.typ

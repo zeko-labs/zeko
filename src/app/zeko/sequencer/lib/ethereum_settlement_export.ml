@@ -228,10 +228,9 @@ let asset_registry_batch_json ~(archive : Archive.t) ~old_root ~old_count
         [ ( "registryPublicKey"
           , `String
               (packed_public_key_hex
-                 Zeko_circuits_config.Inputs.Ethereum_assets
-                   .registry_public_key ) )
-        ; ( "checkpointVersion"
-          , `Int Asset_registry.Checkpoint.version )
+                 Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key )
+          )
+        ; ("checkpointVersion", `Int Asset_registry.Checkpoint.version)
         ; ("root", `String (field_to_hex new_root))
         ; ("count", `Int new_count)
         ; ("schemaVersion", `Int new_schema)
@@ -241,15 +240,15 @@ let asset_registry_batch_json ~(archive : Archive.t) ~old_root ~old_count
         ] )
 
 let ethereum_address_of_compressed
-    (({ Signature_lib.Public_key.Compressed.Poly.x; _ } :
-       Signature_lib.Public_key.Compressed.t ) as recipient) =
+    ( ({ Signature_lib.Public_key.Compressed.Poly.x; _ } :
+        Signature_lib.Public_key.Compressed.t ) as recipient ) =
   match Bridge_state.Ethereum_address.validate recipient with
   | Error _ ->
       None
   | Ok () ->
-    let hex = field_to_hex x |> String.chop_prefix_if_exists ~prefix:"0x" in
-    let hex = String.make (64 - String.length hex) '0' ^ hex in
-    Some ("0x" ^ String.suffix hex 40)
+      let hex = field_to_hex x |> String.chop_prefix_if_exists ~prefix:"0x" in
+      let hex = String.make (64 - String.length hex) '0' ^ hex in
+      Some ("0x" ^ String.suffix hex 40)
 
 let configured_ethereum_bridge_address () =
   match Zeko_circuits_config.t.ethereum_holder_account_l1 with
@@ -287,8 +286,8 @@ let ethereum_withdrawal_preimage_json
           [ ("recipient", `String recipient)
           ; ( "amount"
             , `Intlit
-                ( Currency.Amount.to_uint64 amount
-                |> Unsigned.UInt64.to_string ) )
+                (Currency.Amount.to_uint64 amount |> Unsigned.UInt64.to_string)
+            )
           ] )
   | Some { token; asset_id; params_fields } ->
       ( "tokenWithdrawal"
@@ -298,8 +297,8 @@ let ethereum_withdrawal_preimage_json
           ; ("recipient", `String recipient)
           ; ( "amount"
             , `Intlit
-                ( Currency.Amount.to_uint64 amount
-                |> Unsigned.UInt64.to_string ) )
+                (Currency.Amount.to_uint64 amount |> Unsigned.UInt64.to_string)
+            )
           ; ("paramsFields", fields_json (Array.of_list params_fields))
           ] )
 

@@ -334,20 +334,17 @@ module Sequencer = struct
       |> C.Asset_registry.Registry_state.value_of_app_state
 
     let count_of_account account =
-      (state_of_account account).leaf_count
-      |> C.Zeko_util.Checked32.to_int
+      (state_of_account account).leaf_count |> C.Zeko_util.Checked32.to_int
 
-    let count_command_updates_for_account ~registry_id
-        (command : User_command.t) =
+    let count_command_updates_for_account ~registry_id (command : User_command.t)
+        =
       match command with
       | Signed_command _ ->
           0
       | Zkapp_command command ->
           Zkapp_command.all_account_updates_list command
           |> List.count ~f:(fun update ->
-                 Account_id.equal
-                   (Account_update.account_id update)
-                   registry_id
+                 Account_id.equal (Account_update.account_id update) registry_id
                  &&
                  match Zkapp_state.V.to_list update.body.update.app_state with
                  | _root :: leaf_count :: _ ->
@@ -370,8 +367,7 @@ module Sequencer = struct
           "Ethereum asset registration update count cannot be negative"
       else Ok ()
 
-    let validate_counts ~committed_count ~current_count
-        ~registry_update_count =
+    let validate_counts ~committed_count ~current_count ~registry_update_count =
       let%bind.Result () = validate_update_count registry_update_count in
       if Int.equal registry_update_count 0 then Ok ()
       else if current_count < committed_count then
@@ -405,7 +401,8 @@ module Sequencer = struct
           let index = Sparse_ledger.find_index_exn ledger registry_id in
           Sparse_ledger.get_exn ledger index
         in
-        validate_counts ~committed_count:(count_of_account committed_account)
+        validate_counts
+          ~committed_count:(count_of_account committed_account)
           ~current_count:(count_of_account current_account)
           ~registry_update_count
   end

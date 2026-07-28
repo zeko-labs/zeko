@@ -90,14 +90,16 @@
   is_compile_simple_real_fake
   zeko_constants)
  (preprocess
- (pps ppx_jane))
+  (pps ppx_jane))
  (modules ethereum_bridge_vectors))
 
 (executable
  (name asset_registry_vectors)
  (libraries zeko_circuits compile_simple_fake zeko_constants)
+ (instrumentation
+  (backend bisect_ppx))
  (preprocess
-  (pps ppx_jane))
+  (pps ppx_version ppx_jane))
  (modules asset_registry_vectors))
 
 (executable

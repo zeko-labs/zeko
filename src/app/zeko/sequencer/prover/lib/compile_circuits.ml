@@ -45,8 +45,7 @@ let compile_all ~logger () =
     compile_tag (Lazy.force Bridge_inst_ethereum_token.System_L2.tag)
   in
   let%bind () =
-    compile_tag
-      (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
+    compile_tag (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
   in
   let%bind () =
     compile_tag (Lazy.force Bridge_inst_mina.System_L1_token_owner.tag)

@@ -71,10 +71,8 @@ module Z = struct
       let%map registry_vk =
         if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
           Compile_simple.Verification_key.of_tag
-            (Lazy.force
-               Bridge_inst_ethereum_token.Registry.registry_tag )
-          |> Promise.to_deferred
-          >>| Option.some
+            (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
+          |> Promise.to_deferred >>| Option.some
         else return None
       in
       let inner_account =
@@ -137,16 +135,14 @@ module Z = struct
               ; leaf_count = Zeko_util.Checked32.of_int 0
               ; schema_version =
                   Zeko_circuits_config.Inputs.Ethereum_assets
-                    .registry_schema_version
+                  .registry_schema_version
               }
             in
             { Account.empty with
               public_key =
                 Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
             ; permissions =
-                ( if
-                  Option.is_some
-                    Is_compile_simple_real.is_compile_simple_real
+                ( if Option.is_some Is_compile_simple_real.is_compile_simple_real
                 then proof_permissions_with_unconditional_access
                 else none_permissions )
             ; zkapp =
@@ -289,8 +285,8 @@ let deploy_holder_exn ~signature_kind ~(signer : Keypair.t)
   let%map _, `Holder holder_update, _ =
     L.with_ephemeral_ledger ~depth:35 ~f:(fun ledger ->
         let%bind ( `Inner inner_account
-                  , `Holder holder_account
-                  , `Ethereum_asset_registry _ ) =
+                 , `Holder holder_account
+                 , `Ethereum_asset_registry _ ) =
           Z.Inner.initial_accounts ()
         in
         List.iter [ inner_account; holder_account ] ~f:(fun acc ->
@@ -363,8 +359,8 @@ let deploy_token_owner_exn ~signature_kind ~(signer : Keypair.t)
   let%map _, _, `Token_owner token_owner_update =
     L.with_ledger ~depth:35 ~f:(fun ledger ->
         let%bind ( `Inner inner_account
-                  , `Holder holder_account
-                  , `Ethereum_asset_registry _ ) =
+                 , `Holder holder_account
+                 , `Ethereum_asset_registry _ ) =
           Z.Inner.initial_accounts ()
         in
         List.iter [ inner_account; holder_account ] ~f:(fun acc ->

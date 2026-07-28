@@ -1,6 +1,6 @@
 # Ethereum ERC-20 to Zeko fungible-token bridge
 
-Status: implementation design and gap analysis, 2026-07-21.
+Status: PoC implementation contract and remaining release gaps, 2026-07-28.
 
 This note defines the L2 Mina fungible-token topology for an ERC-20 bridge and
 connects it to the existing OCaml bridge circuits. It is intentionally narrower
@@ -18,21 +18,21 @@ admin whose controller was deployed as `Public_key.Compressed.empty`. The first
 implementation uses the pre-minted inventory for balanced
 vault-to-user/user-to-vault transfers.
 
-This is the supply model that the current OCaml custom-token rules can be
-adapted to. Exact mint-on-deposit and burn-on-withdrawal are supported by the
-Mina fungible-token standard in principle, but are **not** what
-`Bridge_rules.Make_custom` currently proves. They require a different bridge
-circuit and an admin policy that authorizes each mint from the accepted Ethereum
-deposit proof.
+This is the supply model used by the registry-backed OCaml bridge rules. Exact
+mint-on-deposit and burn-on-withdrawal are supported by the Mina fungible-token
+standard in principle, but are **not** what the current bridge circuits prove.
+They require a different bridge circuit and an admin policy that authorizes each
+mint from the accepted Ethereum deposit proof.
 
-The Ethereum side of a deposit remains the existing witness-action path:
+The Ethereum side of a deposit uses the existing witness-action path:
 `submitDeposit` transfers ERC-20 into Solidity custody and emits the canonical
 deposit fields; those fields become the proof witness action consumed by
 `Check_accepted`, just as a native Mina deposit's account-update forest becomes
-the witness action. The current Ethereum branch already replaces Mina children
-with a salted hash of the deposit parameters
-([`bridge_state.ml`, lines 307-325](../bridge_state.ml#L307-L325)). The ERC-20
-version must extend that preimage with an asset identity.
+the witness action. The registry-backed V2 branch replaces Mina children with a
+salted hash that binds the encoding version, registry index, record commitment,
+asset ID, and deposit parameters
+([`Bridge_state.deposit_action`](../bridge_state.ml)). The explicit legacy V1
+branch keeps its original salt and asset-ID-only preimage.
 
 ## Why the standard token contract fits
 
@@ -94,7 +94,7 @@ For every registered ERC-20 asset:
 `token_owner_l2` in the circuit must be the token owner's **account ID**, not
 the derived token ID. The existing helper `token_owner_id` performs that
 derivation for custom assets
-([`zeko_util.ml`, lines 433-437](../zeko_util.ml#L433-L437)).
+([`Zeko_util.token_owner_id`](../zeko_util.ml)).
 
 Each supported ERC-20 gets its own token owner, derived token ID, inventory,
 fee policy, and immutable registry entry. The owner and token ID are dynamic
@@ -127,6 +127,14 @@ limbs, ERC-20 address, L2 owner/token ID, and decimals. Solidity, the OCaml
 action constructor, settlement guest, SDK, and indexer must implement one
 canonical encoding and reject unknown versions.
 
+Registry-backed deposit and withdrawal actions use encoding version 2. Both
+preimages contain `registry_index` and the V1 asset-record commitment. Deposit
+finalization checks those fields and the asset ID against authenticated registry
+membership; withdrawal construction performs the same checks before hashing the
+V2 action. The retained `Make_ethereum_token` V1 circuit family omits registry
+fields and continues to use the original V1 salts. Public GraphQL proof requests
+expose registry V2 only.
+
 Use identical base units on both chains:
 
 - require the registered ERC-20 decimals to equal the L2 token's `UInt8`
@@ -156,13 +164,13 @@ creation fee from a custom-token `UInt64` amount.
 3. `Check_accepted` follows the existing rule: the deposit is accepted only
    after a synchronized commit includes it before its timeout, or rejected after
    the timeout path
-   ([`check_accepted_make.ml`, lines 58-125](../check_accepted_make.ml#L58-L125)).
+   ([`Check_accepted_make.Make`](../check_accepted_make.ml)).
 4. Finalization on L2 proves the accepted deposit, advances the recipient's
    replay helper, debits the custom-token bridge vault, and credits the
    recipient. The current rule already binds the accepted proof, derives the
    helper token, requires a strictly increasing deposit index, and emits the
    deposit event
-   ([`rule_bridge_finalize_deposit.ml`, lines 118-255](../rule_bridge_finalize_deposit.ml#L118-L255)).
+   ([`Rule_bridge_finalize_deposit.Make`](../rule_bridge_finalize_deposit.ml)).
 5. The entire custom-token subtree is passed to the standard owner's
    `approveBase`; its token changes must be conserved and ordered debit-first.
 
@@ -184,7 +192,7 @@ subtree is a one-for-one vault transfer.
 New custom-token accounts must set `implicit_account_creation_fee = false` and
 be funded from MINA fee excess. Mina transaction logic explicitly forbids an
 implicit creation fee on a non-default token
-([`zkapp_command_logic.ml`, lines 1426-1465](../../../../lib/transaction_logic/zkapp_command_logic.ml#L1426-L1465)).
+([`zkapp_command_logic.ml`](../../../../lib/transaction_logic/zkapp_command_logic.ml)).
 
 ## Withdrawal flow: Zeko to Ethereum
 
@@ -194,7 +202,7 @@ implicit creation fee on a non-default token
 2. The bridge-vault receive update uses the existing `inner_receive` proof. Its
    purpose is to satisfy the vault's proof access permission while binding the
    amount and token ID
-   ([`rule_bridge_inner_receive.ml`, lines 18-40](../rule_bridge_inner_receive.ml#L18-L40)).
+   ([`Rule_bridge_inner_receive.Make`](../rule_bridge_inner_receive.ml)).
 3. The rollup inner witness action binds asset ID, amount, Ethereum recipient,
    and the exact approved child forest. A separate default-MINA debit/payout may
    fund proving; it must sit outside the custom-token conservation subtree.
@@ -202,7 +210,7 @@ implicit creation fee on a non-default token
    the exact action and Solidity releases the registered ERC-20 from custody to
    the bound recipient. The OCaml withdrawal proof already binds the withdrawal
    action to the inner action-state extension and a committed outer action
-   ([`rule_bridge_finalize_withdrawal.ml`, lines 128-168](../rule_bridge_finalize_withdrawal.ml#L128-L168));
+   ([`Rule_bridge_finalize_withdrawal.Make`](../rule_bridge_finalize_withdrawal.ml));
    Ethereum replaces the Mina L1 payout portion with Solidity settlement.
 
 The required submission subtree is:
@@ -275,8 +283,10 @@ and no vault-capacity ceiling.
 `Make_mina` fixes both sides to the default token and base parameters, while
 `Make_custom` fixes **both** L1 and L2 to custom-token owners and custom
 parameters
-([`bridge_rules.ml`, lines 5-69 and 132-200](../bridge_rules.ml#L5-L200)). An
-Ethereum ERC-20 bridge is a hybrid:
+([`bridge_rules.ml`](../bridge_rules.ml)). The explicit legacy
+`Make_ethereum_token` family fixes one static ERC-20 identity, while
+`Make_ethereum_assets` verifies a dynamic V2 registry record. An Ethereum ERC-20
+bridge is a hybrid:
 
 ```text
 L1 custody/action source: Ethereum ERC-20, no Mina token owner
@@ -285,49 +295,37 @@ L2 asset:                  custom Mina FungibleToken
 L2 withdrawal forest:      custom parameters and token-owner approval
 ```
 
-Introduce a side-specific asset functor (or `Make_ethereum_custom`) instead of
-reusing `Make_custom` unchanged. In particular, the current Ethereum action
-hashes whichever `Deposit_params` module the enclosing functor selected. Using
-`Make_custom` would make Solidity bind irrelevant Mina authorization/call-forest
-fields and still would not provide a canonical ERC-20 identity
-([`bridge_state.ml`, lines 230-325](../bridge_state.ml#L230-L325)).
+The implemented side-specific families avoid reusing `Make_custom` unchanged.
+Their V1 and V2 parameter modules select distinct Ethereum salts and exclude
+irrelevant Mina L1 authorization and call-forest fields
+([`bridge_state.ml`](../bridge_state.ml)).
 
-### Required circuit corrections
+### ERC-20-specific circuit corrections
 
-The existing custom path compiles, but its generated forests are not yet valid
-standard-token transactions:
+The ERC-20 circuit families apply the standard-token forest constraints:
 
-1. `withdrawal_action` prepends the positive vault receive before caller-supplied
-   nested children
-   ([`bridge_state.ml`, lines 379-402](../bridge_state.ml#L379-L402)). A standard
-   sender debit in `nested_children` therefore comes too late and triggers the
-   reference implementation's flash-mint check. Permit a constrained debit-first
-   ordering.
-2. Deposit-finalization custom-token payouts are children of the vault update
-   but use `Parents_own_token`
-   ([`rule_bridge_finalize_deposit.ml`, lines 245-306](../rule_bridge_finalize_deposit.ml#L245-L306)).
-   A direct child's `Parents_own_token` selects the token derived from the vault
-   account; it does not retain `ft_token_id`. Those payouts must use
-   `Inherit_from_parent`, while the replay helper intentionally keeps
-   `Parents_own_token`. The caller derivation and non-default-token check are in
-   [`zkapp_command_logic.ml`, lines 1043-1108 and 1224-1236](../../../../lib/transaction_logic/zkapp_command_logic.ml#L1043-L1108).
-3. The custom payouts set `implicit_account_creation_fee = true` and subtract a
-   MINA creation fee from the custom-token amount
-   ([`rule_bridge_finalize_deposit.ml`, lines 257-297](../rule_bridge_finalize_deposit.ml#L257-L297)).
-   Non-default tokens cannot pay this implicit fee, and the subtraction also
-   makes the custom-token forest unbalanced. Use a separate MINA funding update
-   and denomination-specific fees.
+1. V1 and V2 withdrawals require exactly one leaf sender debit before the
+   positive vault receive, satisfying `approveBase`'s no-positive-prefix rule
+   ([`Bridge_state.withdrawal_action`](../bridge_state.ml)).
+2. Deposit-finalization custom-token payouts use `Inherit_from_parent`, retaining
+   the owner's derived token ID; the replay helper intentionally uses
+   `Parents_own_token`
+   ([`Rule_bridge_finalize_deposit.Make`](../rule_bridge_finalize_deposit.ml)).
+3. ERC-20 vault and recipient updates disable implicit account-creation fees and
+   move the full custom-token amount one-for-one. Default-token fee payers or
+   sponsors fund MINA account creation separately.
 
 Equivalent corrections are needed in any retained custom-Mina L1
 finalize/cancel rules. For the Ethereum bridge, Solidity handles those L1 paths.
 
 ## Implemented runtime seam
 
-This branch implements the security-critical cross-chain seam:
+The cross-repository PoC implements the security-critical cross-chain seam:
 
-- `Make_ethereum_token` combines an Ethereum deposit source with a custom-token
-  L2 vault and fixes custom-token payout denomination, token inheritance, and
-  debit-first withdrawal ordering;
+- legacy `Make_ethereum_token` and registry-backed `Make_ethereum_assets`
+  combine an Ethereum deposit source with a custom-token L2 vault and enforce
+  custom-token payout denomination, token inheritance, and debit-first
+  withdrawal ordering;
 - the settlement bridge guest converts a canonical Solidity `submitDeposit`
   log into the exact asset-bound outer Witness action consumed by
   `Check_accepted`;
@@ -339,28 +337,45 @@ This branch implements the security-critical cross-chain seam:
 
 The executable Mina Fungible Token orchestration follows the same boundary:
 
-- the sequencer config accepts the registry account, schema, approved MFT
-  standard VK ID, shared vault public key, and universal bridge VK ID;
+- the sequencer config accepts the registry and registration-authority accounts,
+  shared vault, approved MFT standard ID, approved token/admin VK hashes, and
+  universal bridge ID/hash. The registry schema version is the compiled Zeko
+  constant, and the Ethereum bridge address is required when the registry is
+  enabled;
 - public bridge types, prover jobs, VK responses, and proof dispatch carry a
   verified asset record plus membership path through one
   `Make_ethereum_assets` circuit family;
 - registration uses the existing recursive folder pattern to scan every dense
   old leaf at the next exact index, reject duplicate Ethereum token, asset ID,
   owner, or derived token ID, verify an empty append slot, and commit the
-  incremented root/count;
+  incremented root/count. A fixed registration authority signs the full
+  commitment, and both the sequencer admission path and commit circuit limit the
+  pending transition to one append per commit;
 - GraphQL exposes proof-only token deposit-finalization and withdrawal-request
-  mutations plus the immutable public token configuration;
+  mutations. `circuitsConfig.ethereumAssets` publishes the live registry
+  root/count together with the registry, authority, vault, schema, approved
+  standard/VK values, and compiled bridge/registry VK hashes;
 - withdrawal input carries the complete standard token-owner account-update
   body. The circuit pins its public key and default token ID while the standard
   owner's proof enforces all remaining `approveBase` semantics;
 - the bridge SDK checks the returned vault forest and owner public input, grafts
   the genuine standard-token proof/signature authorizations, and only then
   submits the complete L2 transaction; and
-- the operator deployment helper validates each pending Solidity record and
-  Zeko membership, deploys the unmodified `FungibleToken`, live provisioning
-  admin, and empty-controller final admin, locks each token-specific shared
-  vault account to the universal VK with proof-authorized sends, mints exactly
-  the registered cap, and installs the final admin before registration.
+- the companion operator deployment helper validates each pending Solidity
+  record and Zeko membership, deploys the unmodified `FungibleToken`, live
+  provisioning admin, and empty-controller final admin, locks each token-specific
+  shared vault account to the universal VK with proof-authorized sends, mints
+  exactly the registered cap, and installs the final admin before registration.
+
+The Pickles commit circuit opens the old and new registry accounts against the
+transaction SNARK's source and target ledger roots. It permits no registry
+change or one append at the old count, and binds the candidate record, empty
+slot, and resulting root/count. For an append it also opens the real token owner,
+final admin, shared-vault token account, and circulation account in the target
+ledger. Those openings pin the derived token ID, decimals, approved owner/admin
+VKs, revoked admin controller, unpaused owner, vault/circulation balances equal
+to the inventory cap, universal vault VK, and the required immutable
+permissions.
 
 The archive and Actions indexer reconstruct immutable records and refreshed
 membership paths after later appends. They are availability aids, not security
@@ -403,8 +418,8 @@ Onboard one asset atomically where possible:
    the already-deployed empty-controller final admin;
 7. fund all default-token account-creation costs and helper sponsorship policy;
 8. append the canonical record through the exhaustive Zeko registry transition,
-   settle the new root/count and ordered record batch, and activate exactly that
-   pending Solidity proposal; and
+   settle that single new root/count and ordered record batch, and activate
+   exactly that pending Solidity proposal; and
 9. enable deposits only after a cross-chain deposit/withdrawal rehearsal.
 
 The registry commit verifies that the token owner already points to the final
@@ -429,8 +444,9 @@ The active PoC gate is limited to focused builds and fake/vector proofs:
    live provisioning signer, reject invalid registry membership, and cover
    accepted deposit finalization, helper progression, denomination, token
    inheritance, checkpoint key parity, 160-bit even withdrawal recipients,
-   native/V1/V2 withdrawal action and export fields, two registrations in one
-   command, and separate pending registrations before and after a commit.
+   native/V1/V2 withdrawal action and export fields, rejection of two
+   registrations in one command, and separate pending registrations before and
+   after a commit.
 
 ```bash
 dune build ./src/app/zeko/tests/asset_registry_vectors.exe ./src/app/zeko/tests/ethereum_bridge_vectors.exe

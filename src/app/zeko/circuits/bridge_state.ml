@@ -7,11 +7,7 @@ module PC = Signature_lib.Public_key.Compressed
 module Withdrawal_recipient_domain = struct
   type t = Mina | Ethereum
 
-  let of_ethereum_holder_account = function
-    | None ->
-        Mina
-    | Some _ ->
-        Ethereum
+  let of_ethereum_holder_account = function None -> Mina | Some _ -> Ethereum
 end
 
 module Ethereum_address = struct

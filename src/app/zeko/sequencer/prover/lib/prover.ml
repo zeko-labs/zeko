@@ -188,8 +188,7 @@ module Input = struct
       | Inner_receive of Bridge.Inner_receive.serializable
       | Inner_receive_ethereum_token of
           Bridge.Inner_receive_ethereum_token.serializable
-      | Register_ethereum_asset of
-          Bridge.Ethereum_asset_registry.serializable
+      | Register_ethereum_asset of Bridge.Ethereum_asset_registry.serializable
       | Finalize_withdrawal of Bridge.Finalize_withdrawal.serializable
       | Outer_token_owner of Bridge.Outer_token_owner.serializable
     [@@deriving yojson]
@@ -629,13 +628,11 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         let prove = Lazy.force Bridge_inst_ethereum_token.Registry.register in
         let%bind registry_vk_hash =
           Compile_simple.Verification_key.of_tag
-            (Lazy.force
-               Bridge_inst_ethereum_token.Registry.registry_tag )
+            (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
           |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
         in
         let%map (_stmt, parent_with_calls), proof =
-          time ?fake_proving_time ~logger
-            "Ethereum_asset_registry.register"
+          time ?fake_proving_time ~logger "Ethereum_asset_registry.register"
             ( prove
                 (Bridge.Ethereum_asset_registry.of_serializable
                    ~registry_vk_hash input )
@@ -735,8 +732,7 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
       and ethereum_asset_registry =
         Compile_simple.Verification_key.of_tag
-          (Lazy.force
-             Bridge_inst_ethereum_token.Registry.registry_tag )
+          (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
         |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
       in
       return

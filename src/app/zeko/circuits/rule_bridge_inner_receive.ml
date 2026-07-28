@@ -18,8 +18,7 @@ module type ASSET = sig
 
   val call_data : verified -> Currency.Amount.var -> F.var Checked.t
 
-  val authenticated_registry_call :
-    verified -> Account_update.Checked.t option
+  val authenticated_registry_call : verified -> Account_update.Checked.t option
 
   val is_custom_token : bool
 end
@@ -52,7 +51,8 @@ struct
         let token_id_l2 = Asset.token_id_l2 verified_asset in
         let* () =
           assert_equal ~label:"bridge receive vault public key" PC.typ
-            public_key (Asset.vault_public_key verified_asset)
+            public_key
+            (Asset.vault_public_key verified_asset)
         in
         let* call_data = Asset.call_data verified_asset amount in
         let account_update =
@@ -73,13 +73,11 @@ struct
         let calls : Calls.t =
           match Asset.authenticated_registry_call verified_asset with
           | Some call ->
-            [ (call, []) ]
+              [ (call, []) ]
           | None ->
               []
         in
-        let*| out =
-          make_outputs ~chain:chain_l2 account_update calls
-        in
+        let*| out = make_outputs ~chain:chain_l2 account_update calls in
         Compile_simple.{ prevs = No_prevs; out } )
 
   let rule : _ Compile_simple.branch lazy_t =

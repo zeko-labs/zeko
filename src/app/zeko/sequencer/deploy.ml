@@ -51,8 +51,8 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
         Gql_client.infer_nonce ~logger l1_uri sender_pk >>| Or_error.ok_exn
       in
       let%bind ( `Inner inner_account
-                , `Holder holder_account
-                , `Ethereum_asset_registry registry_account ) =
+               , `Holder holder_account
+               , `Ethereum_asset_registry registry_account ) =
         Sequencer_lib.Deploy.Z.Inner.initial_accounts ()
       in
       let old_ledger_witness, new_ledger, imt_hash, imt =
@@ -150,26 +150,25 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
             in
             let accounts_diff =
               (0, inner_account) :: (1, holder_account)
-              ::
-              ( Option.to_list registry_account_diff
-              @
-              match faucet_aid with
-              | None ->
-                  []
-              | Some faucet_aid ->
-                  let account =
-                    Account.create faucet_aid Currency.Balance.max_int
-                  in
-                  let location = L.location_of_account ledger faucet_aid in
-                  let () =
-                    match location with
-                    | None ->
-                        L.create_new_account_exn ledger faucet_aid account
-                    | Some location ->
-                        L.set ledger location account
-                  in
-                  let index = L.index_of_account_exn ledger faucet_aid in
-                  [ (index, account) ] )
+              :: ( Option.to_list registry_account_diff
+                 @
+                 match faucet_aid with
+                 | None ->
+                     []
+                 | Some faucet_aid ->
+                     let account =
+                       Account.create faucet_aid Currency.Balance.max_int
+                     in
+                     let location = L.location_of_account ledger faucet_aid in
+                     let () =
+                       match location with
+                       | None ->
+                           L.create_new_account_exn ledger faucet_aid account
+                       | Some location ->
+                           L.set ledger location account
+                     in
+                     let index = L.index_of_account_exn ledger faucet_aid in
+                     [ (index, account) ] )
             in
 
             printf "New ledger hash: %s\n%!"

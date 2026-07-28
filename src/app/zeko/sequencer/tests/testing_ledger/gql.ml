@@ -2043,13 +2043,15 @@ module Queries = struct
           Archive.get_actions t.archive
             (Account_id.create public_key token_id)
             ~from:from_action_state ~to_:end_action_state
-          |> Result.map ~f:
-               (List.filter ~f:(fun (action : Archive.Account_update_actions.t) ->
-                    Option.for_all action.block_info ~f:(fun block_info ->
-                        Option.for_all from_block ~f:(fun from_block ->
-                            block_info.height >= from_block )
-                        && Option.for_all to_block ~f:(fun to_block ->
-                               block_info.height < to_block ) ) ) )
+          |> Result.map
+               ~f:
+                 (List.filter
+                    ~f:(fun (action : Archive.Account_update_actions.t) ->
+                      Option.for_all action.block_info ~f:(fun block_info ->
+                          Option.for_all from_block ~f:(fun from_block ->
+                              block_info.height >= from_block )
+                          && Option.for_all to_block ~f:(fun to_block ->
+                                 block_info.height < to_block ) ) ) )
           |> return )
 
     let events =

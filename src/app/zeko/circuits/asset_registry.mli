@@ -57,8 +57,7 @@ end
 module Checkpoint : sig
   val version : int
 
-  val commitment :
-    registry_public_key:PC.t -> Registry_state.t -> F.t
+  val commitment : registry_public_key:PC.t -> Registry_state.t -> F.t
 
   val commitment_var :
     registry_public_key:PC.t -> Registry_state.var -> F.var Checked.t

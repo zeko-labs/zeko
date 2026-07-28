@@ -6,6 +6,7 @@
 - [prover.md](./prover.md)
 - [parallel-merger.md](./parallel-merger.md)
 - [sequencer.md](./sequencer.md)
+- [ethereum-erc20-bridge.md](./ethereum-erc20-bridge.md)
 
 Files in `old/` are historical and not up-to-date.
 

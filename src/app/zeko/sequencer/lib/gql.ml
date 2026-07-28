@@ -1632,9 +1632,9 @@ module Types = struct
             ~coerce:(fun children amount recipient ->
               let%map.Result () =
                 Zeko_circuits.Bridge_state.Ethereum_address.validate_for
-                  ( Zeko_circuits.Bridge_state.Withdrawal_recipient_domain
-                    .of_ethereum_holder_account
-                      Zeko_circuits_config.Inputs.ethereum_holder_account_l1 )
+                  (Zeko_circuits.Bridge_state.Withdrawal_recipient_domain
+                   .of_ethereum_holder_account
+                     Zeko_circuits_config.Inputs.ethereum_holder_account_l1 )
                   recipient
               in
               Zeko_types.Bridge.Finalize_withdrawal.Withdrawal_params_base
@@ -2948,8 +2948,8 @@ module Mutations = struct
             let withdrawal_aux =
               Utils.value_to_hash
                 ~init:
-                  Zeko_circuits.Bridge_state
-                  .Withdrawal_params_ethereum_token.hash_salt
+                  Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token
+                  .hash_salt
                 Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.typ
                 withdrawal_params
             in
@@ -2974,7 +2974,8 @@ module Mutations = struct
                        ; params_fields
                        }
                  } ;
-               don't_wait_for proving ; key ) )
+               don't_wait_for proving ;
+               key ) )
 
     let register_ethereum_asset =
       io_field "registerEthereumAsset"

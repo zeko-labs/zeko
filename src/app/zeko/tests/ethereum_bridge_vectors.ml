@@ -1105,8 +1105,7 @@ let run_erc20_withdrawal_action_with_recipient recipient =
   in
   run_and_check_exn
     (let%bind.Checked params =
-       exists
-         Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.typ
+       exists Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token.typ
          ~compute:(fun _ -> params)
      in
      let%map.Checked _action =
@@ -1191,8 +1190,8 @@ let run_legacy_erc20_withdrawal_action_with_recipient recipient =
         }
       ~authorization:Control.Poly.None_given
   in
-  let params :
-      Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token_v1.t =
+  let params : Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token_v1.t
+      =
     { asset_id_high = first_registered_asset.asset_id_high
     ; asset_id_low = first_registered_asset.asset_id_low
     ; custom =
@@ -1210,8 +1209,7 @@ let run_legacy_erc20_withdrawal_action_with_recipient recipient =
   in
   run_and_check_exn
     (let%bind.Checked params =
-       exists
-         Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token_v1.typ
+       exists Zeko_circuits.Bridge_state.Withdrawal_params_ethereum_token_v1.typ
          ~compute:(fun _ -> params)
      in
      let%map.Checked _action =
@@ -1256,13 +1254,11 @@ let registry_count_update_command ?(updates = 1) () : Mina_base.User_command.t =
           ~authorization:Control.Poly.None_given )
     |> List.fold_right ~init:[] ~f:(fun update forest ->
            Zkapp_command.Call_forest.cons
-             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 update forest
-       )
+             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 update forest )
   in
   User_command.Zkapp_command
     { fee_payer =
-        Account_update.Fee_payer.make
-          ~body:Account_update.Body.Fee_payer.dummy
+        Account_update.Fee_payer.make ~body:Account_update.Body.Fee_payer.dummy
           ~authorization:Signature.dummy
     ; account_updates
     ; memo = Signed_command_memo.empty
@@ -1325,8 +1321,7 @@ let () =
             recipient ) ;
       run_native_withdrawal_action_with_recipient
         ~recipient_domain:
-          Zeko_circuits.Bridge_state.Withdrawal_recipient_domain.Mina
-        recipient ) ;
+          Zeko_circuits.Bridge_state.Withdrawal_recipient_domain.Mina recipient ) ;
   let valid_ethereum_key : PC.t =
     { x = Field.of_int 0x01020304; is_odd = false }
   in
@@ -1349,10 +1344,10 @@ let () =
       ~registry_id:(Admission.account_id ())
       (registry_count_update_command ~updates:2 ())
   in
-  if not (Int.equal single_update_count 1)
-  then failwith "registry count update escaped common admission counting" ;
-  if not (Int.equal batched_update_count 2)
-  then failwith "batched registry count updates collapsed during admission" ;
+  if not (Int.equal single_update_count 1) then
+    failwith "registry count update escaped common admission counting" ;
+  if not (Int.equal batched_update_count 2) then
+    failwith "batched registry count updates collapsed during admission" ;
   if
     Result.is_ok
       (Admission.validate_counts ~committed_count:0 ~current_count:0
@@ -1420,16 +1415,16 @@ let () =
         token_preimage
     with
   | ( "tokenWithdrawal"
-      , `Assoc
-          [ ("token", `String "0x0000000000000000000000000000000000000001")
-          ; ( "assetId"
-            , `String
-                "0x0000000000000000000000000000000100000000000000000000000000000002"
-            )
-          ; ("recipient", `String "0x0000000000000000000000000000000001020304")
-          ; ("amount", `Intlit "2000000")
-          ; ("paramsFields", `List params_fields)
-          ] )
+    , `Assoc
+        [ ("token", `String "0x0000000000000000000000000000000000000001")
+        ; ( "assetId"
+          , `String
+              "0x0000000000000000000000000000000100000000000000000000000000000002"
+          )
+        ; ("recipient", `String "0x0000000000000000000000000000000001020304")
+        ; ("amount", `Intlit "2000000")
+        ; ("paramsFields", `List params_fields)
+        ] )
     when List.length params_fields >= 6 ->
       ()
   | _ ->
