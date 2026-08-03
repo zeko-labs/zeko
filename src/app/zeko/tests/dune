@@ -40,6 +40,8 @@
  (libraries
   zeko_circuits
   compile_simple_fake
+  sequencer_lib
+  is_compile_simple_real_fake
   account_set_data
   zeko_constants)
  (instrumentation
@@ -90,6 +92,15 @@
  (preprocess
   (pps ppx_jane))
  (modules ethereum_bridge_vectors))
+
+(executable
+ (name asset_registry_vectors)
+ (libraries zeko_circuits compile_simple_fake zeko_constants)
+ (instrumentation
+  (backend bisect_ppx))
+ (preprocess
+  (pps ppx_version ppx_jane))
+ (modules asset_registry_vectors))
 
 (executable
  (name test_pause_fake)

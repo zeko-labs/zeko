@@ -557,6 +557,12 @@ module Withdrawal_request = struct
     |> Field.to_string
 
   let f ~t ~logger ({ withdrawal_params; transferrer } : t) =
+    let%bind.Result () =
+      Bridge_state.Ethereum_address.validate_for
+        (Bridge_state.Withdrawal_recipient_domain.of_ethereum_holder_account
+           Zeko_circuits_config.Inputs.ethereum_holder_account_l1 )
+        withdrawal_params.recipient
+    in
     let bridge_fee = Zeko_circuits_config.Inputs.bridge_proof_fee in
     let%bind.Result expected_amount =
       Currency.Amount.add withdrawal_params.amount bridge_fee
@@ -626,11 +632,19 @@ end
 
 module Ethereum_token_withdrawal_request = struct
   type t =
-    { withdrawal_params : Bridge_state.Withdrawal_params_ethereum_token.t }
+    { withdrawal_params : Bridge_state.Withdrawal_params_ethereum_token.t
+    ; asset : Bridge_inst_ethereum_token.Registry.Membership_witness.t
+    }
 
   let with_stage stage f = try f () with exn -> Exn.reraise exn stage
 
-  let make_inner_action ~bridge_ethereum_token_l2_vk_hash withdrawal_params =
+  let make_inner_action ~bridge_ethereum_token_l2_vk_hash
+      ~(asset : Bridge_inst_ethereum_token.Registry.Membership_witness.t)
+      withdrawal_params =
+    let record = asset.record in
+    let token_owner_l2 =
+      Account_id.create record.token_owner_l2 Token_id.default
+    in
     with_stage "run checked ERC20 withdrawal action" (fun () ->
         Snark_params.Tick.run_and_check_exn
           (let open Snark_params.Tick.Checked.Let_syntax in
@@ -644,19 +658,14 @@ module Ethereum_token_withdrawal_request = struct
                 Run.run_checked
                   (Bridge_state.withdrawal_action
                      ~chain_l2:Zeko_circuits_config.Inputs.chain_l2
-                     ~holder_account_l2:
-                       Zeko_circuits_config.Inputs.Ethereum_token
-                       .holder_account_l2
-                     ~token_owner_l2:
-                       (Some
-                          Zeko_circuits_config.Inputs.Ethereum_token
-                          .token_owner_l2 )
+                     ~holder_account_l2:record.vault_public_key
+                     ~token_owner_l2:(Some token_owner_l2)
                      ~ethereum_asset_id:
+                       (Some (record.asset_id_high, record.asset_id_low))
+                     ~ethereum_registry_binding:
                        (Some
-                          ( Zeko_circuits_config.Inputs.Ethereum_token
-                            .ethereum_asset_id_high
-                          , Zeko_circuits_config.Inputs.Ethereum_token
-                            .ethereum_asset_id_low ) )
+                          ( record.registry_index
+                          , Asset_registry.Asset_record.commitment record ) )
                      ~l2_holder_vk_hash:
                        (Snark_params.Tick.constant F.typ
                           bridge_ethereum_token_l2_vk_hash )
@@ -671,9 +680,10 @@ module Ethereum_token_withdrawal_request = struct
           in
           Snark_params.Tick.As_prover.read Rollup_state.Inner_action.typ action) )
 
-  let make_witness ~bridge_ethereum_token_l2_vk_hash withdrawal_params =
+  let make_witness ~bridge_ethereum_token_l2_vk_hash ~asset withdrawal_params =
     let witness =
-      make_inner_action ~bridge_ethereum_token_l2_vk_hash withdrawal_params
+      make_inner_action ~bridge_ethereum_token_l2_vk_hash ~asset
+        withdrawal_params
     in
     Bridge.Inner_action_witness.
       { public_key = Zeko_circuits_config.Inputs.inner_public_key
@@ -685,13 +695,12 @@ module Ethereum_token_withdrawal_request = struct
           }
       }
 
-  let make_inner_receive_witness ~bridge_ethereum_token_l2_vk_hash amount =
+  let make_inner_receive_witness ~bridge_ethereum_token_l2_vk_hash
+      ~(asset : Bridge_inst_ethereum_token.Registry.Membership_witness.t) amount
+      =
     Bridge.Inner_receive_ethereum_token.of_serializable
       ~vk_hash:bridge_ethereum_token_l2_vk_hash
-      { public_key =
-          Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
-      ; amount
-      }
+      { public_key = asset.record.vault_public_key; asset; amount }
 
   let replace_vault_tree ~replacement (forest : precomputed_forest) =
     match forest with
@@ -717,16 +726,16 @@ module Ethereum_token_withdrawal_request = struct
           "Ethereum token withdrawal has an invalid owner/debit/vault forest"
 
   let precompute_forest_with_vk_hashes ~bridge_ethereum_token_l2_vk_hash
-      ~inner_rules_vk_hash withdrawal_params =
+      ~inner_rules_vk_hash ~asset withdrawal_params =
     try
       let action =
         with_stage "make ERC20 withdrawal action" (fun () ->
-            make_inner_action ~bridge_ethereum_token_l2_vk_hash
+            make_inner_action ~bridge_ethereum_token_l2_vk_hash ~asset
               withdrawal_params )
       in
       let inner_receive_witness =
         with_stage "make ERC20 inner-receive witness" (fun () ->
-            make_inner_receive_witness ~bridge_ethereum_token_l2_vk_hash
+            make_inner_receive_witness ~bridge_ethereum_token_l2_vk_hash ~asset
               withdrawal_params.custom.base.amount )
       in
       let _stmt, (inner_receive_body, _, inner_receive_calls) =
@@ -792,28 +801,33 @@ module Ethereum_token_withdrawal_request = struct
       |> Or_error.return
     with exn -> Error (Error.of_exn exn)
 
-  let precompute_forest t withdrawal_params =
+  let precompute_forest t ~asset withdrawal_params =
     precompute_forest_with_vk_hashes
       ~bridge_ethereum_token_l2_vk_hash:
         t.verification_keys.bridge_ethereum_token_l2
-      ~inner_rules_vk_hash:t.verification_keys.inner_rules withdrawal_params
+      ~inner_rules_vk_hash:t.verification_keys.inner_rules ~asset
+      withdrawal_params
 
-  let key withdrawal_params =
+  let key ~asset withdrawal_params =
     let (Typ typ) = Bridge_state.Withdrawal_params_ethereum_token.typ in
-    typ.value_to_fields withdrawal_params
-    |> fst
+    let (Typ asset_typ) =
+      Bridge_inst_ethereum_token.Registry.Membership_witness.typ
+    in
+    Array.append
+      (typ.value_to_fields withdrawal_params |> fst)
+      (asset_typ.value_to_fields asset |> fst)
     |> Random_oracle.hash
          ~init:(Hash_prefix_create.salt Zeko_constants.bridge_prover_cache)
     |> Field.to_string
 
-  let f ~t ~logger ({ withdrawal_params } : t) =
-    if not Zeko_circuits_config.Inputs.Ethereum_token.enabled then
+  let f ~t ~logger ({ withdrawal_params; asset } : t) =
+    if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
       Or_error.error_string "Ethereum token bridge is not configured"
     else
       let%map.Result (_ : precomputed_forest) =
-        precompute_forest t withdrawal_params
+        precompute_forest t ~asset withdrawal_params
       in
-      let key = key withdrawal_params in
+      let key = key ~asset withdrawal_params in
       ( key
       , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
             let%map result =
@@ -821,9 +835,8 @@ module Ethereum_token_withdrawal_request = struct
                   let%bind inner_receive_forest =
                     match%map
                       Zeko_prover.Client.inner_receive_ethereum_token t.provers
-                        { public_key =
-                            Zeko_circuits_config.Inputs.Ethereum_token
-                            .holder_account_l2
+                        { public_key = asset.record.vault_public_key
+                        ; asset
                         ; amount = withdrawal_params.custom.base.amount
                         }
                     with
@@ -837,7 +850,7 @@ module Ethereum_token_withdrawal_request = struct
                   let action =
                     make_inner_action
                       ~bridge_ethereum_token_l2_vk_hash:
-                        t.verification_keys.bridge_ethereum_token_l2
+                        t.verification_keys.bridge_ethereum_token_l2 ~asset
                       withdrawal_params
                   in
                   let witness =
@@ -876,6 +889,62 @@ module Ethereum_token_withdrawal_request = struct
                 [%log warn] "Ethereum token withdrawal proof failed: %s"
                   (Error.to_string_mach error) ;
                 Error error ) )
+end
+
+module Register_ethereum_asset = struct
+  type t =
+    { old_state : Asset_registry.Registry_state.t
+    ; candidate : Asset_registry.Asset_record.t
+    ; existing : (Asset_registry.Asset_record.t * Asset_registry.Path.t) list
+    ; append_path : Asset_registry.Path.t
+    }
+  [@@deriving yojson]
+
+  let init ({ old_state; candidate; _ } : t) :
+      Bridge.Ethereum_asset_registry.Scan.Init.t =
+    { old_state; candidate }
+
+  let elems ({ existing; _ } : t) :
+      Bridge.Ethereum_asset_registry.Scan.Elem.t list =
+    List.map existing
+      ~f:(fun (record, path) : Bridge.Ethereum_asset_registry.Scan.Elem.t ->
+        { active = true; record; path } )
+
+  let key request =
+    to_yojson request |> Yojson.Safe.to_string |> Md5.digest_string
+    |> Md5.to_hex
+
+  let f ~t ~logger request =
+    if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+      Or_error.error_string "Ethereum asset registry is not configured"
+    else
+      let key = key request in
+      Ok
+        ( key
+        , Proofs_memory.prove t.proofs_memory key ~f:(fun () ->
+              let%map result =
+                try_with (fun () ->
+                    match%map
+                      Zeko_prover.Client.register_ethereum_asset t.provers
+                        ~init:(init request) ~elems:(elems request)
+                        ~append_path:request.append_path
+                    with
+                    | Ok ((body, _, calls), proof) ->
+                        Utils.attach_proof_to_forest
+                          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+                          ~proof_cache_db:t.proof_cache_db ~body ~calls ~proof
+                    | Error error ->
+                        Error.raise error )
+                >>| Result.map_error ~f:(fun error ->
+                        Error.of_string (Exn.to_string error) )
+              in
+              match result with
+              | Ok forest ->
+                  Ok forest
+              | Error error ->
+                  [%log warn] "Ethereum asset registration proof failed: %s"
+                    (Error.to_string_hum error) ;
+                  Error error ) )
 end
 
 module Finalize_deposit = struct
@@ -962,6 +1031,7 @@ module Finalize_deposit = struct
     let witness : Bridge.Finalize_deposit.t =
       { vk_hash = t.verification_keys.bridge_mina_l2
       ; public_key = Zeko_circuits_config.Inputs.holder_account_l2
+      ; asset = ()
       ; may_use_token =
           Bridge_inst_mina.Rule_bridge_finalize_deposit.May_use_token.No
       ; inner_authorization_kind =
@@ -1157,6 +1227,7 @@ module Finalize_ethereum_token_deposit = struct
     { ase_source : Ase.With_length.Stmt.t
     ; check_accepted_init :
         Bridge_inst_ethereum_token.Check_accepted.Definition.Init.t
+    ; asset : Bridge_inst_ethereum_token.Registry.Membership_witness.t
     ; prev_next_deposit : Zeko_util.Checked32.t
     ; prev_nonce : Zeko_util.Checked32.t
     ; helper_account_new : Zeko_util.Boolean.t
@@ -1167,6 +1238,7 @@ module Finalize_ethereum_token_deposit = struct
     { ase_source : Ase.With_length.Stmt.t
     ; check_accepted_init :
         Bridge_inst_ethereum_token.Check_accepted.Definition.Init.t
+    ; asset : Bridge_inst_ethereum_token.Registry.Membership_witness.t
     ; prev_next_deposit : Zeko_util.Checked32.t
     ; prev_nonce : Zeko_util.Checked32.t
     ; helper_account_new : Zeko_util.Boolean.t
@@ -1187,6 +1259,7 @@ module Finalize_ethereum_token_deposit = struct
        ; ase_elems
        ; check_accepted_init
        ; check_accepted_elems
+       ; asset
        ; prev_next_deposit
        ; prev_nonce
        ; helper_account_new
@@ -1251,8 +1324,8 @@ module Finalize_ethereum_token_deposit = struct
     in
     let witness : Bridge.Finalize_ethereum_token_deposit.t =
       { vk_hash = t.verification_keys.bridge_ethereum_token_l2
-      ; public_key =
-          Zeko_circuits_config.Inputs.Ethereum_token.holder_account_l2
+      ; public_key = asset.record.vault_public_key
+      ; asset
       ; may_use_token =
           Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit.May_use_token
           .Parents_own_token
@@ -1294,6 +1367,7 @@ module Finalize_ethereum_token_deposit = struct
   let key
       ({ ase_source
        ; check_accepted_init
+       ; asset
        ; prev_next_deposit
        ; prev_nonce
        ; helper_account_new
@@ -1309,6 +1383,7 @@ module Finalize_ethereum_token_deposit = struct
       typ.value_to_fields
         { ase_source
         ; check_accepted_init
+        ; asset
         ; prev_next_deposit
         ; prev_nonce
         ; helper_account_new
@@ -1326,7 +1401,7 @@ module Finalize_ethereum_token_deposit = struct
     |> Field.to_string
 
   let f ~t ~logger (request : t_) =
-    if not Zeko_circuits_config.Inputs.Ethereum_token.enabled then
+    if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
       Or_error.error_string "Ethereum token bridge is not configured"
     else
       let%map.Result (_ : precomputed_forest) = precompute_forest t request in
@@ -1345,9 +1420,8 @@ module Finalize_ethereum_token_deposit = struct
                   in
                   match%map
                     Zeko_prover.Client.finalize_ethereum_token_deposit t.provers
-                      ~public_key:
-                        Zeko_circuits_config.Inputs.Ethereum_token
-                        .holder_account_l2
+                      ~public_key:request.asset.record.vault_public_key
+                      ~asset:request.asset
                       ~may_use_token:
                         Bridge_inst_ethereum_token.Rule_bridge_finalize_deposit
                         .May_use_token

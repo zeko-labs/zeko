@@ -4,6 +4,45 @@ open Zeko_util
 open Snark_params.Tick
 module PC = Signature_lib.Public_key.Compressed
 
+module Withdrawal_recipient_domain = struct
+  type t = Mina | Ethereum
+
+  let of_ethereum_holder_account = function None -> Mina | Some _ -> Ethereum
+end
+
+module Ethereum_address = struct
+  let bit_length = 160
+
+  let validate ({ PC.Poly.x; is_odd } : PC.t) =
+    if is_odd then
+      Or_error.error_string "Ethereum withdrawal recipient must be even"
+    else if List.drop (Field.unpack x) bit_length |> List.exists ~f:Fn.id then
+      Or_error.error_string
+        "Ethereum withdrawal recipient x-coordinate must fit 160 bits"
+    else Ok ()
+
+  let assert_valid ({ PC.Poly.x; is_odd } : PC.var) =
+    let* () = Boolean.Assert.is_true (Boolean.not is_odd) in
+    let* (_ : Boolean.var list) =
+      Field.Checked.choose_preimage_var x ~length:bit_length
+    in
+    Checked.return ()
+
+  let validate_for domain recipient =
+    match domain with
+    | Withdrawal_recipient_domain.Mina ->
+        Ok ()
+    | Withdrawal_recipient_domain.Ethereum ->
+        validate recipient
+
+  let assert_valid_for domain recipient =
+    match domain with
+    | Withdrawal_recipient_domain.Mina ->
+        Checked.return ()
+    | Withdrawal_recipient_domain.Ethereum ->
+        assert_valid recipient
+end
+
 module Outer_bridge_state = struct
   type t =
     { disable_offset_lower : Slot.t
@@ -181,9 +220,11 @@ module Deposit_params_base = struct
   let ethereum_salt = Zeko_constants.ethereum_deposit_salt
 
   let asset_id _ = None
+
+  let registry_binding _ = None
 end
 
-module Deposit_params_ethereum_token = struct
+module Deposit_params_ethereum_token_v1 = struct
   type t =
     { asset_id_high : F.t; asset_id_low : F.t; base : Deposit_params_base.t }
   [@@deriving snarky]
@@ -196,6 +237,33 @@ module Deposit_params_ethereum_token = struct
 
   let asset_id { asset_id_high; asset_id_low; _ } =
     Some (asset_id_high, asset_id_low)
+
+  let registry_binding _ = None
+end
+
+module Deposit_params_ethereum_token = struct
+  type t =
+    { encoding_version : Checked32.t
+    ; registry_index : Checked32.t
+    ; record_commitment : F.t
+    ; asset_id_high : F.t
+    ; asset_id_low : F.t
+    ; base : Deposit_params_base.t
+    }
+  [@@deriving snarky]
+
+  let base { base; _ } : Deposit_params_base.var = base
+
+  let custom _ = None
+
+  let ethereum_salt = Zeko_constants.ethereum_erc20_deposit_v2_salt
+
+  let asset_id { asset_id_high; asset_id_low; _ } =
+    Some (asset_id_high, asset_id_low)
+
+  let registry_binding
+      { encoding_version; registry_index; record_commitment; _ } =
+    Some (encoding_version, registry_index, record_commitment)
 end
 
 (* When the token is custom, and we need token owner authorization. *)
@@ -215,6 +283,8 @@ module Deposit_params_custom = struct
   let ethereum_salt = Zeko_constants.ethereum_deposit_salt
 
   let asset_id _ = None
+
+  let registry_binding _ = None
 end
 
 (* When the token is the Mina token. *)
@@ -228,9 +298,13 @@ module Withdrawal_params_base = struct
 
   let debit_first = false
 
+  let recipient_domain = Withdrawal_recipient_domain.Mina
+
   let hash_salt = Zeko_constants.withdrawal_salt
 
   let asset_id _ = None
+
+  let registry_binding _ = None
 end
 
 (* When the token is custom, and we need token owner authorization. *)
@@ -248,12 +322,16 @@ module Withdrawal_params_custom = struct
 
   let debit_first = false
 
+  let recipient_domain = Withdrawal_recipient_domain.Mina
+
   let hash_salt = Zeko_constants.withdrawal_salt
 
   let asset_id _ = None
+
+  let registry_binding _ = None
 end
 
-module Withdrawal_params_ethereum_token = struct
+module Withdrawal_params_ethereum_token_v1 = struct
   type t =
     { asset_id_high : F.t
     ; asset_id_low : F.t
@@ -270,10 +348,43 @@ module Withdrawal_params_ethereum_token = struct
      has to precede the bridge-vault receive synthesized below. *)
   let debit_first = true
 
+  let recipient_domain = Withdrawal_recipient_domain.Ethereum
+
   let hash_salt = Zeko_constants.ethereum_erc20_withdrawal_salt
 
   let asset_id { asset_id_high; asset_id_low; _ } =
     Some (asset_id_high, asset_id_low)
+
+  let registry_binding _ = None
+end
+
+module Withdrawal_params_ethereum_token = struct
+  type t =
+    { encoding_version : Checked32.t
+    ; registry_index : Checked32.t
+    ; record_commitment : F.t
+    ; asset_id_high : F.t
+    ; asset_id_low : F.t
+    ; custom : Withdrawal_params_custom.t
+    }
+  [@@deriving snarky]
+
+  let base { custom; _ } : Withdrawal_params_base.var = custom.base
+
+  let custom { custom; _ } = Some custom
+
+  let debit_first = true
+
+  let recipient_domain = Withdrawal_recipient_domain.Ethereum
+
+  let hash_salt = Zeko_constants.ethereum_erc20_withdrawal_v2_salt
+
+  let asset_id { asset_id_high; asset_id_low; _ } =
+    Some (asset_id_high, asset_id_low)
+
+  let registry_binding
+      { encoding_version; registry_index; record_commitment; _ } =
+    Some (encoding_version, registry_index, record_commitment)
 end
 
 module type DEPOSIT_PARAMS = sig
@@ -286,6 +397,8 @@ module type DEPOSIT_PARAMS = sig
   val ethereum_salt : string
 
   val asset_id : var -> (F.var * F.var) option
+
+  val registry_binding : var -> (Checked32.var * Checked32.var * F.var) option
 end
 
 module type WITHDRAWAL_PARAMS = sig
@@ -297,9 +410,13 @@ module type WITHDRAWAL_PARAMS = sig
 
   val debit_first : bool
 
+  val recipient_domain : Withdrawal_recipient_domain.t
+
   val hash_salt : string
 
   val asset_id : var -> (F.var * F.var) option
+
+  val registry_binding : var -> (Checked32.var * Checked32.var * F.var) option
 end
 
 let deposit_action (type deposit_params_var) ~chain_l1
@@ -318,6 +435,15 @@ let deposit_action (type deposit_params_var) ~chain_l1
   *)
   let base_params = Deposit_params.base params in
   let* () =
+    match Deposit_params.registry_binding params with
+    | None ->
+        Checked.return ()
+    | Some (encoding_version, _, _) ->
+        assert_equal ~label:"Ethereum ERC20 deposit encoding version"
+          Checked32.typ encoding_version
+          (Checked32.Checked.constant (Checked32.of_int 2))
+  in
+  let* () =
     match
       ( ethereum_holder_account_l1
       , ethereum_asset_id
@@ -331,7 +457,7 @@ let deposit_action (type deposit_params_var) ~chain_l1
         in
         assert_equal ~label:__LOC__ F.typ actual_low
           (constant F.typ expected_low)
-    | Some _, None, None | None, None, None ->
+    | Some _, None, Some _ | Some _, None, None | None, None, None ->
         Checked.return ()
     | _ ->
         failwith
@@ -430,7 +556,8 @@ let deposit_action (type deposit_params_var) ~chain_l1
 
 let withdrawal_action (type withdrawal_params_var) ~chain_l2
     ~(holder_account_l2 : PC.t) ~(token_owner_l2 : Account_id.t option)
-    ~(ethereum_asset_id : (F.t * F.t) option) ~l2_holder_vk_hash
+    ~(ethereum_asset_id : (F.t * F.t) option)
+    ~(ethereum_registry_binding : (Checked32.t * F.t) option) ~l2_holder_vk_hash
     ~bridge_fee_recipient_l2 ~bridge_proof_fee
     (module Withdrawal_params : WITHDRAWAL_PARAMS
       with type var = withdrawal_params_var ) (params : Withdrawal_params.var) :
@@ -441,6 +568,35 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
      Adding an account is however not a problem.
   *)
   let base_params = Withdrawal_params.base params in
+  let* () =
+    Ethereum_address.assert_valid_for Withdrawal_params.recipient_domain
+      base_params.recipient
+  in
+  let* () =
+    match
+      (ethereum_registry_binding, Withdrawal_params.registry_binding params)
+    with
+    | None, None ->
+        Checked.return ()
+    | ( Some (expected_index, expected_commitment)
+      , Some (encoding_version, actual_index, actual_commitment) ) ->
+        let* () =
+          assert_equal ~label:"Ethereum ERC20 withdrawal encoding version"
+            Checked32.typ encoding_version
+            (Checked32.Checked.constant (Checked32.of_int 2))
+        in
+        let* () =
+          assert_equal ~label:"Ethereum ERC20 withdrawal registry index"
+            Checked32.typ actual_index
+            (Checked32.Checked.constant expected_index)
+        in
+        assert_equal ~label:"Ethereum ERC20 withdrawal record commitment" F.typ
+          actual_commitment
+          (constant F.typ expected_commitment)
+    | _ ->
+        failwith
+          "Withdrawal registry binding does not match circuit configuration"
+  in
   let* () =
     match (ethereum_asset_id, Withdrawal_params.asset_id params) with
     | Some (expected_high, expected_low), Some (actual_high, actual_low) ->
@@ -459,8 +615,7 @@ let withdrawal_action (type withdrawal_params_var) ~chain_l2
     { default_account_update with
       public_key = constant PC.typ holder_account_l2
     ; token_id = constant Token_id.typ (token_owner_id token_owner_l2)
-    ; use_full_commitment =
-        constant Boolean.typ (Option.is_none token_owner_l2)
+    ; use_full_commitment = constant Boolean.typ (Option.is_none token_owner_l2)
     ; implicit_account_creation_fee =
         constant Boolean.typ (Option.is_none token_owner_l2)
     ; balance_change =

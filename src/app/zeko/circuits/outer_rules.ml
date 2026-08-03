@@ -12,6 +12,23 @@ module Make (Inputs : sig
   val max_sequencer_inactivity : int
 
   val emergency_da_public_key : Signature_lib.Public_key.Compressed.t
+
+  val ethereum_asset_registry_public_key :
+    Signature_lib.Public_key.Compressed.t option
+
+  val ethereum_asset_registry_schema_version : Zeko_util.Checked32.t
+
+  val ethereum_asset_approved_mft_standard_vk_id : Snark_params.Tick.Field.t
+
+  val ethereum_asset_approved_mft_token_vk_hash : Snark_params.Tick.Field.t
+
+  val ethereum_asset_approved_mft_admin_vk_hash : Snark_params.Tick.Field.t
+
+  val ethereum_asset_universal_bridge_vk_id : Snark_params.Tick.Field.t
+
+  val ethereum_asset_universal_bridge_vk_hash : Snark_params.Tick.Field.t
+
+  val ethereum_asset_vault_public_key : Signature_lib.Public_key.Compressed.t
 end)
 () =
 struct

@@ -9,6 +9,21 @@ module C = Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
 
+let committed_account_ids ?(ethereum_asset_accounts = []) () =
+  Zeko_constants.inner_account_id
+  ::
+  ( if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+    [ Account_id.create
+        Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+        Token_id.default
+    ]
+    @ ethereum_asset_accounts
+  else [] )
+
+let compressed_public_key_of_fields x is_odd =
+  let (Typ typ) = Signature_lib.Public_key.Compressed.typ in
+  typ.value_of_fields ([| x; is_odd |], typ.constraint_system_auxiliary ())
+
 module Sequencer = struct
   let constraint_constants = Zeko_constants.constraint_constants
 
@@ -266,7 +281,6 @@ module Sequencer = struct
       ; last_attempt_started_at = t.last_attempt_started_at
       ; next_attempt_at = t.next_attempt_at
       }
-
   end
 
   type t =
@@ -308,6 +322,90 @@ module Sequencer = struct
     let account_id = Account_id.create public_key token_id in
     let%bind.Option location = L.Db.location_of_account t.ledger account_id in
     L.Db.get t.ledger location
+
+  module Ethereum_asset_registry_admission = struct
+    let account_id () =
+      Account_id.create
+        Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+        Token_id.default
+
+    let state_of_account account =
+      (Option.value_exn account.Account.zkapp).app_state
+      |> C.Asset_registry.Registry_state.value_of_app_state
+
+    let count_of_account account =
+      (state_of_account account).leaf_count |> C.Zeko_util.Checked32.to_int
+
+    let count_command_updates_for_account ~registry_id (command : User_command.t)
+        =
+      match command with
+      | Signed_command _ ->
+          0
+      | Zkapp_command command ->
+          Zkapp_command.all_account_updates_list command
+          |> List.count ~f:(fun update ->
+                 Account_id.equal (Account_update.account_id update) registry_id
+                 &&
+                 match Zkapp_state.V.to_list update.body.update.app_state with
+                 | _root :: leaf_count :: _ ->
+                     Zkapp_basic.Set_or_keep.is_set leaf_count
+                 | _ ->
+                     false )
+
+    let count_command_updates command =
+      if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+        count_command_updates_for_account ~registry_id:(account_id ()) command
+      else 0
+
+    let validate_update_count registry_update_count =
+      if registry_update_count > 1 then
+        Or_error.errorf
+          "PoC settlement permits only one Ethereum asset registration update \
+           per command"
+      else if registry_update_count < 0 then
+        Or_error.error_string
+          "Ethereum asset registration update count cannot be negative"
+      else Ok ()
+
+    let validate_counts ~committed_count ~current_count ~registry_update_count =
+      let%bind.Result () = validate_update_count registry_update_count in
+      if Int.equal registry_update_count 0 then Ok ()
+      else if current_count < committed_count then
+        Or_error.errorf
+          "Ethereum asset registry count regressed from committed %d to %d"
+          committed_count current_count
+      else if current_count > committed_count then
+        Or_error.errorf
+          "PoC settlement permits only one pending Ethereum asset registration \
+           per commit"
+      else Ok ()
+
+    let validate t command =
+      let registry_update_count = count_command_updates command in
+      let%bind.Result () = validate_update_count registry_update_count in
+      if Int.equal registry_update_count 0 then Ok ()
+      else
+        let registry_id = account_id () in
+        let current_account =
+          get_account t
+            (Account_id.public_key registry_id)
+            (Account_id.token_id registry_id)
+          |> Option.value_exn
+               ~message:"Configured Ethereum asset registry is missing"
+        in
+        let committed_account =
+          let ledger =
+            State.Last_committed_ledger.get t.state
+            |> Option.value_exn ~message:"No previous committed ledger"
+          in
+          let index = Sparse_ledger.find_index_exn ledger registry_id in
+          Sparse_ledger.get_exn ledger index
+        in
+        validate_counts
+          ~committed_count:(count_of_account committed_account)
+          ~current_count:(count_of_account current_account)
+          ~registry_update_count
+  end
 
   let infer_nonce t public_key =
     match get_account t public_key Token_id.default with
@@ -417,6 +515,10 @@ module Sequencer = struct
               | _ ->
                   return (Ok command)
             else return (Ok command)
+          in
+
+          let%bind.Deferred.Result () =
+            return (Ethereum_asset_registry_admission.validate t command)
           in
 
           let%bind.Deferred.Result () =
@@ -808,10 +910,89 @@ module Sequencer = struct
               [%log info] "Nothing to commit" ;
               return None )
             else
+              let full_ledger = L.of_database t.ledger in
+              let ethereum_asset_accounts =
+                if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+                  []
+                else
+                  let registry_id =
+                    Ethereum_asset_registry_admission.account_id ()
+                  in
+                  let old_registry =
+                    let ledger =
+                      State.Last_committed_ledger.get t.state
+                      |> Option.value_exn
+                           ~message:"No previous committed ledger"
+                    in
+                    let index =
+                      Sparse_ledger.find_index_exn ledger registry_id
+                    in
+                    Sparse_ledger.get_exn ledger index
+                    |> Ethereum_asset_registry_admission.state_of_account
+                  in
+                  let new_registry =
+                    let location =
+                      L.location_of_account full_ledger registry_id
+                      |> Option.value_exn
+                           ~message:
+                             "Configured Ethereum asset registry is missing"
+                    in
+                    L.get full_ledger location |> Option.value_exn
+                    |> Ethereum_asset_registry_admission.state_of_account
+                  in
+                  let old_count =
+                    C.Zeko_util.Checked32.to_int old_registry.leaf_count
+                  in
+                  let new_count =
+                    C.Zeko_util.Checked32.to_int new_registry.leaf_count
+                  in
+                  match new_count - old_count with
+                  | 0 ->
+                      []
+                  | 1 ->
+                      let candidate =
+                        Ethereum_settlement_export.registry_records_from_archive
+                          ~archive:t.archive
+                        |> Fn.flip List.nth_exn old_count
+                      in
+                      let owner_id =
+                        Account_id.create candidate.token_owner_l2
+                          Token_id.default
+                      in
+                      let owner =
+                        let location =
+                          L.location_of_account full_ledger owner_id
+                          |> Option.value_exn
+                               ~message:
+                                 "Registered Ethereum token owner is missing"
+                        in
+                        L.get full_ledger location |> Option.value_exn
+                      in
+                      let owner_state =
+                        (Option.value_exn owner.zkapp).app_state
+                        |> Zkapp_state.V.to_list
+                      in
+                      let admin_public_key =
+                        compressed_public_key_of_fields
+                          (List.nth_exn owner_state 1)
+                          (List.nth_exn owner_state 2)
+                      in
+                      [ owner_id
+                      ; Account_id.create admin_public_key Token_id.default
+                      ; Account_id.create candidate.vault_public_key
+                          candidate.token_id_l2
+                      ; Account_id.create candidate.token_owner_l2
+                          candidate.token_id_l2
+                      ]
+                  | delta ->
+                      failwithf
+                        "PoC settlement supports at most one Ethereum asset \
+                         registration per commit, observed count delta %d"
+                        delta ()
+              in
               let target_ledger =
-                Sparse_ledger.of_ledger_subset_exn
-                  L.(of_database t.ledger)
-                  [ Zeko_constants.inner_account_id ]
+                Sparse_ledger.of_ledger_subset_exn full_ledger
+                  (committed_account_ids ~ethereum_asset_accounts ())
               in
               let () =
                 match t.config.checkpoints_dir with
@@ -1031,7 +1212,7 @@ module Sequencer = struct
     let sparse_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.ledger)
-        [ Zeko_constants.inner_account_id ]
+        (committed_account_ids ())
     in
     State.Last_committed_ledger.set t.state ~data:sparse_ledger ;
     return ()

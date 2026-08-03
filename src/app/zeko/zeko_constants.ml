@@ -49,11 +49,37 @@ let ethereum_deposit_salt = "Ethereum deposit V1"
 
 let ethereum_erc20_deposit_salt = "Ethereum ERC20 deposit V1"
 
+let ethereum_erc20_deposit_v2_salt = "Ethereum ERC20 deposit V2"
+
 let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
 
 let ethereum_erc20_withdrawal_salt = "Ethereum ERC20 withdrawal V1"
 
+let ethereum_erc20_withdrawal_v2_salt = "Ethereum ERC20 withdrawal V2"
+
+let ethereum_asset_registry_leaf_salt = "Ethereum asset registry leaf V1"
+
+let ethereum_asset_registry_node_salt = "Ethereum asset registry node V1"
+
+let ethereum_asset_registry_checkpoint_v2_salt = "Zeko registry checkpoint V2"
+
+let ethereum_asset_registry_registration_salt = "Ethereum asset reg V1"
+
+let ethereum_asset_bridge_call_salt = "Ethereum asset bridge call V1"
+
 let bridge_prover_cache = "bridge prover cache"
+
+module Ethereum_asset_registry = struct
+  let schema_version = 1
+
+  (* A depth-eight immutable list supports 256 mirrors. Registration proving is
+     recursive and linear in the current leaf count; normal bridge operations
+     authenticate one eight-element path. Keep this value synchronized with the
+     cross-language registry implementations and the proving benchmark. *)
+  let depth = 8
+
+  let max_assets = Int.pow 2 depth
+end
 
 module Max_excess_actions = struct
   module Inner_sync = struct
@@ -137,6 +163,16 @@ module Folder_iterations = struct
   module Count_commits : FOLDER_ITERATIONS = Check_accepted
 
   module Emergency_da : FOLDER_ITERATIONS = struct
+    let leaf_iterations = 8
+
+    let leaf_option_iterations = 4
+
+    let extend_iterations = 4
+
+    let extend_option_iterations = 2
+  end
+
+  module Ethereum_asset_registry_scan : FOLDER_ITERATIONS = struct
     let leaf_iterations = 8
 
     let leaf_option_iterations = 4

@@ -11,10 +11,30 @@ module A = struct
   type var = Checked.t
 end
 
+module type ASSET = sig
+  module Witness : SnarkType
+
+  type verified
+
+  val verify : Witness.var -> verified Checked.t
+
+  val vault_public_key : verified -> PC.var
+
+  val token_id_l2 : verified -> Token_id.Checked.t
+
+  val ethereum_asset_id : verified -> (F.var * F.var) option
+
+  val registry_binding : verified -> (Checked32.var * F.var) option Checked.t
+
+  val authenticated_registry_call : verified -> Account_update.Checked.t option
+
+  val is_custom_token : bool
+
+  val is_ethereum_asset : bool
+end
+
 module Make (Inputs : sig
   val token_owner_l1 : Account_id.t option
-
-  val token_owner_l2 : Account_id.t option
 
   val holder_accounts_l1 : PC.t list
 
@@ -23,6 +43,8 @@ module Make (Inputs : sig
   val ethereum_asset_id : (F.t * F.t) option
 
   module Deposit_params : DEPOSIT_PARAMS
+
+  module Asset : ASSET
 
   val zeko_l2 : PC.t
 
@@ -61,8 +83,6 @@ end) =
 struct
   open Inputs
 
-  let token_id_l2 = token_owner_id token_owner_l2
-
   module Token_id = struct
     include Token_id
 
@@ -93,6 +113,7 @@ struct
     type t =
       { public_key : PC.t
       ; vk_hash : F.t
+      ; asset : Asset.Witness.t
       ; may_use_token : May_use_token.t
       ; inner_authorization_kind : A.t
       ; ase : Ase_inst.t
@@ -110,6 +131,7 @@ struct
     let* Witness.
            { public_key
            ; vk_hash
+           ; asset
            ; may_use_token
            ; inner_authorization_kind
            ; ase
@@ -119,6 +141,13 @@ struct
            ; helper_account_new
            } =
       exists Witness.typ ~compute:(V.get w)
+    in
+    let* verified_asset = Asset.verify asset in
+    let asset_public_key = Asset.vault_public_key verified_asset in
+    let token_id_l2 = Asset.token_id_l2 verified_asset in
+    let* () =
+      assert_equal ~label:"bridge asset vault public key" PC.typ public_key
+        asset_public_key
     in
     let* ( { params
            ; action_state = mid_outer_action_state'
@@ -134,9 +163,7 @@ struct
     let* helper_token_id =
       make_checked
       @@ fun () ->
-      let account_id =
-        Account_id.Checked.create public_key (constant Token_id.typ token_id_l2)
-      in
+      let account_id = Account_id.Checked.create public_key token_id_l2 in
       Account_id.Checked.derive_token_id ~owner:account_id
     in
     let@ () = with_label __LOC__ in
@@ -173,6 +200,43 @@ struct
     in
     let@ () = with_label __LOC__ in
     let base_params = Deposit_params.base params in
+    let* expected_registry_binding = Asset.registry_binding verified_asset in
+    let* () =
+      match
+        (expected_registry_binding, Deposit_params.registry_binding params)
+      with
+      | None, None ->
+          Checked.return ()
+      | ( Some (expected_index, expected_commitment)
+        , Some (_, actual_index, actual_commitment) ) ->
+          let* () =
+            assert_equal ~label:"bridge registry index" Checked32.typ
+              expected_index actual_index
+          in
+          assert_equal ~label:"bridge registry record commitment" F.typ
+            expected_commitment actual_commitment
+      | _ ->
+          failwith
+            "Deposit registry binding does not match the verified registry \
+             record"
+    in
+    let* () =
+      match
+        (Asset.ethereum_asset_id verified_asset, Deposit_params.asset_id params)
+      with
+      | Some (expected_high, expected_low), Some (actual_high, actual_low) ->
+          let* () =
+            assert_equal ~label:"bridge registry asset ID high" F.typ
+              expected_high actual_high
+          in
+          assert_equal ~label:"bridge registry asset ID low" F.typ expected_low
+            actual_low
+      | None, None ->
+          Checked.return ()
+      | _ ->
+          failwith
+            "Deposit asset schema does not match the verified registry record"
+    in
     let@ () = with_label __LOC__ in
     let prev_nonce =
       Mina_numbers.Account_nonce.Checked.Unsafe.of_field
@@ -246,11 +310,11 @@ struct
         Typ.(Checked32.typ * Deposit_params.typ)
         (deposit_index, params)
     in
-    let is_ethereum_custom_token = Option.is_some ethereum_asset_id in
+    let is_ethereum_custom_token = Asset.is_ethereum_asset in
     let account_update =
       { default_account_update with
         public_key
-      ; token_id = constant Token_id.typ token_id_l2
+      ; token_id = token_id_l2
       ; may_use_token
       ; authorization_kind = authorization_vk_hash vk_hash
       ; implicit_account_creation_fee =
@@ -287,14 +351,11 @@ struct
     let recipient_payout =
       { default_account_update with
         public_key = base_params.recipient
-      ; token_id = constant Token_id.typ token_id_l2
+      ; token_id = token_id_l2
       ; may_use_token =
           constant May_use_token.typ
-            ( match token_owner_l2 with
-            | Some _ ->
-                Inherit_from_parent
-            | None ->
-                Parents_own_token )
+            ( if Asset.is_custom_token then Inherit_from_parent
+            else Parents_own_token )
       ; authorization_kind = constant A.typ None_given
       ; balance_change =
           Currency.Amount.Signed.Checked.of_unsigned recipient_payout
@@ -305,14 +366,11 @@ struct
     let sequencer_fee_payout =
       { default_account_update with
         public_key = constant PC.typ bridge_fee_recipient_l2
-      ; token_id = constant Token_id.typ token_id_l2
+      ; token_id = token_id_l2
       ; may_use_token =
           constant May_use_token.typ
-            ( match token_owner_l2 with
-            | Some _ ->
-                Inherit_from_parent
-            | None ->
-                Parents_own_token )
+            ( if Asset.is_custom_token then Inherit_from_parent
+            else Parents_own_token )
       ; authorization_kind = constant A.typ None_given
       ; balance_change =
           Currency.Amount.Signed.Checked.of_unsigned bridge_proof_fee
@@ -321,14 +379,23 @@ struct
       }
     in
     let@ () = with_label __LOC__ in
-    let*| out =
-      make_outputs ~chain:chain_l2 account_update
-        [ (helper_account, [])
-        ; (witness_inner, [])
-        ; (recipient_payout, [])
-        ; (sequencer_fee_payout, [])
-        ]
+    let calls : Calls.t =
+      match Asset.authenticated_registry_call verified_asset with
+      | Some call ->
+          [ (helper_account, [])
+          ; (witness_inner, [])
+          ; (recipient_payout, [])
+          ; (sequencer_fee_payout, [])
+          ; (call, [])
+          ]
+      | None ->
+          [ (helper_account, [])
+          ; (witness_inner, [])
+          ; (recipient_payout, [])
+          ; (sequencer_fee_payout, [])
+          ]
     in
+    let*| out = make_outputs ~chain:chain_l2 account_update calls in
     Compile_simple.
       { prevs = Two_prevs (verify_check_accepted, verify_ase); out }
 
