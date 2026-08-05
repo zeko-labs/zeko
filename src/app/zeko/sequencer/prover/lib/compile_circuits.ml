@@ -18,6 +18,9 @@ let compile_all ~logger () =
   let%bind () = compile_tag (Lazy.force Outer_rules_inst.tag) in
   let%bind () = compile_tag (Lazy.force Bridge_inst_mina.Check_accepted.tag) in
   let%bind () =
+    compile_tag (Lazy.force Bridge_inst_ethereum_token.Check_accepted.tag)
+  in
+  let%bind () =
     compile_tag
       (Lazy.force
          Bridge_inst_mina.Rule_bridge_finalize_cancelled_deposit
@@ -38,6 +41,12 @@ let compile_all ~logger () =
     compile_tag (Lazy.force Bridge_inst_mina.System_L1_disabled.tag)
   in
   let%bind () = compile_tag (Lazy.force Bridge_inst_mina.System_L2.tag) in
+  let%bind () =
+    compile_tag (Lazy.force Bridge_inst_ethereum_token.System_L2.tag)
+  in
+  let%bind () =
+    compile_tag (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
+  in
   let%bind () =
     compile_tag (Lazy.force Bridge_inst_mina.System_L1_token_owner.tag)
   in

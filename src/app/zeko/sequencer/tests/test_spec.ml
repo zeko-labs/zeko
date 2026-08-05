@@ -391,8 +391,8 @@ module Sequencer_spec = struct
 
   let gen ?(delay_deposit = 0) ?(number_of_transactions = 5) ?db_dir
       ?checkpoints_dir ?(commit_validity_period = Global_slot_span.of_int 10)
-      ~logger ~postgres_uri ~gql_uri ~da_config ~da_keys ~da_quorum ~mq_host
-      ~slot_acceptance () =
+      ?(include_bridge_fee_recipient = false) ~logger ~postgres_uri ~gql_uri
+      ~da_config ~da_keys ~da_quorum ~mq_host ~slot_acceptance () =
     let _reset =
       run @@ fun () -> Gql_client.For_tests.reset_state ~logger gql_uri
     in
@@ -437,7 +437,9 @@ module Sequencer_spec = struct
           (Keypair.create (), Int64.of_float (1000. *. 1e8)) )
     in
 
-    let `Inner inner_account, `Holder holder_account =
+    let ( `Inner inner_account
+        , `Holder holder_account
+        , `Ethereum_asset_registry registry_account ) =
       run Deploy.Z.Inner.initial_accounts
     in
     (* Pre-fund the sequencer's signer on L2 so the bridge prover's
@@ -450,22 +452,43 @@ module Sequencer_spec = struct
           (Currency.Balance.of_uint64
              (Unsigned.UInt64.of_int64 (Int64.of_float (1000. *. 1e8))) ) )
     in
+    (* The bridge export harness mirrors the production genesis assembled by
+       [Deploy.generate]. Bridge circuits always emit their fee-recipient leaf,
+       including when an ERC20 withdrawal's MINA-denominated proof fee is zero,
+       so this protocol-owned account must already exist there. Keep the
+       generic randomized test genesis unchanged because its checked
+       [Initialize_state] fixture is bound to that historical account set. *)
+    let bridge_fee_recipient_l2_accounts =
+      if include_bridge_fee_recipient then
+        let public_key = Zeko_circuits_config.Inputs.bridge_fee_recipient_l2 in
+        let aid = Account_id.create public_key Token_id.default in
+        [ (aid, Account.create aid Currency.Balance.zero) ]
+      else []
+    in
+    let registry_accounts =
+      Option.to_list registry_account
+      |> List.map ~f:(fun account -> (Account.identifier account, account))
+    in
     let genesis_accounts =
       ( Account_id.create inner_account.public_key inner_account.token_id
       , inner_account )
       :: ( Account_id.create holder_account.public_key holder_account.token_id
          , holder_account )
       :: signer_l2_account
-      :: ( Array.concat [ init_ledger; funded_accounts ]
-         |> Array.map ~f:(fun (keypair, balance) ->
-                let pk = Signature_lib.Public_key.compress keypair.public_key in
-                let account_id = Account_id.create pk Token_id.default in
-                let balance = Unsigned.UInt64.of_int64 balance in
-                let account =
-                  Account.create account_id (Currency.Balance.of_uint64 balance)
-                in
-                (account_id, account) )
-         |> Array.to_list )
+      :: ( registry_accounts @ bridge_fee_recipient_l2_accounts
+         @ ( Array.concat [ init_ledger; funded_accounts ]
+           |> Array.map ~f:(fun (keypair, balance) ->
+                  let pk =
+                    Signature_lib.Public_key.compress keypair.public_key
+                  in
+                  let account_id = Account_id.create pk Token_id.default in
+                  let balance = Unsigned.UInt64.of_int64 balance in
+                  let account =
+                    Account.create account_id
+                      (Currency.Balance.of_uint64 balance)
+                  in
+                  (account_id, account) )
+           |> Array.to_list ) )
     in
 
     print_endline "(* Init ephemeral ledger *)" ;
@@ -566,6 +589,38 @@ module Sequencer_spec = struct
             ~commit_fee:(Currency.Fee.of_mina_int_exn 1)
             ~bridge_txn_fee:(Currency.Fee.of_mina_string_exn "0.1") )
     in
+    let deployed_outer_vk_hash =
+      run (fun () ->
+          let%map account =
+            Gql_client.fetch_account ~logger gql_uri
+              (Account_id.create
+                 (Public_key.compress outer_kp.public_key)
+                 Token_id.default )
+            >>| Or_error.ok_exn
+          in
+          let account =
+            Option.value_exn account
+              ~message:"deployed outer account is missing"
+          in
+          let zkapp =
+            Account.zkapp account
+            |> Option.value_exn ~message:"deployed outer account is not a zkApp"
+          in
+          Option.value_exn zkapp.verification_key
+            ~message:"deployed outer account is missing its verification key"
+          |> With_hash.hash )
+    in
+    let prover_outer_vk_hash =
+      sequencer.bridge_prover.verification_keys.outer_rules
+    in
+    if
+      Option.is_some Is_compile_simple_real.is_compile_simple_real
+      && not (Field.equal deployed_outer_vk_hash prover_outer_vk_hash)
+    then
+      failwithf "outer VK mismatch: deployed %s, real prover %s"
+        (Field.to_string deployed_outer_vk_hash)
+        (Field.to_string prover_outer_vk_hash)
+        () ;
     let l1_executor =
       Executor.create ~kind:(`L1 gql_uri)
         ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ()

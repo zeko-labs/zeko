@@ -1,6 +1,51 @@
 open Mina_base
 module PC = Signature_lib.Public_key.Compressed
 open Bridge_state
+open Snark_params.Tick
+open Zeko_util
+
+module Static_asset (Inputs : sig
+  val holder_account_l2 : PC.t
+
+  val token_owner_l2 : Account_id.t option
+
+  val ethereum_asset_id : (F.t * F.t) option
+end) =
+struct
+  module Witness = struct
+    type t = unit
+
+    type var = unit
+
+    let typ = Typ.unit
+  end
+
+  type verified = unit
+
+  let verify () = Checked.return ()
+
+  let vault_public_key () = constant PC.typ Inputs.holder_account_l2
+
+  let token_id_l2 () =
+    constant Token_id.typ (token_owner_id Inputs.token_owner_l2)
+
+  let ethereum_asset_id () =
+    match Inputs.ethereum_asset_id with
+    | Some (high, low) ->
+        Some (constant F.typ high, constant F.typ low)
+    | None ->
+        None
+
+  let registry_binding () = Checked.return None
+
+  let authenticated_registry_call () = None
+
+  let call_data () _ = Checked.return (constant F.typ Field.zero)
+
+  let is_custom_token = Option.is_some Inputs.token_owner_l2
+
+  let is_ethereum_asset = Option.is_some Inputs.ethereum_asset_id
+end
 
 module Make_mina (Inputs : sig
   val holder_accounts_l1 : PC.t list
@@ -44,6 +89,8 @@ struct
 
         let ethereum_holder_account_l1 = Inputs.ethereum_holder_account_l1
 
+        let ethereum_asset_id = None
+
         let token_owner_l1 = None
 
         let chain_l1 = Inputs.chain_l1
@@ -63,8 +110,26 @@ struct
 
     let token_owner_l2 = None
 
+    let ethereum_asset_id = None
+
+    module Asset = Static_asset (struct
+      let holder_account_l2 = Inputs.holder_account_l2
+
+      let token_owner_l2 = None
+
+      let ethereum_asset_id = None
+    end)
+
     module Deposit_params = Deposit_params_base
-    module Withdrawal_params = Withdrawal_params_base
+
+    module Withdrawal_params = struct
+      include Withdrawal_params_base
+
+      let recipient_domain =
+        Withdrawal_recipient_domain.of_ethereum_holder_account
+          Inputs.ethereum_holder_account_l1
+    end
+
     module Check_accepted = Check_accepted
   end
 
@@ -129,6 +194,252 @@ struct
           () )
 end
 
+module Make_ethereum_token (Inputs : sig
+  val token_owner_l2 : Account_id.t
+
+  val ethereum_holder_account_l1 : PC.t
+
+  val ethereum_asset_id_high : Snark_params.Tick.Field.t
+
+  val ethereum_asset_id_low : Snark_params.Tick.Field.t
+
+  val zeko_l2 : PC.t
+
+  val holder_account_l2 : PC.t
+
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_fee_recipient_l2 : PC.t
+
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
+
+  val multisig_key : Multisig.t
+end)
+() =
+struct
+  let ethereum_asset_id =
+    Some (Inputs.ethereum_asset_id_high, Inputs.ethereum_asset_id_low)
+
+  module Check_accepted =
+    Check_accepted_make.Make
+      (struct
+        let holder_accounts_l1 = []
+
+        let ethereum_holder_account_l1 = Some Inputs.ethereum_holder_account_l1
+
+        let ethereum_asset_id = ethereum_asset_id
+
+        let token_owner_l1 = None
+
+        let chain_l1 = Inputs.chain_l1
+
+        module Deposit_params = Deposit_params_ethereum_token_v1
+
+        let bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+
+        let bridge_proof_fee = Currency.Amount.zero
+      end)
+      ()
+
+  module Circuit_inputs = struct
+    include Inputs
+
+    let holder_accounts_l1 = []
+
+    let ethereum_holder_account_l1 = Some Inputs.ethereum_holder_account_l1
+
+    let ethereum_asset_id = ethereum_asset_id
+
+    let token_owner_l1 = None
+
+    let token_owner_l2 = Some Inputs.token_owner_l2
+
+    let bridge_proof_fee = Currency.Amount.zero
+
+    module Asset = Static_asset (struct
+      let holder_account_l2 = Inputs.holder_account_l2
+
+      let token_owner_l2 = Some Inputs.token_owner_l2
+
+      let ethereum_asset_id = ethereum_asset_id
+    end)
+
+    module Deposit_params = Deposit_params_ethereum_token_v1
+    module Withdrawal_params = Withdrawal_params_ethereum_token_v1
+    module Check_accepted = Check_accepted
+  end
+
+  module Rule_bridge_finalize_deposit =
+    Rule_bridge_finalize_deposit.Make (Circuit_inputs)
+  module Rule_bridge_inner_receive =
+    Rule_bridge_inner_receive.Make (Circuit_inputs)
+
+  module Rule_multisig_update_l2 = Rule_multisig_update.Make (struct
+    let chain = Inputs.chain_l2
+
+    let multisig_key = Inputs.multisig_key
+  end)
+
+  module System_L2 =
+  ( val Compile_simple.compile ~name:"bridge rules for Ethereum ERC20 on l2"
+          ~out_typ:Snark_params.Tick.Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~branches:
+            [ Rule_bridge_finalize_deposit.rule
+            ; Rule_bridge_inner_receive.rule
+            ; Rule_multisig_update_l2.rule
+            ]
+          () )
+end
+
+module Make_ethereum_assets (Inputs : sig
+  val registry_public_key : PC.t
+
+  val registration_authority : PC.t
+
+  val registry_schema_version : Checked32.t
+
+  val approved_mft_standard_vk_id : F.t
+
+  val universal_bridge_vk_id : F.t
+
+  val vault_public_key : PC.t
+
+  val ethereum_holder_account_l1 : PC.t
+
+  val zeko_l2 : PC.t
+
+  val bridge_fee_recipient_l1 : PC.t
+
+  val bridge_fee_recipient_l2 : PC.t
+
+  val chain_l1 : Mina_signature_kind.t
+
+  val chain_l2 : Mina_signature_kind.t
+
+  val multisig_key : Multisig.t
+end)
+() =
+struct
+  module Registry =
+    Asset_registry.Make
+      (struct
+        let registry_public_key = Inputs.registry_public_key
+
+        let registration_authority = Inputs.registration_authority
+
+        let schema_version = Inputs.registry_schema_version
+
+        let approved_mft_standard_vk_id = Inputs.approved_mft_standard_vk_id
+
+        let universal_bridge_vk_id = Inputs.universal_bridge_vk_id
+
+        let vault_public_key = Inputs.vault_public_key
+
+        let chain_l2 = Inputs.chain_l2
+      end)
+      ()
+
+  module Asset = struct
+    module Witness = Registry.Membership_witness
+
+    type verified = Registry.Verified_asset.t
+
+    let verify = Registry.verify
+
+    let record = Registry.Verified_asset.record
+
+    let vault_public_key verified = (record verified).vault_public_key
+
+    let token_id_l2 = Registry.Verified_asset.token_id
+
+    let ethereum_asset_id verified =
+      let record = record verified in
+      Some (record.asset_id_high, record.asset_id_low)
+
+    let registry_binding verified =
+      let record = record verified in
+      let* commitment = Asset_registry.Asset_record.commitment_var record in
+      Checked.return (Some (record.registry_index, commitment))
+
+    let authenticated_registry_call verified =
+      Some (Registry.Verified_asset.authenticated_registry_call verified)
+
+    let call_data verified amount =
+      var_to_hash ~init:Zeko_constants.ethereum_asset_bridge_call_salt
+        Typ.(Asset_registry.Asset_record.typ * Currency.Amount.typ)
+        (record verified, amount)
+
+    let is_custom_token = true
+
+    let is_ethereum_asset = true
+  end
+
+  module Check_accepted =
+    Check_accepted_make.Make
+      (struct
+        let holder_accounts_l1 = []
+
+        let ethereum_holder_account_l1 = Some Inputs.ethereum_holder_account_l1
+
+        (* Asset identity is dynamic here and is constrained against the
+           verified registry record in finalization. *)
+        let ethereum_asset_id = None
+
+        let token_owner_l1 = None
+
+        let chain_l1 = Inputs.chain_l1
+
+        module Deposit_params = Deposit_params_ethereum_token
+
+        let bridge_fee_recipient_l1 = Inputs.bridge_fee_recipient_l1
+
+        let bridge_proof_fee = Currency.Amount.zero
+      end)
+      ()
+
+  module Circuit_inputs = struct
+    include Inputs
+
+    let holder_accounts_l1 = []
+
+    let ethereum_holder_account_l1 = Some Inputs.ethereum_holder_account_l1
+
+    let ethereum_asset_id = None
+
+    let token_owner_l1 = None
+
+    let bridge_proof_fee = Currency.Amount.zero
+
+    module Asset = Asset
+    module Deposit_params = Deposit_params_ethereum_token
+    module Check_accepted = Check_accepted
+  end
+
+  module Rule_bridge_finalize_deposit =
+    Rule_bridge_finalize_deposit.Make (Circuit_inputs)
+  module Rule_bridge_inner_receive =
+    Rule_bridge_inner_receive.Make (Circuit_inputs)
+
+  module Rule_multisig_update_l2 = Rule_multisig_update.Make (struct
+    let chain = Inputs.chain_l2
+
+    let multisig_key = Inputs.multisig_key
+  end)
+
+  module System_L2 =
+  ( val Compile_simple.compile
+          ~name:"universal registry-backed Ethereum asset bridge on l2"
+          ~out_typ:Typ.(Mina_base.Zkapp_statement.typ * V.typ)
+          ~branches:
+            [ Rule_bridge_finalize_deposit.rule
+            ; Rule_bridge_inner_receive.rule
+            ; Rule_multisig_update_l2.rule
+            ]
+          () )
+end
+
 module Make_custom (Inputs : sig
   val token_owner_l1 : Account_id.t
 
@@ -175,6 +486,8 @@ struct
 
         let ethereum_holder_account_l1 = Inputs.ethereum_holder_account_l1
 
+        let ethereum_asset_id = None
+
         let token_owner_l1 = Some Inputs.token_owner_l1
 
         let chain_l1 = Inputs.chain_l1
@@ -194,8 +507,26 @@ struct
 
     let token_owner_l2 = Some Inputs.token_owner_l2
 
+    let ethereum_asset_id = None
+
+    module Asset = Static_asset (struct
+      let holder_account_l2 = Inputs.holder_account_l2
+
+      let token_owner_l2 = Some Inputs.token_owner_l2
+
+      let ethereum_asset_id = None
+    end)
+
     module Deposit_params = Deposit_params_custom
-    module Withdrawal_params = Withdrawal_params_custom
+
+    module Withdrawal_params = struct
+      include Withdrawal_params_custom
+
+      let recipient_domain =
+        Withdrawal_recipient_domain.of_ethereum_holder_account
+          Inputs.ethereum_holder_account_l1
+    end
+
     module Check_accepted = Check_accepted
   end
 

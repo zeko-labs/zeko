@@ -143,6 +143,30 @@ let generate_circuits_config =
        and ethereum_bridge_address =
          flag "--ethereum-bridge-address" (optional string)
            ~doc:"string Ethereum bridge proxy address to bind as an L1 holder"
+       and ethereum_asset_registry_l2 =
+         flag "--ethereum-asset-registry-l2" (optional string)
+           ~doc:"public-key Append-only Ethereum asset registry zkApp"
+       and ethereum_registration_authority_l2 =
+         flag "--ethereum-registration-authority-l2" (optional string)
+           ~doc:"public-key Bridge administrator authorizing registry appends"
+       and ethereum_shared_vault_l2 =
+         flag "--ethereum-shared-vault-l2" (optional string)
+           ~doc:"public-key Shared proof-controlled multi-token bridge vault"
+       and ethereum_mft_standard_vk_id =
+         flag "--ethereum-mft-standard-vk-id" (optional string)
+           ~doc:"field Approved Mina FungibleToken implementation identifier"
+       and ethereum_mft_token_vk_hash =
+         flag "--ethereum-mft-token-vk-hash" (optional string)
+           ~doc:"field Approved Mina FungibleToken verification-key hash"
+       and ethereum_mft_admin_vk_hash =
+         flag "--ethereum-mft-admin-vk-hash" (optional string)
+           ~doc:"field Approved Mina FungibleTokenAdmin verification-key hash"
+       and ethereum_universal_bridge_vk_id =
+         flag "--ethereum-universal-bridge-vk-id" (optional string)
+           ~doc:"field Universal bridge circuit/version identifier"
+       and ethereum_universal_bridge_vk_hash =
+         flag "--ethereum-universal-bridge-vk-hash" (optional string)
+           ~doc:"field Universal bridge L2 verification-key hash"
        in
        fun () ->
          let generate_keypair () =
@@ -155,6 +179,58 @@ let generate_circuits_config =
          let emergency_da = generate_keypair () in
          let bridge_fee_recipient_l1 = generate_keypair () in
          let bridge_fee_recipient_l2 = generate_keypair () in
+         let ethereum_assets =
+           match
+             ( ethereum_asset_registry_l2
+             , ethereum_registration_authority_l2
+             , ethereum_shared_vault_l2
+             , ethereum_mft_standard_vk_id
+             , ethereum_mft_token_vk_hash
+             , ethereum_mft_admin_vk_hash
+             , ethereum_universal_bridge_vk_id
+             , ethereum_universal_bridge_vk_hash )
+           with
+           | None, None, None, None, None, None, None, None ->
+               None
+           | ( Some registry_public_key
+             , Some registration_authority
+             , Some vault_public_key
+             , Some approved_mft_standard_vk_id
+             , Some approved_mft_token_vk_hash
+             , Some approved_mft_admin_vk_hash
+             , Some universal_bridge_vk_id
+             , Some universal_bridge_vk_hash ) ->
+               if Option.is_none ethereum_bridge_address then
+                 failwith
+                   "--ethereum-bridge-address is required when configuring an \
+                    Ethereum asset registry"
+               else
+                 Some
+                   { Zeko_circuits_config.Ethereum_assets.registry_public_key =
+                       Public_key.Compressed.of_base58_check_exn
+                         registry_public_key
+                   ; registration_authority =
+                       Public_key.Compressed.of_base58_check_exn
+                         registration_authority
+                   ; vault_public_key =
+                       Public_key.Compressed.of_base58_check_exn
+                         vault_public_key
+                   ; approved_mft_standard_vk_id
+                   ; approved_mft_token_vk_hash
+                   ; approved_mft_admin_vk_hash
+                   ; universal_bridge_vk_id
+                   ; universal_bridge_vk_hash
+                   }
+           | _ ->
+               failwith
+                 "--ethereum-asset-registry-l2, \
+                  --ethereum-registration-authority-l2, \
+                  --ethereum-shared-vault-l2, --ethereum-mft-standard-vk-id, \
+                  --ethereum-mft-token-vk-hash, --ethereum-mft-admin-vk-hash, \
+                  --ethereum-universal-bridge-vk-id, and \
+                  --ethereum-universal-bridge-vk-hash must be supplied \
+                  together"
+         in
          let t : Zeko_circuits_config.t =
            { chain_l1 = Testnet
            ; chain_l2 = Testnet
@@ -167,6 +243,8 @@ let generate_circuits_config =
            ; ethereum_holder_account_l1 =
                Option.map ethereum_bridge_address
                  ~f:Zeko_circuits_config.ethereum_address_to_public_key
+           ; ethereum_token = None
+           ; ethereum_assets
            ; helper_token_owner_l1 = fst helper_token_owner_l1
            ; zeko_l1 = fst zeko_l1
            ; emergency_da_public_key = fst emergency_da

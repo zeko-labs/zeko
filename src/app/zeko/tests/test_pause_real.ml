@@ -18,7 +18,9 @@ module Outer_rules_inst =
 
       let chain_l1 = Mina_signature_kind.Testnet
 
-      let multisig_update =
+      let chain_l2 = Mina_signature_kind.Testnet
+
+      let multisig_key =
         { Multisig.public_keys = [ inner_public_key ]; quorum = Field.one }
 
       let max_sequencer_inactivity = 128
@@ -30,6 +32,22 @@ module Outer_rules_inst =
             @@ Snark_params.Tick.Field.of_int 223344)
         in
         Signature_lib.Public_key.compress pk
+
+      let ethereum_asset_registry_public_key = None
+
+      let ethereum_asset_registry_schema_version = Zeko_util.Checked32.zero
+
+      let ethereum_asset_approved_mft_standard_vk_id = Field.zero
+
+      let ethereum_asset_approved_mft_token_vk_hash = Field.zero
+
+      let ethereum_asset_approved_mft_admin_vk_hash = Field.zero
+
+      let ethereum_asset_universal_bridge_vk_id = Field.zero
+
+      let ethereum_asset_universal_bridge_vk_hash = Field.zero
+
+      let ethereum_asset_vault_public_key = inner_public_key
     end)
     ()
 

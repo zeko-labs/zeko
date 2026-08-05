@@ -93,6 +93,180 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   in
   let old_inner_acc, old_inner_acc_path = get_inner_acc old_inner_ledger in
   let new_inner_acc, new_inner_acc_path = get_inner_acc new_inner_ledger in
+  let ethereum_asset_registry_account ledger =
+    if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+      let account_id =
+        Account_id.create
+          Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+          Token_id.default
+      in
+      let index = Sparse_ledger.find_index_exn ledger account_id in
+      let account = Sparse_ledger.get_exn ledger index in
+      let path =
+        Sparse_ledger.path_exn ledger index
+        |> List.map ~f:(function
+             | `Left hash ->
+                 ( { hash_other = hash; is_right = false }
+                   : Outer_rules_inst.Rule_commit_inst.Registry_path.Step.t )
+             | `Right hash ->
+                 { hash_other = hash; is_right = true } )
+      in
+      let state =
+        (Option.value_exn account.zkapp).app_state
+        |> Asset_registry.Registry_state.value_of_app_state
+      in
+      (account, path, state)
+    else
+      let path =
+        List.init Zeko_constants.constraint_constants.ledger_depth
+          ~f:(fun _ : Outer_rules_inst.Rule_commit_inst.Registry_path.Step.t ->
+            { hash_other = Field.zero; is_right = false } )
+      in
+      ( Account.empty
+      , path
+      , { Asset_registry.Registry_state.root = Field.zero
+        ; leaf_count = Zeko_util.Checked32.zero
+        ; schema_version = Zeko_util.Checked32.zero
+        } )
+  in
+  let ( old_ethereum_asset_registry_acc
+      , old_ethereum_asset_registry_path
+      , old_ethereum_asset_registry_state ) =
+    ethereum_asset_registry_account old_inner_ledger
+  in
+  let ( new_ethereum_asset_registry_acc
+      , new_ethereum_asset_registry_path
+      , ethereum_asset_registry_state ) =
+    ethereum_asset_registry_account new_inner_ledger
+  in
+  let ethereum_asset_registration =
+    let module Registration =
+      Outer_rules_inst.Rule_commit_inst.Registration_witness
+    in
+    let empty_path () =
+      List.init Zeko_constants.constraint_constants.ledger_depth
+        ~f:(fun _ : Outer_rules_inst.Rule_commit_inst.Registry_path.Step.t ->
+          { hash_other = Field.zero; is_right = false } )
+    in
+    let dummy_candidate : Asset_registry.Asset_record.t =
+      { schema_version = Zeko_util.Checked32.zero
+      ; registry_index = Zeko_util.Checked32.zero
+      ; asset_id_high = Field.zero
+      ; asset_id_low = Field.zero
+      ; ethereum_token_address = Field.zero
+      ; token_owner_l2 = Signature_lib.Public_key.Compressed.empty
+      ; token_id_l2 = Token_id.default
+      ; decimals = Zeko_util.Checked32.zero
+      ; inventory_cap = Currency.Amount.zero
+      ; mft_standard_vk_id = Field.zero
+      ; vault_public_key = Signature_lib.Public_key.Compressed.empty
+      ; universal_bridge_vk_id = Field.zero
+      }
+    in
+    let dummy () : Registration.t =
+      { did_append = false
+      ; candidate = dummy_candidate
+      ; append_path =
+          List.init Zeko_constants.Ethereum_asset_registry.depth ~f:(fun _ ->
+              Field.zero )
+      ; token_owner_acc = Account.empty
+      ; token_owner_path = empty_path ()
+      ; admin_acc = Account.empty
+      ; admin_path = empty_path ()
+      ; vault_acc = Account.empty
+      ; vault_path = empty_path ()
+      ; circulation_acc = Account.empty
+      ; circulation_path = empty_path ()
+      }
+    in
+    if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then dummy ()
+    else
+      let old_count =
+        Zeko_util.Checked32.to_int old_ethereum_asset_registry_state.leaf_count
+      in
+      let new_count =
+        Zeko_util.Checked32.to_int ethereum_asset_registry_state.leaf_count
+      in
+      match new_count - old_count with
+      | 0 ->
+          dummy ()
+      | 1 ->
+          let candidate =
+            Ethereum_settlement_export.registry_records_from_archive ~archive
+            |> Fn.flip List.nth_exn old_count
+          in
+          let account_opening account_id =
+            let index =
+              Sparse_ledger.find_index_exn new_inner_ledger account_id
+            in
+            let account = Sparse_ledger.get_exn new_inner_ledger index in
+            let path =
+              Sparse_ledger.path_exn new_inner_ledger index
+              |> List.map ~f:(function
+                   | `Left hash ->
+                       ( { hash_other = hash; is_right = false }
+                         : Outer_rules_inst.Rule_commit_inst.Registry_path.Step
+                           .t )
+                   | `Right hash ->
+                       { hash_other = hash; is_right = true } )
+            in
+            (account, path)
+          in
+          let owner_id =
+            Account_id.create candidate.token_owner_l2 Token_id.default
+          in
+          let token_owner_acc, token_owner_path = account_opening owner_id in
+          let owner_state =
+            (Option.value_exn token_owner_acc.zkapp).app_state
+            |> Zkapp_state.V.to_list
+          in
+          let admin_public_key =
+            let (Typ typ) = Signature_lib.Public_key.Compressed.typ in
+            typ.value_of_fields
+              ( [| List.nth_exn owner_state 1; List.nth_exn owner_state 2 |]
+              , typ.constraint_system_auxiliary () )
+          in
+          let admin_acc, admin_path =
+            Account_id.create admin_public_key Token_id.default
+            |> account_opening
+          in
+          let vault_acc, vault_path =
+            Account_id.create candidate.vault_public_key candidate.token_id_l2
+            |> account_opening
+          in
+          let circulation_acc, circulation_path =
+            Account_id.create candidate.token_owner_l2 candidate.token_id_l2
+            |> account_opening
+          in
+          { did_append = true
+          ; candidate
+          ; append_path =
+              (let records =
+                 Ethereum_settlement_export.registry_records_from_archive
+                   ~archive
+               in
+               let tree =
+                 List.take records old_count
+                 |> List.fold
+                      ~init:(Asset_registry.Merkle_list.empty ())
+                      ~f:Asset_registry.Merkle_list.append_exn
+               in
+               Asset_registry.Merkle_list.path tree ~index:old_count )
+          ; token_owner_acc
+          ; token_owner_path
+          ; admin_acc
+          ; admin_path
+          ; vault_acc
+          ; vault_path
+          ; circulation_acc
+          ; circulation_path
+          }
+      | delta ->
+          failwithf
+            "PoC settlement supports at most one Ethereum asset registration \
+             per commit, observed count delta %d"
+            delta ()
+  in
   let%bind outer_state, inner_ase_source, emergency_mode =
     let%map outer_account =
       Gql_client.infer_state ~logger l1_uri ~zkapp_pk
@@ -191,7 +365,9 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
       Zeko_prover.Client.outer_commit provers ~txn_snark ~public_key:zkapp_pk
         ~inner_ase_source ~new_inner_actions ~old_inner_acc ~old_inner_acc_path
         ~new_inner_acc ~new_inner_acc_path ~unprocessed_actions ~da_multisig
-        ~slot_range ~emergency_mode
+        ~slot_range ~emergency_mode ~old_ethereum_asset_registry_acc
+        ~old_ethereum_asset_registry_path ~new_ethereum_asset_registry_acc
+        ~new_ethereum_asset_registry_path ~ethereum_asset_registration
     in
     let%map settlement_export =
       match Is_compile_simple_real.is_compile_simple_real with
@@ -208,6 +384,24 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
             ~inner_action_batch:
               (Ethereum_settlement_export.inner_action_batch_json ~archive
                  new_inner_action_records )
+            ?asset_registry_batch:
+              ( if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+                Ethereum_settlement_export.asset_registry_batch_json ~archive
+                  ~old_root:old_ethereum_asset_registry_state.root
+                  ~old_count:
+                    (Zeko_util.Checked32.to_field
+                       old_ethereum_asset_registry_state.leaf_count )
+                  ~old_schema:
+                    (Zeko_util.Checked32.to_field
+                       old_ethereum_asset_registry_state.schema_version )
+                  ~new_root:ethereum_asset_registry_state.root
+                  ~new_count:
+                    (Zeko_util.Checked32.to_field
+                       ethereum_asset_registry_state.leaf_count )
+                  ~new_schema:
+                    (Zeko_util.Checked32.to_field
+                       ethereum_asset_registry_state.schema_version )
+              else None )
           >>| Option.some
     in
     (* see #286 *)
