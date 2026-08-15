@@ -683,8 +683,7 @@ let rec branches_to_choices :
                 } ) )
 
 let compile (type out_t out_var first_input branches n_available_branches)
-    ?(wrap_domain : [ `N13 | `N14 | `N15 ] option)
-    ?(num_chunks = Plonk_checks.num_chunks_by_default) ~(name : string)
+    ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
     ~(branches :
        ( out_var
        , (first_input, branches) cons_branch
@@ -697,19 +696,15 @@ let compile (type out_t out_var first_input branches n_available_branches)
   assert (Run.in_checked_computation () |> not) ;
   assert (Run.in_prover () |> not) ;
   let override_wrap_domain : Pickles_base.Proofs_verified.t option =
-    match (wrap_domain, num_chunks) with
-    | None, 1 ->
+    match wrap_domain with
+    | None ->
         Some N1
         (* TODO: This should have been None, but pickles is really bad at estimating it. *)
-    | None, _ ->
-        None
-        (* Multi-chunk systems need Pickles to account for the extra verifier
-           rows when it computes the wrap domain. *)
-    | Some `N13, _ ->
+    | Some `N13 ->
         Some N0
-    | Some `N14, _ ->
+    | Some `N14 ->
         Some N1
-    | Some `N15, _ ->
+    | Some `N15 ->
         Some N2
   in
   let (Count_branches_result tag_branches) = count_branches branches in
@@ -762,7 +757,7 @@ let compile (type out_t out_var first_input branches n_available_branches)
               , _cache
               , _proof_module
               , provers ) =
-            Pickles.compile_promise () ?override_wrap_domain ~num_chunks
+            Pickles.compile_promise () ?override_wrap_domain
               ~cache:Cache_dir.cache ~public_input:(Output out_typ)
               ~auxiliary_typ:Typ.unit ~choices
               ~max_proofs_verified:(module Pickles_types.Nat.N2)

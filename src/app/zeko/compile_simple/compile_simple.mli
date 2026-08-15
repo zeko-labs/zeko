@@ -40,7 +40,6 @@ end)
 
 val compile :
      ?wrap_domain:[ `N13 | `N14 | `N15 ]
-  -> ?num_chunks:int
   -> name:string
   -> branches:
        ( 'out_var
