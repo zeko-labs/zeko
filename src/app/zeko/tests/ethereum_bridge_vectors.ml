@@ -1413,13 +1413,19 @@ let () =
           }
     }
   in
+  let expected_record_commitment =
+    "0x" ^ field_to_hex (List.nth_exn withdrawal_params_fields 2)
+  in
   ( match
       Sequencer_lib.Ethereum_settlement_export.ethereum_withdrawal_preimage_json
         token_preimage
     with
   | ( "tokenWithdrawal"
     , `Assoc
-        [ ("token", `String "0x0000000000000000000000000000000000000001")
+        [ ("encodingVersion", `Int 2)
+        ; ("registryIndex", `Int 0)
+        ; ("recordCommitment", `String record_commitment)
+        ; ("token", `String "0x0000000000000000000000000000000000000001")
         ; ( "assetId"
           , `String
               "0x0000000000000000000000000000000100000000000000000000000000000002"
@@ -1428,7 +1434,8 @@ let () =
         ; ("amount", `Intlit "2000000")
         ; ("paramsFields", `List params_fields)
         ] )
-    when List.length params_fields >= 6 ->
+    when List.length params_fields >= 6
+         && String.Caseless.equal record_commitment expected_record_commitment ->
       ()
   | _ ->
       failwith "Ethereum ERC20 withdrawal export mismatch" ) ;
