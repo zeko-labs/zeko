@@ -282,6 +282,43 @@ let generate_circuits_config =
          | Some output_file ->
              Yojson.Safe.to_file output_file deploy_config_json ) )
 
+let ethereum_asset_vk_hashes =
+  ( "ethereum-asset-vk-hashes"
+  , Command.async
+      ~summary:
+        "Compile the registry-backed Ethereum asset circuits and print their \
+         verification-key hashes"
+      (let%map_open.Command output =
+         flag "--output" (optional string) ~doc:"string JSON output path"
+       in
+       fun () ->
+         if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+           failwith
+             "ZEKO_CIRCUITS_CONFIG must enable the Ethereum asset registry" ;
+         let%bind universal_bridge =
+           Compile_simple.Verification_key.of_tag
+             (Lazy.force Zeko_types.Bridge_inst_ethereum_token.System_L2.tag)
+           |> Promise.to_deferred
+         and registry =
+           Compile_simple.Verification_key.of_tag
+             (Lazy.force
+                Zeko_types.Bridge_inst_ethereum_token.Registry.registry_tag )
+           |> Promise.to_deferred
+         in
+         write_json ?output
+           (`Assoc
+             [ ( "universalBridgeVkHash"
+               , `String
+                   (Field.to_string
+                      (Compile_simple.Verification_key.hash universal_bridge) )
+               )
+             ; ( "registryVkHash"
+               , `String
+                   (Field.to_string
+                      (Compile_simple.Verification_key.hash registry) ) )
+             ] ) ;
+         return () ) )
+
 let update_outer_verification_keys =
   ( "update-outer-verification-keys"
   , Command.async
@@ -1455,6 +1492,7 @@ let () =
   Command.group ~summary:"Sequencer CLI"
     [ generate_even_key
     ; generate_circuits_config
+    ; ethereum_asset_vk_hashes
     ; update_outer_verification_keys
     ; update_inner_verification_keys
     ; update_da_key
