@@ -563,6 +563,20 @@ let () =
                 (Filename.concat directory "bridge-scenario.json")
                 ~data:(Yojson.Safe.pretty_to_string json ^ "\n")
         in
+        let synthetic_deposit_fee_payer = List.hd_exn accounts in
+        let synthetic_deposit_executor =
+          Executor.create ~kind:(`L1 gql_uri)
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
+            ~signer:
+              (Signer_service.Signer.of_keypair synthetic_deposit_fee_payer)
+            ()
+        in
+        run (fun () ->
+            let%map _created =
+              Gql_client.For_tests.create_account ~logger gql_uri
+                (Public_key.compress synthetic_deposit_fee_payer.public_key)
+            in
+            () ) ;
         let submit_ethereum_deposit aux =
           let witness : Bridge.Outer_action_witness.serializable =
             { public_key = Zeko_circuits_config.Inputs.zeko_l1
@@ -589,7 +603,8 @@ let () =
                 Account_update.Fee_payer.make
                   ~body:
                     { public_key =
-                        Signer_service.Signer.public_key l1_executor.signer
+                        Signer_service.Signer.public_key
+                          synthetic_deposit_executor.signer
                     ; fee = !sequencer.bridge_prover.bridge_txn_fee
                     ; valid_until = None
                     ; nonce = Account.Nonce.zero
@@ -603,7 +618,7 @@ let () =
             ; memo = Signed_command_memo.empty
             }
           in
-          Executor.send_zkapp_command ~logger l1_executor command
+          Executor.send_zkapp_command ~logger synthetic_deposit_executor command
           >>| Or_error.ok_exn
         in
         let fund_ethereum_token_operator () =
