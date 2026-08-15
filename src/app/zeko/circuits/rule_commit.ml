@@ -409,28 +409,38 @@ struct
   let immutable_vk_permission =
     (Permissions.Auth_required.Impossible, Mina_numbers.Txn_version.current)
 
-  let expected_token_owner_permissions : Permissions.t =
+  let expected_zkapp_default_permissions : Permissions.t =
     { Permissions.user_default with
+      edit_state = Proof
+    ; send = Proof
+    ; edit_action_state = Proof
+    }
+
+  let expected_token_owner_permissions : Permissions.t =
+    { expected_zkapp_default_permissions with
       access = Proof
     ; set_permissions = Impossible
     ; set_verification_key = immutable_vk_permission
     }
 
   let expected_token_admin_permissions : Permissions.t =
-    { Permissions.user_default with
+    { expected_zkapp_default_permissions with
       set_permissions = Impossible
     ; set_verification_key = immutable_vk_permission
     }
 
   let expected_vault_permissions : Permissions.t =
-    { Permissions.user_default with
+    { expected_zkapp_default_permissions with
       send = Proof
     ; set_permissions = Impossible
     ; set_verification_key = immutable_vk_permission
     }
 
   let expected_circulation_permissions : Permissions.t =
-    { Permissions.user_default with send = None; set_permissions = Impossible }
+    { expected_zkapp_default_permissions with
+      send = None
+    ; set_permissions = Impossible
+    }
 
   let assert_vk_hash_if ~label active zkapp expected =
     let verification_key = zkapp.Zkapp_account.Poly.verification_key in
