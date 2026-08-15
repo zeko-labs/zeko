@@ -1081,9 +1081,12 @@ let () =
               in
               let expected_next_deposits =
                 List.init (List.length ethereum_asset_records) ~f:(fun index ->
-                    (* The registry checkpoint precedes the two ERC20 deposits
-                       in the shared outer action stream. *)
-                    UInt32.of_int (index + 2) )
+                    (* Each separately committed registry checkpoint precedes
+                       the two ERC20 deposits in the shared outer action
+                       stream. [next_deposit] points one past the finalized
+                       deposit. *)
+                    UInt32.of_int
+                      (index + List.length ethereum_asset_records + 1) )
               in
               if
                 not
