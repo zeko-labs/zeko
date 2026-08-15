@@ -318,7 +318,8 @@ let rec hash_branches :
       lazy Field.zero
 
 let compile (type out_t out_var first_input branches n_available_branches)
-    ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ~(name : string)
+    ?(wrap_domain : [ `N13 | `N14 | `N15 ] option) ?(num_chunks = 1)
+    ~(name : string)
     ~(branches :
        ( out_var
        , (first_input, branches) cons_branch
@@ -329,6 +330,7 @@ let compile (type out_t out_var first_input branches n_available_branches)
         and type out_var = out_var
         and type branches = (first_input, branches) cons_branch ) =
   ignore wrap_domain ;
+  ignore num_chunks ;
   printf "compile_simple.fake: called for circuit %s from %s\n%!" name
     (P.get_callstack 9999 |> get_first_backtrace_entry) ;
   (* ZEKO NOTE: ZEKO FIXME: Add back! didn't work very likely because of snarky bug that should be fixed *)
