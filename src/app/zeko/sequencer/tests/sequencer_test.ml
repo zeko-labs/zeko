@@ -879,6 +879,12 @@ let () =
           , Filename.concat directory "operations-ready"
           , Filename.concat directory "operations-complete" )
         in
+        let registration_marker_paths () =
+          let _, request_base, committed_base, _ = live_sdk_paths () in
+          List.mapi ethereum_asset_records ~f:(fun index _ ->
+              ( sprintf "%s-%d" request_base index
+              , sprintf "%s-registration-%d" committed_base index ) )
+        in
         let start_live_sdk () =
           let port =
             Option.value_map
@@ -903,9 +909,23 @@ let () =
                   , `String (Field.to_string hash) )
                 ]
           in
+          let registration_marker_fields =
+            match bridge_asset with
+            | Native ->
+                []
+            | Ethereum_token ->
+                let markers = registration_marker_paths () in
+                [ ( "registrationRequestMarkers"
+                  , `List (List.map markers ~f:(fun (path, _) -> `String path))
+                  )
+                ; ( "registrationCommittedMarkers"
+                  , `List (List.map markers ~f:(fun (_, path) -> `String path))
+                  )
+                ]
+          in
           let manifest =
             `Assoc
-              ( [ ("schemaVersion", `Int 3)
+              ( [ ("schemaVersion", `Int 4)
                 ; ( "sequencerGraphqlUrl"
                   , `String (sprintf "http://127.0.0.1:%d/graphql" port) )
                 ; ("l1GraphqlUrl", `String (Uri.to_string gql_uri))
@@ -922,14 +942,18 @@ let () =
                   , `String registration_complete_path )
                 ; ("operationsReadyMarker", `String operations_ready_path)
                 ]
-              @ token_verification_key_fields )
+              @ token_verification_key_fields @ registration_marker_fields )
           in
           Out_channel.write_all ready_path
             ~data:(Yojson.Safe.pretty_to_string manifest ^ "\n") ;
           printf "Live bridge SDK harness ready: %s\n%!" ready_path ;
-          run (fun () ->
-              wait_for_file ~timeout:(Time.Span.of_min 45.)
-                registration_complete_path )
+          match bridge_asset with
+          | Native ->
+              run (fun () ->
+                  wait_for_file ~timeout:(Time.Span.of_min 45.)
+                    registration_complete_path )
+          | Ethereum_token ->
+              ()
         in
         let run_live_sdk () =
           let _, _, operations_ready_path, complete_path = live_sdk_paths () in
@@ -1087,9 +1111,17 @@ let () =
         if bridge_live_sdk then start_live_sdk () ;
         ( match bridge_asset with
         | Ethereum_token ->
-            run (fun () ->
-                commit_and_check
-                  "Commit two proof-backed Ethereum asset registrations" )
+            registration_marker_paths ()
+            |> List.iteri ~f:(fun index (request_path, committed_path) ->
+                   run (fun () ->
+                       wait_for_file ~timeout:(Time.Span.of_min 45.)
+                         request_path ) ;
+                   run (fun () ->
+                       commit_and_check
+                         (sprintf
+                            "Commit proof-backed Ethereum asset registration %d"
+                            index ) ) ;
+                   Out_channel.write_all committed_path ~data:"committed\n" )
         | Native ->
             () ) ;
         let outer_action_state_before =
