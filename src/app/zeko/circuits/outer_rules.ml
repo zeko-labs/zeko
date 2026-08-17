@@ -32,7 +32,8 @@ module Make (Inputs : sig
 end)
 () =
 struct
-  module Rule_commit_inst = Rule_commit.Make (Inputs)
+  module Rule_commit_inst = Rule_commit.Make (Inputs) ()
+
   module Rule_action_witness_inst = Rule_action_witness.Make (Inputs)
   module Rule_pause_inst = Rule_pause.Make (Inputs)
 
@@ -54,4 +55,34 @@ struct
               ; Rule_multisig_update_inst.rule
               ]
             ~name:"Outer_rules" )
+
+  let internal_provers = provers
+
+  (* The wire-facing witnesses stay unchanged. Only the proving pipeline knows
+     that registration validation is now materialized as an intermediate
+     proof before the outer commit. *)
+  let provers =
+    lazy
+      (let Compile_simple.
+             [ commit
+             ; emergency_commit
+             ; action_witness
+             ; pause
+             ; multisig_update
+             ] =
+         Lazy.force internal_provers
+       in
+       Compile_simple.
+         [ (fun input ->
+             let%bind.Promise input = Rule_commit_inst.prepare input in
+             commit input )
+         ; (fun input ->
+             let%bind.Promise input =
+               Rule_commit_inst.Emergency_commit.prepare input
+             in
+             emergency_commit input )
+         ; action_witness
+         ; pause
+         ; multisig_update
+         ] )
 end

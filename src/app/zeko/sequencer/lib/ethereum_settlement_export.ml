@@ -290,9 +290,22 @@ let ethereum_withdrawal_preimage_json
             )
           ] )
   | Some { token; asset_id; params_fields } ->
+      let encoding_version, registry_index, record_commitment =
+        match params_fields with
+        | encoding_version :: registry_index :: record_commitment :: _ ->
+            ( Int.of_string (Field.to_string encoding_version)
+            , Int.of_string (Field.to_string registry_index)
+            , "0x" ^ padded_hex_digits record_commitment )
+        | _ ->
+            failwith
+              "Ethereum ERC20 withdrawal parameter preimage is truncated"
+      in
       ( "tokenWithdrawal"
       , `Assoc
-          [ ("token", `String token)
+          [ ("encodingVersion", `Int encoding_version)
+          ; ("registryIndex", `Int registry_index)
+          ; ("recordCommitment", `String record_commitment)
+          ; ("token", `String token)
           ; ("assetId", `String asset_id)
           ; ("recipient", `String recipient)
           ; ( "amount"

@@ -64,7 +64,11 @@ module Proof = struct
 
   let of_pickles x = Real_proof x
 
-  let to_pickles = function Fake_proof _ -> None | Real_proof proof -> Some proof
+  let to_pickles = function
+    | Fake_proof _ ->
+        None
+    | Real_proof proof ->
+        Some proof
 end
 
 let force_tag _ = Promise.return ()

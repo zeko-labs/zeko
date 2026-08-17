@@ -67,37 +67,40 @@ let commit_vk = Mina_base.Side_loaded_verification_key.dummy
 
 let commit_vk_hash = Mina_base.Verification_key_wire.digest_vk commit_vk
 
-module Commit_rule = Zeko_circuits.Rule_commit.Make (struct
-  let max_valid_while_size = 1
+module Commit_rule =
+  Zeko_circuits.Rule_commit.Make
+    (struct
+      let max_valid_while_size = 1
 
-  let inner_public_key = point_of_string "66001"
+      let inner_public_key = point_of_string "66001"
 
-  let chain_l1 = Mina_signature_kind.Testnet
+      let chain_l1 = Mina_signature_kind.Testnet
 
-  let chain_l2 = Mina_signature_kind.Testnet
+      let chain_l2 = Mina_signature_kind.Testnet
 
-  let max_sequencer_inactivity = 1
+      let max_sequencer_inactivity = 1
 
-  let emergency_da_public_key = point_of_string "67001"
+      let emergency_da_public_key = point_of_string "67001"
 
-  let ethereum_asset_registry_public_key = Some commit_registry_public_key
+      let ethereum_asset_registry_public_key = Some commit_registry_public_key
 
-  let ethereum_asset_registry_schema_version =
-    Zeko_circuits.Zeko_util.Checked32.of_int
-      Zeko_constants.Ethereum_asset_registry.schema_version
+      let ethereum_asset_registry_schema_version =
+        Zeko_circuits.Zeko_util.Checked32.of_int
+          Zeko_constants.Ethereum_asset_registry.schema_version
 
-  let ethereum_asset_approved_mft_standard_vk_id = Field.of_int 61008
+      let ethereum_asset_approved_mft_standard_vk_id = Field.of_int 61008
 
-  let ethereum_asset_approved_mft_token_vk_hash = commit_vk_hash
+      let ethereum_asset_approved_mft_token_vk_hash = commit_vk_hash
 
-  let ethereum_asset_approved_mft_admin_vk_hash = commit_vk_hash
+      let ethereum_asset_approved_mft_admin_vk_hash = commit_vk_hash
 
-  let ethereum_asset_universal_bridge_vk_id = Field.of_int 61009
+      let ethereum_asset_universal_bridge_vk_id = Field.of_int 61009
 
-  let ethereum_asset_universal_bridge_vk_hash = commit_vk_hash
+      let ethereum_asset_universal_bridge_vk_hash = commit_vk_hash
 
-  let ethereum_asset_vault_public_key = commit_vault_public_key
-end)
+      let ethereum_asset_vault_public_key = commit_vault_public_key
+    end)
+    ()
 
 type registration_account_mutation =
   | Valid_registration
@@ -1410,13 +1413,19 @@ let () =
           }
     }
   in
+  let expected_record_commitment =
+    "0x" ^ field_to_hex (List.nth_exn withdrawal_params_fields 2)
+  in
   ( match
       Sequencer_lib.Ethereum_settlement_export.ethereum_withdrawal_preimage_json
         token_preimage
     with
   | ( "tokenWithdrawal"
     , `Assoc
-        [ ("token", `String "0x0000000000000000000000000000000000000001")
+        [ ("encodingVersion", `Int 2)
+        ; ("registryIndex", `Int 0)
+        ; ("recordCommitment", `String record_commitment)
+        ; ("token", `String "0x0000000000000000000000000000000000000001")
         ; ( "assetId"
           , `String
               "0x0000000000000000000000000000000100000000000000000000000000000002"
@@ -1425,7 +1434,8 @@ let () =
         ; ("amount", `Intlit "2000000")
         ; ("paramsFields", `List params_fields)
         ] )
-    when List.length params_fields >= 6 ->
+    when List.length params_fields >= 6
+         && String.Caseless.equal record_commitment expected_record_commitment ->
       ()
   | _ ->
       failwith "Ethereum ERC20 withdrawal export mismatch" ) ;
