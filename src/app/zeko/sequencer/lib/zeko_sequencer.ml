@@ -1417,7 +1417,7 @@ module Sequencer = struct
       { fee_payer =
           { body =
               { public_key = fee_payer_pk
-              ; fee = Currency.Fee.of_mina_string_exn "0.1"
+              ; fee = bridge_txn_fee
               ; valid_until = None
               ; nonce
               }

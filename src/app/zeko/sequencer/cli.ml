@@ -78,7 +78,7 @@ let send_direct ~logger ~l1_uri ~(signers : Keypair.t list)
     { fee_payer =
         { Account_update.Fee_payer.body =
             { public_key = Public_key.compress fee_signer.public_key
-            ; fee = Currency.Fee.of_mina_string_exn "0.1"
+            ; fee = Zeko_constants.transaction_fee
             ; valid_until = None
             ; nonce
             }
@@ -251,7 +251,8 @@ let generate_circuits_config =
            ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
            ; bridge_fee_recipient_l1 = fst bridge_fee_recipient_l1
            ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
-           ; outer_account_creation_fee = Currency.Fee.of_mina_string_exn "1"
+           ; outer_account_creation_fee =
+               Zeko_constants.outer_account_creation_fee
            }
          in
          let deploy_config : Zeko_circuits_config.Deploy.t =
@@ -1046,8 +1047,8 @@ let multisig_submit =
                in
                let%bind command =
                  Deploy.submit_multisig_update ~kind:first.kind ~signer:sender
-                   ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-                   ~nonce ~payload ~signatures
+                   ~fee:Zeko_constants.transaction_fee ~nonce ~payload
+                   ~signatures
                  >>| Zkapp_command.read_all_proofs_from_disk
                in
                match%map Gql_client.send_zkapp l1_uri command with
