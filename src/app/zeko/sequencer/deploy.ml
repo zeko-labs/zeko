@@ -199,8 +199,8 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
         Sequencer_lib.Deploy.deploy_command_exn
           ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
           ~signer_pk:sender_pk ~outer_pk ~holder_pk ~token_holder_pk
-          ~fee:(Currency.Fee.of_mina_int_exn 1)
-          ~nonce ~account_creation_fee ~initial_ledger:new_ledger
+          ~fee:Zeko_constants.outer_account_creation_fee ~nonce
+          ~account_creation_fee ~initial_ledger:new_ledger
           ~account_set_hash:imt_hash ~pause_key ~sequencer:sequencer_key
           ~da_key:
             (Multisig.commit
@@ -556,8 +556,8 @@ let deploy_token_owner =
                Sequencer_lib.Deploy.deploy_token_owner_exn
                  ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
                  ~signer:sender_keypair ~token_owner_kp
-                 ~fee:(Currency.Fee.of_mina_int_exn 1)
-                 ~nonce ~account_creation_fee ()
+                 ~fee:Zeko_constants.outer_account_creation_fee ~nonce
+                 ~account_creation_fee ()
              in
              match%bind
                Gql_client.send_zkapp l1_uri

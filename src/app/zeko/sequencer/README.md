@@ -70,7 +70,7 @@ export ZEKO_SIGNER_AUTH_TOKEN="long random signer token"
 dune exec ../signer/cli.exe -- run \
     --port 9000 \
     --allow-zkapp-signing \
-    --max-fee 10 \
+    --max-fee 0.00025 \
     --max-balance-change 1000000
 ```
 
@@ -92,7 +92,7 @@ dune exec ../signer/cli.exe -- run \
     --host 0.0.0.0 \
     --port 9000 \
     --allow-zkapp-signing \
-    --max-fee 10 \
+    --max-fee 0.00025 \
     --max-balance-change 1000000 \
     --tls-cert-file /path/to/signer-cert.pem \
     --tls-key-file /path/to/signer-key.pem

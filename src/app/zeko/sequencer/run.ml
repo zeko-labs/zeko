@@ -135,7 +135,7 @@ let () =
          ~doc:"float Fee modifier for the sequencer"
      and minimum_fee =
        flag "--minimum-fee"
-         (optional_with_default 0.01 float)
+         (optional_with_default Zeko_constants.minimum_fee float)
          ~doc:"float Minimum fee for the sequencer"
      and slot_acceptance_m =
        flag "--slot-acceptance"
@@ -153,12 +153,12 @@ let () =
        flag "--signer" (required string) ~doc:"string Signer service host:port"
      and commit_fee =
        flag "--commit-fee"
-         (optional_with_default 0.1 float)
-         ~doc:"string Commit fee in mina"
+         (optional_with_default Zeko_constants.transaction_fee_string string)
+         ~doc:"string Commit fee in native units"
      and bridge_txn_fee =
        flag "--bridge-txn-fee"
-         (optional_with_default 0.1 float)
-         ~doc:"string Bridge transaction fee in mina"
+         (optional_with_default Zeko_constants.transaction_fee_string string)
+         ~doc:"string Bridge transaction fee in native units"
      in
      let slot_acceptance = Time.Span.of_min slot_acceptance_m in
      if slot_duration_sec <= 0 then
@@ -176,12 +176,8 @@ let () =
      let commit_validity_period =
        Mina_numbers.Global_slot_span.of_int commit_validity_period
      in
-     let commit_fee =
-       Currency.Fee.of_mina_string_exn (Float.to_string commit_fee)
-     in
-     let bridge_txn_fee =
-       Currency.Fee.of_mina_string_exn (Float.to_string bridge_txn_fee)
-     in
+     let commit_fee = Currency.Fee.of_mina_string_exn commit_fee in
+     let bridge_txn_fee = Currency.Fee.of_mina_string_exn bridge_txn_fee in
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
        ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri

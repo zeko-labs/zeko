@@ -309,7 +309,7 @@ open struct
         ; pending_coinbase_depth = 1
         ; coinbase_amount = Currency.Amount.zero
         ; supercharged_coinbase_factor = 1
-        ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
+        ; account_creation_fee = Zeko_constants.account_creation_fee
         ; fork = None
         }
 

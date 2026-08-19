@@ -3,6 +3,19 @@ open Mina_base
 open Signature_lib
 module Field = Snark_params.Tick.Run.Field
 
+(* Preserve the approximate fiat value and relative scale of the former
+   Mina-denominated defaults when the native asset is ETH. The conversion uses
+   25,000 native nanounits per former MINA and keeps every fee divisible by 10. *)
+let account_creation_fee = Currency.Fee.of_mina_string_exn "0.0000025"
+
+let minimum_fee = 0.00000025
+
+let transaction_fee_string = "0.0000025"
+
+let transaction_fee = Currency.Fee.of_mina_string_exn transaction_fee_string
+
+let outer_account_creation_fee = Currency.Fee.of_mina_string_exn "0.000025"
+
 let constraint_constants : Genesis_constants.Constraint_constants.t =
   { sub_windows_per_window = 1
   ; ledger_depth = 35
@@ -12,7 +25,7 @@ let constraint_constants : Genesis_constants.Constraint_constants.t =
   ; pending_coinbase_depth = 1
   ; coinbase_amount = Currency.Amount.zero
   ; supercharged_coinbase_factor = 1
-  ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
+  ; account_creation_fee
   ; fork = None
   }
 
