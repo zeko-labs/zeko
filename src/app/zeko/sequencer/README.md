@@ -22,6 +22,31 @@ dune build
 ./src/app/zeko/sequencer/tests/run-sequencer-test.sh {fake | real} <num_provers>
 ```
 
+## Export Ethereum deployment artifacts
+
+Ethereum deployment uses a dedicated exporter instead of deriving release
+artifacts from a sequencer test scenario. The exporter starts isolated local
+L1, database, queue, signer, DA, and prover services, creates the production
+genesis ledger, and makes one real sequencer commit. It writes exactly one
+settlement artifact together with `genesis-ledger.json` and a
+`deployment-manifest.json` that binds the sequencer identity and DA topology.
+
+Set `ZEKO_CIRCUITS_CONFIG`, `ZEKO_DEPLOY_CONFIG`,
+`ZEKO_DEPLOYMENT_SEQUENCER_PRIVATE_KEY`, and one
+`ZEKO_DEPLOYMENT_DA<N>_PRIVATE_KEY` per selected DA node, then run:
+
+```bash
+mkdir -p build/deployment-artifacts
+src/app/zeko/sequencer/run-deployment-export.sh \
+  build/deployment-artifacts 3 2
+```
+
+The final two arguments are the DA node count and signature quorum. The runner
+supports one through three local DA nodes. This performs real local Pickles
+proving but does not request or generate an SP1 proof. It selects an available
+local port range automatically; set `ZEKO_DEPLOYMENT_EXPORT_PORT_OFFSET` only
+when a specific range is required.
+
 ## Run
 
 Running the sequencer exposes the Graphql API on the port `-p`. The Graphql schema is a subset of the L1 Graphql API joined with the L1 Graphql API for fetching of actions/events.
