@@ -890,7 +890,7 @@ let fetch_fork_slot uri =
         |> to_int)
       |> Mina_numbers.Global_slot_since_genesis.of_int )
 
-module For_tests = struct
+module Local_l1 = struct
   let create_account ~logger uri pk =
     let q =
       object
@@ -1036,3 +1036,5 @@ module For_tests = struct
              |> List.map ~f:to_list
              |> List.map ~f:(List.map ~f:to_string) ))
 end
+
+module For_tests = Local_l1
