@@ -14,6 +14,7 @@ MODE="$1"
 NUM_PROVERS="$2"
 PROVER_PIDS=()
 SIGNER_PIDS=()
+DA_PIDS=()
 PROVERS=()
 
 AGENT="$3"
@@ -37,14 +38,35 @@ if ! [[ "$NUM_PROVERS" =~ ^[1-9][0-9]*$ ]]; then
   usage
 fi
 
+EXPORT_ONLY=false
+if [[ ${ZEKO_ETHEREUM_BRIDGE_EXPORT_ONLY:-false} == true || \
+      ${ZEKO_ETHEREUM_SEQUENTIAL_EXPORT_ONLY:-false} == true ]]; then
+  EXPORT_ONLY=true
+fi
+if [[ $EXPORT_ONLY == true ]]; then
+  ZEKO_TEST_DA_NODE_COUNT=${ZEKO_TEST_DA_NODE_COUNT:-3}
+  ZEKO_TEST_DA_QUORUM=${ZEKO_TEST_DA_QUORUM:-2}
+else
+  ZEKO_TEST_DA_NODE_COUNT=3
+  ZEKO_TEST_DA_QUORUM=2
+fi
+[[ $ZEKO_TEST_DA_NODE_COUNT =~ ^[1-3]$ ]] || {
+  echo "ZEKO_TEST_DA_NODE_COUNT must be between 1 and 3" >&2
+  exit 1
+}
+[[ $ZEKO_TEST_DA_QUORUM =~ ^[1-3]$ && \
+   $ZEKO_TEST_DA_QUORUM -le $ZEKO_TEST_DA_NODE_COUNT ]] || {
+  echo "ZEKO_TEST_DA_QUORUM must be between 1 and ZEKO_TEST_DA_NODE_COUNT" >&2
+  exit 1
+}
+export ZEKO_TEST_DA_NODE_COUNT ZEKO_TEST_DA_QUORUM
+
 cleanup() {
   local exit_status=$1
   echo "Cleaning up..."
   local -a service_pids=(
     "${l1_pid:-}"
-    "${da1_pid:-}"
-    "${da2_pid:-}"
-    "${da3_pid:-}"
+    "${DA_PIDS[@]}"
     "${PROVER_PIDS[@]}"
     "${SIGNER_PIDS[@]}"
   )
@@ -176,9 +198,15 @@ SEQUENCER_SIGNER_BIN="$SIGNER_BUILD_ROOT/cli.exe"
 DA_SIGNER_BIN="$SIGNER_BUILD_ROOT/cli.exe"
 
 ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY="${ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
-DA1_SIGNER_PRIVATE_KEY="${DA1_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
-DA2_SIGNER_PRIVATE_KEY="${DA2_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
-DA3_SIGNER_PRIVATE_KEY="${DA3_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
+DA_SIGNER_PRIVATE_KEYS=()
+for ((index = 1; index <= ZEKO_TEST_DA_NODE_COUNT; index++)); do
+  private_key_variable="DA${index}_SIGNER_PRIVATE_KEY"
+  private_key=${!private_key_variable:-}
+  if [[ -z $private_key ]]; then
+    private_key=$(generate_even_key)
+  fi
+  DA_SIGNER_PRIVATE_KEYS+=("$private_key")
+done
 ZEKO_SIGNER_AUTH_TOKEN="sequencer-test-signer-token"
 SIGNER_TLS_CERT="$TMP_DIR/signer-tls-cert.pem"
 SIGNER_TLS_KEY="$TMP_DIR/signer-tls-key.pem"
@@ -217,43 +245,36 @@ run "sequencer-signer" \
 signer_seq_pid=$!
 SIGNER_PIDS+=("$signer_seq_pid")
 
-run "da1-signer" \
-  env MINA_PRIVATE_KEY="$DA1_SIGNER_PRIVATE_KEY" \
-  "$DA_SIGNER_BIN" run --port 8601 --allow-field-signing \
-    --tls-cert-file "$SIGNER_TLS_CERT" --tls-key-file "$SIGNER_TLS_KEY" &
-signer_da1_pid=$!
-SIGNER_PIDS+=("$signer_da1_pid")
-
-run "da2-signer" \
-  env MINA_PRIVATE_KEY="$DA2_SIGNER_PRIVATE_KEY" \
-  "$DA_SIGNER_BIN" run --port 8602 --allow-field-signing \
-    --tls-cert-file "$SIGNER_TLS_CERT" --tls-key-file "$SIGNER_TLS_KEY" &
-signer_da2_pid=$!
-SIGNER_PIDS+=("$signer_da2_pid")
-
-run "da3-signer" \
-  env MINA_PRIVATE_KEY="$DA3_SIGNER_PRIVATE_KEY" \
-  "$DA_SIGNER_BIN" run --port 8603 --allow-field-signing \
-    --tls-cert-file "$SIGNER_TLS_CERT" --tls-key-file "$SIGNER_TLS_KEY" &
-signer_da3_pid=$!
-SIGNER_PIDS+=("$signer_da3_pid")
+DA_SIGNER_PIDS=()
+for ((index = 1; index <= ZEKO_TEST_DA_NODE_COUNT; index++)); do
+  signer_port=$((8600 + index))
+  run "da${index}-signer" \
+    env MINA_PRIVATE_KEY="${DA_SIGNER_PRIVATE_KEYS[index - 1]}" \
+    "$DA_SIGNER_BIN" run --port "$signer_port" --allow-field-signing \
+      --tls-cert-file "$SIGNER_TLS_CERT" --tls-key-file "$SIGNER_TLS_KEY" &
+  signer_pid=$!
+  SIGNER_PIDS+=("$signer_pid")
+  DA_SIGNER_PIDS+=("$signer_pid")
+done
 
 wait_for_port 8600 $signer_seq_pid
-wait_for_port 8601 $signer_da1_pid
-wait_for_port 8602 $signer_da2_pid
-wait_for_port 8603 $signer_da3_pid
+for ((index = 1; index <= ZEKO_TEST_DA_NODE_COUNT; index++)); do
+  wait_for_port "$((8600 + index))" "${DA_SIGNER_PIDS[index - 1]}"
+done
 
 run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id "$ZEKO_TEST_L1_NETWORK_ID" --block-period 9999999 &
 l1_pid=$!
 
-run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8555 --healthcheck-port 8558 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
-da1_pid=$!
-
-run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8556 --healthcheck-port 8559 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 &
-da2_pid=$!
-
-run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8557 --healthcheck-port 8560 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 &
-da3_pid=$!
+for ((index = 1; index <= ZEKO_TEST_DA_NODE_COUNT; index++)); do
+  da_port=$((8554 + index))
+  healthcheck_port=$((8557 + index))
+  signer_port=$((8600 + index))
+  run "da${index}" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node \
+    --bind-localhost --port "$da_port" --healthcheck-port "$healthcheck_port" \
+    --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da${index}_db" \
+    --signer "localhost:$signer_port" &
+  DA_PIDS+=("$!")
+done
 
 # Launch provers
 if [ "$MODE" = "fake" ]; then
@@ -277,9 +298,9 @@ done
 echo "Waiting for services to start..."
 
 wait_for_port 8080 $l1_pid
-wait_for_port 8555 $da1_pid
-wait_for_port 8556 $da2_pid
-wait_for_port 8557 $da3_pid
+for ((index = 1; index <= ZEKO_TEST_DA_NODE_COUNT; index++)); do
+  wait_for_port "$((8554 + index))" "${DA_PIDS[index - 1]}"
+done
 wait_for_provers "$NUM_PROVERS"
 
 echo "All services started successfully"

@@ -24,22 +24,62 @@ let logger =
 
 let gql_uri = Uri.of_string "http://localhost:8080/graphql"
 
-let da_config_with2 =
-  Da_layer.Client.Config.of_string_list [ "127.0.0.1:8555"; "127.0.0.1:8556" ]
+let env_flag name =
+  Option.value_map
+    (Stdlib.Sys.getenv_opt name)
+    ~default:false
+    ~f:(String.Caseless.equal "true")
 
-let da_config_with3 =
+let sequential_export_only = env_flag "ZEKO_ETHEREUM_SEQUENTIAL_EXPORT_ONLY"
+
+let bridge_export_only = env_flag "ZEKO_ETHEREUM_BRIDGE_EXPORT_ONLY"
+
+let export_only = sequential_export_only || bridge_export_only
+
+let int_env name ~default =
+  Option.value_map (Stdlib.Sys.getenv_opt name) ~default ~f:(fun value ->
+      try Int.of_string value
+      with _ -> failwithf "%s must be an integer, got %S" name value () )
+
+let export_da_node_count =
+  if export_only then int_env "ZEKO_TEST_DA_NODE_COUNT" ~default:3 else 3
+
+let export_da_quorum =
+  if export_only then int_env "ZEKO_TEST_DA_QUORUM" ~default:2 else 2
+
+let da_node_locations = [ "127.0.0.1:8555"; "127.0.0.1:8556"; "127.0.0.1:8557" ]
+
+let () =
+  if export_only then (
+    if not (Int.between export_da_node_count ~low:1 ~high:3) then
+      failwithf "ZEKO_TEST_DA_NODE_COUNT must be between 1 and 3, got %d"
+        export_da_node_count () ;
+    if not (Int.between export_da_quorum ~low:1 ~high:export_da_node_count) then
+      failwithf
+        "ZEKO_TEST_DA_QUORUM must be between 1 and the DA node count %d, got %d"
+        export_da_node_count export_da_quorum () )
+
+let da_config_with2 =
+  Da_layer.Client.Config.of_string_list (List.take da_node_locations 2)
+
+let da_config_with3 = Da_layer.Client.Config.of_string_list da_node_locations
+
+let export_da_config =
   Da_layer.Client.Config.of_string_list
-    [ "127.0.0.1:8555"; "127.0.0.1:8556"; "127.0.0.1:8557" ]
+    (List.take da_node_locations export_da_node_count)
+
+let active_da_config = if export_only then export_da_config else da_config_with2
+
+let run = Thread_safe.block_on_async_exn
 
 let da_keys =
   run (fun () ->
-      Da_layer.Client.Config.fetch_public_keys ~logger da_config_with3 )
+      Da_layer.Client.Config.fetch_public_keys ~logger
+        (if export_only then export_da_config else da_config_with3) )
 
-let da_quorum = 2
+let da_quorum = if export_only then export_da_quorum else 2
 
 let mq_host = Host_and_port.of_string "localhost:5672"
-
-let run = Thread_safe.block_on_async_exn
 
 let get_test_signer () =
   run (fun () ->
@@ -55,18 +95,6 @@ let free_sequencer (sequencer : Sequencer.t Handle.valid_t) =
   Handle.invalidate sequencer
 
 let slot_acceptance = Time.Span.of_min 60.
-
-let sequential_export_only =
-  Option.value_map
-    (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_SEQUENTIAL_EXPORT_ONLY")
-    ~default:false
-    ~f:(String.Caseless.equal "true")
-
-let bridge_export_only =
-  Option.value_map
-    (Stdlib.Sys.getenv_opt "ZEKO_ETHEREUM_BRIDGE_EXPORT_ONLY")
-    ~default:false
-    ~f:(String.Caseless.equal "true")
 
 let bridge_live_sdk =
   Option.value_map
@@ -130,7 +158,7 @@ let () =
     let open Mina_numbers in
     Quickcheck.test ~trials:1
       (Sequencer_spec.gen ~logger ~number_of_transactions:0 ~postgres_uri
-         ~gql_uri ~da_config:da_config_with3 ~da_keys ~da_quorum ~mq_host
+         ~gql_uri ~da_config:export_da_config ~da_keys ~da_quorum ~mq_host
          ~slot_acceptance:(Time.Span.of_min 10.)
          ~include_bridge_fee_recipient:true
          ~commit_validity_period:
@@ -505,7 +533,7 @@ let () =
               in
               let json =
                 `Assoc
-                  ( [ ("schemaVersion", `Int 3)
+                  ( [ ("schemaVersion", `Int 4)
                     ; ( "commitValidityPeriod"
                       , `Int bridge_commit_validity_period )
                     ; ( "zekoRecipient"
@@ -553,6 +581,15 @@ let () =
                                `String
                                  (Public_key.Compressed.to_base58_check
                                     public_key ) ) ) )
+                    ; ("daNodeCount", `Int (List.length da_keys))
+                    ; ("daQuorum", `Int da_quorum)
+                    ; ( "daCommitment"
+                      , `String
+                          (Ethereum_settlement_export.field_to_hex
+                             (Multisig.commit
+                                { public_keys = da_keys
+                                ; quorum = Field.of_int da_quorum
+                                } ) ) )
                     ; ( "sequencerPublicKey"
                       , `String
                           (Public_key.Compressed.to_base58_check signer_pk) )
@@ -1207,7 +1244,7 @@ let () =
 
     Quickcheck.test ~trials:1
       (Sequencer_spec.gen ~logger ~number_of_transactions:5
-         ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:da_config_with2
+         ~postgres_uri:postgres_uri1 ~gql_uri ~da_config:active_da_config
          ~da_keys ~da_quorum ~mq_host ~slot_acceptance () )
       ~f:(fun
            { outer_kp
@@ -1370,7 +1407,7 @@ let () =
           run (fun () ->
               let%map new_sequencer =
                 Sequencer.create ~logger ~max_pool_size:10
-                  ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
+                  ~commitment_period_sec:0. ~da_config:active_da_config ~da_keys
                   ~da_quorum ~db_dir:None ~checkpoints_dir:None
                   ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri
                   ~archive_uri:gql_uri ~signer:(get_test_signer ())
