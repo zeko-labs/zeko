@@ -12,6 +12,14 @@ module Field = Snark_params.Tick.Field
 module Sequencer = struct
   let constraint_constants = Zeko_constants.constraint_constants
 
+  let account_set_root account_set =
+    match Account_set.to_fields account_set |> Array.to_list with
+    | [ root ] ->
+        root
+    | fields ->
+        failwithf "Expected one account-set field, got %d" (List.length fields)
+          ()
+
   module Config = struct
     type t =
       { max_pool_size : int
@@ -152,8 +160,13 @@ module Sequencer = struct
             ~f:(fun () ->
               let open Deferred.Result.Let_syntax in
               let%bind da_multisig =
-                Da_layer.Client.get_multisig da_client
-                  ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
+                let (txn_statement : Zeko_stmt.t), _ = txn_snark in
+                let state =
+                  Da_layer.Da_state.create
+                    ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
+                    ~acc_set:(account_set_root txn_statement.target_acc_set)
+                in
+                Da_layer.Client.get_multisig da_client ~state
                 |> Deferred.map ~f:(fun (quorum, multisig) ->
                        Multisig.Witness.make ~signatures:multisig ~quorum )
                 |> Deferred.map ~f:Result.return
@@ -220,6 +233,7 @@ module Sequencer = struct
     type t =
       { proved_ledger_hash : Ledger_hash.t
       ; unproved_ledger_hash : Ledger_hash.t
+      ; unproved_acc_set : Field.t
       ; committed_ledger_hash : Ledger_hash.t
       }
   end
@@ -276,6 +290,7 @@ module Sequencer = struct
     State_hashes.
       { proved_ledger_hash = Field.zero
       ; unproved_ledger_hash = get_root t
+      ; unproved_acc_set = Indexed_merkle_tree.Db.merkle_root t.imt
       ; committed_ledger_hash = Field.zero
       }
 
@@ -450,6 +465,7 @@ module Sequencer = struct
                   return (Error e)
           in
 
+          let source_acc_set = Indexed_merkle_tree.Db.merkle_root t.imt in
           let%bind.Deferred.Result source_ledger, witnesses =
             let sequencer_pk =
               Even_PC.create_exn
@@ -513,13 +529,22 @@ module Sequencer = struct
                      ~owner:(Account.identifier account) )
           in
           let%bind () =
+            let source_state =
+              Da_layer.Da_state.create
+                ~ledger_hash:(Sparse_ledger.merkle_root source_ledger)
+                ~acc_set:source_acc_set
+            in
+            let target_state =
+              Da_layer.Da_state.create
+                ~ledger_hash:(L.Db.merkle_root t.ledger)
+                ~acc_set:(Indexed_merkle_tree.Db.merkle_root t.imt)
+            in
             Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-              ~ledger_openings:source_ledger
+              ~source_state ~target_state ~ledger_openings:source_ledger
               ~acc_set_openings:
                 (Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
                    ~db:t.imt ~keys:new_accounts_keys )
               ~diff
-              ~target_ledger_hash:(L.Db.merkle_root t.ledger)
           in
 
           (* Add witnesses to the merger *)
@@ -555,6 +580,7 @@ module Sequencer = struct
         && Currency.Fee.(fee < constraint_constants.account_creation_fee)
       then return `Skip
       else
+        let source_acc_set = Indexed_merkle_tree.Db.merkle_root t.imt in
         match
           Zeko_transaction_logic.apply_fee_transfer_unchecked ~receiver_pk ~fee
             ~constraint_constants ~global_slot:l1_global_slot ledger t.imt
@@ -593,13 +619,22 @@ module Sequencer = struct
                        ~owner:(Account.identifier account) )
             in
             let%bind () =
+              let source_state =
+                Da_layer.Da_state.create
+                  ~ledger_hash:(Sparse_ledger.merkle_root source_ledger)
+                  ~acc_set:source_acc_set
+              in
+              let target_state =
+                Da_layer.Da_state.create
+                  ~ledger_hash:(L.Db.merkle_root t.ledger)
+                  ~acc_set:(Indexed_merkle_tree.Db.merkle_root t.imt)
+              in
               Da_layer.Client.enqueue_diff t.da_client ~genesis:false
-                ~ledger_openings:source_ledger
+                ~source_state ~target_state ~ledger_openings:source_ledger
                 ~acc_set_openings:
                   (Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
                      ~db:t.imt ~keys:new_accounts_keys )
                 ~diff
-                ~target_ledger_hash:(L.Db.merkle_root t.ledger)
             in
             match%map
               Merger.P.add_job t.db_pool t.merger t.merger_ctx ~data:witness
@@ -788,16 +823,17 @@ module Sequencer = struct
 
   let sync ~logger ({ config; _ } as t) da_config source =
     [%log info] "Syncing" ;
-    let%bind commited_ledger_hash =
+    let%bind committed_state =
       Gql_client.infer_state ~logger config.l1_uri
         ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
         ~signer_pk:(Signer_service.Signer.public_key config.signer)
       >>| Or_error.ok_exn
       >>| Utils.value_of_zkapp_state Zeko_circuits.Rollup_state.Outer_state.typ
-      >>| fun { ledger_hash; _ } -> ledger_hash
+      >>| fun { ledger_hash; acc_set; _ } ->
+      Da_layer.Da_state.create ~ledger_hash ~acc_set:(account_set_root acc_set)
     in
     [%log info] "Fetched commited root: %s"
-      Ledger_hash.(to_decimal_string commited_ledger_hash) ;
+      (Da_layer.Da_state.to_string committed_state) ;
 
     [%log info] "Init root: %s" Ledger_hash.(to_decimal_string (get_root t)) ;
 
@@ -810,48 +846,119 @@ module Sequencer = struct
           [%log info] "Syncing from specific ledger hash: %s"
             (Ledger_hash.to_decimal_string ledger_hash) ;
 
-          [%log info] "Creating genesis diff" ;
-          let ledger = L.of_database t.ledger in
-          let%bind diffs =
-            Da_layer.Client.create_genesis_diffs ~logger ledger
-              ~get_actions_for_aid:(fun aid ->
-                Archive.query_actions t.archive aid
-                |> List.map ~f:(fun x -> List.map x.actions ~f:Array.to_list) )
+          (* Rebuild the local posting queue from the original DA history.
+             A synthetic snapshot from the empty ledger cannot safely import
+             historical receipt-chain hashes without the commands that
+             authorized them. *)
+          [%log info] "Reconstructing DA history up to checkpoint" ;
+          let replay_ledger =
+            L.create_ephemeral ~depth:constraint_constants.ledger_depth ()
           in
-          let%bind inserted_genesis =
-            Deferred.List.foldi ~init:false diffs
-              ~f:(fun
-                   i
-                   acc
-                   ( diff
-                   , ledger_openings
-                   , acc_set_openings
-                   , `Target target_ledger_hash )
-                 ->
-                let genesis = i = 0 in
-                let%map () =
-                  Da_layer.Client.enqueue_diff t.da_client ~diff
-                    ~ledger_openings ~acc_set_openings ~target_ledger_hash
-                    ~genesis
-                in
-                genesis || acc )
+          let replay_imt =
+            Indexed_merkle_tree.In_memory.create
+              ~depth:constraint_constants.ledger_depth ()
           in
-          [%log info] "Enqueued genesis diff" ;
-          return inserted_genesis
+          let checkpoint_state =
+            Da_layer.Da_state.create ~ledger_hash
+              ~acc_set:(Indexed_merkle_tree.Db.merkle_root t.imt)
+          in
+          Monitor.protect
+            ~finally:(fun () ->
+              let (_ : L.unattached_mask) =
+                L.Maskable.unregister_mask_exn ~loc:__LOC__
+                  ~grandchildren:`Recursive replay_ledger
+              in
+              return () )
+            (fun () ->
+              let%map replayed =
+                Da_layer.Client.map_diffs ~logger ~config:da_config
+                  ~source_state:`Genesis ~target_state:checkpoint_state ()
+                  ~f:(fun
+                       ~current_chunk
+                       ~current_diff
+                       ~chunks_length:_
+                       stored_diff
+                     ->
+                    let diff = stored_diff.Da_layer.Stored_diff.diff in
+                    let current_state =
+                      Da_layer.Da_state.create
+                        ~ledger_hash:(L.merkle_root replay_ledger)
+                        ~acc_set:
+                          (Indexed_merkle_tree.In_memory.merkle_root replay_imt)
+                    in
+                    assert (
+                      Da_layer.Da_state.equal stored_diff.source_state
+                        current_state ) ;
+                    let ledger_openings =
+                      Da_layer.Client.get_ledger_openings ~diff
+                        ~ledger:replay_ledger
+                    in
+                    let changed_accounts =
+                      Da_layer.Diff.Stable.Latest.changed_accounts diff
+                      |> List.sort ~compare:(fun (a, _) (b, _) ->
+                             Int.compare a b )
+                    in
+                    let new_accounts_keys =
+                      List.filter changed_accounts ~f:(fun (index, _) ->
+                          Account.equal
+                            (Sparse_ledger.get_exn ledger_openings index)
+                            Account.empty )
+                      |> List.map ~f:(fun (_, account) ->
+                             Account_id.derive_token_id
+                               ~owner:(Account.identifier account) )
+                    in
+                    List.iter changed_accounts ~f:(fun (index, account) ->
+                        L.set_at_index_exn replay_ledger index account ) ;
+                    Indexed_merkle_tree.In_memory.insert_batch_exn replay_imt
+                      new_accounts_keys ;
+                    let acc_set_openings =
+                      Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger
+                        ~db:replay_imt ~keys:new_accounts_keys
+                    in
+                    let replayed_state =
+                      Da_layer.Da_state.create
+                        ~ledger_hash:(L.merkle_root replay_ledger)
+                        ~acc_set:
+                          (Indexed_merkle_tree.In_memory.merkle_root replay_imt)
+                    in
+                    assert (
+                      Da_layer.Da_state.equal stored_diff.target_state
+                        replayed_state ) ;
+                    Da_layer.Client.enqueue_diff t.da_client
+                      ~diff:(Da_layer.Diff.drop_time diff)
+                      ~source_state:stored_diff.source_state
+                      ~target_state:stored_diff.target_state ~ledger_openings
+                      ~acc_set_openings
+                      ~genesis:(current_chunk = 0 && current_diff = 0) )
+                >>| Or_error.ok_exn
+              in
+              [%log info] "Reconstructed %d DA diffs up to checkpoint"
+                (List.length replayed) ;
+              not (List.is_empty replayed) )
     in
 
     (* apply diffs from DA layer *)
+    let source_state =
+      match source with
+      | `Genesis ->
+          `Genesis
+      | `Specific ledger_hash ->
+          `Specific
+            (Da_layer.Da_state.create ~ledger_hash
+               ~acc_set:(Indexed_merkle_tree.Db.merkle_root t.imt) )
+    in
     let%bind () =
       Da_layer.Client.map_diffs
         ?interval_size:
           (Sys.getenv_opt "ZEKO_INTERVAL_SIZE" |> Option.map ~f:Int.of_string)
-        ~logger ~config:da_config ~depth:constraint_constants.ledger_depth
-        ~source_ledger_hash:source ~target_ledger_hash:commited_ledger_hash ()
-        ~f:(fun ~current_chunk ~current_diff ~chunks_length diff ->
-          assert (
-            Ledger_hash.equal
-              (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
-              (get_root t) ) ;
+        ~logger ~config:da_config ~source_state ~target_state:committed_state ()
+        ~f:(fun ~current_chunk ~current_diff ~chunks_length stored_diff ->
+          let diff = stored_diff.Da_layer.Stored_diff.diff in
+          let current_state =
+            Da_layer.Da_state.create ~ledger_hash:(get_root t)
+              ~acc_set:(Indexed_merkle_tree.Db.merkle_root t.imt)
+          in
+          assert (Da_layer.Da_state.equal stored_diff.source_state current_state) ;
           [%log info]
             "Applying diff with source ledger hash %s, progress: %.0f%%"
             (Ledger_hash.to_decimal_string
@@ -880,6 +987,13 @@ module Sequencer = struct
               in
               () ) ;
 
+          let applied_state =
+            Da_layer.Da_state.create
+              ~ledger_hash:(L.Db.merkle_root t.ledger)
+              ~acc_set:(Indexed_merkle_tree.Db.merkle_root t.imt)
+          in
+          assert (Da_layer.Da_state.equal stored_diff.target_state applied_state) ;
+
           let acc_set_openings =
             Da_layer.Client.get_acc_set_openings ~logger ~diff ~ledger_openings
               ~imt:t.imt
@@ -889,8 +1003,9 @@ module Sequencer = struct
           let%bind () =
             Da_layer.Client.enqueue_diff t.da_client
               ~diff:(Da_layer.Diff.drop_time diff)
-              ~ledger_openings ~acc_set_openings
-              ~target_ledger_hash:(L.Db.merkle_root t.ledger)
+              ~source_state:stored_diff.source_state
+              ~target_state:stored_diff.target_state ~ledger_openings
+              ~acc_set_openings
               ~genesis:
                 ((not inserted_genesis) && current_chunk = 0 && current_diff = 0)
           in
@@ -923,7 +1038,7 @@ module Sequencer = struct
     [%log info] "IMT root: %s"
       (Ledger_hash.to_decimal_string @@ Indexed_merkle_tree.Db.merkle_root t.imt) ;
 
-    if not @@ Ledger_hash.equal current_root commited_ledger_hash then
+    if not @@ Ledger_hash.equal current_root committed_state.ledger_hash then
       [%log error] "Ledger mismatch" ;
 
     let sparse_ledger =
@@ -1249,7 +1364,10 @@ module Sequencer = struct
       >>| Or_error.ok_exn
     in
     let () =
-      Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)
+      Da_layer.Client.start_client da_client
+        ~target_state:
+          (Da_layer.Da_state.create ~ledger_hash:(get_root t)
+             ~acc_set:(Indexed_merkle_tree.Db.merkle_root t.imt) )
     in
     return t
 end

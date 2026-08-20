@@ -1,5 +1,4 @@
 open Core_kernel
-open Mina_base
 module Rpc_def = Rpc
 open Async
 
@@ -13,17 +12,13 @@ type t =
   ; proof_cache_db : Proof_cache_tag.cache_db
   }
 
-let get_signature t ~ledger_hash =
-  let%bind diff = Db.Async.get_diff t.db ~ledger_hash in
-  match diff with
+let get_signature t ~state =
+  let%bind stored_diff = Db.Async.get_diff t.db ~state in
+  match stored_diff with
   | None ->
       return None
-  | Some diff -> (
-      let message =
-        Random_oracle.hash
-          ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
-          [| ledger_hash; diff.acc_set |]
-      in
+  | Some _ -> (
+      let message = Da_state.signing_message state in
       Signer_service.Signer.sign_field ~signature_kind:t.chain t.signer message
       >>| function
       | Ok signature ->
@@ -33,9 +28,9 @@ let get_signature t ~ledger_hash =
           [%log error] "Failed to sign DA receipt: %s" (Error.to_string_hum err) ;
           None )
 
-let get_ledger_hashes_chain t
+let get_states_chain t
     ({ source = source_opt; target; max_length = max_length_opt } :
-      Rpc_def.Get_ledger_hashes_chain.V1.Query.t ) =
+      Rpc_def.Get_ledger_hashes_chain.V2.Query.t ) =
   let logger = t.logger in
   let max_length =
     match max_length_opt with Some n -> n | None -> Int.max_value
@@ -43,24 +38,24 @@ let get_ledger_hashes_chain t
   let source =
     match source_opt with
     | `Genesis ->
-        Diff.empty_ledger_hash ~depth:constraint_constants.ledger_depth
+        Da_state.empty ~depth:constraint_constants.ledger_depth
     | `Specific source ->
         source
   in
-  [%log debug] "Getting ledger hashes chain from $source to $target"
+  [%log debug] "Getting DA states chain from $source to $target"
     ~metadata:
-      [ ("source", `String (Ledger_hash.to_decimal_string source))
-      ; ("target", `String (Ledger_hash.to_decimal_string target))
+      [ ("source", `String (Da_state.to_string source))
+      ; ("target", `String (Da_state.to_string target))
       ] ;
   let rec go n current =
-    if Ledger_hash.equal current source || n <= 0 then return []
+    if Da_state.equal current source || n <= 0 then return []
     else
       let%bind source =
-        Db.Async.get_diff ~ledger_hash:current t.db
-        >>| fun diff ->
+        Db.Async.get_diff ~state:current t.db
+        >>| fun stored_diff ->
         Option.value_exn ~here:[%here]
-          ~message:"Get_ledger_hashes_chain: diff not found" diff
-        |> Diff.Stable.V4.source_ledger_hash
+          ~message:"Get_states_chain: diff not found" stored_diff
+        |> fun (stored : Stored_diff.t) -> stored.source_state
       in
       let%map next = go (n - 1) source in
       current :: next
@@ -73,12 +68,12 @@ let implementations t =
       [ (* Healthcheck *)
         Rpc.Rpc.implement Rpc_def.Healthcheck.V1.t (fun () () -> return ())
       ; (* Post_diff *)
-        Rpc.Rpc.implement Rpc_def.Post_diff.V1.t
-          (fun () { ledger_openings; acc_set_openings; diff } ->
+        Rpc.Rpc.implement Rpc_def.Post_diff.V2.t
+          (fun () { source_state; ledger_openings; acc_set_openings; diff } ->
             match%bind
               Core.post_diff ~logger:t.logger ~proof_cache_db:t.proof_cache_db
                 ~kvdb:t.db ~network_id:t.chain ~signer:t.signer ~ledger_openings
-                ~acc_set_openings ~diff
+                ~source_state ~acc_set_openings ~diff
               |> function Error e -> Deferred.return (Error e) | Ok d -> d
             with
             | Ok signature ->
@@ -89,41 +84,40 @@ let implementations t =
                 [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;
                 failwith (Error.to_string_hum e) )
       ; (* Get_diff *)
-        Rpc.Rpc.implement Rpc_def.Get_diff.V4.t (fun () query ->
-            Db.Async.get_diff t.db ~ledger_hash:query )
+        Rpc.Rpc.implement Rpc_def.Get_diff.V5.t (fun () query ->
+            Db.Async.get_diff t.db ~state:query )
       ; (* Has_diff *)
-        Rpc.Rpc.implement Rpc_def.Has_diff.V1.t (fun () query ->
-            Db.Async.has_diff t.db ~ledger_hash:query )
+        Rpc.Rpc.implement Rpc_def.Has_diff.V2.t (fun () query ->
+            Db.Async.has_diff t.db ~state:query )
       ; (* Get_diff_source *)
-        Rpc.Rpc.implement Rpc_def.Get_diff_source.V1.t (fun () query ->
-            Db.Async.get_diff t.db ~ledger_hash:query
-            >>| fun diff ->
+        Rpc.Rpc.implement Rpc_def.Get_diff_source.V2.t (fun () query ->
+            Db.Async.get_diff t.db ~state:query
+            >>| fun stored_diff ->
             Option.value_exn
               ~error:
                 ( Error.of_string
                 @@ sprintf
-                     "Get_diff_source exception: Diff not found for ledger \
-                      hash %s"
-                     (Ledger_hash.to_decimal_string query) )
-              diff
-            |> Diff.Stable.Latest.source_ledger_hash )
+                     "Get_diff_source exception: Diff not found for DA state %s"
+                     (Da_state.to_string query) )
+              stored_diff
+            |> fun (stored : Stored_diff.t) -> stored.source_state )
       ; (* Get_signed_public_key *)
         Rpc.Rpc.implement Rpc_def.Get_signer_public_key.V1.t (fun () () ->
             return @@ Signer_service.Signer.public_key t.signer )
       ; (* Get_signature *)
-        Async.Rpc.Rpc.implement Rpc_def.Get_signature.V1.t (fun () query ->
+        Async.Rpc.Rpc.implement Rpc_def.Get_signature.V2.t (fun () query ->
             let pk = Signer_service.Signer.public_key t.signer in
-            let%map signature = get_signature t ~ledger_hash:query in
+            let%map signature = get_signature t ~state:query in
             Option.map signature ~f:(fun s -> (pk, s)) )
       ; (* Get_ledger_hashes_chain *)
-        Rpc.Rpc.implement Rpc_def.Get_ledger_hashes_chain.V1.t (fun () query ->
-            get_ledger_hashes_chain t query )
+        Rpc.Rpc.implement Rpc_def.Get_ledger_hashes_chain.V2.t (fun () query ->
+            get_states_chain t query )
       ; (* Get_diffs_chain *)
-        Rpc.Rpc.implement Rpc_def.Get_diffs_chain.V2.t
+        Rpc.Rpc.implement Rpc_def.Get_diffs_chain.V3.t
           (fun () { source; target; max_length } ->
             let logger = t.logger in
             let%bind chain =
-              get_ledger_hashes_chain t { source; target; max_length }
+              get_states_chain t { source; target; max_length }
             in
             [%log debug]
               "Got ledger hashes chain from $source to $target with length \
@@ -135,54 +129,43 @@ let implementations t =
                       | `Genesis ->
                           "genesis"
                       | `Specific source ->
-                          Ledger_hash.to_decimal_string source ) )
-                ; ("target", `String (Ledger_hash.to_decimal_string target))
+                          Da_state.to_string source ) )
+                ; ("target", `String (Da_state.to_string target))
                 ; ("length", `Int (List.length chain))
                 ] ;
-            Deferred.List.map ~how:`Parallel chain ~f:(fun ledger_hash ->
-                [%log debug] "Getting diff for ledger hash: $ledger_hash"
-                  ~metadata:
-                    [ ( "ledger_hash"
-                      , `String (Ledger_hash.to_decimal_string ledger_hash) )
-                    ] ;
-                Db.Async.get_diff ~ledger_hash t.db
-                >>| fun diff ->
-                Option.value_exn ~here:[%here] ~message:"Diff not found" diff ) )
+            Deferred.List.map ~how:`Parallel chain ~f:(fun state ->
+                [%log debug] "Getting diff for DA state: $state"
+                  ~metadata:[ ("state", `String (Da_state.to_string state)) ] ;
+                Db.Async.get_diff ~state t.db
+                >>| fun stored_diff ->
+                Option.value_exn ~here:[%here] ~message:"Diff not found"
+                  stored_diff ) )
       ; (* Diffs_stream *)
-        Rpc.Pipe_rpc.implement Rpc_def.Diffs_stream.V3.t
+        Rpc.Pipe_rpc.implement Rpc_def.Diffs_stream.V4.t
           (fun () { source; target } ->
             let logger = t.logger in
             let r, w = Pipe.create () in
             let%bind chain =
-              get_ledger_hashes_chain t { source; target; max_length = None }
+              get_states_chain t { source; target; max_length = None }
             in
             don't_wait_for
               ( Monitor.try_with (fun () ->
-                    Deferred.List.iter ~how:`Sequential chain
-                      ~f:(fun ledger_hash ->
-                        [%log debug]
-                          "Getting diff for ledger hash: $ledger_hash"
+                    Deferred.List.iter ~how:`Sequential chain ~f:(fun state ->
+                        [%log debug] "Getting diff for DA state: $state"
                           ~metadata:
-                            [ ( "ledger_hash"
-                              , `String
-                                  (Ledger_hash.to_decimal_string ledger_hash) )
-                            ] ;
-                        let%bind diff =
-                          Db.Async.get_diff ~ledger_hash t.db
+                            [ ("state", `String (Da_state.to_string state)) ] ;
+                        let%bind stored_diff =
+                          Db.Async.get_diff ~state t.db
                           >>| fun o ->
                           Option.value_exn o ~here:[%here]
                             ~message:
-                              (sprintf "Diff stream didn't find diff %s"
-                                 (Ledger_hash.to_decimal_string ledger_hash) )
+                              (sprintf "Diff stream didn't find DA state %s"
+                                 (Da_state.to_string state) )
                         in
-                        let%map () = Pipe.write w diff in
-                        [%log debug]
-                          "Wrote diff to pipe for ledger hash: $ledger_hash"
+                        let%map () = Pipe.write w stored_diff in
+                        [%log debug] "Wrote diff to pipe for DA state: $state"
                           ~metadata:
-                            [ ( "ledger_hash"
-                              , `String
-                                  (Ledger_hash.to_decimal_string ledger_hash) )
-                            ] ) )
+                            [ ("state", `String (Da_state.to_string state)) ] ) )
               >>| Result.iter_error ~f:(fun exn ->
                       [%log error] "Diff stream worker crashed: $error"
                         ~metadata:

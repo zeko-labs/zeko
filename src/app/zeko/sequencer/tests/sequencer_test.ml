@@ -347,14 +347,14 @@ let () =
       in
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
-      let ledger_hash =
+      let da_state =
         run (fun () ->
             let%bind commit_result = commit new_sequencer >>| Or_error.ok_exn in
             let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish new_sequencer.merger_ctx.executor
             in
-            let%map { ledger_hash = committed_ledger_hash; _ } =
+            let%map { ledger_hash = committed_ledger_hash; acc_set; _ } =
               Gql_client.infer_state ~logger gql_uri ~signer_pk
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
@@ -363,7 +363,8 @@ let () =
             in
             let target_ledger_hash = get_root new_sequencer in
             [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
-            committed_ledger_hash )
+            Da_layer.Da_state.create ~ledger_hash:committed_ledger_hash
+              ~acc_set:(account_set_root acc_set) )
       in
 
       print_endline "(* Check that all da nodes are synced *)" ;
@@ -371,12 +372,12 @@ let () =
           let%bind _multisig =
             Da_layer.Client.get_multisig
               { new_sequencer.da_client with quorum = 3 }
-              ~ledger_hash
+              ~state:da_state
           in
           let%map da_nodes_synced =
             Deferred.List.map da_config_with3.nodes ~f:(fun node ->
                 Da_layer.Client.Rpc.has_diff ~logger ~node_location:node
-                  ~ledger_hash )
+                  ~state:da_state )
             >>| Result.all >>| Or_error.ok_exn >>| List.for_all ~f:Fn.id
           in
           [%test_eq: bool] da_nodes_synced true ) ;
@@ -441,14 +442,14 @@ let () =
               apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* Commit *)" ;
-      let ledger_hash =
+      let da_state =
         run (fun () ->
             let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
             let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
-            let%map { ledger_hash = committed_ledger_hash; _ } =
+            let%map { ledger_hash = committed_ledger_hash; acc_set; _ } =
               Gql_client.infer_state ~logger gql_uri ~signer_pk
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
@@ -457,7 +458,8 @@ let () =
             in
             let target_ledger_hash = get_root !sequencer in
             [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
-            committed_ledger_hash )
+            Da_layer.Da_state.create ~ledger_hash:committed_ledger_hash
+              ~acc_set:(account_set_root acc_set) )
       in
 
       let[@warning "-26"] sequencer = free_sequencer sequencer in
@@ -483,12 +485,12 @@ let () =
           let%bind _multisig =
             Da_layer.Client.get_multisig
               { new_sequencer.da_client with quorum = 3 }
-              ~ledger_hash
+              ~state:da_state
           in
           let%map da_nodes_synced =
             Deferred.List.map da_config_with3.nodes ~f:(fun node ->
                 Da_layer.Client.Rpc.has_diff ~logger ~node_location:node
-                  ~ledger_hash )
+                  ~state:da_state )
             >>| Result.all >>| Or_error.ok_exn >>| List.for_all ~f:Fn.id
           in
           [%test_eq: bool] da_nodes_synced true ) ;

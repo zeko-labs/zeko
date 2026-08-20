@@ -122,6 +122,17 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
                    L.set_at_index_exn ledger index account ) ;
 
             let old_ledger_hash = L.merkle_root ledger in
+            let old_acc_set =
+              let tree =
+                Indexed_merkle_tree.In_memory.create
+                  ~depth:constraint_constants.ledger_depth ()
+              in
+              L.to_list_sequential ledger
+              |> List.map ~f:Account.identifier
+              |> List.map ~f:(fun aid -> Account_id.derive_token_id ~owner:aid)
+              |> Indexed_merkle_tree.In_memory.insert_batch_exn tree ;
+              Indexed_merkle_tree.In_memory.merkle_root tree
+            in
             printf "Old ledger hash: %s\n%!"
               (Ledger_hash.to_decimal_string old_ledger_hash) ;
 
@@ -176,7 +187,11 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
               printf "IMT hash: %s\n%!" (Ledger_hash.to_decimal_string imt_hash) ;
               Account_set.of_fields [| imt_hash |]
             in
-            ( Some (old_ledger_hash, old_ledger_openings, accounts_diff)
+            ( Some
+                ( old_ledger_hash
+                , old_acc_set
+                , old_ledger_openings
+                , accounts_diff )
             , ledger
             , imt_hash
             , imt )
@@ -204,11 +219,15 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
       let da_config = Da_layer.Client.Config.{ nodes = da_nodes } in
 
       (* If the old ledger exists, we need to just post the diff with updated inner account *)
-      let old_ledger_hash = Option.map old_ledger_witness ~f:fst3 in
+      let old_ledger_hash =
+        Option.map old_ledger_witness ~f:(fun (ledger_hash, _, _, _) ->
+            ledger_hash )
+      in
       let%bind old_ledger_exists =
         match old_ledger_witness with
-        | Some (ledger_hash, _, _) ->
-            Da_layer.Client.get_diff ~logger ~config:da_config ~ledger_hash
+        | Some (ledger_hash, acc_set, _, _) ->
+            let state = Da_layer.Da_state.create ~ledger_hash ~acc_set in
+            Da_layer.Client.get_diff ~logger ~config:da_config ~state
             >>| Result.is_ok
         | None ->
             return false
@@ -228,7 +247,7 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
           in
           let old_ledger_openings, changed_accounts =
             match old_ledger_witness with
-            | Some (_, old_ledger_openings, diff) ->
+            | Some (_, _, old_ledger_openings, diff) ->
                 (old_ledger_openings, diff)
             | None ->
                 failwith "Unreachable"
@@ -249,8 +268,15 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
                    Account_id.derive_token_id
                      ~owner:(Account.identifier account) )
           in
+          let source_state =
+            match old_ledger_witness with
+            | Some (ledger_hash, acc_set, _, _) ->
+                Da_layer.Da_state.create ~ledger_hash ~acc_set
+            | None ->
+                failwith "Unreachable"
+          in
           Da_layer.Client.distribute_diff ~logger ~config:da_config
-            ~ledger_openings:old_ledger_openings
+            ~source_state ~ledger_openings:old_ledger_openings
             ~acc_set_openings:
               (Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:imt
                  ~keys:new_accounts_keys )

@@ -15,13 +15,23 @@ module Field = Snark_params.Tick.Field
     9. Store the diff under the [target_ledger_hash]. 
     10. Sign [target_ledger_hash]. *)
 let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
-    ~(signer : Signer_service.Signer.t) ~ledger_openings ~acc_set_openings
-    ~(diff : Diff.Pending.t) =
+    ~(signer : Signer_service.Signer.t) ~(source_state : Da_state.t)
+    ~ledger_openings ~acc_set_openings ~(diff : Diff.Pending.t) =
   let get_account ledger account_id =
     try
       let index = Sparse_ledger.find_index_exn ledger account_id in
       Ok (Sparse_ledger.get_exn ledger index)
     with e -> Error (Error.of_exn e)
+  in
+
+  let%bind.Result () =
+    if Ledger_hash.equal source_state.ledger_hash diff.source_ledger_hash then
+      Ok ()
+    else
+      Error
+        (Error.create "Source DA state does not match diff source ledger hash"
+           (source_state, diff.source_ledger_hash)
+           [%sexp_of: Da_state.t * Ledger_hash.t] )
   in
 
   (* 1 *)
@@ -43,19 +53,18 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
 
   (* 2 *)
   let%bind.Result () =
-    match Db.get_diff kvdb ~ledger_hash:diff.source_ledger_hash with
+    match Db.get_diff kvdb ~state:source_state with
     | Some _ ->
         Ok ()
     | None ->
         if
-          Ledger_hash.equal diff.source_ledger_hash
-            (Diff.empty_ledger_hash
-               ~depth:(Sparse_ledger.depth ledger_openings) )
+          Da_state.equal source_state
+            (Da_state.empty ~depth:(Sparse_ledger.depth ledger_openings))
         then Ok ()
         else
           Error
-            (Error.create "Source ledger not found in the database"
-               diff.source_ledger_hash Ledger_hash.sexp_of_t )
+            (Error.create "Source ledger not found in the database" source_state
+               Da_state.sexp_of_t )
   in
 
   (* 3 *)
@@ -250,30 +259,28 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
         Ok acc
   in
   let%bind.Result () =
-    match diff.actions with
-    | `Actions _ ->
-        Ok ()
-    | `Command_with_action_step_flags _ ->
-        List.fold_result diff.changed_accounts ~init:()
-          ~f:(fun _ (_, account) ->
-            (* account's target_receipt_chain_hash needs to be either unchanged or the same as in [applied_hashes] *)
-            let account_id = Account.identifier account in
-            let%bind.Result target_account =
-              get_account target_ledger account_id
-            in
-            let target_receipt_chain_hash = target_account.receipt_chain_hash in
-            let%bind.Result applied_receipt_chain_hash =
-              get_account's_receipt_chain_hash applied_hashes account_id
-            in
-            if
-              Receipt.Chain_hash.equal target_receipt_chain_hash
-                applied_receipt_chain_hash
-            then Ok ()
-            else
-              Error
-                (Error.create "Receipt chain hash mismatch"
-                   (target_receipt_chain_hash, applied_receipt_chain_hash)
-                   [%sexp_of: Receipt.Chain_hash.t * Receipt.Chain_hash.t] ) )
+    List.fold_result diff.changed_accounts ~init:() ~f:(fun _ (_, account) ->
+        (* For command-backed diffs, [applied_hashes] contains every receipt
+           update authorized by the command. For actions-only diffs it is
+           empty, so this requires each receipt chain hash to stay unchanged. *)
+        let account_id = Account.identifier account in
+        let%bind.Result target_account = get_account target_ledger account_id in
+        let target_receipt_chain_hash = target_account.receipt_chain_hash in
+        let%bind.Result applied_receipt_chain_hash =
+          get_account's_receipt_chain_hash applied_hashes account_id
+        in
+        if
+          Receipt.Chain_hash.equal target_receipt_chain_hash
+            applied_receipt_chain_hash
+        then Ok ()
+        else
+          Error
+            (Error.create "Receipt chain hash mismatch"
+               ( account_id
+               , target_receipt_chain_hash
+               , applied_receipt_chain_hash )
+               [%sexp_of:
+                 Account_id.t * Receipt.Chain_hash.t * Receipt.Chain_hash.t] ) )
   in
 
   (* 7 *)
@@ -319,33 +326,40 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
 
   (* 8 *)
   (* V2 was added time *)
-  let diff : Diff.Stable.V4.t =
-    Diff.add_time_and_acc_set ~logger diff
-      ~acc_set:(Indexed_merkle_tree.Sparse.merkle_root acc_set_openings)
+  let target_acc_set =
+    Indexed_merkle_tree.Sparse.merkle_root_without_cache_exn acc_set_openings
   in
+  let diff : Diff.Stable.V4.t =
+    Diff.add_time_and_acc_set ~logger diff ~acc_set:target_acc_set
+  in
+  let target_state =
+    Da_state.create ~ledger_hash:target_ledger_hash ~acc_set:target_acc_set
+  in
+  let stored_diff : Stored_diff.t = { source_state; target_state; diff } in
 
   (* 9 *)
-  (* We don't care if the diff already existed *)
-  let () =
-    match Db.add_diff kvdb ~ledger_hash:target_ledger_hash ~diff with
+  let%bind.Result () =
+    match Db.add_diff kvdb ~diff:stored_diff with
     | `Already_existed ->
-        [%log warn] "Diff with target ledger hash %s already exists"
-          (Ledger_hash.to_decimal_string target_ledger_hash)
+        [%log info] "DA diff for state %s already exists"
+          (Da_state.to_string target_state) ;
+        Ok ()
     | `Added ->
-        [%log info] "Diff with target ledger hash %s added to the database"
-          (Ledger_hash.to_decimal_string target_ledger_hash)
+        [%log info] "DA diff for state %s added to the database"
+          (Da_state.to_string target_state) ;
+        Ok ()
+    | `Conflicting_diff existing ->
+        Error
+          (Error.create
+             "Refusing to sign a DA state whose stored diff has different \
+              contents"
+             (target_state, existing.diff, diff)
+             [%sexp_of: Da_state.t * Diff.Stable.V4.t * Diff.Stable.V4.t] )
   in
 
   (* 10 *)
   let%bind.Result message =
-    try
-      Random_oracle.hash
-        ~init:(Hash_prefix_create.salt Zeko_constants.da_layer_check_salt)
-        [| target_ledger_hash
-         ; Indexed_merkle_tree.Sparse.merkle_root_without_cache_exn
-             acc_set_openings
-        |]
-      |> Result.return
+    try Da_state.signing_message target_state |> Result.return
     with e -> Error (Error.of_exn e)
   in
   let signature =
@@ -353,3 +367,140 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
     (* Schnorr.Chunked.sign ~signature_kind:network_id signer.private_key message *)
   in
   Ok signature
+
+let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
+  let depth = 8 in
+  let logger = Logger.create () in
+  let proof_cache_db = Proof_cache_tag.create_identity_db () in
+  let signer =
+    Signer_service.Signer.of_keypair (Signature_lib.Keypair.create ())
+  in
+  let db_dir =
+    Filename.concat Filename.temp_dir_name
+      ("zeko-da-core-test-" ^ (Uuid_unix.create () |> Uuid.to_string))
+  in
+  let kvdb = Db.create db_dir in
+  Exn.protect
+    ~finally:(fun () -> Db.close kvdb)
+    ~f:(fun () ->
+      Ledger.with_ledger ~depth ~f:(fun ledger ->
+          let keypair = Signature_lib.Keypair.create () in
+          let account_id =
+            Account_id.create
+              (Public_key.compress keypair.public_key)
+              Token_id.default
+          in
+          let source_account =
+            Account.create account_id Currency.Balance.zero
+          in
+          Ledger.create_new_account_exn ledger account_id source_account ;
+          let source_ledger_hash = Ledger.merkle_root ledger in
+          let ledger_openings =
+            Sparse_ledger.of_ledger_subset_exn ledger [ account_id ]
+          in
+          let account_set = Indexed_merkle_tree.In_memory.create ~depth () in
+          Indexed_merkle_tree.In_memory.insert_exn account_set
+            (Account_id.derive_token_id ~owner:account_id) ;
+          let acc_set_openings =
+            Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger
+              ~db:account_set ~keys:[]
+          in
+          let acc_set =
+            Indexed_merkle_tree.Sparse.merkle_root acc_set_openings
+          in
+          let source_diff : Diff.Stable.V4.t =
+            { source_ledger_hash
+            ; changed_accounts = []
+            ; actions = `Actions []
+            ; timestamp = Block_time.zero
+            ; acc_set
+            }
+          in
+          ignore
+            ( Db.add_diff kvdb
+                ~diff:
+                  { Stored_diff.source_state =
+                      Da_state.create
+                        ~ledger_hash:source_diff.source_ledger_hash ~acc_set
+                  ; target_state =
+                      Da_state.create ~ledger_hash:source_ledger_hash ~acc_set
+                  ; diff = source_diff
+                  }
+              : [ `Added
+                | `Already_existed
+                | `Conflicting_diff of Stored_diff.t ] ) ;
+          let source_state =
+            Da_state.create ~ledger_hash:source_ledger_hash ~acc_set
+          in
+          let changed_receipt_chain_hash =
+            Receipt.Chain_hash.cons_zkapp_command_commitment
+              Unsigned.UInt32.zero
+              (Receipt.Zkapp_command_elt.Zkapp_command_commitment Field.one)
+              source_account.receipt_chain_hash
+          in
+          let target_account =
+            { source_account with
+              receipt_chain_hash = changed_receipt_chain_hash
+            }
+          in
+          let diff =
+            Diff.create_pending ~source_ledger_hash
+              ~changed_accounts:
+                [ (Ledger.index_of_account_exn ledger account_id, target_account)
+                ]
+              ~actions:(`Actions [])
+          in
+          let result =
+            match
+              post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet
+                ~signer ~source_state ~ledger_openings ~acc_set_openings ~diff
+            with
+            | Error error ->
+                Error error
+            | Ok signature ->
+                Async.Thread_safe.block_on_async_exn (fun () -> signature)
+          in
+          assert (Result.is_error result) ;
+          let receipt_preserving_account =
+            { source_account with nonce = Unsigned.UInt32.one }
+          in
+          let receipt_preserving_diff =
+            Diff.create_pending ~source_ledger_hash
+              ~changed_accounts:
+                [ ( Ledger.index_of_account_exn ledger account_id
+                  , receipt_preserving_account )
+                ]
+              ~actions:(`Actions [])
+          in
+          let receipt_preserving_result =
+            match
+              post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet
+                ~signer ~source_state ~ledger_openings ~acc_set_openings
+                ~diff:receipt_preserving_diff
+            with
+            | Error error ->
+                Error error
+            | Ok signature ->
+                Async.Thread_safe.block_on_async_exn (fun () -> signature)
+          in
+          assert (Result.is_ok receipt_preserving_result) ;
+          let conflicting_diff =
+            Diff.create_pending ~source_ledger_hash
+              ~changed_accounts:
+                [ ( Ledger.index_of_account_exn ledger account_id
+                  , receipt_preserving_account )
+                ]
+              ~actions:(`Actions [ (account_id, []) ])
+          in
+          let conflicting_result =
+            match
+              post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet
+                ~signer ~source_state ~ledger_openings ~acc_set_openings
+                ~diff:conflicting_diff
+            with
+            | Error error ->
+                Error error
+            | Ok signature ->
+                Async.Thread_safe.block_on_async_exn (fun () -> signature)
+          in
+          assert (Result.is_error conflicting_result) ) )

@@ -26,26 +26,37 @@ module Diff_table = struct
     ; ledger_openings : Sparse_ledger.t
     ; acc_set_openings : Indexed_merkle_tree.Sparse.t
     ; genesis : bool
-    ; target_ledger_hash : Ledger_hash.t
+    ; source_state : Da_state.t
+    ; target_state : Da_state.t
     }
   [@@deriving hlist, fields, sexp]
 
-  let make ~diff ~ledger_openings ~acc_set_openings ~target_ledger_hash ~genesis
-      =
-    { diff; ledger_openings; acc_set_openings; target_ledger_hash; genesis }
+  let make ~diff ~ledger_openings ~acc_set_openings ~source_state ~target_state
+      ~genesis =
+    { diff
+    ; ledger_openings
+    ; acc_set_openings
+    ; source_state
+    ; target_state
+    ; genesis
+    }
 
   let typ =
     Mina_caqti.Type_spec.custom_type
       ~to_hlist:(fun { diff
                      ; ledger_openings
                      ; acc_set_openings
-                     ; target_ledger_hash
+                     ; source_state
+                     ; target_state
                      ; genesis
                      } ->
         H_list.
-          [ Ledger_hash.to_decimal_string target_ledger_hash
+          [ Ledger_hash.to_decimal_string target_state.ledger_hash
+          ; Field.to_string target_state.acc_set
           ; ( if genesis then None
-            else Some (Ledger_hash.to_decimal_string diff.source_ledger_hash) )
+            else Some (Ledger_hash.to_decimal_string source_state.ledger_hash)
+            )
+          ; Field.to_string source_state.acc_set
           ; Binable.to_bigstring
               (module Diff.Pending.Stable.V1.With_top_version_tag)
               diff
@@ -56,7 +67,9 @@ module Diff_table = struct
           ] )
       ~of_hlist:(fun H_list.
                        [ target_ledger_hash
+                       ; target_acc_set
                        ; source_ledger_hash
+                       ; source_acc_set
                        ; diff
                        ; ledger_openings
                        ; acc_set_openings
@@ -67,10 +80,20 @@ module Diff_table = struct
           | Ppx_deriving_yojson_runtime.Result.Error e ->
               failwithf "Error parsing ledger openings: %s" e ()
         in
-        { diff =
-            Binable.of_bigstring
-              (module Diff.Pending.Stable.V1.With_top_version_tag)
-              (Bigstring.of_string diff)
+        let diff =
+          Binable.of_bigstring
+            (module Diff.Pending.Stable.V1.With_top_version_tag)
+            (Bigstring.of_string diff)
+        in
+        let source_state =
+          Da_state.create
+            ~ledger_hash:
+              (Option.value_map source_ledger_hash
+                 ~default:diff.source_ledger_hash
+                 ~f:Ledger_hash.of_decimal_string )
+            ~acc_set:(Field.of_string source_acc_set)
+        in
+        { diff
         ; ledger_openings =
             Sparse_ledger.of_yojson (Yojson.Safe.from_string ledger_openings)
             |> ok_exn
@@ -79,49 +102,64 @@ module Diff_table = struct
               (Yojson.Safe.from_string acc_set_openings)
             |> ok_exn
         ; genesis = Option.is_none source_ledger_hash
-        ; target_ledger_hash = Ledger_hash.of_decimal_string target_ledger_hash
+        ; source_state
+        ; target_state =
+            Da_state.create
+              ~ledger_hash:(Ledger_hash.of_decimal_string target_ledger_hash)
+              ~acc_set:(Field.of_string target_acc_set)
         } )
-      Caqti_type.[ string; option string; octets; octets; octets ]
+      Caqti_type.
+        [ string; string; option string; string; octets; octets; octets ]
 
   let insert (module Conn : CONNECTION) t =
     Conn.exec
       (Caqti_request.exec typ
-         {sql| INSERT INTO da_diff (target_ledger_hash, source_ledger_hash, diff, ledger_openings, acc_set_openings)
-                VALUES (?, ?, ?, ?, ?) |sql} )
+         {sql| INSERT INTO da_diff (target_ledger_hash, target_acc_set, source_ledger_hash, source_acc_set, diff, ledger_openings, acc_set_openings)
+                VALUES (?, ?, ?, ?, ?, ?, ?) |sql} )
       t
 
-  let get_diff_by_source (module Conn : CONNECTION) ledger_hash =
-    match ledger_hash with
-    | Some ledger_hash ->
+  let get_diff_by_source (module Conn : CONNECTION) state =
+    match state with
+    | Some (state : Da_state.t) ->
         Conn.find_opt
-          (Caqti_request.find_opt Caqti_type.string typ
-             {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings, acc_set_openings FROM da_diff WHERE source_ledger_hash = ? |sql} )
-          (Ledger_hash.to_decimal_string ledger_hash)
+          (Caqti_request.find_opt
+             Caqti_type.(tup2 string string)
+             typ
+             {sql| SELECT target_ledger_hash, target_acc_set, source_ledger_hash, source_acc_set, diff, ledger_openings, acc_set_openings FROM da_diff WHERE source_ledger_hash = ? AND source_acc_set = ? |sql} )
+          ( Ledger_hash.to_decimal_string state.ledger_hash
+          , Field.to_string state.acc_set )
     | None ->
         Conn.find_opt
           (Caqti_request.find_opt Caqti_type.unit typ
-             {sql| SELECT target_ledger_hash, source_ledger_hash, diff, ledger_openings, acc_set_openings FROM da_diff WHERE source_ledger_hash IS NULL |sql} )
+             {sql| SELECT target_ledger_hash, target_acc_set, source_ledger_hash, source_acc_set, diff, ledger_openings, acc_set_openings FROM da_diff WHERE source_ledger_hash IS NULL |sql} )
           ()
 
-  let get_id_by_target (module Conn : CONNECTION) ledger_hash =
+  let get_id_by_target (module Conn : CONNECTION) (state : Da_state.t) =
     Conn.find_opt
-      (Caqti_request.find_opt Caqti_type.string Caqti_type.int
-         {sql| SELECT id FROM da_diff WHERE target_ledger_hash = ? |sql} )
-      (Ledger_hash.to_decimal_string ledger_hash)
+      (Caqti_request.find_opt
+         Caqti_type.(tup2 string string)
+         Caqti_type.int
+         {sql| SELECT id FROM da_diff WHERE target_ledger_hash = ? AND target_acc_set = ? |sql} )
+      ( Ledger_hash.to_decimal_string state.ledger_hash
+      , Field.to_string state.acc_set )
 
   let get_target_by_id (module Conn : CONNECTION) id =
     let%map.Deferred.Result result =
       Conn.find_opt
-        (Caqti_request.find_opt Caqti_type.int Caqti_type.string
-           {sql| SELECT target_ledger_hash FROM da_diff WHERE id = ? |sql} )
+        (Caqti_request.find_opt Caqti_type.int
+           Caqti_type.(tup2 string string)
+           {sql| SELECT target_ledger_hash, target_acc_set FROM da_diff WHERE id = ? |sql} )
         id
     in
-    Option.map ~f:Ledger_hash.of_decimal_string result
+    Option.map result ~f:(fun (ledger_hash, acc_set) ->
+        Da_state.create
+          ~ledger_hash:(Ledger_hash.of_decimal_string ledger_hash)
+          ~acc_set:(Field.of_string acc_set) )
 end
 
 module Signature_table = struct
   type t =
-    { target_ledger_hash : Ledger_hash.t
+    { target_state : Da_state.t
     ; public_key : Public_key.Compressed.t
     ; signature : Signature.t
     }
@@ -129,39 +167,53 @@ module Signature_table = struct
 
   let typ =
     Mina_caqti.Type_spec.custom_type
-      ~to_hlist:(fun { target_ledger_hash; public_key; signature } ->
+      ~to_hlist:(fun { target_state; public_key; signature } ->
         H_list.
-          [ Ledger_hash.to_decimal_string target_ledger_hash
+          [ Ledger_hash.to_decimal_string target_state.ledger_hash
+          ; Field.to_string target_state.acc_set
           ; Public_key.Compressed.to_base58_check public_key
           ; Signature.to_base58_check signature
           ] )
-      ~of_hlist:(fun H_list.[ target_ledger_hash; public_key; signature ] ->
-        { target_ledger_hash = Ledger_hash.of_decimal_string target_ledger_hash
+      ~of_hlist:(fun H_list.
+                       [ target_ledger_hash
+                       ; target_acc_set
+                       ; public_key
+                       ; signature
+                       ] ->
+        { target_state =
+            Da_state.create
+              ~ledger_hash:(Ledger_hash.of_decimal_string target_ledger_hash)
+              ~acc_set:(Field.of_string target_acc_set)
         ; public_key = Public_key.Compressed.of_base58_check_exn public_key
         ; signature = Signature.of_base58_check_exn signature
         } )
-      Caqti_type.[ string; string; octets ]
+      Caqti_type.[ string; string; string; octets ]
 
   let insert (module Conn : CONNECTION) t =
     Conn.exec
       (Caqti_request.exec typ
-         {sql| INSERT INTO da_signature (target_ledger_hash, public_key, signature) VALUES (?, ?, ?) |sql} )
+         {sql| INSERT INTO da_signature (target_ledger_hash, target_acc_set, public_key, signature) VALUES (?, ?, ?, ?) |sql} )
       t
 
-  let get_signature_opt (module Conn : CONNECTION) ledger_hash public_key =
+  let get_signature_opt (module Conn : CONNECTION) (state : Da_state.t)
+      public_key =
     Conn.find_opt
       (Caqti_request.find_opt
-         Caqti_type.(tup2 string string)
+         Caqti_type.(tup3 string string string)
          typ
-         {sql| SELECT target_ledger_hash, public_key, signature FROM da_signature WHERE target_ledger_hash = ? AND public_key = ? |sql} )
-      ( Ledger_hash.to_decimal_string ledger_hash
+         {sql| SELECT target_ledger_hash, target_acc_set, public_key, signature FROM da_signature WHERE target_ledger_hash = ? AND target_acc_set = ? AND public_key = ? |sql} )
+      ( Ledger_hash.to_decimal_string state.ledger_hash
+      , Field.to_string state.acc_set
       , Public_key.Compressed.to_base58_check public_key )
 
-  let get_signatures (module Conn : CONNECTION) ledger_hash =
+  let get_signatures (module Conn : CONNECTION) (state : Da_state.t) =
     Conn.collect_list
-      (Caqti_request.collect Caqti_type.string typ
-         {sql| SELECT target_ledger_hash, public_key, signature FROM da_signature WHERE target_ledger_hash = ? |sql} )
-      (Ledger_hash.to_decimal_string ledger_hash)
+      (Caqti_request.collect
+         Caqti_type.(tup2 string string)
+         typ
+         {sql| SELECT target_ledger_hash, target_acc_set, public_key, signature FROM da_signature WHERE target_ledger_hash = ? AND target_acc_set = ? |sql} )
+      ( Ledger_hash.to_decimal_string state.ledger_hash
+      , Field.to_string state.acc_set )
 end
 
 module Rpc = struct
@@ -265,36 +317,23 @@ module Rpc = struct
 
   let post_diff ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
-      ~ledger_openings ~acc_set_openings ~diff =
+      ~source_state ~ledger_openings ~acc_set_openings ~diff =
     [%log debug] "Posting diff to da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:5 ~logger node_location Rpc.Post_diff.V1.t
-      { ledger_openings; diff; acc_set_openings }
+    dispatch ~max_tries:5 ~logger node_location Rpc.Post_diff.V2.t
+      { source_state; ledger_openings; diff; acc_set_openings }
 
   let get_diff ~logger
-      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
-      ~ledger_hash =
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~state =
     [%log debug] "Getting diff from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch_with_fallback_same_query ~max_tries:1 ~logger node_location
-      ledger_hash
-      ~versions:
-        [ Versioned_rpc_same_query.V (Rpc.Get_diff.V4.t, Fn.id)
-        ; Versioned_rpc_same_query.V
-            (Rpc.Get_diff.V3.t, Option.map ~f:Diff.Stable.V3.to_latest)
-        ; Versioned_rpc_same_query.V
-            (Rpc.Get_diff.V2.t, Option.map ~f:Diff.Stable.V2.to_latest)
-        ; Versioned_rpc_same_query.V
-            (Rpc.Get_diff.V1.t, Option.map ~f:Diff.Stable.V1.to_latest)
-        ]
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff.V5.t state
 
   let get_diff_source ~logger
-      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
-      ~ledger_hash =
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~state =
     [%log debug] "Getting diff source from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.V1.t
-      ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diff_source.V2.t state
 
   let get_node_public_key ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) () =
@@ -304,19 +343,17 @@ module Rpc = struct
       ()
 
   let get_signature ~logger
-      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
-      ~ledger_hash =
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~state =
     [%log debug] "Getting signature from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.V1.t
-      ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_signature.V2.t state
 
-  let get_ledger_hashes_chain ~logger
+  let get_states_chain ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
       ?max_length ~source ~target () =
     [%log debug] "Getting ledger hashes chain from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_ledger_hashes_chain.V1.t
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_ledger_hashes_chain.V2.t
       { source; target; max_length }
 
   let get_diffs_chain ~logger
@@ -324,15 +361,14 @@ module Rpc = struct
       ?max_length ~source ~target () =
     [%log debug] "Getting diffs chain from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diffs_chain.V2.t
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_diffs_chain.V3.t
       { source; target; max_length }
 
   let has_diff ~logger
-      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
-      ~ledger_hash =
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~state =
     [%log debug] "Checking if diff exists in da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:1 ~logger node_location Rpc.Has_diff.V1.t ledger_hash
+    dispatch ~max_tries:1 ~logger node_location Rpc.Has_diff.V2.t state
 
   let pipe_dispatch rpc query (host_and_port : Host_and_port.t) =
     let open Async in
@@ -386,7 +422,7 @@ module Rpc = struct
       ~target () =
     [%log debug] "Getting diffs stream from da node %s"
       (Host_and_port.to_string node_location.value) ;
-    pipe_dispatch Rpc.Diffs_stream.V3.t { source; target } node_location.value
+    pipe_dispatch Rpc.Diffs_stream.V4.t { source; target } node_location.value
 end
 
 module Config = struct
@@ -456,8 +492,8 @@ let create ~logger ~(config : Config.t) ~quorum ~da_keys ~db_pool =
 
 let stop t = Ivar.fill t.stop ()
 
-let enqueue_diff t ~target_ledger_hash ~ledger_openings ~acc_set_openings ~diff
-    ~genesis =
+let enqueue_diff t ~source_state ~target_state ~ledger_openings
+    ~acc_set_openings ~diff ~genesis =
   let%map () =
     Pool.use
       (fun conn ->
@@ -465,7 +501,8 @@ let enqueue_diff t ~target_ledger_hash ~ledger_openings ~acc_set_openings ~diff
           { diff
           ; ledger_openings
           ; acc_set_openings
-          ; target_ledger_hash
+          ; source_state
+          ; target_state
           ; genesis
           } )
       t.db_pool
@@ -475,7 +512,7 @@ let enqueue_diff t ~target_ledger_hash ~ledger_openings ~acc_set_openings ~diff
 
 let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
     ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
-    ~source_ledger_hash () =
+    ~source_state () =
   if Ivar.is_full t.stop then return ()
   else
     let logger = t.logger in
@@ -483,26 +520,31 @@ let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
       Option.value pushed_diff ~default:(Condition.wait t.pushed_diff)
     in
     match%bind
-      Pool.use
-        (fun c -> Diff_table.get_diff_by_source c source_ledger_hash)
-        t.db_pool
+      Pool.use (fun c -> Diff_table.get_diff_by_source c source_state) t.db_pool
       >>| caqti_ok_exn ~msg:"Failed to get diff from db: %s"
     with
     | None ->
         [%log info]
-          !"No diff found for source ledger hash: %{sexp: Ledger_hash.t \
-            option} for node %s, waiting"
-          source_ledger_hash
+          !"No diff found for source DA state: %{sexp: Da_state.t option} for \
+            node %s, waiting"
+          source_state
           (Host_and_port.to_string node_location.value) ;
         let%bind () = Deferred.any [ pushed_diff; Ivar.read t.stop ] in
         start_posting_diffs_from ?timeout_on_failure
           ~pushed_diff:(Condition.wait t.pushed_diff)
-          t ~node_location ~source_ledger_hash ()
-    | Some { diff; ledger_openings; acc_set_openings; target_ledger_hash; _ }
-      -> (
+          t ~node_location ~source_state ()
+    | Some
+        { diff
+        ; ledger_openings
+        ; acc_set_openings
+        ; source_state = diff_source_state
+        ; target_state
+        ; _
+        } -> (
         match%bind
-          Rpc.post_diff ~logger:t.logger ~node_location ~ledger_openings
-            ~acc_set_openings ~diff
+          Rpc.post_diff ~logger:t.logger ~node_location
+            ~source_state:diff_source_state ~ledger_openings ~acc_set_openings
+            ~diff
         with
         | Error err ->
             [%log error] "Failed to post diff to da node: %s"
@@ -524,17 +566,17 @@ let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
                   after timeout
             in
             start_posting_diffs_from ?timeout_on_failure t ~node_location
-              ~source_ledger_hash ()
+              ~source_state ()
         | Ok (public_key, signature) ->
             [%log info]
-              !"Posted diff to da node %s with hash: %{sexp: Ledger_hash.t}"
+              !"Posted diff to da node %s for state: %{sexp: Da_state.t}"
               (Host_and_port.to_string node_location.value)
-              target_ledger_hash ;
+              target_state ;
             let%bind () =
               Pool.use
                 (fun c ->
                   Signature_table.insert c
-                    { target_ledger_hash; public_key; signature } )
+                    { target_state; public_key; signature } )
                 t.db_pool
               >>| fun r ->
               if Ivar.is_full t.stop then ()
@@ -542,7 +584,7 @@ let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
             in
             Condition.broadcast t.pushed_signature () ;
             start_posting_diffs_from ?timeout_on_failure t ~node_location
-              ~source_ledger_hash:(Some target_ledger_hash) () )
+              ~source_state:(Some target_state) () )
 
 let wait_for_successful_healthcheck ~timeout ~logger ~node_location () =
   keep_retrying ~delay:timeout ~logger
@@ -560,16 +602,14 @@ let wait_for_successful_healthcheck ~timeout ~logger ~node_location () =
           Error err )
     ()
 
-let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
+let binary_search_last_state t ~node_location ~target_state =
   let return = Deferred.Result.return in
   if%bind.Deferred.Result
-    Rpc.has_diff ~logger:t.logger ~node_location ~ledger_hash:target_ledger_hash
-  then return (Some target_ledger_hash)
+    Rpc.has_diff ~logger:t.logger ~node_location ~state:target_state
+  then return (Some target_state)
   else
     let%bind.Deferred.Result target_id =
-      Pool.use
-        (fun c -> Diff_table.get_id_by_target c target_ledger_hash)
-        t.db_pool
+      Pool.use (fun c -> Diff_table.get_id_by_target c target_state) t.db_pool
       >>| caqti_ok_exn ~msg:"Failed to get id from target ledger hash: %s"
       >>| (fun opt -> Option.value_exn ~message:"No diff found" opt)
       >>| Result.return
@@ -578,7 +618,7 @@ let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
       if left > right then return None
       else
         let mid = (left + right) / 2 in
-        let%bind.Deferred.Result mid_ledger_hash =
+        let%bind.Deferred.Result mid_state =
           Pool.use (fun c -> Diff_table.get_target_by_id c mid) t.db_pool
           >>| caqti_ok_exn ~msg:"Failed to find mid ledger hash: %s"
           >>| (fun opt ->
@@ -587,25 +627,23 @@ let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
           >>| Result.return
         in
         let%bind.Deferred.Result mid_found =
-          Rpc.has_diff ~logger:t.logger ~node_location
-            ~ledger_hash:mid_ledger_hash
+          Rpc.has_diff ~logger:t.logger ~node_location ~state:mid_state
         in
-        let%bind.Deferred.Result next_ledger_hash =
+        let%bind.Deferred.Result next_state =
           Pool.use (fun c -> Diff_table.get_target_by_id c (mid + 1)) t.db_pool
           >>| caqti_ok_exn ~msg:"Failed to find next ledger hash: %s"
           >>| Result.return
         in
         let%bind.Deferred.Result next_found =
-          match next_ledger_hash with
-          | Some next_ledger_hash ->
-              Rpc.has_diff ~logger:t.logger ~node_location
-                ~ledger_hash:next_ledger_hash
+          match next_state with
+          | Some next_state ->
+              Rpc.has_diff ~logger:t.logger ~node_location ~state:next_state
           | None ->
               return false
         in
-        if mid_found && not next_found then return (Some mid_ledger_hash)
-        else if mid_found && mid = target_id then return (Some mid_ledger_hash)
-        else if next_found && mid + 1 = target_id then return next_ledger_hash
+        if mid_found && not next_found then return (Some mid_state)
+        else if mid_found && mid = target_id then return (Some mid_state)
+        else if next_found && mid + 1 = target_id then return next_state
         else if (not mid_found) && mid = 1 then return None
         else if mid_found && next_found then go ~left:mid ~right
         else go ~left ~right:mid
@@ -613,27 +651,26 @@ let binary_search_last_ledger_hash t ~node_location ~target_ledger_hash =
     go ~left:1 ~right:target_id
 
 let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
-    ~target_ledger_hash =
+    ~target_state =
   let logger = t.logger in
   let%bind.Deferred () =
     wait_for_successful_healthcheck ~timeout:(Time_ns.Span.of_sec 30.) ~logger
       ~node_location ()
   in
-  let%bind last_ledger_hash =
+  let%bind last_state =
     keep_retrying ~logger
-      ~f:(fun () ->
-        binary_search_last_ledger_hash t ~node_location ~target_ledger_hash )
+      ~f:(fun () -> binary_search_last_state t ~node_location ~target_state)
       ()
   in
   [%log info]
-    !"Found last ledger hash: %{sexp: Ledger_hash.t option} for node %s"
-    last_ledger_hash
+    !"Found last DA state: %{sexp: Da_state.t option} for node %s"
+    last_state
     (Host_and_port.to_string node_location.value) ;
   let%bind () =
-    match (last_ledger_hash, Ivar.is_full t.stop) with
+    match (last_state, Ivar.is_full t.stop) with
     | None, _ | _, true ->
         return ()
-    | Some last_ledger_hash, false ->
+    | Some last_state, false ->
         (* In case we've started from checkpoint, we need to refetch the signature *)
         let%bind public_key =
           keep_retrying ~logger:t.logger
@@ -644,7 +681,7 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
         Pool.use
           (with_transaction ~f:(fun c ->
                let%bind.Deferred.Result signature_opt =
-                 Signature_table.get_signature_opt c last_ledger_hash public_key
+                 Signature_table.get_signature_opt c last_state public_key
                in
                if Option.is_some signature_opt then return (Ok ())
                else (
@@ -653,16 +690,13 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
                    (Host_and_port.to_string node_location.value) ;
                  let%bind public_key, signature =
                    Rpc.get_signature ~logger:t.logger ~node_location
-                     ~ledger_hash:last_ledger_hash
+                     ~state:last_state
                    >>| Or_error.ok_exn
                    >>| fun x ->
                    Option.value_exn ~message:"Signature not found" x
                  in
                  Signature_table.insert c
-                   { target_ledger_hash = last_ledger_hash
-                   ; public_key
-                   ; signature
-                   } ) ) )
+                   { target_state = last_state; public_key; signature } ) ) )
           t.db_pool
         >>| fun res ->
         if Ivar.is_full t.stop then ()
@@ -671,20 +705,20 @@ let catch_up t ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
   if Ivar.is_full t.stop then return ()
   else
     start_posting_diffs_from t ~timeout_on_failure:(Time_ns.Span.of_sec 10.)
-      ~node_location ~source_ledger_hash:last_ledger_hash ()
+      ~node_location ~source_state:last_state ()
 
-let start_client t ~target_ledger_hash =
+let start_client t ~target_state =
   List.iter t.config.nodes ~f:(fun node_location ->
       don't_wait_for
         (within' ~monitor:Monitor.main (fun () ->
-             catch_up t ~node_location ~target_ledger_hash ) ) )
+             catch_up t ~node_location ~target_state ) ) )
 
-let rec get_multisig ?pushed_signature t ~ledger_hash =
+let rec get_multisig ?pushed_signature t ~state =
   let pushed_signature =
     Option.value pushed_signature ~default:(Condition.wait t.pushed_signature)
   in
   let%bind signatures =
-    Pool.use (fun c -> Signature_table.get_signatures c ledger_hash) t.db_pool
+    Pool.use (fun c -> Signature_table.get_signatures c state) t.db_pool
     >>| caqti_ok_exn ~msg:"Failed to get signatures from db: %s"
   in
   if List.length signatures >= t.quorum then
@@ -704,7 +738,7 @@ let rec get_multisig ?pushed_signature t ~ledger_hash =
     else
       get_multisig
         ~pushed_signature:(Condition.wait t.pushed_signature)
-        t ~ledger_hash
+        t ~state
 
 (** Useful for querying data, will fallback to the next node in list in case the first one fails *)
 let try_all_nodes ~config ~f =
@@ -720,29 +754,28 @@ let try_all_nodes ~config ~f =
   in
   try_first ~accum_errors:[] (Config.nodes config)
 
-(** Get the chain of ledger hashes from [source_ledger_hash] hash to [target_ledger_hash] *)
-let get_ledger_hashes_chain ~logger ~config ?max_length ~source_ledger_hash
-    ~target_ledger_hash () =
+(** Get the chain of exact DA states from [source_state] to [target_state]. *)
+let get_states_chain ~logger ~config ?max_length ~source_state ~target_state ()
+    =
   try_all_nodes ~config ~f:(fun ~node_location () ->
-      Rpc.get_ledger_hashes_chain ~logger ~node_location ?max_length
-        ~source:source_ledger_hash ~target:target_ledger_hash () )
+      Rpc.get_states_chain ~logger ~node_location ?max_length
+        ~source:source_state ~target:target_state () )
 
-(** Get the chain of diffs from [source_ledger_hash] hash to [target_ledger_hash] *)
-let get_diffs_chain ~logger ~config ?max_length ~source_ledger_hash
-    ~target_ledger_hash () =
+(** Get the chain of stored diffs from [source_state] to [target_state]. *)
+let get_diffs_chain ~logger ~config ?max_length ~source_state ~target_state () =
   try_all_nodes ~config ~f:(fun ~node_location () ->
       Rpc.get_diffs_chain ~logger ~node_location ?max_length
-        ~source:source_ledger_hash ~target:target_ledger_hash () )
+        ~source:source_state ~target:target_state () )
 
-let diff_exists ~logger ~config ~ledger_hash () =
+let diff_exists ~logger ~config ~state () =
   try_all_nodes ~config ~f:(fun ~node_location () ->
-      Rpc.has_diff ~logger ~node_location ~ledger_hash )
+      Rpc.has_diff ~logger ~node_location ~state )
 
-let stream_diffs ~logger ~config ~source_ledger_hash ~target_ledger_hash () =
+let stream_diffs ~logger ~config ~source_state ~target_state () =
   try_all_nodes ~config ~f:(fun ~node_location () ->
       match%bind
-        Rpc.diffs_stream ~logger ~node_location ~source:source_ledger_hash
-          ~target:target_ledger_hash ()
+        Rpc.diffs_stream ~logger ~node_location ~source:source_state
+          ~target:target_state ()
       with
       | Ok (Ok stream) ->
           return (Ok stream)
@@ -750,28 +783,23 @@ let stream_diffs ~logger ~config ~source_ledger_hash ~target_ledger_hash () =
           return (Error err) )
 
 (** Lazily fetch chunks of diffs, used to minimize memory usage *)
-let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
-    ~target_ledger_hash
+let get_lazy_diffs_chunks ~logger ~config ?(n = 1000) ~source_state
+    ~target_state
     (rpc :
          logger:Logger.t
       -> config:Config.t
-      -> source_ledger_hash:[ `Genesis | `Specific of Field.t ]
-      -> target_ledger_hash:Field.t
+      -> source_state:[ `Genesis | `Specific of Da_state.t ]
+      -> target_state:Da_state.t
       -> unit
       -> ('a, Error.t) result Deferred.t ) () =
-  let source_ledger_hash =
-    match source_ledger_hash with
-    | `Genesis ->
-        Diff.empty_ledger_hash ~depth
-    | `Specific h ->
-        h
+  let specific_source_state =
+    match source_state with `Genesis -> None | `Specific state -> Some state
   in
   let counter = ref 0 in
   (* Get ledger hashes intervals of size [n] *)
-  let rec get_intervals ~target_ledger_hash =
+  let rec get_intervals ~target_state =
     let%bind.Deferred.Result chain =
-      get_ledger_hashes_chain ~logger ~config ~max_length:n
-        ~source_ledger_hash:(`Specific source_ledger_hash) ~target_ledger_hash
+      get_states_chain ~logger ~config ~max_length:n ~source_state ~target_state
         ()
     in
     counter := !counter + List.length chain ;
@@ -780,21 +808,28 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
     | [] ->
         return (Ok [])
     | [ last ] ->
-        let interval = (source_ledger_hash, last) in
+        let interval_source =
+          match specific_source_state with
+          | Some state ->
+              `Specific state
+          | None ->
+              `Genesis
+        in
+        let interval = (interval_source, last) in
         return (Ok [ interval ])
     | chain ->
         let hd = List.hd_exn chain in
         let tl = List.last_exn chain in
-        let interval = (hd, tl) in
+        let interval = (`Specific hd, tl) in
         let%bind.Deferred.Result next_intervals =
-          get_intervals ~target_ledger_hash:hd
+          get_intervals ~target_state:hd
         in
         return (Ok (interval :: next_intervals))
   in
   let%bind.Deferred.Result intervals =
     [%log info] "Fetching intervals from da layer of size %s"
       (Int.to_string_hum n) ;
-    get_intervals ~target_ledger_hash >>| Result.map ~f:List.rev
+    get_intervals ~target_state >>| Result.map ~f:List.rev
   in
   [%log debug] "Fetched %s intervals"
     (Int.to_string_hum (List.length intervals)) ;
@@ -802,35 +837,41 @@ let get_lazy_diffs_chunks ~logger ~depth ~config ?(n = 1000) ~source_ledger_hash
   @@ Ok
        (List.map intervals ~f:(fun (source, target) ->
             [%log debug] "Creating lazy chunk from %s to %s"
-              (Ledger_hash.to_decimal_string source)
-              (Ledger_hash.to_decimal_string target) ;
+              ( match source with
+              | `Genesis ->
+                  "genesis"
+              | `Specific state ->
+                  Da_state.to_string state )
+              (Da_state.to_string target) ;
             lazy
               ( [%log debug] "Forcing diffs chunk from %s to %s"
-                  (Ledger_hash.to_decimal_string source)
-                  (Ledger_hash.to_decimal_string target) ;
-                rpc ~logger ~config ~source_ledger_hash:(`Specific source)
-                  ~target_ledger_hash:target () ) ) )
+                  ( match source with
+                  | `Genesis ->
+                      "genesis"
+                  | `Specific state ->
+                      Da_state.to_string state )
+                  (Da_state.to_string target) ;
+                rpc ~logger ~config ~source_state:source ~target_state:target ()
+              ) ) )
 
 let map_diffs :
        ?interval_size:int
     -> logger:Logger.t
-    -> depth:int
     -> config:Config.t
-    -> source_ledger_hash:[< `Genesis | `Specific of Field.t ]
-    -> target_ledger_hash:Field.t
+    -> source_state:[< `Genesis | `Specific of Da_state.t ]
+    -> target_state:Da_state.t
     -> f:
          (   current_chunk:int
           -> current_diff:int
           -> chunks_length:int
-          -> Diff.Stable.V4.t
+          -> Stored_diff.t
           -> 'a Deferred.t )
     -> unit
     -> ('a list, Error.t) Deferred.Result.t =
- fun ?interval_size ~logger ~depth ~config ~source_ledger_hash
-     ~target_ledger_hash ~f () ->
+ fun ?interval_size ~logger ~config ~source_state ~target_state ~f () ->
   let%bind.Deferred.Result lazy_chunks =
-    get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
-      ~source_ledger_hash ~target_ledger_hash
+    get_lazy_diffs_chunks ?n:interval_size ~logger ~config ~source_state
+      ~target_state
       (get_diffs_chain ?max_length:None)
       ()
   in
@@ -858,23 +899,21 @@ let map_diffs :
 let iter_diffs :
        ?interval_size:int
     -> logger:Logger.t
-    -> depth:int
     -> config:Config.t
-    -> source_ledger_hash:[< `Genesis | `Specific of Field.t ]
-    -> target_ledger_hash:Field.t
+    -> source_state:[< `Genesis | `Specific of Da_state.t ]
+    -> target_state:Da_state.t
     -> f:
          (   current_chunk:int
           -> current_diff:int
           -> chunks_length:int
-          -> Diff.Stable.V4.t
+          -> Stored_diff.t
           -> unit Deferred.t )
     -> unit
     -> (unit, Error.t) Deferred.Result.t =
- fun ?interval_size ~logger ~depth ~config ~source_ledger_hash
-     ~target_ledger_hash ~f () ->
+ fun ?interval_size ~logger ~config ~source_state ~target_state ~f () ->
   let%bind.Deferred.Result lazy_chunks =
-    get_lazy_diffs_chunks ?n:interval_size ~logger ~depth ~config
-      ~source_ledger_hash ~target_ledger_hash stream_diffs ()
+    get_lazy_diffs_chunks ?n:interval_size ~logger ~config ~source_state
+      ~target_state stream_diffs ()
   in
   [%log debug] "Fetched %s lazy chunks"
     (Int.to_string_hum (List.length lazy_chunks)) ;
@@ -899,9 +938,9 @@ let iter_diffs :
               return (Error err) ) )
 
 (** Try to get the diff from the first node in the list, if it fails, try the next one *)
-let get_diff ~logger ~config ~ledger_hash =
+let get_diff ~logger ~config ~state =
   try_all_nodes ~config ~f:(fun ~node_location () ->
-      match%bind Rpc.get_diff ~logger ~node_location ~ledger_hash with
+      match%bind Rpc.get_diff ~logger ~node_location ~state with
       | Ok (Some diff) ->
           return (Ok diff)
       | Ok None ->
@@ -909,12 +948,13 @@ let get_diff ~logger ~config ~ledger_hash =
       | Error e ->
           return (Error e) )
 
-let distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff =
+let distribute_diff ~logger ~config ~source_state ~ledger_openings
+    ~acc_set_openings ~diff =
   Deferred.List.iter ~how:`Parallel
     Config.(config.nodes)
     ~f:(fun n ->
       match%map
-        Rpc.post_diff ~logger ~node_location:n ~ledger_openings
+        Rpc.post_diff ~logger ~node_location:n ~source_state ~ledger_openings
           ~acc_set_openings ~diff
       with
       | Ok _ ->
@@ -945,6 +985,11 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger ~get_actions_for_aid =
     (Int.to_string_hum (List.length account_chunks)) ;
   let%map result =
     Deferred.List.map ~how:`Sequential account_chunks ~f:(fun chunk ->
+        let source_state =
+          Da_state.create
+            ~ledger_hash:(Ledger.merkle_root ephemeral)
+            ~acc_set:(Indexed_merkle_tree.In_memory.merkle_root acc_set)
+        in
         let ledger_openings =
           Sparse_ledger.of_ledger_subset_exn ephemeral
             (List.map chunk ~f:snd |> List.map ~f:Account.identifier)
@@ -976,11 +1021,17 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger ~get_actions_for_aid =
                        Account_id.derive_token_id
                          ~owner:(Account.identifier acc) ) )
         in
+        let target_state =
+          Da_state.create
+            ~ledger_hash:(Ledger.merkle_root ephemeral)
+            ~acc_set:(Indexed_merkle_tree.In_memory.merkle_root acc_set)
+        in
         return
           ( diff
           , ledger_openings
           , acc_set_openings
-          , `Target (Ledger.merkle_root ephemeral) ) )
+          , `Source source_state
+          , `Target target_state ) )
   in
   let (_ : Ledger.unattached_mask) =
     Ledger.Maskable.unregister_mask_exn ~loc:__LOC__ ~grandchildren:`Recursive
@@ -992,8 +1043,15 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger ~get_actions_for_aid =
 let distribute_genesis_diff ~logger ~config ~ledger ~get_actions_for_aid =
   let%bind diffs = create_genesis_diffs ~logger ledger ~get_actions_for_aid in
   Deferred.List.iter ~how:`Sequential diffs
-    ~f:(fun (diff, ledger_openings, acc_set_openings, `Target _) ->
-      distribute_diff ~logger ~config ~ledger_openings ~acc_set_openings ~diff )
+    ~f:(fun
+         ( diff
+         , ledger_openings
+         , acc_set_openings
+         , `Source source_state
+         , `Target _ )
+       ->
+      distribute_diff ~logger ~config ~source_state ~ledger_openings
+        ~acc_set_openings ~diff )
 
 let get_ledger_openings ~diff ~ledger =
   let changed_accounts =

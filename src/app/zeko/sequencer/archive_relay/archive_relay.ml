@@ -109,6 +109,38 @@ module Protocol_state = struct
         compile_time_genesis.data
 end
 
+module Da_state_store = struct
+  include Kvdb_base.Make_singleton (struct
+    type t = Da_layer.Da_state.t [@@deriving yojson]
+
+    let key = "archive_relay_da_state"
+  end)
+
+  let get_exn ledger =
+    let kvdb = Ledger.Db.zeko_kvdb ledger in
+    match get kvdb with
+    | Some state
+      when Ledger_hash.equal state.ledger_hash (Ledger.Db.merkle_root ledger) ->
+        state
+    | Some state ->
+        failwithf "Archive DA state ledger mismatch: %s != %s"
+          (Ledger_hash.to_decimal_string state.ledger_hash)
+          (Ledger.Db.merkle_root ledger |> Ledger_hash.to_decimal_string)
+          ()
+    | None ->
+        let empty =
+          Da_layer.Da_state.empty ~depth:constraint_constants.ledger_depth
+        in
+        if Ledger_hash.equal empty.ledger_hash (Ledger.Db.merkle_root ledger)
+        then empty
+        else
+          failwith
+            "Archive checkpoint predates composite DA states; rebuild it from \
+             genesis"
+
+  let set ledger state = set (Ledger.Db.zeko_kvdb ledger) ~data:state
+end
+
 type t =
   { logger : Logger.t
   ; db_dir : string
@@ -267,27 +299,25 @@ let prune_checkpoints t =
             (Filename.concat (checkpoints_dir db_dir)
                (Checkpoint_label.to_string checkpoint) ) )
 
-let sync_archive (t : t) ~hash =
+let sync_archive (t : t) ~state =
   let logger = t.logger in
+  let source_state = Da_state_store.get_exn t.ledger in
   Da_layer.Client.iter_diffs ~logger ~config:t.da_config
-    ~depth:constraint_constants.ledger_depth
-    ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root t.ledger))
-    ~target_ledger_hash:hash ()
-    ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+    ~source_state:(`Specific source_state) ~target_state:state ()
+    ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length stored_diff ->
+      let diff = stored_diff.Da_layer.Stored_diff.diff in
       [%log debug]
-        !"Applying diff with source ledger hash: %{sexp: Ledger_hash.t}"
-        (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) ;
+        !"Applying diff with source DA state: %{sexp: Da_layer.Da_state.t}"
+        stored_diff.source_state ;
       (* Sanity check *)
-      let source_ledger_hash_matches =
-        Ledger_hash.equal
-          (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
-          (Ledger.Db.merkle_root t.ledger)
+      let current_state = Da_state_store.get_exn t.ledger in
+      let source_state_matches =
+        Da_layer.Da_state.equal stored_diff.source_state current_state
       in
-      if not source_ledger_hash_matches then
-        failwithf "Source ledger hash mismatch: %s != %s"
-          (Ledger_hash.to_decimal_string
-             (Da_layer.Diff.Stable.Latest.source_ledger_hash diff) )
-          (Ledger_hash.to_decimal_string (Ledger.Db.merkle_root t.ledger))
+      if not source_state_matches then
+        failwithf "Source DA state mismatch: %s != %s"
+          (Da_layer.Da_state.to_string stored_diff.source_state)
+          (Da_layer.Da_state.to_string current_state)
           () ;
       let ledger = Ledger.of_database t.ledger in
       let changed_accounts =
@@ -303,10 +333,20 @@ let sync_archive (t : t) ~hash =
       in
       List.iter changed_accounts ~f:(fun (index, account) ->
           Ledger.set_at_index_exn ledger index account ) ;
+      if
+        not
+          (Ledger_hash.equal stored_diff.target_state.ledger_hash
+             (Ledger.merkle_root ledger) )
+      then
+        failwithf "Target ledger hash mismatch: %s != %s"
+          (Ledger_hash.to_decimal_string stored_diff.target_state.ledger_hash)
+          (Ledger.merkle_root ledger |> Ledger_hash.to_decimal_string)
+          () ;
       match diff.actions with
       | `Actions _ ->
           [%log info] "No command with action step flags, committing ledger" ;
           Ledger.commit ledger ;
+          Da_state_store.set t.ledger stored_diff.target_state ;
           return ()
       | `Command_with_action_step_flags (command, _) -> (
           let command =
@@ -338,17 +378,17 @@ let sync_archive (t : t) ~hash =
                 ( Float.of_int current_chunk /. Float.of_int chunks_length
                 *. 100.0 )
                 (Int.to_string_hum height) ;
-              let ledger_hash = Ledger.Db.merkle_root t.ledger in
-              let%map ledger_hash_exists =
+              let target_state = stored_diff.target_state in
+              let%map state_exists =
                 Da_layer.Client.diff_exists ~logger ~config:t.da_config
-                  ~ledger_hash ()
+                  ~state:target_state ()
                 >>| Or_error.ok_exn
               in
-              [%log info] "Ledger hash %s exists: %b"
-                (Ledger_hash.to_decimal_string ledger_hash)
-                ledger_hash_exists ;
+              [%log info] "DA state %s exists: %b"
+                (Da_layer.Da_state.to_string target_state)
+                state_exists ;
               (* Sanity check *)
-              assert ledger_hash_exists ;
+              assert state_exists ;
               make_checkpoint t
                 ~label:
                   ( Da_layer.Diff.Stable.Latest.timestamp diff
@@ -368,21 +408,25 @@ let sync_archive (t : t) ~hash =
               Ledger.commit ledger ;
               [%log debug] "Committed ledger" ;
               Protocol_state.set kvdb ~data:new_protocol_state ;
+              Da_state_store.set t.ledger stored_diff.target_state ;
               return ()
           | Error e ->
               raise (Error.to_exn e) ) )
 
-let fetch_current_ledger_hash ~logger ~zeko_uri () =
-  match Sys.getenv_opt "ZEKO_ARCHIVE_RELAY_OVERRIDE_TARGET_LEDGER_HASH" with
-  | Some hash ->
-      [%log info] "Using override target ledger hash: %s" hash ;
-      return (Ok (Ledger_hash.of_decimal_string hash))
+let fetch_current_da_state ~logger ~zeko_uri () =
+  match Sys.getenv_opt "ZEKO_ARCHIVE_RELAY_OVERRIDE_TARGET_DA_STATE" with
+  | Some state ->
+      [%log info] "Using override target DA state: %s" state ;
+      return
+        ( Da_layer.Da_state.of_string state
+        |> Result.map_error ~f:Error.to_string_hum )
   | None -> (
       let query =
         {|
       query {
         stateHashes {
           unprovedLedgerHash
+          unprovedAccountSetHash
         }
       }
     |}
@@ -428,29 +472,37 @@ let fetch_current_ledger_hash ~logger ~zeko_uri () =
             |> member "unprovedLedgerHash"
             |> to_string |> Ledger_hash.of_decimal_string
           in
-          return (Ok unproved_ledger_hash) )
+          let unproved_acc_set =
+            member "stateHashes" raw_json
+            |> member "unprovedAccountSetHash"
+            |> to_string |> Snark_params.Tick.Field.of_string
+          in
+          return
+            (Ok
+               (Da_layer.Da_state.create ~ledger_hash:unproved_ledger_hash
+                  ~acc_set:unproved_acc_set ) ) )
 
 let sync (t : t) () =
   let logger = t.logger in
   Thread_safe.block_on_async_exn (fun () ->
-      let%bind ledger_hash =
-        match%bind
-          fetch_current_ledger_hash ~logger ~zeko_uri:t.zeko_uri ()
-        with
-        | Ok hash ->
-            [%log info] "Fetched ledger hash: %s"
-              (Ledger_hash.to_decimal_string hash) ;
-            return hash
+      let%bind target_state =
+        match%bind fetch_current_da_state ~logger ~zeko_uri:t.zeko_uri () with
+        | Ok state ->
+            [%log info] "Fetched DA state: %s"
+              (Da_layer.Da_state.to_string state) ;
+            return state
         | Error e ->
             failwith e
       in
-      [%log info] "Syncing to ledger hash %s from %s"
-        (Ledger_hash.to_decimal_string ledger_hash)
-        (Ledger.Db.merkle_root t.ledger |> Ledger_hash.to_decimal_string) ;
+      let source_state = Da_state_store.get_exn t.ledger in
+      [%log info] "Syncing to DA state %s from %s"
+        (Da_layer.Da_state.to_string target_state)
+        (Da_layer.Da_state.to_string source_state) ;
       if%bind
-        Da_layer.Client.diff_exists ~logger ~config:t.da_config ~ledger_hash ()
+        Da_layer.Client.diff_exists ~logger ~config:t.da_config
+          ~state:target_state ()
         >>| Or_error.ok_exn
-      then time ~logger "Synced" (sync_archive t ~hash:ledger_hash)
+      then time ~logger "Synced" (sync_archive t ~state:target_state)
       else (
         [%log warn] "Diff does not exist yet, skipping sync" ;
         return (Ok ()) ) )
