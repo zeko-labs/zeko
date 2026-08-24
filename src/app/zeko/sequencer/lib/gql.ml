@@ -1026,6 +1026,12 @@ module Types = struct
               ~resolve:(fun _ t ->
                 Field.to_string
                   Zeko_sequencer.State_hashes.(t.unproved_ledger_hash) )
+          ; field "unprovedAccountSetHash" ~typ:(non_null string)
+              ~doc:"Account-set hash of latest unproved state"
+              ~args:Arg.[]
+              ~resolve:(fun _ t ->
+                Field.to_string Zeko_sequencer.State_hashes.(t.unproved_acc_set)
+                )
           ; field "committedLedgerHash" ~typ:(non_null string)
               ~doc:"Ledger hash of latest committed state"
               ~args:Arg.[]

@@ -5,10 +5,18 @@ open Signature_lib
 open Cli_lib
 open Mina_base
 open Mina_ledger
+open Zeko_types
 module Field = Snark_params.Tick.Field
 module Sequencer = Zeko_sequencer.Sequencer
 
 let take2 (a, b, _) = (a, b)
+
+let account_set_root account_set =
+  match Account_set.to_fields account_set |> Array.to_list with
+  | [ root ] ->
+      root
+  | fields ->
+      failwithf "Expected one account-set field, got %d" (List.length fields) ()
 
 let default_admin_permissions : Permissions.t =
   { edit_state = Either
@@ -390,14 +398,16 @@ let update_inner_verification_keys =
          Stdout_log.setup log_json log_level ;
 
          (* Fetch current state *)
-         let%bind commited_ledger_hash =
+         let%bind committed_state =
            Gql_client.infer_state ~logger l1_uri
              ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
              ~signer_pk:(Public_key.compress sender.public_key)
            >>| Or_error.ok_exn
            >>| Utils.value_of_zkapp_state
                  Zeko_circuits.Rollup_state.Outer_state.typ
-           >>| fun { ledger_hash; _ } -> ledger_hash
+           >>| fun { ledger_hash; acc_set; _ } ->
+           Da_layer.Da_state.create ~ledger_hash
+             ~acc_set:(account_set_root acc_set)
          and fetched_outer_vk_hash =
            Gql_client.fetch_vk ~logger l1_uri
              ( Account_id.of_public_key
@@ -433,16 +443,25 @@ let update_inner_verification_keys =
          in
 
          (* Sync ledger *)
+         let source_state =
+           Da_layer.Da_state.create
+             ~ledger_hash:(Ledger.merkle_root ledger)
+             ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
+         in
          let%bind () =
            Da_layer.Client.map_diffs ~logger ~config:da_config
-             ~depth:Zeko_constants.constraint_constants.ledger_depth
-             ~source_ledger_hash:(`Specific (Ledger.merkle_root ledger))
-             ~target_ledger_hash:commited_ledger_hash ()
-             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+             ~source_state:(`Specific source_state)
+             ~target_state:committed_state ()
+             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length stored_diff
+                ->
+               let diff = stored_diff.Da_layer.Stored_diff.diff in
+               let current_state =
+                 Da_layer.Da_state.create
+                   ~ledger_hash:(Ledger.merkle_root ledger)
+                   ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
+               in
                assert (
-                 Ledger_hash.equal
-                   (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
-                   (Ledger.merkle_root ledger) ) ;
+                 Da_layer.Da_state.equal stored_diff.source_state current_state ) ;
                let progress =
                  Float.of_int current_chunk /. Float.of_int chunks_length
                in
@@ -461,6 +480,13 @@ let update_inner_verification_keys =
                        (Account_id.derive_token_id ~owner:aid)
                    in
                    () ) ;
+               let target_state =
+                 Da_layer.Da_state.create
+                   ~ledger_hash:(Ledger.merkle_root ledger)
+                   ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
+               in
+               assert (
+                 Da_layer.Da_state.equal stored_diff.target_state target_state ) ;
                return () )
            >>| Or_error.ok_exn >>| ignore
          in
@@ -557,6 +583,10 @@ let update_inner_verification_keys =
 
            (* Update the ledegr *)
            let source_ledger_hash = Ledger.merkle_root ledger in
+           let source_state =
+             Da_layer.Da_state.create ~ledger_hash:source_ledger_hash
+               ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
+           in
            let ledger_openings =
              Sparse_ledger.of_ledger_subset_exn ledger
                (List.map diff ~f:(fun (_, acc) -> Account.identifier acc))
@@ -570,23 +600,19 @@ let update_inner_verification_keys =
              Da_layer.Diff.create_pending ~source_ledger_hash
                ~changed_accounts:diff ~actions:(`Actions [])
            in
-           let new_accounts_keys =
-             List.filter diff.changed_accounts ~f:(fun (index, _) ->
-                 Account.equal
-                   (Sparse_ledger.get_exn ledger_openings index)
-                   Account.empty )
-             |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-             |> List.map ~f:(fun (_, account) ->
-                    Account_id.derive_token_id
-                      ~owner:(Account.identifier account) )
+           let target_state =
+             Da_layer.Da_state.create ~ledger_hash:target_ledger_hash
+               ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
            in
            printf "Distributing diff\n%!" ;
            let%bind () =
              Da_layer.Client.distribute_diff ~logger ~config:da_config
-               ~ledger_openings
+               ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+               ~source_state ~target_state ~ledger_openings
                ~acc_set_openings:
-                 (Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:imt
-                    ~keys:new_accounts_keys )
+                 (Da_layer.Client.get_acc_set_openings ~logger
+                    ~changed_accounts:diff.changed_accounts ~ledger_openings
+                    ~imt )
                ~diff
            in
            let%bind body =
@@ -1278,6 +1304,9 @@ let sync_ledger =
        and target_ledger_hash =
          flag "--target-ledger-hash" (required string)
            ~doc:"string Target ledger hash"
+       and target_acc_set =
+         flag "--target-account-set-hash" (required string)
+           ~doc:"string Target account-set hash"
        and output_path =
          flag "--output-path" (required string) ~doc:"string Output path"
        in
@@ -1296,18 +1325,43 @@ let sync_ledger =
            Ledger.Db.create_checkpoint ledger
              ~directory_name:(output_path ^ "/ledger") ()
          in
+         let imt =
+           let db =
+             Indexed_merkle_tree.Db.create
+               ~depth:Zeko_constants.constraint_constants.ledger_depth ()
+           in
+           Ledger.Db.iteri ledger ~f:(fun _ account ->
+               let owner = Account.identifier account in
+               let _index, _witness =
+                 Indexed_merkle_tree.Db.get_or_create_entry_exn db
+                   (Account_id.derive_token_id ~owner)
+               in
+               () ) ;
+           db
+         in
+         let source_state =
+           Da_layer.Da_state.create
+             ~ledger_hash:(Ledger.Db.merkle_root ledger)
+             ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
+         in
+         let target_state =
+           Da_layer.Da_state.create
+             ~ledger_hash:(Ledger_hash.of_decimal_string target_ledger_hash)
+             ~acc_set:(Field.of_string target_acc_set)
+         in
          let%bind () =
            Da_layer.Client.iter_diffs ~logger ~config:da_config
-             ~depth:Zeko_constants.constraint_constants.ledger_depth
-             ~source_ledger_hash:(`Specific (Ledger.Db.merkle_root ledger))
-             ~target_ledger_hash:
-               (Ledger_hash.of_decimal_string target_ledger_hash)
-             ()
-             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length diff ->
+             ~source_state:(`Specific source_state) ~target_state ()
+             ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length stored_diff
+                ->
+               let diff = stored_diff.Da_layer.Stored_diff.diff in
+               let current_state =
+                 Da_layer.Da_state.create
+                   ~ledger_hash:(Ledger.Db.merkle_root ledger)
+                   ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
+               in
                assert (
-                 Ledger_hash.equal
-                   (Da_layer.Diff.Stable.Latest.source_ledger_hash diff)
-                   (Ledger.Db.merkle_root ledger) ) ;
+                 Da_layer.Da_state.equal stored_diff.source_state current_state ) ;
                [%log info]
                  "Applying diff with source ledger hash %s, progress: %.0f%%"
                  (Ledger_hash.to_decimal_string
@@ -1323,6 +1377,21 @@ let sync_ledger =
                List.iter changed_accounts ~f:(fun (index, account) ->
                    Ledger.set_at_index_exn mask index account ) ;
                Ledger.Mask.Attached.commit mask ;
+
+               List.iter changed_accounts ~f:(fun (_, account) ->
+                   let owner = Account.identifier account in
+                   let _index, _witness =
+                     Indexed_merkle_tree.Db.get_or_create_entry_exn imt
+                       (Account_id.derive_token_id ~owner)
+                   in
+                   () ) ;
+               let applied_state =
+                 Da_layer.Da_state.create
+                   ~ledger_hash:(Ledger.Db.merkle_root ledger)
+                   ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
+               in
+               assert (
+                 Da_layer.Da_state.equal stored_diff.target_state applied_state ) ;
 
                let () =
                  match diff.actions with
@@ -1345,26 +1414,7 @@ let sync_ledger =
            >>| Or_error.ok_exn
          in
          [%log info] "Synced ledger" ;
-
-         [%log info] "Creating IMT" ;
-         let imt =
-           Indexed_merkle_tree.Db.create
-             ~depth:Zeko_constants.constraint_constants.ledger_depth ()
-         in
-         let l = Ledger.Db.num_accounts ledger in
-         let () =
-           Ledger.Db.iteri ledger ~f:(fun index account ->
-               let progress = Float.of_int index /. Float.of_int l *. 100.0 in
-               if index mod 200 = 0 then
-                 [%log info] "Progress: %.2f%%\t%d/%d" progress index l ;
-               let aid = Account.identifier account in
-               let tid = Account_id.derive_token_id ~owner:aid in
-               let _witness =
-                 Indexed_merkle_tree.Db.get_or_create_entry_exn imt tid
-               in
-               () )
-         in
-         [%log info] "Created IMT" ;
+         [%log info] "Synced account set" ;
          return () ) )
 
 let () =

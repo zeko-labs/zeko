@@ -35,6 +35,31 @@ module Post_diff = struct
       Rpc.Rpc.create ~name:"Post_diff" ~version:1 ~bin_query:Query.bin_t
         ~bin_response:Response.bin_t
   end
+
+  module V2 = struct
+    module Query = struct
+      type t =
+        { source_state : Da_state.Stable.V1.t
+        ; ledger_openings : Sparse_ledger.Stable.V2.t
+        ; diff : Diff.Pending.Stable.V1.t
+        ; acc_set_openings : Indexed_merkle_tree.Sparse.Stable.V1.t
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    module Response = struct
+      type t =
+        { state_id : Da_state.Stable.V1.t
+        ; signer : Public_key.Compressed.Stable.V1.t
+        ; signature : Signature.Stable.V1.t
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Query.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Post_diff" ~version:2 ~bin_query:Query.bin_t
+        ~bin_response:Response.bin_t
+  end
 end
 
 (* val get_diff : Ledger_hash.t -> Diff.t option *)
@@ -78,6 +103,16 @@ module Get_diff = struct
       Rpc.Rpc.create ~name:"Get_diff" ~version:4
         ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
   end
+
+  module V5 = struct
+    module Response = struct
+      type t = Stored_diff.Stable.V1.t option [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Da_state.Stable.V1.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_diff" ~version:5
+        ~bin_query:Da_state.Stable.V1.bin_t ~bin_response:Response.bin_t
+  end
 end
 
 (* val has_diff : Ledger_hash.t -> bool *)
@@ -86,6 +121,12 @@ module Has_diff = struct
     let t : (Ledger_hash.t, bool) Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Has_diff" ~version:1
         ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Bool.bin_t
+  end
+
+  module V2 = struct
+    let t : (Da_state.Stable.V1.t, bool) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Has_diff" ~version:2
+        ~bin_query:Da_state.Stable.V1.bin_t ~bin_response:Bool.bin_t
   end
 end
 
@@ -96,6 +137,13 @@ module Get_diff_source = struct
       Rpc.Rpc.create ~name:"Get_diff_source" ~version:1
         ~bin_query:Ledger_hash.Stable.V1.bin_t
         ~bin_response:Ledger_hash.Stable.V1.bin_t
+  end
+
+  module V2 = struct
+    let t : (Da_state.Stable.V1.t, Da_state.Stable.V1.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_diff_source" ~version:2
+        ~bin_query:Da_state.Stable.V1.bin_t
+        ~bin_response:Da_state.Stable.V1.bin_t
   end
 end
 
@@ -127,6 +175,21 @@ module Get_signature = struct
       Rpc.Rpc.create ~name:"Get_signature" ~version:1
         ~bin_query:Ledger_hash.Stable.V1.bin_t ~bin_response:Response.bin_t
   end
+
+  module V2 = struct
+    module Response = struct
+      type t =
+        (Public_key.Compressed.Stable.V1.t * Signature.Stable.V1.t) option
+      [@@deriving bin_io_unversioned]
+    end
+
+    let t :
+        ( Da_state.Stable.V1.t
+        , (Public_key.Compressed.t * Signature.t) option )
+        Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_signature" ~version:2
+        ~bin_query:Da_state.Stable.V1.bin_t ~bin_response:Response.bin_t
+  end
 end
 
 (* val get_ledger_hashes_chain : source:Ledger_hash.t option -> target:Ledger_hash.t -> Ledger_hash.t list *)
@@ -147,6 +210,25 @@ module Get_ledger_hashes_chain = struct
 
     let t : (Query.t, Response.t) Rpc.Rpc.t =
       Rpc.Rpc.create ~name:"Get_ledger_hashes_chain" ~version:1
+        ~bin_query:Query.bin_t ~bin_response:Response.bin_t
+  end
+
+  module V2 = struct
+    module Query = struct
+      type t =
+        { source : [ `Genesis | `Specific of Da_state.Stable.V1.t ]
+        ; target : Da_state.Stable.V1.t
+        ; max_length : int option
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    module Response = struct
+      type t = Da_state.Stable.V1.t list [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Query.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_ledger_hashes_chain" ~version:2
         ~bin_query:Query.bin_t ~bin_response:Response.bin_t
   end
 end
@@ -171,6 +253,25 @@ module Get_diffs_chain = struct
       Rpc.Rpc.create ~name:"Get_diffs_chain" ~version:2 ~bin_query:Query.bin_t
         ~bin_response:Response.bin_t
   end
+
+  module V3 = struct
+    module Query = struct
+      type t =
+        { source : [ `Genesis | `Specific of Da_state.Stable.V1.t ]
+        ; target : Da_state.Stable.V1.t
+        ; max_length : int option
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    module Response = struct
+      type t = Stored_diff.Stable.V1.t list [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Query.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_diffs_chain" ~version:3 ~bin_query:Query.bin_t
+        ~bin_response:Response.bin_t
+  end
 end
 
 (* val diffs_stream : source:Ledger_hash.t option -> target:Ledger_hash.t -> Diff.t stream *)
@@ -190,6 +291,24 @@ module Diffs_stream = struct
 
     let t : (Query.t, Response.t, Error.t) Rpc.Pipe_rpc.t =
       Rpc.Pipe_rpc.create ~name:"Diffs_stream" ~version:3 ~bin_query:Query.bin_t
+        ~bin_response:Response.bin_t ~bin_error:Error.bin_t ()
+  end
+
+  module V4 = struct
+    module Query = struct
+      type t =
+        { source : [ `Genesis | `Specific of Da_state.Stable.V1.t ]
+        ; target : Da_state.Stable.V1.t
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    module Response = struct
+      type t = Stored_diff.Stable.V1.t [@@deriving bin_io_unversioned]
+    end
+
+    let t : (Query.t, Response.t, Error.t) Rpc.Pipe_rpc.t =
+      Rpc.Pipe_rpc.create ~name:"Diffs_stream" ~version:4 ~bin_query:Query.bin_t
         ~bin_response:Response.bin_t ~bin_error:Error.bin_t ()
   end
 end

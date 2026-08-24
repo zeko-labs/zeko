@@ -492,6 +492,7 @@ module Sequencer_spec = struct
     print_endline "(* Post genesis batch *)" ;
     run (fun () ->
         Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
+          ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
           ~ledger:ephemeral_ledger ~get_actions_for_aid:(fun _aid -> []) ) ;
 
     print_endline "(* Deploy zkapp *)" ;
