@@ -10,10 +10,11 @@ module Field = Snark_params.Tick.Field
     4. Set each account in [diff.diff] to the [ledger_openings] and call the resulting ledger hash [target_ledger_hash].
     5. Apply all the actions in [diff.diff] to the [ledger_openings] and check it matches the target ledger..
     6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
-    7. Check that new accounts in ledger openings are in same order as in acc set openings.
+    7. Check that the account-set openings transform [source_state.acc_set]
+       by inserting exactly the new accounts in ledger order.
     8. Attach timestamp and acc set root.
-    9. Store the diff under the [target_ledger_hash]. 
-    10. Sign [target_ledger_hash]. *)
+    9. Store the diff under the target DA state.
+    10. Sign and return the target DA state. *)
 let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
     ~(signer : Signer_service.Signer.t) ~(source_state : Da_state.t)
     ~ledger_openings ~acc_set_openings ~(diff : Diff.Pending.t) =
@@ -284,15 +285,25 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
   in
 
   (* 7 *)
+  let new_accounts =
+    List.filter diff.changed_accounts ~f:(fun (index, _) ->
+        Account.equal
+          (Sparse_ledger.get_exn ledger_openings index)
+          Account.empty )
+    |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+  in
+  let new_account_keys =
+    List.map new_accounts ~f:(fun (_, account) ->
+        Account_id.derive_token_id ~owner:(Account.identifier account) )
+  in
+  let%bind.Result target_acc_set =
+    Acc_set_transition.validate ~source_root:source_state.acc_set
+      ~new_keys:new_account_keys acc_set_openings
+    |> Result.map_error ~f:(fun error ->
+           Error.tag error ~tag:"Invalid account-set transition" )
+  in
   let%bind.Result () =
     try
-      let new_accounts =
-        List.filter diff.changed_accounts ~f:(fun (index, _) ->
-            Account.equal
-              (Sparse_ledger.get_exn ledger_openings index)
-              Account.empty )
-        |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-      in
       let acc_set_entries =
         List.map new_accounts ~f:(fun (_, account) ->
             let key =
@@ -326,9 +337,6 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
 
   (* 8 *)
   (* V2 was added time *)
-  let target_acc_set =
-    Indexed_merkle_tree.Sparse.merkle_root_without_cache_exn acc_set_openings
-  in
   let diff : Diff.Stable.V4.t =
     Diff.add_time_and_acc_set ~logger diff ~acc_set:target_acc_set
   in
@@ -366,7 +374,9 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
     Signer_service.Signer.sign_field ~signature_kind:network_id signer message
     (* Schnorr.Chunked.sign ~signature_kind:network_id signer.private_key message *)
   in
-  Ok signature
+  Ok
+    (Async.Deferred.map signature ~f:(fun result ->
+         Result.map result ~f:(fun signature -> (target_state, signature)) ) )
 
 let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
   let depth = 8 in
@@ -432,6 +442,36 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
           let source_state =
             Da_state.create ~ledger_hash:source_ledger_hash ~acc_set
           in
+          let mismatched_acc_set =
+            if Field.equal acc_set Field.one then Field.of_int 2 else Field.one
+          in
+          let mismatched_source_state =
+            Da_state.create ~ledger_hash:source_ledger_hash
+              ~acc_set:mismatched_acc_set
+          in
+          let mismatched_source_diff =
+            { source_diff with Diff.Stable.V4.acc_set = mismatched_acc_set }
+          in
+          ignore
+            ( Db.add_diff kvdb
+                ~diff:
+                  { Stored_diff.source_state
+                  ; target_state = mismatched_source_state
+                  ; diff = mismatched_source_diff
+                  }
+              : [ `Added
+                | `Already_existed
+                | `Conflicting_diff of Stored_diff.t ] ) ;
+          let no_op_diff =
+            Diff.create_pending ~source_ledger_hash ~changed_accounts:[]
+              ~actions:(`Actions [])
+          in
+          let mismatched_source_result =
+            post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet ~signer
+              ~source_state:mismatched_source_state ~ledger_openings
+              ~acc_set_openings ~diff:no_op_diff
+          in
+          assert (Result.is_error mismatched_source_result) ;
           let changed_receipt_chain_hash =
             Receipt.Chain_hash.cons_zkapp_command_commitment
               Unsigned.UInt32.zero
@@ -457,8 +497,9 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
             with
             | Error error ->
                 Error error
-            | Ok signature ->
-                Async.Thread_safe.block_on_async_exn (fun () -> signature)
+            | Ok state_and_signature ->
+                Async.Thread_safe.block_on_async_exn (fun () ->
+                    state_and_signature )
           in
           assert (Result.is_error result) ;
           let receipt_preserving_account =
@@ -480,8 +521,9 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
             with
             | Error error ->
                 Error error
-            | Ok signature ->
-                Async.Thread_safe.block_on_async_exn (fun () -> signature)
+            | Ok state_and_signature ->
+                Async.Thread_safe.block_on_async_exn (fun () ->
+                    state_and_signature )
           in
           assert (Result.is_ok receipt_preserving_result) ;
           let conflicting_diff =
@@ -500,7 +542,8 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
             with
             | Error error ->
                 Error error
-            | Ok signature ->
-                Async.Thread_safe.block_on_async_exn (fun () -> signature)
+            | Ok state_and_signature ->
+                Async.Thread_safe.block_on_async_exn (fun () ->
+                    state_and_signature )
           in
           assert (Result.is_error conflicting_result) ) )

@@ -258,16 +258,6 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
                 (Sparse_ledger.merkle_root old_ledger_openings)
               ~changed_accounts ~actions:(`Actions [])
           in
-          let new_accounts_keys =
-            List.filter changed_accounts ~f:(fun (index, _) ->
-                Account.equal
-                  (Sparse_ledger.get_exn old_ledger_openings index)
-                  Account.empty )
-            |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-            |> List.map ~f:(fun (_, account) ->
-                   Account_id.derive_token_id
-                     ~owner:(Account.identifier account) )
-          in
           let source_state =
             match old_ledger_witness with
             | Some (ledger_hash, acc_set, _, _) ->
@@ -275,11 +265,17 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
             | None ->
                 failwith "Unreachable"
           in
+          let target_state =
+            Da_layer.Da_state.create ~ledger_hash:(L.merkle_root new_ledger)
+              ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
+          in
           Da_layer.Client.distribute_diff ~logger ~config:da_config
-            ~source_state ~ledger_openings:old_ledger_openings
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~source_state
+            ~target_state ~ledger_openings:old_ledger_openings
             ~acc_set_openings:
-              (Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:imt
-                 ~keys:new_accounts_keys )
+              (Da_layer.Client.get_acc_set_openings ~logger
+                 ~changed_accounts:diff.changed_accounts
+                 ~ledger_openings:old_ledger_openings ~imt )
             ~diff
         else
           let () =
@@ -287,6 +283,7 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
               "(* Post the whole genesis diff with all the accounts *)"
           in
           Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
             ~ledger:new_ledger ~get_actions_for_aid:(fun _aid -> [])
       in
       return command )

@@ -5,6 +5,7 @@ open Mina_ledger
 open Signature_lib
 open Relational_db
 module Field = Snark_params.Tick.Field
+module Rpc_def = Rpc
 
 let rec keep_retrying ~logger ?(delay = Time_ns.Span.of_sec 5.) ~f () =
   match%bind
@@ -216,6 +217,70 @@ module Signature_table = struct
       , Field.to_string state.acc_set )
 end
 
+let verify_da_signature ~signature_kind ~state ~public_key ~signature =
+  match Public_key.decompress public_key with
+  | None ->
+      Or_error.error_string "DA response contains an invalid signer public key"
+  | Some public_key ->
+      let verifies =
+        Schnorr.Chunked.verify ~signature_kind signature
+          (Snark_params.Tick.Inner_curve.of_affine public_key)
+          (Random_oracle.Input.Chunked.field (Da_state.signing_message state))
+      in
+      if verifies then Ok ()
+      else Or_error.error_string "DA signature does not verify for target state"
+
+let validate_post_diff_response ~signature_kind ~expected_state
+    (response : Rpc_def.Post_diff.V2.Response.t) =
+  if not (Da_state.equal response.state_id expected_state) then
+    Or_error.error_s
+      [%message
+        "DA node returned a signature for an unexpected state"
+          (expected_state : Da_state.t)
+          (response.state_id : Da_state.t)]
+  else
+    let%map.Or_error () =
+      verify_da_signature ~signature_kind ~state:response.state_id
+        ~public_key:response.signer ~signature:response.signature
+    in
+    (response.signer, response.signature)
+
+let%test_unit "post-diff responses are bound to the expected state" =
+  let signature_kind = Mina_signature_kind.Other_network "da-response-test" in
+  let keypair = Keypair.create () in
+  let expected_state =
+    Da_state.create ~ledger_hash:Ledger_hash.empty_hash ~acc_set:Field.zero
+  in
+  let signature =
+    Schnorr.Chunked.sign ~signature_kind keypair.private_key
+      (Random_oracle.Input.Chunked.field
+         (Da_state.signing_message expected_state) )
+  in
+  let response =
+    Rpc_def.Post_diff.V2.Response.
+      { state_id = expected_state
+      ; signer = Public_key.compress keypair.public_key
+      ; signature
+      }
+  in
+  assert (
+    Result.is_ok
+      (validate_post_diff_response ~signature_kind ~expected_state response) ) ;
+  let unexpected_state = { expected_state with acc_set = Field.one } in
+  assert (
+    Result.is_error
+      (validate_post_diff_response ~signature_kind
+         ~expected_state:unexpected_state response ) ) ;
+  let bad_signature =
+    Schnorr.Chunked.sign ~signature_kind (Keypair.create ()).private_key
+      (Random_oracle.Input.Chunked.field
+         (Da_state.signing_message expected_state) )
+  in
+  assert (
+    Result.is_error
+      (validate_post_diff_response ~signature_kind ~expected_state
+         { response with signature = bad_signature } ) )
+
 module Rpc = struct
   let dispatch ?(max_tries = 5) ?(timeout = 5.) ~logger
       (node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) rpc data =
@@ -317,11 +382,17 @@ module Rpc = struct
 
   let post_diff ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
-      ~source_state ~ledger_openings ~acc_set_openings ~diff =
+      ~signature_kind ~source_state ~target_state ~ledger_openings
+      ~acc_set_openings ~diff =
     [%log debug] "Posting diff to da node %s"
       (Host_and_port.to_string node_location.value) ;
-    dispatch ~max_tries:5 ~logger node_location Rpc.Post_diff.V2.t
-      { source_state; ledger_openings; diff; acc_set_openings }
+    let%map result =
+      dispatch ~max_tries:5 ~logger node_location Rpc_def.Post_diff.V2.t
+        { source_state; ledger_openings; diff; acc_set_openings }
+    in
+    Result.bind result ~f:(fun response ->
+        validate_post_diff_response ~signature_kind ~expected_state:target_state
+          response )
 
   let get_diff ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~state =
@@ -460,6 +531,7 @@ end
 type t =
   { logger : Logger.t
   ; config : Config.t
+  ; signature_kind : Mina_signature_kind.t
   ; quorum : int  (** The amount of signatures needed when distributing diff *)
   ; db_pool : Db.pool
   ; pushed_diff : unit Condition.t
@@ -468,7 +540,8 @@ type t =
   ; da_keys : Public_key.Compressed.t list
   }
 
-let create ~logger ~(config : Config.t) ~quorum ~da_keys ~db_pool =
+let create ~logger ~(config : Config.t) ~signature_kind ~quorum ~da_keys
+    ~db_pool =
   let%map.Deferred fetched_da_keys = Config.fetch_public_keys ~logger config in
   let sorted_da_keys =
     List.sort da_keys ~compare:Public_key.Compressed.compare
@@ -482,6 +555,7 @@ let create ~logger ~(config : Config.t) ~quorum ~da_keys ~db_pool =
       fetched_da_keys sorted_da_keys ;
   { logger
   ; config
+  ; signature_kind
   ; quorum
   ; db_pool
   ; pushed_diff = Condition.create ()
@@ -543,8 +617,8 @@ let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
         } -> (
         match%bind
           Rpc.post_diff ~logger:t.logger ~node_location
-            ~source_state:diff_source_state ~ledger_openings ~acc_set_openings
-            ~diff
+            ~signature_kind:t.signature_kind ~source_state:diff_source_state
+            ~target_state ~ledger_openings ~acc_set_openings ~diff
         with
         | Error err ->
             [%log error] "Failed to post diff to da node: %s"
@@ -948,20 +1022,34 @@ let get_diff ~logger ~config ~state =
       | Error e ->
           return (Error e) )
 
-let distribute_diff ~logger ~config ~source_state ~ledger_openings
-    ~acc_set_openings ~diff =
+let distribute_diff ~logger ~config ~signature_kind ~source_state ~target_state
+    ~ledger_openings ~acc_set_openings ~diff =
   Deferred.List.iter ~how:`Parallel
     Config.(config.nodes)
     ~f:(fun n ->
       match%map
-        Rpc.post_diff ~logger ~node_location:n ~source_state ~ledger_openings
-          ~acc_set_openings ~diff
+        Rpc.post_diff ~logger ~node_location:n ~signature_kind ~source_state
+          ~target_state ~ledger_openings ~acc_set_openings ~diff
       with
       | Ok _ ->
           ()
       | Error e ->
           [%log error] "Failed to post diff to da node: %s"
             (Error.to_string_hum e) )
+
+let acc_set_opening_keys ~new_keys ~find_lower =
+  Acc_set_transition.opening_keys ~find_lower new_keys |> Or_error.ok_exn
+
+let get_in_memory_acc_set_openings ~logger ~changed_accounts ~ledger_openings
+    ~imt =
+  let new_keys =
+    Acc_set_transition.new_account_keys ~changed_accounts ~ledger_openings
+  in
+  let keys =
+    acc_set_opening_keys ~new_keys
+      ~find_lower:(Indexed_merkle_tree.In_memory.find_lower_entry_tid imt)
+  in
+  Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger ~db:imt ~keys
 
 (** One diff can be too big, split it into multiple smaller ones
     To have only one diff set [max_size] to [Int.max_value]
@@ -1007,19 +1095,16 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger ~get_actions_for_aid =
             ~changed_accounts:chunk ~actions:(`Actions actions)
         in
         [%log debug] "Adding accounts to acc set db" ;
-        Indexed_merkle_tree.In_memory.insert_batch_exn acc_set
-          (List.map chunk ~f:(fun (_, account) ->
-               Account_id.derive_token_id ~owner:(Account.identifier account) )
-          ) ;
+        let new_account_keys =
+          List.map chunk ~f:(fun (_, account) ->
+              Account_id.derive_token_id ~owner:(Account.identifier account) )
+        in
+        Indexed_merkle_tree.In_memory.insert_batch_exn acc_set new_account_keys ;
         [%log debug] "Creating acc set openings" ;
         let acc_set_openings =
-          Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger ~db:acc_set
-            ~keys:
-              ( [%log debug] "Getting accounts from chunk" ;
-                List.map chunk ~f:snd
-                |> List.map ~f:(fun acc ->
-                       Account_id.derive_token_id
-                         ~owner:(Account.identifier acc) ) )
+          get_in_memory_acc_set_openings ~logger
+            ~changed_accounts:diff.changed_accounts ~ledger_openings
+            ~imt:acc_set
         in
         let target_state =
           Da_state.create
@@ -1040,7 +1125,8 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger ~get_actions_for_aid =
   result
 
 (** Distribute diff of initial accounts *)
-let distribute_genesis_diff ~logger ~config ~ledger ~get_actions_for_aid =
+let distribute_genesis_diff ~logger ~config ~signature_kind ~ledger
+    ~get_actions_for_aid =
   let%bind diffs = create_genesis_diffs ~logger ledger ~get_actions_for_aid in
   Deferred.List.iter ~how:`Sequential diffs
     ~f:(fun
@@ -1048,10 +1134,10 @@ let distribute_genesis_diff ~logger ~config ~ledger ~get_actions_for_aid =
          , ledger_openings
          , acc_set_openings
          , `Source source_state
-         , `Target _ )
+         , `Target target_state )
        ->
-      distribute_diff ~logger ~config ~source_state ~ledger_openings
-        ~acc_set_openings ~diff )
+      distribute_diff ~logger ~config ~signature_kind ~source_state
+        ~target_state ~ledger_openings ~acc_set_openings ~diff )
 
 let get_ledger_openings ~diff ~ledger =
   let changed_accounts =
@@ -1067,17 +1153,12 @@ let get_ledger_openings ~diff ~ledger =
 let attach_ledger_openings ~diffs ~ledger =
   List.map diffs ~f:(fun diff -> (diff, get_ledger_openings ~diff ~ledger))
 
-let get_acc_set_openings ~diff ~ledger_openings ~imt =
-  let new_accounts_keys =
-    List.filter (Diff.changed_accounts diff) ~f:(fun (index, _) ->
-        Account.equal
-          (Sparse_ledger.get_exn ledger_openings index)
-          Account.empty )
-    |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-    |> List.map ~f:(fun (_, account) ->
-           Account_id.derive_token_id ~owner:(Account.identifier account) )
+let get_acc_set_openings ~logger ~changed_accounts ~ledger_openings ~imt =
+  let new_keys =
+    Acc_set_transition.new_account_keys ~changed_accounts ~ledger_openings
   in
-  let acc_set_openings =
-    Indexed_merkle_tree.Sparse.of_db_subset ~db:imt ~keys:new_accounts_keys
+  let keys =
+    acc_set_opening_keys ~new_keys
+      ~find_lower:(Indexed_merkle_tree.Db.find_lower_entry_tid imt)
   in
-  acc_set_openings
+  Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:imt ~keys

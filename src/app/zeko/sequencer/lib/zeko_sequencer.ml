@@ -518,16 +518,6 @@ module Sequencer = struct
                         Zkapp_command.all_account_updates_list command
                         |> List.map ~f:(fun _ -> true) ) )
           in
-          let new_accounts_keys =
-            List.filter changed_accounts ~f:(fun (index, _) ->
-                Account.equal
-                  (Sparse_ledger.get_exn source_ledger index)
-                  Account.empty )
-            |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-            |> List.map ~f:(fun (_, account) ->
-                   Account_id.derive_token_id
-                     ~owner:(Account.identifier account) )
-          in
           let%bind () =
             let source_state =
               Da_layer.Da_state.create
@@ -542,8 +532,9 @@ module Sequencer = struct
             Da_layer.Client.enqueue_diff t.da_client ~genesis:false
               ~source_state ~target_state ~ledger_openings:source_ledger
               ~acc_set_openings:
-                (Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
-                   ~db:t.imt ~keys:new_accounts_keys )
+                (Da_layer.Client.get_acc_set_openings ~logger:t.logger
+                   ~changed_accounts:diff.changed_accounts
+                   ~ledger_openings:source_ledger ~imt:t.imt )
               ~diff
           in
 
@@ -608,16 +599,6 @@ module Sequencer = struct
                 ~source_ledger_hash:(Sparse_ledger.merkle_root source_ledger)
                 ~changed_accounts ~actions:(`Actions [])
             in
-            let new_accounts_keys =
-              List.filter changed_accounts ~f:(fun (index, _) ->
-                  Account.equal
-                    (Sparse_ledger.get_exn source_ledger index)
-                    Account.empty )
-              |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-              |> List.map ~f:(fun (_, account) ->
-                     Account_id.derive_token_id
-                       ~owner:(Account.identifier account) )
-            in
             let%bind () =
               let source_state =
                 Da_layer.Da_state.create
@@ -632,8 +613,9 @@ module Sequencer = struct
               Da_layer.Client.enqueue_diff t.da_client ~genesis:false
                 ~source_state ~target_state ~ledger_openings:source_ledger
                 ~acc_set_openings:
-                  (Indexed_merkle_tree.Sparse.of_db_subset ~logger:t.logger
-                     ~db:t.imt ~keys:new_accounts_keys )
+                  (Da_layer.Client.get_acc_set_openings ~logger:t.logger
+                     ~changed_accounts:diff.changed_accounts
+                     ~ledger_openings:source_ledger ~imt:t.imt )
                 ~diff
             in
             match%map
@@ -912,8 +894,9 @@ module Sequencer = struct
                     Indexed_merkle_tree.In_memory.insert_batch_exn replay_imt
                       new_accounts_keys ;
                     let acc_set_openings =
-                      Indexed_merkle_tree.Sparse.of_in_memory_subset ~logger
-                        ~db:replay_imt ~keys:new_accounts_keys
+                      Da_layer.Client.get_in_memory_acc_set_openings ~logger
+                        ~changed_accounts:diff.changed_accounts ~ledger_openings
+                        ~imt:replay_imt
                     in
                     let replayed_state =
                       Da_layer.Da_state.create
@@ -995,7 +978,8 @@ module Sequencer = struct
           assert (Da_layer.Da_state.equal stored_diff.target_state applied_state) ;
 
           let acc_set_openings =
-            Da_layer.Client.get_acc_set_openings ~logger ~diff ~ledger_openings
+            Da_layer.Client.get_acc_set_openings ~logger
+              ~changed_accounts:diff.changed_accounts ~ledger_openings
               ~imt:t.imt
           in
 
@@ -1186,7 +1170,8 @@ module Sequencer = struct
     in
     let%bind db_pool = Db.create_and_migrate ~postgres_uri ~logger in
     let%bind da_client =
-      Da_layer.Client.create ~logger ~config:da_config ~quorum:da_quorum
+      Da_layer.Client.create ~logger ~config:da_config
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~quorum:da_quorum
         ~da_keys ~db_pool
     in
     let kvdb = L.Db.zeko_kvdb ledger in

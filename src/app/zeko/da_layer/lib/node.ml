@@ -76,9 +76,13 @@ let implementations t =
                 ~source_state ~acc_set_openings ~diff
               |> function Error e -> Deferred.return (Error e) | Ok d -> d
             with
-            | Ok signature ->
-                let pk = Signer_service.Signer.public_key t.signer in
-                return (pk, signature)
+            | Ok (state, signature) ->
+                return
+                  Rpc_def.Post_diff.V2.Response.
+                    { state_id = state
+                    ; signer = Signer_service.Signer.public_key t.signer
+                    ; signature
+                    }
             | Error e ->
                 let logger = t.logger in
                 [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;

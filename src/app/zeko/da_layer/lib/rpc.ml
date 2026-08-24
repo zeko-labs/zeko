@@ -48,7 +48,11 @@ module Post_diff = struct
     end
 
     module Response = struct
-      type t = Public_key.Compressed.Stable.V1.t * Signature.Stable.V1.t
+      type t =
+        { state_id : Da_state.Stable.V1.t
+        ; signer : Public_key.Compressed.Stable.V1.t
+        ; signature : Signature.Stable.V1.t
+        }
       [@@deriving bin_io_unversioned]
     end
 

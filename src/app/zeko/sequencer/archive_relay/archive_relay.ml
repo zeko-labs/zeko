@@ -306,6 +306,15 @@ let sync_archive (t : t) ~state =
     ~source_state:(`Specific source_state) ~target_state:state ()
     ~f:(fun ~current_chunk ~current_diff:_ ~chunks_length stored_diff ->
       let diff = stored_diff.Da_layer.Stored_diff.diff in
+      if
+        not
+          (Snark_params.Tick.Field.equal stored_diff.target_state.acc_set
+             diff.acc_set )
+      then
+        failwithf "Target account-set root mismatch: %s != %s"
+          (Snark_params.Tick.Field.to_string stored_diff.target_state.acc_set)
+          (Snark_params.Tick.Field.to_string diff.acc_set)
+          () ;
       [%log debug]
         !"Applying diff with source DA state: %{sexp: Da_layer.Da_state.t}"
         stored_diff.source_state ;

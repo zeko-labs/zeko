@@ -600,23 +600,19 @@ let update_inner_verification_keys =
              Da_layer.Diff.create_pending ~source_ledger_hash
                ~changed_accounts:diff ~actions:(`Actions [])
            in
-           let new_accounts_keys =
-             List.filter diff.changed_accounts ~f:(fun (index, _) ->
-                 Account.equal
-                   (Sparse_ledger.get_exn ledger_openings index)
-                   Account.empty )
-             |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-             |> List.map ~f:(fun (_, account) ->
-                    Account_id.derive_token_id
-                      ~owner:(Account.identifier account) )
+           let target_state =
+             Da_layer.Da_state.create ~ledger_hash:target_ledger_hash
+               ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
            in
            printf "Distributing diff\n%!" ;
            let%bind () =
              Da_layer.Client.distribute_diff ~logger ~config:da_config
-               ~source_state ~ledger_openings
+               ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+               ~source_state ~target_state ~ledger_openings
                ~acc_set_openings:
-                 (Indexed_merkle_tree.Sparse.of_db_subset ~logger ~db:imt
-                    ~keys:new_accounts_keys )
+                 (Da_layer.Client.get_acc_set_openings ~logger
+                    ~changed_accounts:diff.changed_accounts ~ledger_openings
+                    ~imt )
                ~diff
            in
            let%bind body =
