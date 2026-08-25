@@ -431,11 +431,25 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
     ~(executor : Executor.t) ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
     ~commit_validity_period ~commit_fee =
   let open Deferred.Result.Let_syntax in
-  let%bind { ledger_hash; _ } =
-    Gql_client.infer_state ~logger l1_uri ~zkapp_pk
-      ~signer_pk:(Signer_service.Signer.public_key executor.signer)
-    >>| Utils.value_of_zkapp_state Rollup_state.Outer_state.typ
+  let signer_pk = Signer_service.Signer.public_key executor.signer in
+  let fetch_outer_state () =
+    let%bind () =
+      Settlement_finality.wait_for_previous_settlement ~logger ~l1_uri
+        ~signer_pk
+        ~message:
+          "Waiting for the previous Ethereum settlement to finalize before \
+           recommitting"
+    in
+    let%map state =
+      if Settlement_finality.ethereum_gateway_enabled () then
+        Gql_client.fetch_state ~logger l1_uri
+          ( Account_id.of_public_key
+          @@ Signature_lib.Public_key.decompress_exn zkapp_pk )
+      else Gql_client.infer_state ~logger l1_uri ~zkapp_pk ~signer_pk
+    in
+    Utils.value_of_zkapp_state Rollup_state.Outer_state.typ state
   in
+  let%bind { ledger_hash; _ } = fetch_outer_state () in
   let rec recommit_next current_state =
     match%bind
       Pool.use
@@ -468,6 +482,12 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
           Executor.send_zkapp_command ~logger ?settlement_export executor
             command
         in
-        recommit_next target_ledger_hash
+        let%bind next_state =
+          if Settlement_finality.ethereum_gateway_enabled () then
+            let%map { ledger_hash; _ } = fetch_outer_state () in
+            ledger_hash
+          else return target_ledger_hash
+        in
+        recommit_next next_state
   in
   recommit_next ledger_hash
