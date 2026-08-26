@@ -61,7 +61,7 @@ guide](https://docs.minaprotocol.com/node-developers/code-review-guidelines) for
 what to look for. Just leave comments on the **Files changed** view.
 
 All pull requests must be approved by at least one _code owner_ for the
-source code they touch. See the [CODEOWNERS](./CODEOWNERS) file to
+source code they touch. See the [CODEOWNERS](.github/CODEOWNERS) file to
 find out who the maintainers are.
 
 Maintainers assign reviewers to pull requests and tag the pull requests with 
