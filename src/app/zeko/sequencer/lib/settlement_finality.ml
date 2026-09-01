@@ -19,6 +19,15 @@ let wait_until_idle ?(retry_delay = Time_ns.Span.of_sec 15.)
   in
   loop ()
 
+let enqueue_after_wait ~wait ~enqueue job =
+  (* Finality polling can take minutes. Keep it outside the transaction
+     admission queue so user commands can continue to enter the sequencer. *)
+  match%bind wait () with
+  | Error error ->
+      Deferred.return (Error error)
+  | Ok () ->
+      enqueue job
+
 (* The Ethereum gateway keeps accepted commands in its Mina-compatible pool
    until their Ethereum transactions are finalized or fail. An empty pool is
    therefore the boundary at which it is safe to build a new state-bound
