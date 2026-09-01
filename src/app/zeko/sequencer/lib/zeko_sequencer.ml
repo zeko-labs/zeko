@@ -170,44 +170,6 @@ module Sequencer = struct
                 State.Last_committed_ledger.get sequencer_state
                 |> Option.value_exn ~message:"No previous committed ledger"
               in
-              let expected_ledger_hash =
-                Sparse_ledger.merkle_root old_inner_ledger
-              in
-              let%bind () =
-                if not (Settlement_finality.ethereum_gateway_enabled ()) then
-                  Deferred.Or_error.return ()
-                else
-                  let%bind () =
-                    Settlement_finality.wait_for_previous_settlement ~logger
-                      ~l1_uri:config.l1_uri
-                      ~signer_pk:
-                        (Signer_service.Signer.public_key executor.signer)
-                      ~message:
-                        "Waiting for the previous Ethereum settlement to \
-                         finalize before proving the next commit"
-                  in
-                  let%bind state =
-                    Gql_client.fetch_state ~logger config.l1_uri
-                      ( Account_id.of_public_key
-                      @@ Public_key.decompress_exn
-                           Zeko_circuits_config.Inputs.zeko_l1 )
-                  in
-                  let ({ ledger_hash = finalized_ledger_hash; _ }
-                        : C.Rollup_state.Outer_state.t ) =
-                    Utils.value_of_zkapp_state C.Rollup_state.Outer_state.typ
-                      state
-                  in
-                  if
-                    Ledger_hash.equal finalized_ledger_hash expected_ledger_hash
-                  then Deferred.Or_error.return ()
-                  else
-                    Deferred.return
-                      (Or_error.errorf
-                         "Finalized Ethereum settlement ledger %s does not \
-                          match the sequencer's last committed ledger %s"
-                         (Ledger_hash.to_decimal_string finalized_ledger_hash)
-                         (Ledger_hash.to_decimal_string expected_ledger_hash) )
-              in
               let%bind da_multisig =
                 Da_layer.Client.get_multisig da_client
                   ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
@@ -339,6 +301,44 @@ module Sequencer = struct
     ; inner_sync_q : unit Sequencer.t
           (* Fetching and applying outer actions must also be serialized. *)
     }
+
+  let wait_for_finalized_settlement t =
+    let open Deferred.Result.Let_syntax in
+    if not (Settlement_finality.ethereum_gateway_enabled ()) then
+      Deferred.Or_error.return ()
+    else
+      let old_inner_ledger =
+        State.Last_committed_ledger.get t.state
+        |> Option.value_exn ~message:"No previous committed ledger"
+      in
+      let expected_ledger_hash = Sparse_ledger.merkle_root old_inner_ledger in
+      let%bind () =
+        Settlement_finality.wait_for_previous_settlement ~logger:t.logger
+          ~l1_uri:t.config.l1_uri
+          ~signer_pk:
+            (Signer_service.Signer.public_key t.merger_ctx.executor.signer)
+          ~message:
+            "Waiting for the previous Ethereum settlement to finalize before \
+             proving the next commit"
+      in
+      let%bind state =
+        Gql_client.fetch_state ~logger:t.logger t.config.l1_uri
+          ( Account_id.of_public_key
+          @@ Public_key.decompress_exn Zeko_circuits_config.Inputs.zeko_l1 )
+      in
+      let ({ ledger_hash = finalized_ledger_hash; _ }
+            : C.Rollup_state.Outer_state.t ) =
+        Utils.value_of_zkapp_state C.Rollup_state.Outer_state.typ state
+      in
+      if Ledger_hash.equal finalized_ledger_hash expected_ledger_hash then
+        Deferred.Or_error.return ()
+      else
+        Deferred.return
+          (Or_error.errorf
+             "Finalized Ethereum settlement ledger %s does not match the \
+              sequencer's last committed ledger %s"
+             (Ledger_hash.to_decimal_string finalized_ledger_hash)
+             (Ledger_hash.to_decimal_string expected_ledger_hash) )
 
   let shutdown t =
     let logger = t.logger in
@@ -926,7 +926,10 @@ module Sequencer = struct
     let%map processed_witnesses, processed_actions_pointer =
       update_inner_account t
     in
-    Throttle.enqueue t.apply_q (fun () ->
+    Settlement_finality.enqueue_after_wait
+      ~wait:(fun () -> wait_for_finalized_settlement t)
+      ~enqueue:(fun job -> Throttle.enqueue t.apply_q job)
+      (fun () ->
         match%bind.Deferred apply_fee_transfer t with
         | `Skip ->
             [%log info]
