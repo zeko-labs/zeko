@@ -18,21 +18,90 @@ let test_wait_until_idle () =
   assert (!fetch_count = 2) ;
   assert (!wait_count = 1)
 
-let test_finality_wait_does_not_block_admission () =
+let test_state_snapshot_follows_wait () =
+  Thread_safe.block_on_async_exn (fun () ->
+      let wait_started = Ivar.create () in
+      let release_wait = Ivar.create () in
+      let expected_state = ref `First_settlement in
+      let waiter =
+        Finality.run_after_wait
+          ~wait:(fun () ->
+            Ivar.fill wait_started () ;
+            Ivar.read release_wait >>| Or_error.return )
+          (fun () -> Deferred.Or_error.return !expected_state)
+      in
+      let%bind () = Ivar.read wait_started in
+      expected_state := `Second_settlement ;
+      Ivar.fill release_wait () ;
+      let%map observed_state = waiter >>| Or_error.ok_exn in
+      assert (Poly.equal observed_state `Second_settlement) )
+
+let test_gate_serializes_sync_and_submission () =
+  Thread_safe.block_on_async_exn (fun () ->
+      let gate = Finality.Gate.create () in
+      let sync_started = Ivar.create () in
+      let release_sync = Ivar.create () in
+      let submission_started = Ivar.create () in
+      let submission_finished = Ivar.create () in
+      let second_sync_started = Ivar.create () in
+      let sync =
+        Finality.Gate.with_ gate ~f:(fun () ->
+            Ivar.fill sync_started () ; Ivar.read release_sync )
+      in
+      let%bind () = Ivar.read sync_started in
+      let commit =
+        Finality.Gate.with_held_until gate
+          ~f:(fun () ->
+            Ivar.fill submission_started () ;
+            Deferred.return (Ivar.read submission_finished) )
+          ~until:Fn.id
+      in
+      let%bind () = Scheduler.yield_until_no_jobs_remain () in
+      assert (Ivar.is_empty submission_started) ;
+      Ivar.fill release_sync () ;
+      let%bind (), submission = Deferred.both sync commit in
+      assert (Ivar.is_full submission_started) ;
+      let second_sync =
+        Finality.Gate.with_ gate ~f:(fun () ->
+            Ivar.fill second_sync_started () ;
+            Deferred.unit )
+      in
+      let%bind () = Scheduler.yield_until_no_jobs_remain () in
+      assert (Ivar.is_empty second_sync_started) ;
+      Ivar.fill submission_finished () ;
+      let%bind () = submission in
+      let%map () = second_sync in
+      assert (Ivar.is_full second_sync_started) )
+
+let test_preparation_follows_finality_without_blocking_admission () =
   Thread_safe.block_on_async_exn (fun () ->
       let apply_q =
         Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
       in
       let wait_started = Ivar.create () in
       let release_wait = Ivar.create () in
+      let preparation_started = Ivar.create () in
       let admission_started = Ivar.create () in
+      let outer_state = ref `Before_finality in
       let commit =
-        Finality.enqueue_after_wait
-          ~wait:(fun () ->
-            Ivar.fill wait_started () ;
-            Ivar.read release_wait >>| Or_error.return )
-          ~enqueue:(fun job -> Throttle.enqueue apply_q job)
-          (fun () -> Deferred.Or_error.return ())
+        Finality.Gate.with_held_until (Finality.Gate.create ())
+          ~f:(fun () ->
+            Finality.prepare_and_enqueue_after_wait
+              ~wait:(fun () ->
+                Ivar.fill wait_started () ;
+                Ivar.read release_wait >>| Or_error.return )
+              ~prepare:(fun () ->
+                Ivar.fill preparation_started () ;
+                Deferred.Or_error.return !outer_state )
+              ~enqueue:(fun job -> Throttle.enqueue apply_q job)
+              (fun prepared_state () ->
+                assert (Poly.equal prepared_state `After_finality) ;
+                Deferred.Or_error.return () ) )
+          ~until:(function
+            | Error _ ->
+                Deferred.unit
+            | Ok commit_result ->
+                commit_result >>| ignore )
       in
       let%bind () = Ivar.read wait_started in
       let admission =
@@ -40,19 +109,18 @@ let test_finality_wait_does_not_block_admission () =
             Ivar.fill admission_started () ;
             Deferred.unit )
       in
-      let%bind admission_outcome =
-        Deferred.choose
-          [ Deferred.choice (Ivar.read admission_started) (fun () -> true)
-          ; Deferred.choice
-              (Clock_ns.after (Time_ns.Span.of_sec 0.1))
-              (fun () -> false)
-          ]
-      in
+      let%bind () = Scheduler.yield_until_no_jobs_remain () in
+      assert (Ivar.is_full admission_started) ;
+      assert (Ivar.is_empty preparation_started) ;
+      outer_state := `After_finality ;
       Ivar.fill release_wait () ;
-      let%map commit_result, () = Deferred.both commit admission in
+      let%bind commit_result, () = Deferred.both commit admission in
+      let%map commit_result = Or_error.ok_exn commit_result in
       Or_error.ok_exn commit_result ;
-      assert admission_outcome )
+      assert (Ivar.is_full preparation_started) )
 
 let () =
   test_wait_until_idle () ;
-  test_finality_wait_does_not_block_admission ()
+  test_state_snapshot_follows_wait () ;
+  test_gate_serializes_sync_and_submission () ;
+  test_preparation_follows_finality_without_blocking_admission ()
