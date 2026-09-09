@@ -18,21 +18,28 @@ let test_wait_until_idle () =
   assert (!fetch_count = 2) ;
   assert (!wait_count = 1)
 
-let test_finality_wait_does_not_block_admission () =
+let test_preparation_follows_finality_without_blocking_admission () =
   Thread_safe.block_on_async_exn (fun () ->
       let apply_q =
         Throttle.create ~continue_on_error:false ~max_concurrent_jobs:1
       in
       let wait_started = Ivar.create () in
       let release_wait = Ivar.create () in
+      let preparation_started = Ivar.create () in
       let admission_started = Ivar.create () in
+      let outer_state = ref `Before_finality in
       let commit =
-        Finality.enqueue_after_wait
+        Finality.prepare_and_enqueue_after_wait
           ~wait:(fun () ->
             Ivar.fill wait_started () ;
             Ivar.read release_wait >>| Or_error.return )
+          ~prepare:(fun () ->
+            Ivar.fill preparation_started () ;
+            Deferred.Or_error.return !outer_state )
           ~enqueue:(fun job -> Throttle.enqueue apply_q job)
-          (fun () -> Deferred.Or_error.return ())
+          (fun prepared_state () ->
+            assert (Poly.equal prepared_state `After_finality) ;
+            Deferred.Or_error.return () )
       in
       let%bind () = Ivar.read wait_started in
       let admission =
@@ -48,11 +55,15 @@ let test_finality_wait_does_not_block_admission () =
               (fun () -> false)
           ]
       in
+      assert (Ivar.is_empty preparation_started) ;
+      outer_state := `After_finality ;
       Ivar.fill release_wait () ;
-      let%map commit_result, () = Deferred.both commit admission in
+      let%bind commit_result, () = Deferred.both commit admission in
+      let%map commit_result = Or_error.ok_exn commit_result in
       Or_error.ok_exn commit_result ;
-      assert admission_outcome )
+      assert admission_outcome ;
+      assert (Ivar.is_full preparation_started) )
 
 let () =
   test_wait_until_idle () ;
-  test_finality_wait_does_not_block_admission ()
+  test_preparation_follows_finality_without_blocking_admission ()

@@ -923,13 +923,11 @@ module Sequencer = struct
       Txn_snark.serializable option Deferred.Or_error.t Deferred.Or_error.t =
     let logger = t.logger in
     let open Deferred.Result.Let_syntax in
-    let%map processed_witnesses, processed_actions_pointer =
-      update_inner_account t
-    in
-    Settlement_finality.enqueue_after_wait
+    Settlement_finality.prepare_and_enqueue_after_wait
       ~wait:(fun () -> wait_for_finalized_settlement t)
+      ~prepare:(fun () -> update_inner_account t)
       ~enqueue:(fun job -> Throttle.enqueue t.apply_q job)
-      (fun () ->
+      (fun (processed_witnesses, processed_actions_pointer) () ->
         match%bind.Deferred apply_fee_transfer t with
         | `Skip ->
             [%log info]
