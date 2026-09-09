@@ -26,6 +26,32 @@ let run_after_wait ~wait run =
   | Ok () ->
       run ()
 
+module Gate = struct
+  type t = unit Mvar.Read_write.t
+
+  let create () =
+    let t = Mvar.create () in
+    don't_wait_for (Mvar.put t ()) ;
+    t
+
+  let with_ t ~f =
+    let%bind () = Mvar.take t in
+    Monitor.protect f ~finally:(fun () -> Mvar.put t ())
+
+  let with_held_until t ~f ~until =
+    let%bind () = Mvar.take t in
+    match%bind Monitor.try_with f with
+    | Error exn ->
+        let%map () = Mvar.put t () in
+        raise exn
+    | Ok result ->
+        don't_wait_for
+          (Monitor.protect
+             (fun () -> until result)
+             ~finally:(fun () -> Mvar.put t ()) ) ;
+        return result
+end
+
 let prepare_and_enqueue_after_wait ~wait ~prepare ~enqueue job =
   (* Finality polling can take minutes. Keep it outside the transaction
      admission queue so user commands can continue to enter the sequencer.

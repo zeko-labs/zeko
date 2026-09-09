@@ -300,6 +300,7 @@ module Sequencer = struct
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
     ; inner_sync_q : unit Sequencer.t
           (* Fetching and applying outer actions must also be serialized. *)
+    ; finality_gate : Settlement_finality.Gate.t
     }
 
   let wait_for_finalized_settlement t =
@@ -918,14 +919,15 @@ module Sequencer = struct
     Throttle.enqueue t.inner_sync_q (fun () -> update_inner_account_unlocked t)
 
   let sync_commits_only t =
-    Settlement_finality.run_after_wait
-      ~wait:(fun () -> wait_for_finalized_settlement t)
-      (fun () ->
-        Throttle.enqueue t.inner_sync_q (fun () ->
-            update_inner_account_unlocked ~commits_only:true t ) )
+    Settlement_finality.Gate.with_ t.finality_gate ~f:(fun () ->
+        Settlement_finality.run_after_wait
+          ~wait:(fun () -> wait_for_finalized_settlement t)
+          (fun () ->
+            Throttle.enqueue t.inner_sync_q (fun () ->
+                update_inner_account_unlocked ~commits_only:true t ) ) )
 
   (** Double Deferred.t is deliberate, the first is filled after update of ledger, the second is filled after commit *)
-  let commit t :
+  let commit_unlocked t :
       Txn_snark.serializable option Deferred.Or_error.t Deferred.Or_error.t =
     let logger = t.logger in
     let open Deferred.Result.Let_syntax in
@@ -1066,6 +1068,15 @@ module Sequencer = struct
                     }
               in
               return (Some result) )
+
+  let commit t =
+    Settlement_finality.Gate.with_held_until t.finality_gate
+      ~f:(fun () -> commit_unlocked t)
+      ~until:(function
+        | Error _ ->
+            Deferred.unit
+        | Ok commit_result ->
+            commit_result >>| ignore )
 
   let run_committer t =
     if Float.(t.config.commitment_period_sec <= 0.) then
@@ -1559,6 +1570,7 @@ module Sequencer = struct
       ; closed = Ivar.create ()
       ; apply_q = Sequencer.create ()
       ; inner_sync_q = Sequencer.create ()
+      ; finality_gate = Settlement_finality.Gate.create ()
       }
     in
     let%bind () =
