@@ -19,16 +19,20 @@ let wait_until_idle ?(retry_delay = Time_ns.Span.of_sec 15.)
   in
   loop ()
 
+let run_after_wait ~wait run =
+  match%bind wait () with
+  | Error error ->
+      Deferred.return (Error error)
+  | Ok () ->
+      run ()
+
 let prepare_and_enqueue_after_wait ~wait ~prepare ~enqueue job =
   (* Finality polling can take minutes. Keep it outside the transaction
      admission queue so user commands can continue to enter the sequencer.
      State-bound preparation must happen after the wait because finalization
      can advance the outer action state. *)
-  match%bind wait () with
-  | Error error ->
-      Deferred.return (Error error)
-  | Ok () ->
-      prepare () >>| Result.map ~f:(fun prepared -> enqueue (job prepared))
+  run_after_wait ~wait (fun () ->
+      prepare () >>| Result.map ~f:(fun prepared -> enqueue (job prepared)) )
 
 (* The Ethereum gateway keeps accepted commands in its Mina-compatible pool
    until their Ethereum transactions are finalized or fail. An empty pool is

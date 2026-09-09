@@ -915,8 +915,11 @@ module Sequencer = struct
     Throttle.enqueue t.inner_sync_q (fun () -> update_inner_account_unlocked t)
 
   let sync_commits_only t =
-    Throttle.enqueue t.inner_sync_q (fun () ->
-        update_inner_account_unlocked ~commits_only:true t )
+    Settlement_finality.run_after_wait
+      ~wait:(fun () -> wait_for_finalized_settlement t)
+      (fun () ->
+        Throttle.enqueue t.inner_sync_q (fun () ->
+            update_inner_account_unlocked ~commits_only:true t ) )
 
   (** Double Deferred.t is deliberate, the first is filled after update of ledger, the second is filled after commit *)
   let commit t :

@@ -47,21 +47,14 @@ let test_preparation_follows_finality_without_blocking_admission () =
             Ivar.fill admission_started () ;
             Deferred.unit )
       in
-      let%bind admission_outcome =
-        Deferred.choose
-          [ Deferred.choice (Ivar.read admission_started) (fun () -> true)
-          ; Deferred.choice
-              (Clock_ns.after (Time_ns.Span.of_sec 0.1))
-              (fun () -> false)
-          ]
-      in
+      let%bind () = Scheduler.yield_until_no_jobs_remain () in
+      assert (Ivar.is_full admission_started) ;
       assert (Ivar.is_empty preparation_started) ;
       outer_state := `After_finality ;
       Ivar.fill release_wait () ;
       let%bind commit_result, () = Deferred.both commit admission in
       let%map commit_result = Or_error.ok_exn commit_result in
       Or_error.ok_exn commit_result ;
-      assert admission_outcome ;
       assert (Ivar.is_full preparation_started) )
 
 let () =
