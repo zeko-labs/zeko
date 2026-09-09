@@ -18,6 +18,24 @@ let test_wait_until_idle () =
   assert (!fetch_count = 2) ;
   assert (!wait_count = 1)
 
+let test_state_snapshot_follows_wait () =
+  Thread_safe.block_on_async_exn (fun () ->
+      let wait_started = Ivar.create () in
+      let release_wait = Ivar.create () in
+      let expected_state = ref `First_settlement in
+      let waiter =
+        Finality.run_after_wait
+          ~wait:(fun () ->
+            Ivar.fill wait_started () ;
+            Ivar.read release_wait >>| Or_error.return )
+          (fun () -> Deferred.Or_error.return !expected_state)
+      in
+      let%bind () = Ivar.read wait_started in
+      expected_state := `Second_settlement ;
+      Ivar.fill release_wait () ;
+      let%map observed_state = waiter >>| Or_error.ok_exn in
+      assert (Poly.equal observed_state `Second_settlement) )
+
 let test_preparation_follows_finality_without_blocking_admission () =
   Thread_safe.block_on_async_exn (fun () ->
       let apply_q =
@@ -59,4 +77,5 @@ let test_preparation_follows_finality_without_blocking_admission () =
 
 let () =
   test_wait_until_idle () ;
+  test_state_snapshot_follows_wait () ;
   test_preparation_follows_finality_without_blocking_admission ()

@@ -307,38 +307,41 @@ module Sequencer = struct
     if not (Settlement_finality.ethereum_gateway_enabled ()) then
       Deferred.Or_error.return ()
     else
-      let old_inner_ledger =
-        State.Last_committed_ledger.get t.state
-        |> Option.value_exn ~message:"No previous committed ledger"
-      in
-      let expected_ledger_hash = Sparse_ledger.merkle_root old_inner_ledger in
-      let%bind () =
-        Settlement_finality.wait_for_previous_settlement ~logger:t.logger
-          ~l1_uri:t.config.l1_uri
-          ~signer_pk:
-            (Signer_service.Signer.public_key t.merger_ctx.executor.signer)
-          ~message:
-            "Waiting for the previous Ethereum settlement to finalize before \
-             proving the next commit"
-      in
-      let%bind state =
-        Gql_client.fetch_state ~logger:t.logger t.config.l1_uri
-          ( Account_id.of_public_key
-          @@ Public_key.decompress_exn Zeko_circuits_config.Inputs.zeko_l1 )
-      in
-      let ({ ledger_hash = finalized_ledger_hash; _ }
-            : C.Rollup_state.Outer_state.t ) =
-        Utils.value_of_zkapp_state C.Rollup_state.Outer_state.typ state
-      in
-      if Ledger_hash.equal finalized_ledger_hash expected_ledger_hash then
-        Deferred.Or_error.return ()
-      else
-        Deferred.return
-          (Or_error.errorf
-             "Finalized Ethereum settlement ledger %s does not match the \
-              sequencer's last committed ledger %s"
-             (Ledger_hash.to_decimal_string finalized_ledger_hash)
-             (Ledger_hash.to_decimal_string expected_ledger_hash) )
+      Settlement_finality.run_after_wait
+        ~wait:(fun () ->
+          Settlement_finality.wait_for_previous_settlement ~logger:t.logger
+            ~l1_uri:t.config.l1_uri
+            ~signer_pk:
+              (Signer_service.Signer.public_key t.merger_ctx.executor.signer)
+            ~message:
+              "Waiting for the previous Ethereum settlement to finalize \
+               before proving the next commit" )
+        (fun () ->
+          let old_inner_ledger =
+            State.Last_committed_ledger.get t.state
+            |> Option.value_exn ~message:"No previous committed ledger"
+          in
+          let expected_ledger_hash =
+            Sparse_ledger.merkle_root old_inner_ledger
+          in
+          let%bind state =
+            Gql_client.fetch_state ~logger:t.logger t.config.l1_uri
+              ( Account_id.of_public_key
+              @@ Public_key.decompress_exn Zeko_circuits_config.Inputs.zeko_l1 )
+          in
+          let ({ ledger_hash = finalized_ledger_hash; _ }
+                : C.Rollup_state.Outer_state.t ) =
+            Utils.value_of_zkapp_state C.Rollup_state.Outer_state.typ state
+          in
+          if Ledger_hash.equal finalized_ledger_hash expected_ledger_hash then
+            Deferred.Or_error.return ()
+          else
+            Deferred.return
+              (Or_error.errorf
+                 "Finalized Ethereum settlement ledger %s does not match the \
+                  sequencer's last committed ledger %s"
+                 (Ledger_hash.to_decimal_string finalized_ledger_hash)
+                 (Ledger_hash.to_decimal_string expected_ledger_hash) ) )
 
   let shutdown t =
     let logger = t.logger in
