@@ -83,6 +83,15 @@ At each commitment period:
   - slot-range constraints
 - It proves the outer commit circuit and sends the resulting zkapp command to L1.
 
+When the Ethereum gateway is enabled, the sequencer waits for the previous
+settlement to reach finality before synchronizing outer actions or preparing
+the next state-bound settlement. Commit-only inner sync and settlement
+submission share a gate, so neither can observe or change the outer action
+state while the other is in flight. Finality polling happens before the commit
+enters the transaction-application queue, allowing user commands to continue
+entering while the sequencer waits. These ordering guarantees are covered by
+[`settlement_finality_test.ml`](../../sequencer/tests/settlement_finality_test.ml).
+
 If there is nothing to commit (e.g., only an inner sync happened), the commit
 step is skipped.
 

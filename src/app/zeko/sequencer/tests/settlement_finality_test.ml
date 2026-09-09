@@ -46,8 +46,7 @@ let test_gate_serializes_sync_and_submission () =
       let second_sync_started = Ivar.create () in
       let sync =
         Finality.Gate.with_ gate ~f:(fun () ->
-            Ivar.fill sync_started () ;
-            Ivar.read release_sync )
+            Ivar.fill sync_started () ; Ivar.read release_sync )
       in
       let%bind () = Ivar.read sync_started in
       let commit =

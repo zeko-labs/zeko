@@ -315,8 +315,8 @@ module Sequencer = struct
             ~signer_pk:
               (Signer_service.Signer.public_key t.merger_ctx.executor.signer)
             ~message:
-              "Waiting for the previous Ethereum settlement to finalize \
-               before proving the next commit" )
+              "Waiting for the previous Ethereum settlement to finalize before \
+               proving the next commit" )
         (fun () ->
           let old_inner_ledger =
             State.Last_committed_ledger.get t.state
@@ -328,7 +328,8 @@ module Sequencer = struct
           let%bind state =
             Gql_client.fetch_state ~logger:t.logger t.config.l1_uri
               ( Account_id.of_public_key
-              @@ Public_key.decompress_exn Zeko_circuits_config.Inputs.zeko_l1 )
+              @@ Public_key.decompress_exn Zeko_circuits_config.Inputs.zeko_l1
+              )
           in
           let ({ ledger_hash = finalized_ledger_hash; _ }
                 : C.Rollup_state.Outer_state.t ) =
