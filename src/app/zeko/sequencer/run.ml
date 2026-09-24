@@ -74,7 +74,19 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
           (fun _ exn ->
             [%log error] "Unhandled exception: %s" (Exn.to_string exn) ) )
       (Async.Tcp.Where_to_listen.of_port port)
-      (fun ~body _sock req -> graphql_callback () req body)
+      (fun ~body _sock req ->
+        match Uri.path (Cohttp.Request.uri req) with
+        | "/healthz" ->
+            Graphql_cohttp_async.respond_string ~status:`OK ~body:"alive\n" ()
+        | "/readyz" ->
+            let executor = sequencer.merger_ctx.executor in
+            Graphql_cohttp_async.respond_string
+              ~status:
+                (if executor.settlement_ready then `OK else `Service_unavailable)
+              ~body:(executor.settlement_status ^ "\n")
+              ()
+        | _ ->
+            graphql_callback () req body )
     |> Deferred.ignore_m |> don't_wait_for
   in
   [%log info] "Sequencer listening on port %d" port ;

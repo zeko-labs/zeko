@@ -55,7 +55,8 @@ module Commit_table = struct
     Conn.exec
       (Caqti_request.exec typ
          {sql| INSERT INTO "commit" (source_ledger_hash, target_ledger_hash, witness)
-                VALUES (?, ?, ?) |sql} )
+                VALUES (?, ?, ?) ON CONFLICT (source_ledger_hash, target_ledger_hash)
+                DO NOTHING |sql} )
       t
 
   let get_by_source (module Conn : CONNECTION) ledger_hash =
@@ -63,6 +64,53 @@ module Commit_table = struct
       (Caqti_request.find_opt Caqti_type.string typ
          {sql| SELECT source_ledger_hash, target_ledger_hash, witness FROM "commit" WHERE source_ledger_hash = ? |sql} )
       (Ledger_hash.to_decimal_string ledger_hash)
+
+  let get_by_target (module Conn : CONNECTION) ledger_hash =
+    Conn.find_opt
+      (Caqti_request.find_opt Caqti_type.string typ
+         {sql| SELECT source_ledger_hash, target_ledger_hash, witness FROM "commit"
+               WHERE target_ledger_hash = ? ORDER BY id DESC LIMIT 1 |sql} )
+      (Ledger_hash.to_decimal_string ledger_hash)
+
+  (* A saved commit takes ownership of its base witnesses before any external
+     send. Both sides of this handoff use the same database transaction. *)
+  let handoff ~tree_id ~store_commit conn =
+    let open Deferred.Result.Let_syntax in
+    let%bind () = store_commit conn in
+    let module Conn = (val conn : CONNECTION) in
+    Conn.exec
+      (Caqti_request.exec Caqti_type.string
+         {sql| DELETE FROM parallel_merger WHERE tree_id = ? |sql} )
+      tree_id
+
+  let prepare ~tree_id conn t =
+    handoff ~tree_id ~store_commit:(fun conn -> insert conn t) conn
+
+  let record_attempt (module Conn : CONNECTION) ~source ~target ~hash ~command
+      ~reservation =
+    Conn.exec
+      (Caqti_request.exec
+         Caqti_type.(tup3 string string (tup3 string string string))
+         {sql| INSERT INTO settlement_attempt
+             (source_ledger_hash, target_ledger_hash, mina_transaction_hash,
+              command_base64, submission_payload)
+             VALUES (?, ?, ?, ?, ?::jsonb)
+             ON CONFLICT (source_ledger_hash) DO UPDATE SET
+               target_ledger_hash = EXCLUDED.target_ledger_hash,
+               mina_transaction_hash = EXCLUDED.mina_transaction_hash,
+               command_base64 = EXCLUDED.command_base64,
+               submission_payload = EXCLUDED.submission_payload, updated_at = NOW() |sql} )
+      ( Ledger_hash.to_decimal_string source
+      , Ledger_hash.to_decimal_string target
+      , (hash, command, Yojson.Safe.to_string reservation) )
+
+  let get_attempt (module Conn : CONNECTION) source =
+    Conn.find_opt
+      (Caqti_request.find_opt Caqti_type.string
+         Caqti_type.(tup3 string string string)
+         {sql| SELECT mina_transaction_hash, command_base64, submission_payload::text
+               FROM settlement_attempt WHERE source_ledger_hash = ? |sql} )
+      (Ledger_hash.to_decimal_string source)
 end
 
 let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
@@ -427,19 +475,245 @@ let prove_commit ~logger ~proof_cache_db ~provers ~(executor : Executor.t)
   in
   return (command, settlement_export)
 
-let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
+type recovery_action = Confirmed | Await | Retry | Blocked of string
+
+let transaction_proof_expired ~current_slot ~upper =
+  (* Transaction validity intervals include their upper bound. *)
+  Zeko_util.Slot.(upper < current_slot)
+
+let recovery_action ~source ~target ~finalized outcome =
+  if String.equal finalized target then Confirmed
+  else if not (String.equal finalized source) then
+    Blocked "Finalized settlement root is outside the persisted commit chain"
+  else
+    match outcome with
+    | None ->
+        Retry
+    | Some (outcome : Settlement_finality.Gateway.outcome) ->
+        if
+          not
+            ( String.equal outcome.source source
+            && String.equal outcome.target target )
+        then
+          Blocked
+            "Gateway settlement identity does not match the persisted commit"
+        else if outcome.finalized then
+          Blocked
+            "Gateway finalized receipt disagrees with its finalized account"
+        else if not (Settlement_finality.Gateway.terminal outcome.status) then
+          Await
+        else if outcome.retryable then Retry
+        else
+          Blocked
+            (Option.value outcome.error
+               ~default:("Settlement " ^ outcome.status) )
+
+let finalized_state ~logger ~l1_uri ~zkapp_pk =
+  Gql_client.fetch_state ~logger l1_uri
+    ( Account_id.of_public_key
+    @@ Signature_lib.Public_key.decompress_exn zkapp_pk )
+  >>| Result.map ~f:(Utils.value_of_zkapp_state Rollup_state.Outer_state.typ)
+
+let submit_saved ~logger ~proof_cache_db ~db_pool ~provers
+    ~(executor : Executor.t) ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
+    ~commit_validity_period ~commit_fee
+    ({ source_ledger_hash; target_ledger_hash; witness } : Commit_table.t) =
+  let open Deferred.Result.Let_syntax in
+  let check_validity () =
+    let current_slot = Utils.Slot.global_slot ~l1_config in
+    if
+      transaction_proof_expired ~current_slot
+        ~upper:(fst witness.txn_snark).slot_range.upper
+    then (
+      let reason =
+        "Settlement recovery blocked: transaction proof validity has expired; \
+         replay requires operator review"
+      in
+      Executor.settlement_status executor ~ready:false "blocked" (Some reason) ;
+      Deferred.Or_error.error_string reason )
+    else Deferred.Or_error.return ()
+  in
+  let%bind () = check_validity () in
+  let%bind () = Executor.reserve_settlement executor in
+  let%bind () = check_validity () in
+  let%bind () =
+    match executor.settlement_reservation with
+    | Some reservation
+      when not
+             (String.equal reservation.ledger_hash
+                (Ledger_hash.to_decimal_string source_ledger_hash) ) ->
+        let reason =
+          "Settlement reservation checkpoint is outside the persisted commit \
+           chain"
+        in
+        Executor.settlement_status executor ~ready:false "blocked" (Some reason) ;
+        Deferred.Or_error.error_string reason
+    | _ ->
+        Deferred.Or_error.return ()
+  in
+  let%bind command, settlement_export =
+    prove_commit ~logger ~proof_cache_db ~provers ~executor ~l1_uri ~archive
+      ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period ~commit_fee
+      witness
+  in
+  Executor.refresh_nonce executor ;
+  let before_send command payload =
+    let%bind () = check_validity () in
+    let hash =
+      Yojson.Safe.Util.(payload |> member "minaTransactionHash" |> to_string)
+    in
+    Pool.use
+      (fun conn ->
+        Commit_table.record_attempt conn ~source:source_ledger_hash
+          ~target:target_ledger_hash ~hash
+          ~command:(Zkapp_command.to_base64 command)
+          ~reservation:payload )
+      db_pool
+    |> Deferred.map ~f:caqti_to_err
+  in
+  let%map _ =
+    Executor.send_zkapp_command ~logger ?settlement_export ~before_send executor
+      command
+  in
+  ()
+
+let resolve_saved ~logger ~proof_cache_db ~db_pool ~provers
+    ~(executor : Executor.t) ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
+    ~commit_validity_period ~commit_fee ~wait_for_finality
+    (saved : Commit_table.t) =
+  let open Deferred.Result.Let_syntax in
+  let source = Ledger_hash.to_decimal_string saved.source_ledger_hash in
+  let target = Ledger_hash.to_decimal_string saved.target_ledger_hash in
+  let rec loop () =
+    let%bind { ledger_hash; _ } = finalized_state ~logger ~l1_uri ~zkapp_pk in
+    let%bind attempt =
+      Pool.use
+        (fun conn -> Commit_table.get_attempt conn saved.source_ledger_hash)
+        db_pool
+      |> Deferred.map ~f:caqti_to_err
+    in
+    let%bind outcome =
+      match attempt with
+      | None ->
+          return None
+      | Some (hash, _, _) ->
+          Settlement_finality.Gateway.lookup ~l1_uri hash
+    in
+    match
+      recovery_action ~source ~target
+        ~finalized:(Ledger_hash.to_decimal_string ledger_hash)
+        outcome
+    with
+    | Confirmed ->
+        let%map.Deferred () = Executor.release_reservation executor in
+        Ok ()
+    | Blocked reason ->
+        Executor.settlement_status executor ~ready:false "blocked" (Some reason) ;
+        let%bind.Deferred () = Executor.release_reservation executor in
+        Deferred.Or_error.error_string reason
+    | Await ->
+        let error = Option.bind outcome ~f:(fun outcome -> outcome.error) in
+        Executor.settlement_status executor
+          ~ready:(executor.settlement_ready && Option.is_none error)
+          (if Option.is_none error then "settling" else "recovering")
+          error ;
+        if not wait_for_finality then return ()
+        else
+          let%bind.Deferred () = Clock_ns.after (Time_ns.Span.of_sec 15.) in
+          loop ()
+    | Retry -> (
+        let%bind replayed =
+          match (attempt, outcome) with
+          | Some (_, command_base64, payload), None -> (
+              (* The sender may have died after the gateway accepted the HTTP
+                 request. Retry its immutable bytes before generating anything
+                 new; a new reservation is allowed only after fenced rejection. *)
+              match%map.Deferred
+                Executor.replay_settlement executor ~l1_uri ~command_base64
+                  ~payload:(Yojson.Safe.from_string payload)
+              with
+              | Ok () ->
+                  Ok true
+              | Error error ->
+                  let message = Error.to_string_hum error in
+                  if
+                    List.exists
+                      [ "RESERVATION_EXPIRED"
+                      ; "STALE_CHECKPOINT"
+                      ; "RESERVATION_REQUIRED"
+                      ] ~f:(fun code ->
+                        String.is_substring message ~substring:code )
+                  then Ok false
+                  else Error error )
+          | _ ->
+              return false
+        in
+        if replayed then if wait_for_finality then loop () else return ()
+        else
+          let%bind.Deferred () =
+            match attempt with
+            | None ->
+                Deferred.unit
+            | Some _ ->
+                Executor.settlement_status executor ~ready:false "recovering"
+                  (Option.bind outcome ~f:(fun outcome -> outcome.error)) ;
+                Clock_ns.after (Time_ns.Span.of_sec 30.)
+          in
+          let%bind.Deferred () =
+            (* A terminal attempt no longer owns the writer. Rebuilding uses a
+               newly fenced, finalized checkpoint, never the old proof context. *)
+            match attempt with
+            | None ->
+                Deferred.unit
+            | Some _ ->
+                Executor.release_reservation executor
+          in
+          match%bind.Deferred
+            submit_saved ~logger ~proof_cache_db ~db_pool ~provers ~executor
+              ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
+              ~commit_validity_period ~commit_fee saved
+          with
+          | Ok () when not wait_for_finality ->
+              Executor.settlement_status executor
+                ~ready:executor.settlement_ready "settling" None ;
+              return ()
+          | Ok () ->
+              loop ()
+          | Error error ->
+              Executor.pause_settlement executor error ;
+              let%bind.Deferred () = Executor.release_reservation executor in
+              Deferred.return (Error error) )
+  in
+  loop ()
+
+let rec submit_until_accepted ~logger ~proof_cache_db ~db_pool ~provers
+    ~executor ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
+    ~commit_validity_period ~commit_fee saved =
+  match%bind
+    Utils.retry ~max_attempts:1
+      ~f:(fun () ->
+        resolve_saved ~logger ~proof_cache_db ~db_pool ~provers ~executor
+          ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
+          ~commit_validity_period ~commit_fee ~wait_for_finality:false saved )
+      ()
+  with
+  | Ok () ->
+      Deferred.unit
+  | Error error ->
+      Executor.pause_settlement executor error ;
+      [%log error] "Settlement submission is paused: %s"
+        (Error.to_string_hum error) ;
+      let%bind () = Clock_ns.after (Time_ns.Span.of_sec 30.) in
+      submit_until_accepted ~logger ~proof_cache_db ~db_pool ~provers ~executor
+        ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
+        ~commit_validity_period ~commit_fee saved
+
+let recommit_all ~on_confirmed ~logger ~proof_cache_db ~db_pool ~provers
     ~(executor : Executor.t) ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
     ~commit_validity_period ~commit_fee =
   let open Deferred.Result.Let_syntax in
   let signer_pk = Signer_service.Signer.public_key executor.signer in
   let fetch_outer_state () =
-    let%bind () =
-      Settlement_finality.wait_for_previous_settlement ~logger ~l1_uri
-        ~signer_pk
-        ~message:
-          "Waiting for the previous Ethereum settlement to finalize before \
-           recommitting"
-    in
     let%map state =
       if Settlement_finality.ethereum_gateway_enabled () then
         Gql_client.fetch_state ~logger l1_uri
@@ -450,6 +724,17 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
     Utils.value_of_zkapp_state Rollup_state.Outer_state.typ state
   in
   let%bind { ledger_hash; _ } = fetch_outer_state () in
+  let%bind () =
+    if Settlement_finality.ethereum_gateway_enabled () then
+      let%map previous =
+        Pool.use
+          (fun conn -> Commit_table.get_by_target conn ledger_hash)
+          db_pool
+        |> Deferred.map ~f:caqti_to_err
+      in
+      Option.iter previous ~f:(fun saved -> on_confirmed saved.witness)
+    else return ()
+  in
   let rec recommit_next current_state =
     match%bind
       Pool.use
@@ -459,35 +744,44 @@ let recommit_all ~logger ~proof_cache_db ~db_pool ~provers
     with
     | None ->
         return ()
-    | Some { source_ledger_hash; target_ledger_hash; witness } ->
+    | Some ({ source_ledger_hash; target_ledger_hash; witness } as saved) ->
         [%log info] "Recommitting %s -> %s"
           (Frozen_ledger_hash.to_base58_check source_ledger_hash)
           (Frozen_ledger_hash.to_base58_check target_ledger_hash) ;
-        let () =
-          let l1_global_slot = Utils.Slot.global_slot ~l1_config in
-          let ({ upper; _ } : Slot_range.t) =
-            (fst witness.txn_snark).slot_range
+        if Settlement_finality.ethereum_gateway_enabled () then (
+          let%bind () =
+            resolve_saved ~logger ~proof_cache_db ~db_pool ~provers ~executor
+              ~l1_uri ~archive ~zkapp_pk ~archive_uri ~l1_config
+              ~commit_validity_period ~commit_fee ~wait_for_finality:true saved
           in
-          if Zeko_util.Slot.(upper <= l1_global_slot) then
-            failwithf "Failed to recommit, upper slot is in the past: %s"
-              (Zeko_util.Slot.to_string upper)
-              ()
-        in
-        let%bind command, settlement_export =
-          prove_commit ~logger ~proof_cache_db ~provers ~executor ~l1_uri
-            ~archive ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period
-            ~commit_fee witness
-        in
-        let%bind _hash =
-          Executor.send_zkapp_command ~logger ?settlement_export executor
-            command
-        in
-        let%bind next_state =
-          if Settlement_finality.ethereum_gateway_enabled () then
-            let%map { ledger_hash; _ } = fetch_outer_state () in
-            ledger_hash
-          else return target_ledger_hash
-        in
-        recommit_next next_state
+          on_confirmed witness ;
+          recommit_next target_ledger_hash )
+        else
+          let () =
+            let l1_global_slot = Utils.Slot.global_slot ~l1_config in
+            let ({ upper; _ } : Slot_range.t) =
+              (fst witness.txn_snark).slot_range
+            in
+            if Zeko_util.Slot.(upper <= l1_global_slot) then
+              failwithf "Failed to recommit, upper slot is in the past: %s"
+                (Zeko_util.Slot.to_string upper)
+                ()
+          in
+          let%bind command, settlement_export =
+            prove_commit ~logger ~proof_cache_db ~provers ~executor ~l1_uri
+              ~archive ~zkapp_pk ~archive_uri ~l1_config ~commit_validity_period
+              ~commit_fee witness
+          in
+          let%bind _hash =
+            Executor.send_zkapp_command ~logger ?settlement_export executor
+              command
+          in
+          let%bind next_state =
+            if Settlement_finality.ethereum_gateway_enabled () then
+              let%map { ledger_hash; _ } = fetch_outer_state () in
+              ledger_hash
+            else return target_ledger_hash
+          in
+          recommit_next next_state
   in
   recommit_next ledger_hash

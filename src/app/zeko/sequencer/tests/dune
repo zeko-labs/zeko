@@ -60,6 +60,13 @@
  (modules settlement_finality_test))
 
 (executable
+ (name settlement_durability_test)
+ (libraries sequencer_lib is_compile_simple_real_fake)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina))
+ (modules settlement_durability_test))
+
+(executable
  (name slot_duration_test)
  (libraries utils core_kernel mina_numbers is_compile_simple_real_fake)
  (modules slot_duration_test))

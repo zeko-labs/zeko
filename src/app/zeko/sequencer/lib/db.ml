@@ -151,6 +151,19 @@ let migrations : Db.Migration.t list =
           (Caqti_request.exec Caqti_type.unit
              {sql| ALTER TABLE da_diff ADD COLUMN acc_set_openings BYTEA NOT NULL |sql} )
           () )
+  ; Db.Migration.make 6 "durable_settlement_attempts"
+      (fun (module Conn : CONNECTION) ->
+        Conn.exec
+          (Caqti_request.exec Caqti_type.unit
+             {sql| CREATE TABLE settlement_attempt (
+                 source_ledger_hash TEXT PRIMARY KEY,
+                 target_ledger_hash TEXT NOT NULL,
+                 mina_transaction_hash TEXT NOT NULL,
+                 command_base64 TEXT NOT NULL,
+                 submission_payload JSONB NOT NULL,
+                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+               ) |sql} )
+          () )
   ]
 
 let create_and_migrate ~postgres_uri ~logger =
