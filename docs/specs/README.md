@@ -13,7 +13,7 @@
 * `offset` of binary URS within file
 
 **Outputs**
-* `TODO`
+* `CamlPastaFpUrs` loaded
 
 **Spec**
 
