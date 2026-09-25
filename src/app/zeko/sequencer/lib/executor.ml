@@ -236,13 +236,12 @@ let process_command ~logger ?settlement_export ?before_send t
       command
     with
     | Ok command ->
-        [%log info] "Sent zkapp command: %s"
-          Transaction_hash.(
-            to_base58_check @@ hash_command (Zkapp_command command)) ;
-        increment_nonce t ;
-        let hash : Mina_transaction.Transaction_hash.t =
+        let hash =
           Mina_transaction.Transaction_hash.hash_command (Zkapp_command command)
         in
+        [%log info] "Sent zkapp command: %s"
+          (Mina_transaction.Transaction_hash.to_base58_check hash) ;
+        increment_nonce t ;
         return (Ok hash)
     | Error err when attempt >= t.max_attempts ->
         return
