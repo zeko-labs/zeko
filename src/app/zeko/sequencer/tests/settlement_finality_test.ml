@@ -119,8 +119,114 @@ let test_preparation_follows_finality_without_blocking_admission () =
       Or_error.ok_exn commit_result ;
       assert (Ivar.is_full preparation_started) )
 
+let test_failed_acceptance_recovers_before_successor () =
+  let module Committer = Sequencer_lib.Committer in
+  let outcome =
+    Finality.Gateway.
+      { status = "queued"
+      ; finalized = false
+      ; retryable = false
+      ; error = None
+      ; source = "10"
+      ; target = "20"
+      }
+  in
+  let decide finalized outcome =
+    Committer.recovery_action ~source:"10" ~target:"20" ~finalized outcome
+  in
+  (* Acceptance alone must not advance the finalized chain. *)
+  assert (Poly.equal (decide "10" (Some outcome)) Committer.Await) ;
+  (* A gateway-owned retry, including insufficient funds, must not create a
+     second settlement job or discard the already prepared proof. *)
+  let retry_wait = { outcome with error = Some "insufficient funds" } in
+  assert (Poly.equal (decide "10" (Some retry_wait)) Committer.Await) ;
+  (* A definitively failed proof with unchanged source may be rebuilt from the
+     saved A -> B witness; B -> C remains inadmissible until B finalizes. *)
+  let failed =
+    { outcome with
+      status = "failed"
+    ; retryable = true
+    ; error = Some "STALE_CHECKPOINT"
+    }
+  in
+  assert (Poly.equal (decide "10" (Some failed)) Committer.Retry) ;
+  assert (
+    match
+      Committer.recovery_action ~source:"20" ~target:"30" ~finalized:"10" None
+    with
+    | Committer.Blocked _ ->
+        true
+    | _ ->
+        false ) ;
+  assert (Poly.equal (decide "20" (Some failed)) Committer.Confirmed) ;
+  assert (
+    Poly.equal
+      (Committer.recovery_action ~source:"20" ~target:"30" ~finalized:"20" None)
+      Committer.Retry )
+
+let test_unknown_root_and_wrong_job_stay_blocked () =
+  let module Committer = Sequencer_lib.Committer in
+  let outcome =
+    Finality.Gateway.
+      { status = "submitted"
+      ; finalized = false
+      ; retryable = false
+      ; error = None
+      ; source = "10"
+      ; target = "30"
+      }
+  in
+  let blocked finalized outcome =
+    match
+      Committer.recovery_action ~source:"10" ~target:"20" ~finalized outcome
+    with
+    | Committer.Blocked _ ->
+        true
+    | _ ->
+        false
+  in
+  assert (blocked "99" None) ;
+  assert (blocked "10" (Some outcome)) ;
+  assert (
+    blocked "10"
+      (Some
+         { outcome with target = "20"; status = "confirmed"; finalized = true }
+      ) ) ;
+  assert (blocked "10" (Some { outcome with target = "20"; status = "reorged" }))
+
+let test_gateway_outcome_contract () =
+  let outcome =
+    Finality.Gateway.outcome_of_json
+      (`Assoc
+        [ ("status", `String "queued")
+        ; ("finalized", `Bool false)
+        ; ("retryable", `Bool false)
+        ; ("error", `String "RPC 429")
+        ; ("sourceLedgerHash", `String "10")
+        ; ("targetLedgerHash", `String "20")
+        ] )
+  in
+  assert (String.equal outcome.source "10") ;
+  assert (String.equal outcome.target "20") ;
+  assert (Option.equal String.equal outcome.error (Some "RPC 429")) ;
+  assert (not (Finality.Gateway.terminal outcome.status))
+
+let test_transaction_proof_expiry_is_inclusive () =
+  let slot = Mina_numbers.Global_slot_since_genesis.of_int in
+  let expired current_slot =
+    Sequencer_lib.Committer.transaction_proof_expired
+      ~current_slot:(slot current_slot) ~upper:(slot 20)
+  in
+  assert (not (expired 19)) ;
+  assert (not (expired 20)) ;
+  assert (expired 21)
+
 let () =
   test_wait_until_idle () ;
   test_state_snapshot_follows_wait () ;
   test_gate_serializes_sync_and_submission () ;
-  test_preparation_follows_finality_without_blocking_admission ()
+  test_preparation_follows_finality_without_blocking_admission () ;
+  test_failed_acceptance_recovers_before_successor () ;
+  test_unknown_root_and_wrong_job_stay_blocked () ;
+  test_gateway_outcome_contract () ;
+  test_transaction_proof_expiry_is_inclusive ()

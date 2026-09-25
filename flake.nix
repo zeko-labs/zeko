@@ -290,6 +290,16 @@
 
         ocamlPackages = pkgs.ocamlPackages_mina;
 
+        # ZEKO NOTE: The pinned Cap'n Proto RPC tests deadlock in the emulated
+        # development container (TestRecvCancel hangs until the 10m timeout).
+        # Keep this workaround local to the native development shell; packages
+        # and the default shell retain the upstream dependency checks.
+        zekoNativePkgs = pkgs.extend (_: prev: {
+          go-capnproto2 = prev.go-capnproto2.overrideAttrs (_: {
+            doCheck = false;
+          });
+        });
+
         # Nix-built `dpkg` archives with Mina in them
         debianPackages = pkgs.callPackage ./nix/debian.nix { };
 
@@ -348,6 +358,22 @@
           '';
         });
         devShells.default = self.devShell.${system};
+
+        # ZEKO NOTE: Reuse the pinned native/OCaml dependencies for sequencer
+        # work without pulling in optional Rosetta, JS/WASM, and RocksDB tools.
+        devShells.zeko-native = zekoNativePkgs.ocamlPackages_mina.mina-dev.overrideAttrs (oa: {
+          buildInputs = oa.buildInputs
+            ++ (with pkgs; [ curl jq netcat-openbsd git ])
+            ++ pkgs.lib.optional pkgs.stdenv.isLinux pkgs.procps;
+          # A nonempty literal removes the WASM derivation dependency and makes
+          # accidental JS targets fail instead of starting a local WASM build.
+          PLONK_WASM_NODEJS = "/nonexistent/zeko-native-only-wasm";
+          PLONK_WASM_WEB = "/nonexistent/zeko-native-only-wasm";
+          shellHook = ''
+            ${oa.shellHook}
+            unset MINA_COMMIT_DATE MINA_COMMIT_SHA1 MINA_BRANCH
+          '';
+        });
 
         # Shell with an LSP server available in it. You can start your editor from this shell, and tell it to look for LSP in PATH.
         devShells.with-lsp = ocamlPackages.mina-dev.overrideAttrs (oa: {

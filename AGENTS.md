@@ -16,6 +16,29 @@
 
 ## Build
 
+- On the shared 16 GB development Mac, reuse the `zeko-dev` tmux session and
+  its persistent Nix shell. Check `tmux list-windows -t zeko-dev` before
+  starting anything; attach with `tmux attach -t zeko-dev`. The Docker
+  container `zeko-dev` maps the sibling-repository workspace to `/workspace`
+  and retains its Nix store and `_build` directory in named volumes.
+- For sequencer work, select the native-only shell inside tmux with
+  `nix develop 'git+file:///workspace/zeko?submodules=1#zeko-native'
+  --option accept-flake-config false --max-jobs 1 --cores 1
+  --profile /root/nix-profiles/zeko-ocaml -c bash --noprofile --norc` in the
+  container. It retains the same pinned OCaml libraries, native Kimchi stubs,
+  and RocksDB while omitting optional Rosetta and JS/WASM tooling. Use the
+  default shell for JS/WASM targets.
+- The native development shell disables upstream `go-capnproto2` tests because
+  `TestRecvCancel` deadlocks until its 10-minute timeout in the emulated
+  development container. This override is limited to that shell; production
+  packages and the default shell retain their dependency checks.
+- Once installed, prefer the existing shell or reenter its saved profile with
+  `nix develop /root/nix-profiles/zeko-ocaml -c bash --noprofile --norc`.
+  Refresh the profile when dependency pins change. Keep the shell alive so
+  another session can continue without reinitializing it.
+- Run only one heavy build at a time, with `dune build -j 1` and
+  `RAYON_NUM_THREADS=1`. The build container is limited to 6 GB RAM; never
+  increase parallelism simply to speed up a cold build.
 - Build the Zeko project with:
   - `dune build ./src/app/zeko/sequencer ./src/app/zeko/da_layer ./src/app/zeko/signer`
 - The build can take longer than 10 seconds; prefer running with a longer timeout (e.g., 120s) in CI or local scripts.
@@ -32,7 +55,10 @@
 ## Testing
 
 - Build the Zeko project first
-- run ./src/app/zeko/tests/run-sequencer-test.sh fake 3 true false
+- Run `./src/app/zeko/sequencer/tests/run-sequencer-test.sh fake 3 true false`.
+- On the 16 GB Mac, only fake proving tests are permitted. Never change this
+  runner to `real`, launch a real prover, or run SP1 execution/proving. Prefer
+  focused deterministic concurrency/recovery tests before the full fake suite.
 
 ## Ethereum settlement export
 

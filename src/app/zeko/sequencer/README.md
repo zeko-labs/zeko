@@ -18,8 +18,72 @@ DUNE_PROFILE=devnet dune build ./src/app/zeko/sequencer
 ## Tests
 
 ```bash
-dune build
-./src/app/zeko/sequencer/tests/run-sequencer-test.sh {fake | real} <num_provers>
+dune build -j 1 ./src/app/zeko/sequencer/tests/settlement_finality_test.exe \
+  ./src/app/zeko/sequencer/tests/settlement_durability_test.exe
+env -u ZEKO_ETHEREUM_GATEWAY_TOKEN ZEKO_CIRCUITS_CONFIG=test ZEKO_CIRCUITS_MODE=fake \
+  ./_build/default/src/app/zeko/sequencer/tests/settlement_finality_test.exe
+env -u ZEKO_ETHEREUM_GATEWAY_TOKEN ZEKO_CIRCUITS_CONFIG=test ZEKO_CIRCUITS_MODE=fake \
+  ZEKO_TEST_POSTGRES_PORT=5433 \
+  ./_build/default/src/app/zeko/sequencer/tests/settlement_durability_test.exe
+```
+
+Both targets link the fake proving implementation. The durability test requires
+an isolated PostgreSQL instance with `postgres:postgres` credentials; it creates
+and drops only its `settlement_durability_test` database. It checks transaction
+rollback during witness handoff and restores the saved submission and successor
+witnesses through a fresh connection pool. It needs no signer, RabbitMQ, DA node,
+or proving worker.
+
+The full fake integration runner requires Docker and the compiled sequencer,
+signer, DA, and fake-prover binaries. Fake mode uses `cli_fake.exe` for key
+generation, `prover/cli_fake.exe` for proving, and `sequencer_test_fake.exe` for
+the test process:
+
+```bash
+./src/app/zeko/sequencer/tests/run-sequencer-test.sh fake 1 true true
+```
+
+Its four arguments are mode, prover count, log redirection, and service-readiness
+waiting. Use one fake prover on a constrained development machine. Real proving
+must be requested separately and run on a suitable machine.
+
+For a persistent Nix development container named `zeko-dev`, start isolated test
+sidecars from the host. Sharing its network namespace makes their ports available
+on the runner's `localhost` without giving the development container Docker
+access. These limits leave room for one fake prover on a 16 GB machine:
+
+```bash
+docker run -d --name zeko-test-postgres \
+  --network container:zeko-dev --memory 512m --cpus 1 \
+  --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+  postgres:16-alpine postgres -p 5433
+docker run -d --name zeko-test-rabbitmq \
+  --network container:zeko-dev --memory 768m --cpus 1 \
+  -e RABBITMQ_DEFAULT_USER=guest -e RABBITMQ_DEFAULT_PASS=guest \
+  -e 'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=+S 1:1' \
+  rabbitmq:4-management
+```
+
+Inside the development container, run from the core repository in its Nix shell
+with `curl`, `jq`, and `nc` available:
+
+```bash
+ZEKO_TEST_EXTERNAL_SERVICES=true \
+  ./src/app/zeko/sequencer/tests/run-sequencer-test.sh fake 1 true true
+```
+
+This mode checks PostgreSQL on port 5433 and RabbitMQ on port 5672, and waits for
+prover consumers through RabbitMQ's management API. It defaults to
+`http://localhost:15672` and the isolated test credentials `guest:guest`. Override
+these with `ZEKO_TEST_RABBITMQ_MANAGEMENT_URL`,
+`ZEKO_TEST_RABBITMQ_MANAGEMENT_USER`, and
+`ZEKO_TEST_RABBITMQ_MANAGEMENT_PASSWORD` when needed. The runner still stops its
+own signer, DA, L1, and prover processes; externally managed sidecars remain until
+the host removes them:
+
+```bash
+docker rm -f zeko-test-postgres zeko-test-rabbitmq
 ```
 
 ## Export Ethereum deployment artifacts
@@ -80,6 +144,66 @@ Run help to see the options:
 ```bash
 dune exec ./run.exe -- --help
 ```
+
+## Ethereum settlement recovery
+
+When `ZEKO_ETHEREUM_GATEWAY_TOKEN` is set, the sequencer uses the gateway's
+settlement reservation and outcome APIs in addition to its Mina-compatible
+GraphQL endpoint. The same token authenticates those REST requests through
+`X-API-Key`. The gateway and sequencer must both implement this protocol.
+
+Before inner-account synchronization or outer proof preparation, the sequencer
+reserves a finalized outer-state checkpoint. Its durable owner ID lives in the
+ledger KV database. Preparing reservations expire after 120 seconds and are
+renewed every 30 seconds; a gateway-accepted job retains ownership until the
+gateway resolves its outcome. A busy bridge writer delays preparation outside
+the transaction admission queue. A lost or stale reservation cannot authorize a
+new submission.
+
+The sequencer stores the source/target ledger witness before submitting a commit.
+The PostgreSQL transaction that saves it also removes that commit's original
+base witnesses, leaving subsequent transaction witnesses available for restart.
+Migration 6 adds `settlement_attempt`, which records the signed command, its
+gateway hash, and the complete immutable submission payload before the HTTP
+request. Keep this table, the existing `commit` table, and the ledger/IMT together
+when backing up or restoring a sequencer. Existing commit-witness JSON remains
+compatible; no history rewrite is required.
+
+Acceptance is distinct from finality. Recovery checks both the durable gateway
+outcome and the finalized ledger root. It completes a saved A-to-B commit before
+allowing a queued B-to-C commit. Unknown submission outcomes replay the exact
+stored payload; a definite fenced rejection or retryable terminal job can cause
+the outer proof to be rebuilt against a fresh reservation. Gateway-owned retries
+for RPC failures or insufficient funds remain the same job. Recovery never
+silently rolls back the accepted ledger pointer, skips an unknown root, or
+extends an expired transaction proof's validity interval.
+
+After local ledger initialization, HTTP and GraphQL remain available while
+settlement recovery is running:
+
+- `GET /healthz` returns 200 while the process serves requests.
+- `GET /readyz` returns 200 when admission is ready and 503 while recovery blocks
+  admission. Its body contains the settlement phase.
+- GraphQL fields `settlementStatus`, `settlementReady`, `settlementError`, and
+  `settlementFinalizedLedgerHash` expose the recovery state and last verified
+  finalized ledger. Phases include `initializing`, `ready`, `settling`,
+  `waiting_for_outer_writer`, `recovering`, and `blocked`.
+
+Ordinary admission remains available during healthy pending settlement and
+writer waits. Startup reconciliation, failed-job recovery, and consistency
+errors reject new transactions with a retryable availability error. An unknown
+finalized root, non-retryable rejection, or expired transaction proof requires
+operator investigation. Inspect the saved job and witness instead of deleting
+the ledger, resetting the database, or repeatedly restarting the process.
+
+For rollout, stop the old sequencer before enabling mandatory gateway
+reservations, inspect/drain existing gateway jobs without discarding ambiguous
+Ethereum submissions, deploy the gateway migration and API, then start the new
+sequencer with its existing state. Verify `/healthz`, `/readyz`, and the finalized
+ledger before routing new writes. An old sequencer cannot submit to a gateway
+that requires reservations. Use liveness to detect a dead process and readiness
+to route writes; an unfunded relayer or a blocked recovery is not a reason to
+erase state or run a hard reset.
 
 ## Signer service auth and TLS
 

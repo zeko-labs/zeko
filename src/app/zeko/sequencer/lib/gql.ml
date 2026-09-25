@@ -3263,6 +3263,41 @@ module Queries = struct
       ~resolve:(fun { ctx = { sequencer; _ }; _ } () ->
         Zeko_sequencer.commit_schedule sequencer )
 
+  let settlement_status =
+    field "settlementStatus" ~typ:(non_null string)
+      ~args:Arg.[]
+      ~doc:"Settlement recovery phase; this does not imply Ethereum finality"
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () ->
+        sequencer.merger_ctx.executor.settlement_status )
+
+  let settlement_ready =
+    field "settlementReady" ~typ:(non_null bool)
+      ~args:Arg.[]
+      ~doc:
+        "Whether transaction admission is available after settlement \
+         reconciliation"
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () ->
+        sequencer.merger_ctx.executor.settlement_ready )
+
+  let settlement_error =
+    field "settlementError" ~typ:string
+      ~args:Arg.[]
+      ~doc:"Reason settlement recovery is paused, if any"
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () ->
+        sequencer.merger_ctx.executor.settlement_error )
+
+  let settlement_finalized_ledger =
+    field "settlementFinalizedLedgerHash" ~typ:string
+      ~args:Arg.[]
+      ~doc:
+        "Last Ethereum-finalized ledger verified against the persisted commit \
+         chain"
+      ~resolve:(fun { ctx = Context.{ sequencer; _ }; _ } () ->
+        Zeko_sequencer.State.Last_finalized_ledger.get sequencer.state
+        |> Option.map ~f:(fun ledger ->
+               Mina_ledger.Sparse_ledger.merkle_root ledger
+               |> Ledger_hash.to_decimal_string ) )
+
   let network_id =
     field "networkID"
       ~doc:
@@ -3601,6 +3636,10 @@ module Queries = struct
     [ sync_status
     ; daemon_status
     ; commit_schedule
+    ; settlement_status
+    ; settlement_ready
+    ; settlement_error
+    ; settlement_finalized_ledger
     ; account
     ; accounts_for_pk
     ; token_accounts

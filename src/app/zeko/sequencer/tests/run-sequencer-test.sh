@@ -12,6 +12,7 @@ fi
 
 MODE="$1"
 NUM_PROVERS="$2"
+EXTERNAL_SERVICES="${ZEKO_TEST_EXTERNAL_SERVICES:-false}"
 PROVER_PIDS=()
 SIGNER_PIDS=()
 PROVERS=()
@@ -29,6 +30,14 @@ fake | real) ;;
 *)
   echo "Error: first argument must be 'fake' or 'real'" >&2
   usage
+  ;;
+esac
+
+case "$EXTERNAL_SERVICES" in
+true | false) ;;
+*)
+  echo "Error: ZEKO_TEST_EXTERNAL_SERVICES must be true or false" >&2
+  exit 1
   ;;
 esac
 
@@ -64,8 +73,10 @@ cleanup() {
   done
 
   rm -rf "$TMP_DIR"
-  docker rm -f pg-sequencer 2>/dev/null
-  docker rm -f rabbitmq-sequencer 2>/dev/null
+  if [ "$EXTERNAL_SERVICES" = "false" ]; then
+    docker rm -f pg-sequencer 2>/dev/null
+    docker rm -f rabbitmq-sequencer 2>/dev/null
+  fi
   exit ${exit_status:-0}
 }
 
@@ -83,6 +94,7 @@ SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/
 SIGNING_NETWORK_ID="${MINA_SIGNING_NETWORK_ID:-zeko-testnet}"
 export ZEKO_SIGNATURE_KIND="$SIGNING_NETWORK_ID"
 export ZEKO_CIRCUITS_CONFIG="${ZEKO_CIRCUITS_CONFIG:-test}"
+export ZEKO_CIRCUITS_MODE="$MODE"
 ZEKO_TEST_L1_NETWORK_ID="${ZEKO_TEST_L1_NETWORK_ID:-mainnet}"
 
 TMP_DIR=$(mktemp -d)
@@ -131,11 +143,26 @@ wait_for_provers() {
 
   echo "Waiting for $expected prover(s) to finish compiling circuits..."
   for _ in $(seq 1 600); do
-    consumers=$(
-      { docker exec rabbitmq-sequencer rabbitmqctl -q list_queues name consumers \
-        2>/dev/null || true; } \
-        | awk '$2 ~ /^[0-9]+$/ { total += $2 } END { print total + 0 }'
-    )
+    if [ "$EXTERNAL_SERVICES" = "true" ]; then
+      local management_url="${ZEKO_TEST_RABBITMQ_MANAGEMENT_URL:-http://localhost:15672}"
+      local management_user="${ZEKO_TEST_RABBITMQ_MANAGEMENT_USER:-guest}"
+      local management_password="${ZEKO_TEST_RABBITMQ_MANAGEMENT_PASSWORD:-guest}"
+      consumers=$(
+        { curl --fail --silent --show-error --connect-timeout 1 --max-time 2 \
+          --user "$management_user:$management_password" \
+          "${management_url%/}/api/queues/%2F" 2>/dev/null || true; } \
+          | jq -r '[.[] | .consumers // 0] | add // 0' 2>/dev/null || true
+      )
+      if ! [[ "$consumers" =~ ^[0-9]+$ ]]; then
+        consumers=0
+      fi
+    else
+      consumers=$(
+        { docker exec rabbitmq-sequencer rabbitmqctl -q list_queues name consumers \
+          2>/dev/null || true; } \
+          | awk '$2 ~ /^[0-9]+$/ { total += $2 } END { print total + 0 }'
+      )
+    fi
     if [ "$consumers" -ge "$expected" ]; then
       echo "$consumers prover consumer(s) are ready"
       return 0
@@ -152,22 +179,32 @@ wait_for_provers() {
   return 1
 }
 
-KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli.exe"
+if [ "$MODE" = "fake" ]; then
+  KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli_fake.exe"
+else
+  KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli.exe"
+fi
 
 generate_even_key() {
   "$KEYGEN_BIN" generate-even-key | awk -F': ' '/Private key:/ {print $2}'
 }
 
-docker run --rm --name pg-sequencer \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid \
-  -p 127.0.0.1:5433:5432 \
-  -d postgres:16-alpine
+if [ "$EXTERNAL_SERVICES" = "false" ]; then
+  docker run --rm --name pg-sequencer \
+    -e POSTGRES_USER=postgres \
+    -e POSTGRES_PASSWORD=postgres \
+    --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid \
+    -p 127.0.0.1:5433:5432 \
+    -d postgres:16-alpine
 
-docker run -d --name rabbitmq-sequencer \
-  -p 127.0.0.1:5672:5672 \
-  rabbitmq:latest
+  docker run -d --name rabbitmq-sequencer \
+    -p 127.0.0.1:5672:5672 \
+    rabbitmq:latest
+else
+  echo "Using externally managed PostgreSQL and RabbitMQ test services"
+  command -v curl >/dev/null
+  command -v jq >/dev/null
+fi
 
 wait_for_port 5433 $$
 wait_for_port 5672 $$
