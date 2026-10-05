@@ -32,66 +32,76 @@ TODO: error severity ordering? seems tricky to get right, but super useful
 ##### Decorations
 
 ```ocaml
-val section : string -> node test -> node test
+val section : string -> unit Malleable_error.t -> unit Malleable_error.t
+val section_hard : string -> 'a Malleable_error.t -> 'a Malleable_error.t
 ```
 
-The `section` function associates a portion of DSL code with a name. This is useful for tracking the high level of "why" the test is doing what it is doing. The test DSL is able to provide human descriptions of what it is doing most of the time, but sections allow the tests to also have high level logical groupings of "why" we are doing the specific operations being described. These names get propagated to fatal failures and errors that are accumulated.
+The `section` function associates a portion of DSL code with a name. This is useful for tracking the high level of "why" the test is doing what it is doing. These names get propagated to failures and accumulated errors within the `Malleable_error.t` context. `section_hard` is a variant for sections that produce a value.
 
 ##### Orchestra Interactions
 
-```ocaml
-val spawn : node_config -> node_arguments -> node test
-```
-
-The `spawn` function communicates with the orchestrator to allocate and start a new node. This function takes a runtime config for the node and CLI arguments to execute the node with (not necessarily fed in via the CLI though, in the case of local tests). This function does not wait for the node to join the network; execution of the test will continue as soon as the node is started, regardless of errors.
-
-```ocaml
-val destroy : node -> unit test
-```
-
-The `destroy` function communicates with the orchestrator to destroy nodes that have been created. If the node attempting to be destroyed is already dead due to a crash, the test execution will continue, but the crash will accumulated as an error. If the node attempting to be destroyed has been previously destroyed via this function, an error is accumulated. Any nodes that were spawned and are not destroyed by the end of a test will cause errors to be accumulated (we want all spawned nodes to be asserted to have not crashed or to be expected to crash by the end of the test).
+Node lifecycle and network orchestration are handled by the engine and network layers rather than DSL primitives. Tests interact with networks via `Engine.Network_manager` and `Engine.Network`, and individual nodes via `Engine.Network.Node.start/stop`. There are no `spawn`/`destroy` functions in the current DSL.
 
 ##### Concurrent Tasks
 
-```ocaml
-type task
-val task : (unit test -> unit test) -> task test
-val stop : task -> unit test
-```
+Concurrent task primitives (`task`, `stop`) are not part of the current DSL surface.
 
 ##### Synchronization
 
 ```ocaml
-val wait_for :
-     (* exclusive arguments *)
-     ?status:node_status
-  -> ?blocks:int
-  -> ?epoch_reached:int
-  -> ...
-     (* non-exclusive arguments *)
-  -> ?timeout:
-       [ `Slots of int
-       | `Epochs of int
-       | `Milliseconds of int64 ]
-  -> unit
-  -> unit test
+val wait_for : t -> Wait_condition.t -> unit Malleable_error.t
+```
+
+Waiting is expressed via `Wait_condition` constructors and optional timeouts:
+
+```ocaml
+module Wait_condition : sig
+  type t
+  val blocks_to_be_produced : int -> t
+  val block_height_growth : height_growth:int -> t
+  val nodes_to_synchronize : Engine.Network.Node.t list -> t
+  val node_to_initialize : Engine.Network.Node.t -> t
+  val nodes_to_initialize : Engine.Network.Node.t list -> t
+  val signed_command_to_be_included_in_frontier :
+    txn_hash:Mina_transaction.Transaction_hash.t ->
+    node_included_in:[ `Any_node | `Node of Engine.Network.Node.t ] -> t
+  val ledger_proofs_emitted_since_genesis :
+    test_config:Test_config.t -> num_proofs:int -> t
+  val zkapp_to_be_included_in_frontier :
+    has_failures:bool -> zkapp_command:Mina_base.Zkapp_command.t -> t
+  val persisted_frontier_loaded : Engine.Network.Node.t -> t
+  val transition_frontier_loaded_from_persistence :
+    fresh_data:bool -> sync_needed:bool -> t
+  val with_timeouts :
+    ?soft_timeout:Network_time_span.t ->
+    ?hard_timeout:Network_time_span.t -> t -> t
+end
 ```
 
 ##### Analysis
 
 ```ocaml
-val assert : ...
+val watch_log_errors :
+  logger:Logger.t ->
+  event_router:Event_router.t ->
+  on_fatal_error:(Logger.Message.t -> unit) ->
+  log_error_accumulator
+
+val lift_accumulated_log_errors :
+  ?exit_code:int -> log_error_accumulator ->
+  Test_error.remote_error Test_error.Set.t
 ```
 
-```ocaml
-type collection = Logger.Log.t -> Metric.t list
-val collect : node -> collection -> unit test
-```
+Assertions and metric collection are handled via log/event processing (`Log_engine`, `Event_router`, `Network_state`). There is no `assert` or `collect` DSL primitive in the current surface.
 
 ##### Node Interactions: TODO
 
+Direct node interactions are performed via `Engine.Network` and `Engine.Network.Node` APIs rather than dedicated DSL primitives.
+
 <!-- DSL DESIGN SECTION -->
 #### Pseudo-code Examples
+
+Note: The following examples reflect an earlier design proposal and do not match the current DSL API. They should be translated to use `Engine.Network_manager`/`Engine.Network` for orchestration and `Dsl.wait_for` with `Wait_condition` for synchronization.
 
 ##### Basic Bootstrap Test
 
