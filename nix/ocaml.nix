@@ -389,6 +389,7 @@ let
             src/app/zeko/sequencer/run_fake.exe \
             src/app/zeko/sequencer/deploy.exe \
             src/app/zeko/sequencer/cli.exe \
+            src/app/zeko/sequencer/deployment_export.exe \
             src/app/zeko/sequencer/archive_relay/cli.exe \
             src/app/zeko/sequencer/tests/testing_ledger/run.exe \
             src/app/zeko/sequencer/prover/cli.exe \
@@ -448,7 +449,10 @@ let
           cp src/app/zeko/sequencer/run_fake.exe $zeko/bin/zeko-run-fake
           cp src/app/zeko/sequencer/deploy.exe $zeko/bin/zeko-deploy
           cp src/app/zeko/sequencer/cli.exe $zeko/bin/zeko-cli
+          cp src/app/zeko/sequencer/deployment_export.exe $zeko/bin/zeko-deployment-export
           cp src/app/zeko/sequencer/tests/testing_ledger/run.exe $localnet/bin/mina-localnet
+          # Bootstrap L1 stand-in used by zeko-deployment-export (nix/bootstrap-roles).
+          cp src/app/zeko/sequencer/tests/testing_ledger/run.exe $zeko/bin/zeko-testing-ledger
           cp src/app/zeko/sequencer/prover/cli.exe $zeko/bin/zeko-prover
           cp src/app/zeko/sequencer/prover/cli_fake.exe $zeko/bin/zeko-prover-fake
           cp src/app/zeko/da_layer/cli.exe $zeko_da/bin/zeko-da
