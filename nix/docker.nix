@@ -1,9 +1,11 @@
 { lib, dockerTools, buildEnv, ocamlPackages_mina, runCommand, dumb-init
 , coreutils, findutils, bashInteractive, python3, libp2p_helper, procps
 , postgresql, curl, jq, stdenv, rsync, bash, gnutar, gzip, gawk, gnugrep
-, currentTime, flockenzeit, pkgs, }:
+, currentTime, flockenzeit, pkgs, callPackage, }:
 let
   created = flockenzeit.lib.ISO-8601 currentTime;
+
+  archive-node-api = callPackage ./archive-node-api.nix { };
 
   # One-shot fresh-rollup bootstrap roles (nix/bootstrap-roles/README.md),
   # zeko-image only. Long-lived services (signer, DA node, prover) use the
@@ -210,6 +212,32 @@ in {
 
         "ZEKO_SIGNATURE_KIND=testnet"
       ];
+    };
+  };
+
+  zeko-archive-node-api-image = dockerTools.buildLayeredImage {
+    name = "zeko-archive-node-api";
+    tag = "latest";
+    inherit created;
+    contents = [ archive-node-api archive-node-api.nodejs (mkBaseEnv pkgs) ];
+    config = {
+      # package.json "start": node build/src/index.js. schema.graphql is read
+      # relative to the working directory (src/resolvers.ts).
+      Entrypoint = [
+        "${archive-node-api.nodejs}/bin/node"
+        "${archive-node-api}/lib/build/src/index.js"
+      ];
+      Env = [
+        "TZ=UTC"
+        "TZDIR=${pkgs.tzdata}/share/zoneinfo"
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+
+        # src/index.ts: PORT defaults to 8080; PG_CONN (postgres connection
+        # string) has no default and must be supplied at run time.
+        "PORT=8080"
+      ];
+      ExposedPorts = { "8080/tcp" = { }; };
+      WorkingDir = "${archive-node-api}/lib";
     };
   };
 
