@@ -1,9 +1,29 @@
 { lib, dockerTools, buildEnv, ocamlPackages_mina, runCommand, dumb-init
 , coreutils, findutils, bashInteractive, python3, libp2p_helper, procps
-, postgresql, curl, jq, stdenv, rsync, bash, gnutar, gzip, currentTime
-, flockenzeit, pkgs, }:
+, postgresql, curl, jq, stdenv, rsync, bash, gnutar, gzip, gawk, gnugrep
+, currentTime, flockenzeit, pkgs, }:
 let
   created = flockenzeit.lib.ISO-8601 currentTime;
+
+  # One-shot fresh-rollup bootstrap roles (nix/bootstrap-roles/README.md),
+  # zeko-image only. Long-lived services (signer, DA node, prover) use the
+  # images' native entrypoints. The scripts are invoked through Compose
+  # `entrypoint:` overrides, never as image defaults.
+  mkBootstrapRoles = name: roles:
+    runCommand "zeko-bootstrap-roles-${name}" { } ''
+      mkdir -p $out/bin
+      for role in zeko-bootstrap-common.sh ${lib.escapeShellArgs roles}; do
+        sed "1s|^#!/usr/bin/env bash$|#!${bashInteractive}/bin/bash|" \
+          ${./bootstrap-roles/bin}/"$role" > "$out/bin/$role"
+        chmod 0755 "$out/bin/$role"
+      done
+    '';
+  zekoBootstrapRoles = mkBootstrapRoles "zeko" [
+    "zeko-bootstrap-generate-config"
+    "zeko-bootstrap-signer-tls"
+    "zeko-bootstrap-l1"
+    "zeko-bootstrap-export"
+  ];
 
   mkdir = name:
     runCommand "mkdir-${name}" { } "mkdir -p $out${lib.escapeShellArg name}";
@@ -104,7 +124,14 @@ in {
     name = "zeko";
     tag = "latest";
     inherit created;
-    contents = [ ocamlPackages_mina.devnet.zeko (mkBaseEnv pkgs) ];
+    # gawk/gnugrep serve the bootstrap role scripts (zeko-bootstrap-export).
+    contents = [
+      ocamlPackages_mina.devnet.zeko
+      (mkBaseEnv pkgs)
+      zekoBootstrapRoles
+      gawk
+      gnugrep
+    ];
 
     config = {
       Entrypoint = [ "/bin/zeko-run" ];

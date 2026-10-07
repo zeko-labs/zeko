@@ -13,6 +13,10 @@
 
   inputs.utils.url = "github:gytis-ivaskevicius/flake-utils-plus";
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-24.11-small";
+  # Unused since the zeko-tooling-image was retired (Foundry now ships in the
+  # ethereum-settlement zeko-bootstrap image). Kept declared so flake.lock
+  # stays unchanged; drop together with its lock node in a lock update.
+  inputs.nixpkgs-foundry.url = "github:NixOS/nixpkgs/nixos-26.05";
   inputs.nixpkgs-old.url = "github:nixos/nixpkgs/nixos-23.05-small";
 
   inputs.mix-to-nix.url = "github:serokell/mix-to-nix";
