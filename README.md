@@ -5,8 +5,8 @@ It supports recursive proofs and smart contracts built with o1js, with ETH and
 ERC-20 bridging between Ethereum and Zeko.
 
 This repository implements Zeko's ledger, transaction and bridge circuits,
-sequencer, and provers. The experimental Ethereum settlement integration lives
-in [ethereum-settlement](https://github.com/zeko-labs/ethereum-settlement), where
+sequencer, and provers. The Ethereum settlement integration lives in
+[ethereum-settlement](https://github.com/zeko-labs/ethereum-settlement), where
 SP1 verifies Zeko's Pickles proofs for verification on Ethereum.
 
 This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina).
