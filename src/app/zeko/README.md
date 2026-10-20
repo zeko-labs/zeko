@@ -1,3 +1,7 @@
-The code under here is under the RPL-1.5 license with modifications. A copy is included in https://github.com/zeko-labs/zeko/blob/compatible/src/app/zeko/LICENSE.md
+# Zeko Protocol Code
 
-You can also find the original license at https://opensource.org/license/rpl-1-5
+Zeko-authored and repository-maintained code under this directory is licensed
+under the Apache License, Version 2.0. See [LICENSE.md](./LICENSE.md).
+
+Upstream or third-party components that contain a separate license notice keep
+the license stated by that notice.
