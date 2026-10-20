@@ -5,4 +5,7 @@ Zeko-authored and repository-maintained code in this repository is licensed
 under the Apache License, Version 2.0. See LICENSE and LICENSING.md.
 
 This repository includes upstream Mina and third-party components. Their
-original copyright and license notices remain applicable where present.
+original copyright and license notices remain applicable where present. Known
+examples are documented in LICENSING.md, including the Mina and o1-labs
+submodules, the ISC-licensed frontend utility, and the BSD-2-Clause signature
+specification.
