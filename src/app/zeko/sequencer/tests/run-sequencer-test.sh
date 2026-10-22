@@ -146,6 +146,11 @@ ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY="$(generate_even_key)"
 DA1_SIGNER_PRIVATE_KEY="$(generate_even_key)"
 DA2_SIGNER_PRIVATE_KEY="$(generate_even_key)"
 DA3_SIGNER_PRIVATE_KEY="$(generate_even_key)"
+# Dedicated key that authorizes diffs posted to DA nodes
+DA_POSTER_KEYPAIR="$("$KEYGEN_BIN" generate-even-key)"
+DA_POSTER_PRIVATE_KEY="$(echo "$DA_POSTER_KEYPAIR" | awk -F': ' '/Private key:/ {print $2}')"
+DA_POSTER_PUBLIC_KEY="$(echo "$DA_POSTER_KEYPAIR" | awk -F': ' '/Public key:/ {print $2}')"
+ROLLUP_PUBLIC_KEY="$("$KEYGEN_BIN" rollup-public-key)"
 ZEKO_SIGNER_AUTH_TOKEN="sequencer-test-signer-token"
 SIGNER_TLS_CERT="$TMP_DIR/signer-tls-cert.pem"
 SIGNER_TLS_KEY="$TMP_DIR/signer-tls-key.pem"
@@ -158,6 +163,7 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -addext "subjectAltName=DNS:localhost"
 
 export ZEKO_TEST_SEQUENCER_SIGNER="localhost:8600"
+export ZEKO_TEST_DA_POSTER_SIGNER="localhost:8604"
 export ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY
 export ZEKO_SIGNER_AUTH_TOKEN
 export ZEKO_SIGNER_TLS_CA_FILE="$SIGNER_TLS_CERT"
@@ -205,21 +211,31 @@ run "da3-signer" \
 signer_da3_pid=$!
 SIGNER_PIDS+=("$signer_da3_pid")
 
+run "da-poster-signer" \
+  env MINA_PRIVATE_KEY="$DA_POSTER_PRIVATE_KEY" \
+  "$DA_SIGNER_BIN" run --port 8604 --allow-field-signing \
+    --tls-cert-file "$SIGNER_TLS_CERT" --tls-key-file "$SIGNER_TLS_KEY" &
+signer_da_poster_pid=$!
+SIGNER_PIDS+=("$signer_da_poster_pid")
+
 wait_for_port 8600 $signer_seq_pid
 wait_for_port 8601 $signer_da1_pid
 wait_for_port 8602 $signer_da2_pid
 wait_for_port 8603 $signer_da3_pid
+wait_for_port 8604 $signer_da_poster_pid
+
+DA_POST_POLICY=(--rollup-public-key "$ROLLUP_PUBLIC_KEY" --poster-key "$DA_POSTER_PUBLIC_KEY")
 
 run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id mainnet --block-period 9999999 &
 l1_pid=$!
 
-run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
+run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 "${DA_POST_POLICY[@]}" &
 da1_pid=$!
 
-run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id zeko-testnet --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 &
+run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id zeko-testnet --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 "${DA_POST_POLICY[@]}" &
 da2_pid=$!
 
-run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id zeko-testnet --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 &
+run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id zeko-testnet --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 "${DA_POST_POLICY[@]}" &
 da3_pid=$!
 
 # Launch provers

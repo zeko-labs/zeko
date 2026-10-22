@@ -60,6 +60,44 @@ module Post_diff = struct
       Rpc.Rpc.create ~name:"Post_diff" ~version:2 ~bin_query:Query.bin_t
         ~bin_response:Response.bin_t
   end
+
+  (* V3 adds the claimed target state and the poster's authorization *)
+  module V3 = struct
+    module Query = struct
+      type t =
+        { source_state : Da_state.Stable.V1.t
+        ; target_state : Da_state.Stable.V1.t
+        ; ledger_openings : Sparse_ledger.Stable.V2.t
+        ; diff : Diff.Pending.Stable.V1.t
+        ; acc_set_openings : Indexed_merkle_tree.Sparse.Stable.V1.t
+        ; authorization : Post_diff_auth.Stable.V1.t
+        }
+      [@@deriving bin_io_unversioned]
+    end
+
+    module Response = V2.Response
+
+    let t : (Query.t, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Post_diff" ~version:3 ~bin_query:Query.bin_t
+        ~bin_response:Response.bin_t
+  end
+end
+
+(* val get_post_diff_policy : unit -> { rollup; posters } *)
+module Get_post_diff_policy = struct
+  module V1 = struct
+    module Response = struct
+      type t =
+        { rollup : Public_key.Compressed.Stable.V1.t
+        ; posters : Public_key.Compressed.Stable.V1.t list
+        }
+      [@@deriving bin_io_unversioned, sexp]
+    end
+
+    let t : (unit, Response.t) Rpc.Rpc.t =
+      Rpc.Rpc.create ~name:"Get_post_diff_policy" ~version:1
+        ~bin_query:Unit.bin_t ~bin_response:Response.bin_t
+  end
 end
 
 (* val get_diff : Ledger_hash.t -> Diff.t option *)

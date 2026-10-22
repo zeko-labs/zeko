@@ -231,7 +231,7 @@ let verify_da_signature ~signature_kind ~state ~public_key ~signature =
       else Or_error.error_string "DA signature does not verify for target state"
 
 let validate_post_diff_response ~signature_kind ~expected_state
-    (response : Rpc_def.Post_diff.V2.Response.t) =
+    (response : Rpc_def.Post_diff.V3.Response.t) =
   if not (Da_state.equal response.state_id expected_state) then
     Or_error.error_s
       [%message
@@ -257,7 +257,7 @@ let%test_unit "post-diff responses are bound to the expected state" =
          (Da_state.signing_message expected_state) )
   in
   let response =
-    Rpc_def.Post_diff.V2.Response.
+    Rpc_def.Post_diff.V3.Response.
       { state_id = expected_state
       ; signer = Public_key.compress keypair.public_key
       ; signature
@@ -383,12 +383,18 @@ module Rpc = struct
   let post_diff ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name)
       ~signature_kind ~source_state ~target_state ~ledger_openings
-      ~acc_set_openings ~diff =
+      ~acc_set_openings ~diff ~authorization =
     [%log debug] "Posting diff to da node %s"
       (Host_and_port.to_string node_location.value) ;
     let%map result =
-      dispatch ~max_tries:5 ~logger node_location Rpc_def.Post_diff.V2.t
-        { source_state; ledger_openings; diff; acc_set_openings }
+      dispatch ~max_tries:5 ~logger node_location Rpc_def.Post_diff.V3.t
+        { source_state
+        ; target_state
+        ; ledger_openings
+        ; diff
+        ; acc_set_openings
+        ; authorization
+        }
     in
     Result.bind result ~f:(fun response ->
         validate_post_diff_response ~signature_kind ~expected_state:target_state
@@ -412,6 +418,12 @@ module Rpc = struct
       (Host_and_port.to_string node_location.value) ;
     dispatch ~max_tries:1 ~logger node_location Rpc.Get_signer_public_key.V1.t
       ()
+
+  let get_post_diff_policy ~logger
+      ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) () =
+    [%log debug] "Getting Post_diff policy from da node %s"
+      (Host_and_port.to_string node_location.value) ;
+    dispatch ~max_tries:1 ~logger node_location Rpc.Get_post_diff_policy.V1.t ()
 
   let get_signature ~logger
       ~(node_location : Host_and_port.t Cli_lib.Flag.Types.with_name) ~state =
@@ -526,6 +538,47 @@ module Config = struct
       >>| List.filter_opt
     in
     List.sort fetched_da_keys ~compare:Public_key.Compressed.compare
+
+  (** Checks that the DA nodes accept diffs from [poster]. A node that is not
+      reachable is only logged; it can come up later. Fails if the nodes that
+      refuse the poster leave fewer than [quorum] nodes able to sign. *)
+  let check_post_diff_policy ~logger ~quorum ~(poster : Post_diff_auth.Poster.t)
+      t =
+    let poster_key = Signer_service.Signer.public_key poster.signer in
+    let%map.Deferred mismatches =
+      Deferred.List.filter_map ~how:`Parallel t.nodes ~f:(fun node_location ->
+          let node = Host_and_port.to_string node_location.value in
+          match%map.Deferred
+            Rpc.get_post_diff_policy ~logger ~node_location ()
+          with
+          | Error err ->
+              [%log warn] "Failed to get Post_diff policy from da node %s: %s"
+                node (Error.to_string_hum err) ;
+              None
+          | Ok { rollup; posters } ->
+              if not (Public_key.Compressed.equal rollup poster.rollup) then
+                Some
+                  (sprintf "%s accepts rollup %s" node
+                     (Public_key.Compressed.to_base58_check rollup) )
+              else if
+                not
+                  (List.mem posters poster_key
+                     ~equal:Public_key.Compressed.equal )
+              then
+                Some
+                  (sprintf "%s does not accept poster %s" node
+                     (Public_key.Compressed.to_base58_check poster_key) )
+              else None )
+    in
+    List.iter mismatches ~f:(fun mismatch ->
+        [%log error] "DA node refuses diffs from this sequencer: %s" mismatch ) ;
+    if List.length t.nodes - List.length mismatches < quorum then
+      failwithf
+        "Too many DA nodes refuse diffs from this sequencer to reach quorum \
+         %d: %s"
+        quorum
+        (String.concat ~sep:"; " mismatches)
+        ()
 end
 
 type t =
@@ -538,10 +591,14 @@ type t =
   ; pushed_signature : unit Condition.t
   ; stop : unit Ivar.t
   ; da_keys : Public_key.Compressed.t list
+  ; poster : Post_diff_auth.Poster.t
   }
 
-let create ~logger ~(config : Config.t) ~signature_kind ~quorum ~da_keys
+let create ~logger ~(config : Config.t) ~signature_kind ~quorum ~da_keys ~poster
     ~db_pool =
+  let%bind.Deferred () =
+    Config.check_post_diff_policy ~logger ~quorum ~poster config
+  in
   let%map.Deferred fetched_da_keys = Config.fetch_public_keys ~logger config in
   let sorted_da_keys =
     List.sort da_keys ~compare:Public_key.Compressed.compare
@@ -562,6 +619,7 @@ let create ~logger ~(config : Config.t) ~signature_kind ~quorum ~da_keys
   ; pushed_signature = Condition.create ()
   ; stop = Ivar.create ()
   ; da_keys = sorted_da_keys
+  ; poster
   }
 
 let stop t = Ivar.fill t.stop ()
@@ -616,9 +674,17 @@ let rec start_posting_diffs_from ?timeout_on_failure ?pushed_diff t
         ; _
         } -> (
         match%bind
+          (* Sign when posting rather than when enqueuing, so stored diffs can
+             be posted again, e.g. to a new DA node, after a key rotation *)
+          let%bind.Deferred.Result authorization =
+            Post_diff_auth.sign ~signature_kind:t.signature_kind
+              ~poster:t.poster ~source_state:diff_source_state ~target_state
+              ~diff
+          in
           Rpc.post_diff ~logger:t.logger ~node_location
             ~signature_kind:t.signature_kind ~source_state:diff_source_state
             ~target_state ~ledger_openings ~acc_set_openings ~diff
+            ~authorization
         with
         | Error err ->
             [%log error] "Failed to post diff to da node: %s"
@@ -1022,14 +1088,20 @@ let get_diff ~logger ~config ~state =
       | Error e ->
           return (Error e) )
 
-let distribute_diff ~logger ~config ~signature_kind ~source_state ~target_state
-    ~ledger_openings ~acc_set_openings ~diff =
+let distribute_diff ~logger ~config ~signature_kind ~poster ~source_state
+    ~target_state ~ledger_openings ~acc_set_openings ~diff =
+  let%bind authorization =
+    Post_diff_auth.sign ~signature_kind ~poster ~source_state ~target_state
+      ~diff
+    >>| Or_error.tag ~tag:"Failed to authorize diff"
+    >>| Or_error.ok_exn
+  in
   Deferred.List.iter ~how:`Parallel
     Config.(config.nodes)
     ~f:(fun n ->
       match%map
         Rpc.post_diff ~logger ~node_location:n ~signature_kind ~source_state
-          ~target_state ~ledger_openings ~acc_set_openings ~diff
+          ~target_state ~ledger_openings ~acc_set_openings ~diff ~authorization
       with
       | Ok _ ->
           ()
@@ -1125,7 +1197,7 @@ let create_genesis_diffs ?(max_size = 50) ~logger ledger ~get_actions_for_aid =
   result
 
 (** Distribute diff of initial accounts *)
-let distribute_genesis_diff ~logger ~config ~signature_kind ~ledger
+let distribute_genesis_diff ~logger ~config ~signature_kind ~poster ~ledger
     ~get_actions_for_aid =
   let%bind diffs = create_genesis_diffs ~logger ledger ~get_actions_for_aid in
   Deferred.List.iter ~how:`Sequential diffs
@@ -1136,7 +1208,7 @@ let distribute_genesis_diff ~logger ~config ~signature_kind ~ledger
          , `Source source_state
          , `Target target_state )
        ->
-      distribute_diff ~logger ~config ~signature_kind ~source_state
+      distribute_diff ~logger ~config ~signature_kind ~poster ~source_state
         ~target_state ~ledger_openings ~acc_set_openings ~diff )
 
 let get_ledger_openings ~diff ~ledger =

@@ -9,8 +9,9 @@ module Sequencer = Zeko_sequencer.Sequencer
 
 let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
-    ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-    ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee () =
+    ~signer ~da_poster_signer ~deposit_delay_blocks ~mq_host ~fee_modifier
+    ~minimum_fee ~slot_acceptance ~commit_validity_period ~commit_fee
+    ~bridge_txn_fee () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
     let genesis_timestamp =
@@ -32,14 +33,21 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
           ~location:(Host_and_port.of_string signer)
         >>| Signer_service.Signer.of_client )
   in
+  let da_poster_signer =
+    Thread_safe.block_on_async_exn (fun () ->
+        Signer_service.Client.create ~logger
+          ~location:(Host_and_port.of_string da_poster_signer)
+        >>| Signer_service.Signer.of_client )
+  in
   let sequencer =
     Thread_safe.block_on_async_exn (fun () ->
         Sequencer.create ~logger ~max_pool_size ~da_config ~da_keys ~da_quorum
           ~db_dir:(Some db_dir) ~checkpoints_dir:(Some checkpoints_dir)
           ~postgres_uri ~l1_uri ~archive_uri
           ~commitment_period_sec:commitment_period ~deposit_delay_blocks ~signer
-          ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db
-          ~l1_config ~commit_validity_period ~commit_fee ~bridge_txn_fee )
+          ~da_poster_signer ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance
+          ~proof_cache_db ~l1_config ~commit_validity_period ~commit_fee
+          ~bridge_txn_fee )
   in
 
   Sequencer.run_committer sequencer ;
@@ -138,6 +146,12 @@ let () =
          ~doc:"int Commit validity period in slots"
      and signer =
        flag "--signer" (required string) ~doc:"string Signer service host:port"
+     and da_poster_signer =
+       flag "--da-poster-signer" (required string)
+         ~doc:
+           "string host:port of the signer service that authorizes diffs \
+            posted to DA nodes. Use a dedicated key with field signing \
+            enabled, never the sequencer's fee-payer key"
      and commit_fee =
        flag "--commit-fee"
          (optional_with_default 0.1 float)
@@ -170,6 +184,7 @@ let () =
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
        ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
-       ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-       ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee )
+       ~signer ~da_poster_signer ~deposit_delay_blocks ~mq_host ~fee_modifier
+       ~minimum_fee ~slot_acceptance ~commit_validity_period ~commit_fee
+       ~bridge_txn_fee )
   |> Command_unix.run

@@ -123,6 +123,17 @@ let generate_even_key =
              ( Public_key.compress keypair.public_key
              |> Public_key.Compressed.to_base58_check ) ) ) )
 
+let rollup_public_key =
+  ( "rollup-public-key"
+  , Command.basic
+      ~summary:
+        "Print the rollup public key of the circuits config, as DA nodes \
+         expect in --rollup-public-key"
+      (Command_unix.Param.return (fun () ->
+           Core.printf "%s\n"
+             (Public_key.Compressed.to_base58_check
+                Zeko_circuits_config.Inputs.zeko_l1 ) ) ) )
+
 let construct_multisig_key =
   ( "construct-multisig-key"
   , Command.basic ~summary:"Construct a multisig key from a list of public keys"
@@ -372,6 +383,11 @@ let update_inner_verification_keys =
        and log_level = Flag.Log.level
        and l1_uri = flag "--l1-uri" (required string) ~doc:"string L1 URI"
        and da_node = flag "--da-node" (required string) ~doc:"string DA node"
+       and da_poster_signer =
+         flag "--da-poster-signer" (required string)
+           ~doc:
+             "string host:port of the signer service that authorizes diffs \
+              posted to DA nodes"
        and output =
          flag "--output" (optional string)
            ~doc:"string Output signed update JSON file"
@@ -605,9 +621,18 @@ let update_inner_verification_keys =
                ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
            in
            printf "Distributing diff\n%!" ;
+           let%bind da_poster_signer =
+             Signer_service.Client.create ~logger
+               ~location:(Host_and_port.of_string da_poster_signer)
+             >>| Signer_service.Signer.of_client
+           in
            let%bind () =
              Da_layer.Client.distribute_diff ~logger ~config:da_config
                ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+               ~poster:
+                 { rollup = Zeko_circuits_config.Inputs.zeko_l1
+                 ; signer = da_poster_signer
+                 }
                ~source_state ~target_state ~ledger_openings
                ~acc_set_openings:
                  (Da_layer.Client.get_acc_set_openings ~logger
@@ -1420,6 +1445,7 @@ let sync_ledger =
 let () =
   Command.group ~summary:"Sequencer CLI"
     [ generate_even_key
+    ; rollup_public_key
     ; generate_circuits_config
     ; update_outer_verification_keys
     ; update_inner_verification_keys

@@ -32,7 +32,7 @@ let read_deploy_command ~input =
 
 let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
     ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee ~prefund_account
-    ~da_nodes () =
+    ~da_nodes ~da_poster_signer () =
   let logger = Logger.create () in
 
   let outer_pk = Zeko_circuits_config.t.zeko_l1 in
@@ -217,6 +217,23 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
       in
 
       let da_config = Da_layer.Client.Config.{ nodes = da_nodes } in
+      let%bind da_poster =
+        match (da_nodes, da_poster_signer) with
+        | [], _ ->
+            return None
+        | _ :: _, None ->
+            failwith "--da-poster-signer is required when posting to DA nodes"
+        | _ :: _, Some location ->
+            let%map signer =
+              Signer_service.Client.create ~logger
+                ~location:(Host_and_port.of_string location)
+              >>| Signer_service.Signer.of_client
+            in
+            Some { Da_layer.Post_diff_auth.Poster.rollup = outer_pk; signer }
+      in
+      let da_poster () =
+        Option.value_exn ~message:"DA poster signer missing" da_poster
+      in
 
       (* If the old ledger exists, we need to just post the diff with updated inner account *)
       let old_ledger_hash =
@@ -270,8 +287,9 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
               ~acc_set:(Indexed_merkle_tree.Db.merkle_root imt)
           in
           Da_layer.Client.distribute_diff ~logger ~config:da_config
-            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~source_state
-            ~target_state ~ledger_openings:old_ledger_openings
+            ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
+            ~poster:(da_poster ()) ~source_state ~target_state
+            ~ledger_openings:old_ledger_openings
             ~acc_set_openings:
               (Da_layer.Client.get_acc_set_openings ~logger
                  ~changed_accounts:diff.changed_accounts
@@ -284,7 +302,8 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
           in
           Da_layer.Client.distribute_genesis_diff ~logger ~config:da_config
             ~signature_kind:Zeko_circuits_config.Inputs.chain_l2
-            ~ledger:new_ledger ~get_actions_for_aid:(fun _aid -> [])
+            ~poster:(da_poster ()) ~ledger:new_ledger
+            ~get_actions_for_aid:(fun _aid -> [])
       in
       return command )
 
@@ -343,6 +362,11 @@ let deploy_all =
        and da_nodes =
          flag "--da-node" (listed string)
            ~doc:"string Address of the DA node, can be supplied multiple times"
+       and da_poster_signer =
+         flag "--da-poster-signer" (optional string)
+           ~doc:
+             "string host:port of the signer service that authorizes diffs \
+              posted to DA nodes; required with --da-node"
        and pause_key =
          flag "--pause-key" (required string) ~doc:"string Pause key"
        and sequencer_key =
@@ -417,7 +441,7 @@ let deploy_all =
        let command =
          generate ~l1_uri ~ledger_input ~faucet_aid ~da_nodes ~pause_key
            ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee
-           ~prefund_account ~sender_pk ()
+           ~prefund_account ~sender_pk ~da_poster_signer ()
        in
        deploy ~l1_uri ~sk ~command ) )
 
@@ -437,6 +461,11 @@ let generate_deploy_command =
        and da_nodes =
          flag "--da-node" (listed string)
            ~doc:"string Address of the DA node, can be supplied multiple times"
+       and da_poster_signer =
+         flag "--da-poster-signer" (optional string)
+           ~doc:
+             "string host:port of the signer service that authorizes diffs \
+              posted to DA nodes; required with --da-node"
        and pause_key =
          flag "--pause-key" (required string) ~doc:"string Pause key"
        and sequencer_key =
@@ -509,7 +538,7 @@ let generate_deploy_command =
        let command =
          generate ~l1_uri ~ledger_input ~faucet_aid ~da_nodes ~pause_key
            ~sequencer_key ~da_keys ~da_quorum ~account_creation_fee
-           ~prefund_account ~sender_pk ()
+           ~prefund_account ~sender_pk ~da_poster_signer ()
        in
        fun () -> write_deploy_command ~output:command_output command ) )
 

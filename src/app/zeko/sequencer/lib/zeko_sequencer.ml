@@ -1131,9 +1131,17 @@ module Sequencer = struct
 
   let create ~logger ~max_pool_size ~commitment_period_sec ~da_config ~da_keys
       ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
-      ~(signer : Signer_service.Signer.t) ~deposit_delay_blocks ~mq_host
-      ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db ~l1_config
-      ~commit_validity_period ~commit_fee ~bridge_txn_fee =
+      ~(signer : Signer_service.Signer.t)
+      ~(da_poster_signer : Signer_service.Signer.t) ~deposit_delay_blocks
+      ~mq_host ~fee_modifier ~minimum_fee ~slot_acceptance ~proof_cache_db
+      ~l1_config ~commit_validity_period ~commit_fee ~bridge_txn_fee =
+    (* The poster key signs raw fields, so it must not be a key that also
+       authorizes L1 or L2 transactions *)
+    if
+      Signature_lib.Public_key.Compressed.equal
+        (Signer_service.Signer.public_key da_poster_signer)
+        (Signer_service.Signer.public_key signer)
+    then failwith "The DA poster key must differ from the sequencer key" ;
     [%log info] "Precomputing srs" ;
     Pickles.Side_loaded.srs_precomputation () ;
     let db_dir =
@@ -1172,7 +1180,12 @@ module Sequencer = struct
     let%bind da_client =
       Da_layer.Client.create ~logger ~config:da_config
         ~signature_kind:Zeko_circuits_config.Inputs.chain_l2 ~quorum:da_quorum
-        ~da_keys ~db_pool
+        ~da_keys
+        ~poster:
+          { rollup = Zeko_circuits_config.Inputs.zeko_l1
+          ; signer = da_poster_signer
+          }
+        ~db_pool
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in

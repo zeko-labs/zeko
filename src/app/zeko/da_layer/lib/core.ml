@@ -4,7 +4,9 @@ open Mina_ledger
 open Signature_lib
 module Field = Snark_params.Tick.Field
 
-(** 1. Check that [root ledger_openings = diff.source_ledger_hash].
+(** 0. Check that the claimed target differs from the source and that an
+       allowed poster signed [(rollup, source_state, target_state, diff)].
+    1. Check that [root ledger_openings = diff.source_ledger_hash].
     2. Check that [diff.source_ledger_hash] is either in the databse or an empty ledger.
     3. Check that the indices in [diff.diff] are unique. 
     4. Set each account in [diff.diff] to the [ledger_openings] and call the resulting ledger hash [target_ledger_hash].
@@ -12,12 +14,27 @@ module Field = Snark_params.Tick.Field
     6. Check that after applying all the receipts of the command, the receipt chain hashes match the target ledger.
     7. Check that the account-set openings transform [source_state.acc_set]
        by inserting exactly the new accounts in ledger order.
-    8. Attach timestamp and acc set root.
+    8. Attach timestamp and acc set root, and check that the resulting
+       DA state is the claimed target.
     9. Store the diff under the target DA state.
     10. Sign and return the target DA state. *)
 let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
-    ~(signer : Signer_service.Signer.t) ~(source_state : Da_state.t)
+    ~(signer : Signer_service.Signer.t) ~rollup ~allowed_posters
+    ~(source_state : Da_state.t) ~(target_state : Da_state.t) ~authorization
     ~ledger_openings ~acc_set_openings ~(diff : Diff.Pending.t) =
+  let claimed_target_state = target_state in
+  (* 0 *)
+  let%bind.Result () =
+    if Da_state.equal source_state claimed_target_state then
+      Error
+        (Error.create "Refusing a diff whose target DA state equals its source"
+           source_state Da_state.sexp_of_t )
+    else Ok ()
+  in
+  let%bind.Result () =
+    Post_diff_auth.verify ~signature_kind:network_id ~rollup ~allowed_posters
+      ~source_state ~target_state:claimed_target_state ~diff authorization
+  in
   let get_account ledger account_id =
     try
       let index = Sparse_ledger.find_index_exn ledger account_id in
@@ -343,6 +360,14 @@ let post_diff ~logger ~proof_cache_db ~kvdb ~network_id
   let target_state =
     Da_state.create ~ledger_hash:target_ledger_hash ~acc_set:target_acc_set
   in
+  let%bind.Result () =
+    if Da_state.equal target_state claimed_target_state then Ok ()
+    else
+      Error
+        (Error.create "Diff does not lead to the claimed target DA state"
+           (claimed_target_state, target_state)
+           [%sexp_of: Da_state.t * Da_state.t] )
+  in
   let stored_diff : Stored_diff.t = { source_state; target_state; diff } in
 
   (* 9 *)
@@ -418,6 +443,46 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
           let acc_set =
             Indexed_merkle_tree.Sparse.merkle_root acc_set_openings
           in
+          let poster = Signature_lib.Keypair.create () in
+          let rollup =
+            Public_key.compress (Signature_lib.Keypair.create ()).public_key
+          in
+          let allowed_posters = [ Public_key.compress poster.public_key ] in
+          let target_of (diff : Diff.Pending.t) =
+            let target_ledger =
+              List.fold diff.changed_accounts ~init:ledger_openings
+                ~f:(fun ledger (index, account) ->
+                  Sparse_ledger.set_exn ledger index account )
+            in
+            Da_state.create
+              ~ledger_hash:(Sparse_ledger.merkle_root target_ledger)
+              ~acc_set
+          in
+          let post ?(poster = poster) ?target_state ~source_state diff =
+            let target_state =
+              Option.value target_state ~default:(target_of diff)
+            in
+            let authorization =
+              Async.Thread_safe.block_on_async_exn (fun () ->
+                  Post_diff_auth.sign ~signature_kind:Mainnet
+                    ~poster:
+                      { rollup
+                      ; signer = Signer_service.Signer.of_keypair poster
+                      }
+                    ~source_state ~target_state ~diff )
+              |> Or_error.ok_exn
+            in
+            match
+              post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet
+                ~signer ~rollup ~allowed_posters ~source_state ~target_state
+                ~authorization ~ledger_openings ~acc_set_openings ~diff
+            with
+            | Error error ->
+                Error error
+            | Ok state_and_signature ->
+                Async.Thread_safe.block_on_async_exn (fun () ->
+                    state_and_signature )
+          in
           let source_diff : Diff.Stable.V4.t =
             { source_ledger_hash
             ; changed_accounts = []
@@ -467,11 +532,11 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
               ~actions:(`Actions [])
           in
           let mismatched_source_result =
-            post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet ~signer
-              ~source_state:mismatched_source_state ~ledger_openings
-              ~acc_set_openings ~diff:no_op_diff
+            post ~source_state:mismatched_source_state no_op_diff
           in
           assert (Result.is_error mismatched_source_result) ;
+          (* A diff whose target equals its source is refused *)
+          assert (Result.is_error (post ~source_state no_op_diff)) ;
           let changed_receipt_chain_hash =
             Receipt.Chain_hash.cons_zkapp_command_commitment
               Unsigned.UInt32.zero
@@ -490,17 +555,7 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
                 ]
               ~actions:(`Actions [])
           in
-          let result =
-            match
-              post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet
-                ~signer ~source_state ~ledger_openings ~acc_set_openings ~diff
-            with
-            | Error error ->
-                Error error
-            | Ok state_and_signature ->
-                Async.Thread_safe.block_on_async_exn (fun () ->
-                    state_and_signature )
-          in
+          let result = post ~source_state diff in
           assert (Result.is_error result) ;
           let receipt_preserving_account =
             { source_account with nonce = Unsigned.UInt32.one }
@@ -513,17 +568,27 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
                 ]
               ~actions:(`Actions [])
           in
+          (* A diff posted by anyone except an allowed poster is refused and
+             not stored, so it cannot block the poster's own diff *)
+          let unauthorized_result =
+            post
+              ~poster:(Signature_lib.Keypair.create ())
+              ~source_state receipt_preserving_diff
+          in
+          assert (Result.is_error unauthorized_result) ;
+          assert (
+            not (Db.has_diff kvdb ~state:(target_of receipt_preserving_diff)) ) ;
+          (* The claimed target must be the target the diff leads to *)
+          assert (
+            Result.is_error
+              (post ~source_state
+                 ~target_state:
+                   { (target_of receipt_preserving_diff) with
+                     acc_set = mismatched_acc_set
+                   }
+                 receipt_preserving_diff ) ) ;
           let receipt_preserving_result =
-            match
-              post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet
-                ~signer ~source_state ~ledger_openings ~acc_set_openings
-                ~diff:receipt_preserving_diff
-            with
-            | Error error ->
-                Error error
-            | Ok state_and_signature ->
-                Async.Thread_safe.block_on_async_exn (fun () ->
-                    state_and_signature )
+            post ~source_state receipt_preserving_diff
           in
           assert (Result.is_ok receipt_preserving_result) ;
           let conflicting_diff =
@@ -534,16 +599,5 @@ let%test_unit "actions-only diffs cannot change receipt-chain hashes" =
                 ]
               ~actions:(`Actions [ (account_id, []) ])
           in
-          let conflicting_result =
-            match
-              post_diff ~logger ~proof_cache_db ~kvdb ~network_id:Mainnet
-                ~signer ~source_state ~ledger_openings ~acc_set_openings
-                ~diff:conflicting_diff
-            with
-            | Error error ->
-                Error error
-            | Ok state_and_signature ->
-                Async.Thread_safe.block_on_async_exn (fun () ->
-                    state_and_signature )
-          in
+          let conflicting_result = post ~source_state conflicting_diff in
           assert (Result.is_error conflicting_result) ) )

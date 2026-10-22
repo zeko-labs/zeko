@@ -1,6 +1,7 @@
 open Core_kernel
 module Rpc_def = Rpc
 open Async
+open Signature_lib
 
 let constraint_constants = Zeko_constants.constraint_constants
 
@@ -10,6 +11,10 @@ type t =
   ; logger : Logger.t
   ; chain : Mina_signature_kind.t
   ; proof_cache_db : Proof_cache_tag.cache_db
+  ; rollup : Public_key.Compressed.t
+        (** The rollup whose diffs this node accepts *)
+  ; allowed_posters : Public_key.Compressed.t list
+        (** Keys allowed to authorize [Post_diff] *)
   }
 
 let get_signature t ~state =
@@ -68,17 +73,29 @@ let implementations t =
       [ (* Healthcheck *)
         Rpc.Rpc.implement Rpc_def.Healthcheck.V1.t (fun () () -> return ())
       ; (* Post_diff *)
-        Rpc.Rpc.implement Rpc_def.Post_diff.V2.t
-          (fun () { source_state; ledger_openings; acc_set_openings; diff } ->
+        (* Only V3 is implemented: earlier versions carry no authorization *)
+        Rpc.Rpc.implement Rpc_def.Post_diff.V3.t
+          (fun
+            ()
+            { source_state
+            ; target_state
+            ; ledger_openings
+            ; acc_set_openings
+            ; diff
+            ; authorization
+            }
+          ->
             match%bind
               Core.post_diff ~logger:t.logger ~proof_cache_db:t.proof_cache_db
-                ~kvdb:t.db ~network_id:t.chain ~signer:t.signer ~ledger_openings
-                ~source_state ~acc_set_openings ~diff
+                ~kvdb:t.db ~network_id:t.chain ~signer:t.signer ~rollup:t.rollup
+                ~allowed_posters:t.allowed_posters ~ledger_openings
+                ~source_state ~target_state ~authorization ~acc_set_openings
+                ~diff
               |> function Error e -> Deferred.return (Error e) | Ok d -> d
             with
             | Ok (state, signature) ->
                 return
-                  Rpc_def.Post_diff.V2.Response.
+                  Rpc_def.Post_diff.V3.Response.
                     { state_id = state
                     ; signer = Signer_service.Signer.public_key t.signer
                     ; signature
@@ -87,6 +104,11 @@ let implementations t =
                 let logger = t.logger in
                 [%log warn] "Error posting diff: %s" (Error.to_string_hum e) ;
                 failwith (Error.to_string_hum e) )
+      ; (* Get_post_diff_policy *)
+        Rpc.Rpc.implement Rpc_def.Get_post_diff_policy.V1.t (fun () () ->
+            return
+              Rpc_def.Get_post_diff_policy.V1.Response.
+                { rollup = t.rollup; posters = t.allowed_posters } )
       ; (* Get_diff *)
         Rpc.Rpc.implement Rpc_def.Get_diff.V5.t (fun () query ->
             Db.Async.get_diff t.db ~state:query )
@@ -203,8 +225,10 @@ let start_healthcheck_server ~logger ~port =
   in
   [%log info] "Healthcheck server started on port %d" port
 
-let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer
-    ~no_migrations () =
+let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer ~rollup
+    ~allowed_posters ~no_migrations () =
+  if List.is_empty allowed_posters then
+    failwith "At least one allowed Post_diff poster key is required" ;
   let where_to_listen =
     Tcp.Where_to_listen.bind_to All_addresses (On_port port)
   in
@@ -215,6 +239,8 @@ let create_server ?healthcheck_port ~chain ~port ~logger ~db_dir ~signer
     ; logger
     ; chain
     ; proof_cache_db = Proof_cache_tag.create_identity_db ()
+    ; rollup
+    ; allowed_posters
     }
   in
 

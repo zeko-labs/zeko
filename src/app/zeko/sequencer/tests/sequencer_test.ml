@@ -46,6 +46,14 @@ let get_test_signer () =
       Signer_service.Client.create ~logger ~location
       >>| Signer_service.Signer.of_client )
 
+let get_test_da_poster_signer () =
+  run (fun () ->
+      let location =
+        Sys.getenv_exn "ZEKO_TEST_DA_POSTER_SIGNER" |> Host_and_port.of_string
+      in
+      Signer_service.Client.create ~logger ~location
+      >>| Signer_service.Signer.of_client )
+
 let free_sequencer (sequencer : Sequencer.t Handle.valid_t) =
   Gc.full_major () ;
   run (fun () -> Sequencer.shutdown !sequencer) ;
@@ -232,8 +240,10 @@ let () =
                 ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
                 ~da_quorum ~db_dir:None ~checkpoints_dir:None
                 ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
-                ~signer:(get_test_signer ()) ~deposit_delay_blocks:0 ~mq_host
-                ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+                ~signer:(get_test_signer ())
+                ~da_poster_signer:(get_test_da_poster_signer ())
+                ~deposit_delay_blocks:0 ~mq_host ~fee_modifier:1.0
+                ~minimum_fee:0.01 ~slot_acceptance
                 ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
                 ~l1_config
                 ~commit_validity_period:
@@ -337,6 +347,7 @@ let () =
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir)
               ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer:(get_test_signer ())
+              ~da_poster_signer:(get_test_da_poster_signer ())
               ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
               ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
@@ -471,8 +482,10 @@ let () =
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir2)
               ~checkpoints_dir:(Some checkpoints_dir)
               ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
-              ~signer:(get_test_signer ()) ~deposit_delay_blocks:0 ~mq_host
-              ~da_keys ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+              ~signer:(get_test_signer ())
+              ~da_poster_signer:(get_test_da_poster_signer ())
+              ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
+              ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10)
@@ -579,6 +592,7 @@ let () =
               ~da_config:da_config_with2 ~da_quorum ~db_dir:(Some db_dir)
               ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer:(get_test_signer ())
+              ~da_poster_signer:(get_test_da_poster_signer ())
               ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
               ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
