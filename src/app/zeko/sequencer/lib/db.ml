@@ -1,5 +1,7 @@
 open Async
+open Core_kernel
 open Relational_db
+module Field = Snark_params.Tick.Field
 
 let migrations : Db.Migration.t list =
   let open Deferred.Result.Let_syntax in
@@ -151,6 +153,158 @@ let migrations : Db.Migration.t list =
           (Caqti_request.exec Caqti_type.unit
              {sql| ALTER TABLE da_diff ADD COLUMN acc_set_openings BYTEA NOT NULL |sql} )
           () )
+  ; Db.Migration.make 6 "key_da_by_ledger_and_account_set"
+      (fun (module Conn : CONNECTION) ->
+        let exec sql = Conn.exec (Caqti_request.exec Caqti_type.unit sql) () in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_diff
+                    ADD COLUMN target_acc_set TEXT,
+                    ADD COLUMN source_acc_set TEXT |sql}
+        in
+        let%bind rows =
+          Conn.collect_list
+            (Caqti_request.collect Caqti_type.unit
+               Caqti_type.(tup4 int (option string) octets octets)
+               {sql| SELECT id, source_ledger_hash, diff, acc_set_openings FROM da_diff |sql} )
+            ()
+        in
+        let parse_acc_set_root openings =
+          let ok_exn = function
+            | Ppx_deriving_yojson_runtime.Result.Ok value ->
+                value
+            | Ppx_deriving_yojson_runtime.Result.Error error ->
+                failwithf "Error parsing account-set openings: %s" error ()
+          in
+          Indexed_merkle_tree.Sparse.of_yojson
+            (Yojson.Safe.from_string openings)
+          |> ok_exn |> Indexed_merkle_tree.Sparse.merkle_root |> Field.to_string
+        in
+        let empty_state =
+          Da_layer.Da_state.empty
+            ~depth:Zeko_constants.constraint_constants.ledger_depth
+        in
+        let migration_error message =
+          Caqti_error.request_failed
+            ~uri:(Uri.of_string "zeko://migration")
+            ~query:"key_da_by_ledger_and_account_set" (Caqti_error.Msg message)
+        in
+        let%bind () =
+          Deferred.List.fold rows ~init:(Ok ())
+            ~f:(fun result (id, source_ledger_hash, diff, openings) ->
+              match result with
+              | Error _ ->
+                  Deferred.return result
+              | Ok () -> (
+                  let pending_diff =
+                    Binable.of_bigstring
+                      ( module Da_layer.Diff.Pending.Stable.V1
+                               .With_top_version_tag )
+                      (Bigstring.of_string diff)
+                  in
+                  match source_ledger_hash with
+                  | None
+                    when not
+                           (Mina_base.Ledger_hash.equal
+                              pending_diff.source_ledger_hash
+                              empty_state.ledger_hash ) ->
+                      Deferred.return
+                        (Error
+                           (migration_error
+                              (sprintf
+                                 "Cannot recover the source account-set root \
+                                  for legacy DA queue row %d starting at \
+                                  non-genesis ledger %s; rebuild the local DA \
+                                  queue from a checkpoint with an explicit \
+                                  account-set root"
+                                 id
+                                 (Mina_base.Ledger_hash.to_decimal_string
+                                    pending_diff.source_ledger_hash ) ) ) )
+                  | None | Some _ ->
+                      Conn.exec
+                        (Caqti_request.exec
+                           Caqti_type.(tup2 string int)
+                           {sql| UPDATE da_diff SET target_acc_set = ? WHERE id = ? |sql} )
+                        (parse_acc_set_root openings, id) ) )
+        in
+        let%bind () =
+          exec
+            {sql| UPDATE da_diff AS child
+                    SET source_acc_set = parent.target_acc_set
+                   FROM da_diff AS parent
+                  WHERE child.source_ledger_hash = parent.target_ledger_hash |sql}
+        in
+        let empty_acc_set = Field.to_string empty_state.acc_set in
+        let%bind () =
+          Conn.exec
+            (Caqti_request.exec Caqti_type.string
+               {sql| UPDATE da_diff
+                       SET source_acc_set = ?
+                     WHERE source_acc_set IS NULL |sql} )
+            empty_acc_set
+        in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_signature ADD COLUMN target_acc_set TEXT |sql}
+        in
+        let%bind () =
+          exec
+            {sql| UPDATE da_signature AS signature
+                    SET target_acc_set = diff.target_acc_set
+                   FROM da_diff AS diff
+                  WHERE signature.target_ledger_hash = diff.target_ledger_hash |sql}
+        in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_signature DROP CONSTRAINT da_signature_target_ledger_hash_fkey |sql}
+        in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_diff DROP CONSTRAINT da_diff_source_ledger_hash_fkey |sql}
+        in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_signature DROP CONSTRAINT da_signature_target_ledger_hash_public_key_key |sql}
+        in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_diff DROP CONSTRAINT da_diff_target_ledger_hash_key |sql}
+        in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_diff
+                    ALTER COLUMN target_acc_set SET NOT NULL,
+                    ALTER COLUMN source_acc_set SET NOT NULL |sql}
+        in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_signature ALTER COLUMN target_acc_set SET NOT NULL |sql}
+        in
+        let%bind () =
+          exec
+            {sql| ALTER TABLE da_diff
+                    ADD CONSTRAINT da_diff_target_state_key
+                      UNIQUE (target_ledger_hash, target_acc_set),
+                    ADD CONSTRAINT da_diff_source_state_fkey
+                      FOREIGN KEY (source_ledger_hash, source_acc_set)
+                      REFERENCES da_diff (target_ledger_hash, target_acc_set)
+                      ON UPDATE CASCADE
+                      ON DELETE RESTRICT |sql}
+        in
+        let%bind () =
+          exec
+            {sql| CREATE INDEX idx_da_diff_source_state
+                    ON da_diff (source_ledger_hash, source_acc_set) |sql}
+        in
+        exec
+          {sql| ALTER TABLE da_signature
+                  ADD CONSTRAINT da_signature_target_state_public_key_key
+                    UNIQUE (target_ledger_hash, target_acc_set, public_key),
+                  ADD CONSTRAINT da_signature_target_state_fkey
+                    FOREIGN KEY (target_ledger_hash, target_acc_set)
+                    REFERENCES da_diff (target_ledger_hash, target_acc_set)
+                    ON UPDATE CASCADE
+                    ON DELETE CASCADE |sql} )
   ]
 
 let create_and_migrate ~postgres_uri ~logger =

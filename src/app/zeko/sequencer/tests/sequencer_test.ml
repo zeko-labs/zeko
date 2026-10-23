@@ -46,6 +46,14 @@ let get_test_signer () =
       Signer_service.Client.create ~logger ~location
       >>| Signer_service.Signer.of_client )
 
+let get_test_da_poster_signer () =
+  run (fun () ->
+      let location =
+        Sys.getenv_exn "ZEKO_TEST_DA_POSTER_SIGNER" |> Host_and_port.of_string
+      in
+      Signer_service.Client.create ~logger ~location
+      >>| Signer_service.Signer.of_client )
+
 let free_sequencer (sequencer : Sequencer.t Handle.valid_t) =
   Gc.full_major () ;
   run (fun () -> Sequencer.shutdown !sequencer) ;
@@ -232,8 +240,10 @@ let () =
                 ~commitment_period_sec:0. ~da_config:da_config_with2 ~da_keys
                 ~da_quorum ~db_dir:None ~checkpoints_dir:None
                 ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
-                ~signer:(get_test_signer ()) ~deposit_delay_blocks:0 ~mq_host
-                ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+                ~signer:(get_test_signer ())
+                ~da_poster_signer:(get_test_da_poster_signer ())
+                ~deposit_delay_blocks:0 ~mq_host ~fee_modifier:1.0
+                ~minimum_fee:0.01 ~slot_acceptance
                 ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
                 ~l1_config
                 ~commit_validity_period:
@@ -337,6 +347,7 @@ let () =
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir)
               ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer:(get_test_signer ())
+              ~da_poster_signer:(get_test_da_poster_signer ())
               ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
               ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
@@ -347,14 +358,14 @@ let () =
       in
 
       print_endline "(* Requeue witnesses and commit with quorum 3 *)" ;
-      let ledger_hash =
+      let da_state =
         run (fun () ->
             let%bind commit_result = commit new_sequencer >>| Or_error.ok_exn in
             let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish new_sequencer.merger_ctx.executor
             in
-            let%map { ledger_hash = committed_ledger_hash; _ } =
+            let%map { ledger_hash = committed_ledger_hash; acc_set; _ } =
               Gql_client.infer_state ~logger gql_uri ~signer_pk
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
@@ -363,7 +374,8 @@ let () =
             in
             let target_ledger_hash = get_root new_sequencer in
             [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
-            committed_ledger_hash )
+            Da_layer.Da_state.create ~ledger_hash:committed_ledger_hash
+              ~acc_set:(account_set_root acc_set) )
       in
 
       print_endline "(* Check that all da nodes are synced *)" ;
@@ -371,12 +383,12 @@ let () =
           let%bind _multisig =
             Da_layer.Client.get_multisig
               { new_sequencer.da_client with quorum = 3 }
-              ~ledger_hash
+              ~state:da_state
           in
           let%map da_nodes_synced =
             Deferred.List.map da_config_with3.nodes ~f:(fun node ->
                 Da_layer.Client.Rpc.has_diff ~logger ~node_location:node
-                  ~ledger_hash )
+                  ~state:da_state )
             >>| Result.all >>| Or_error.ok_exn >>| List.for_all ~f:Fn.id
           in
           [%test_eq: bool] da_nodes_synced true ) ;
@@ -441,14 +453,14 @@ let () =
               apply_user_command !sequencer command >>| Or_error.ok_exn ) ) ;
 
       print_endline "(* Commit *)" ;
-      let ledger_hash =
+      let da_state =
         run (fun () ->
             let%bind commit_result = commit !sequencer >>| Or_error.ok_exn in
             let%bind _txn_snark = commit_result >>| Or_error.ok_exn in
             let%bind () =
               Executor.wait_to_finish !sequencer.merger_ctx.executor
             in
-            let%map { ledger_hash = committed_ledger_hash; _ } =
+            let%map { ledger_hash = committed_ledger_hash; acc_set; _ } =
               Gql_client.infer_state ~logger gql_uri ~signer_pk
                 ~zkapp_pk:(Public_key.compress outer_kp.public_key)
               >>| Or_error.ok_exn
@@ -457,7 +469,8 @@ let () =
             in
             let target_ledger_hash = get_root !sequencer in
             [%test_eq: Ledger_hash.t] committed_ledger_hash target_ledger_hash ;
-            committed_ledger_hash )
+            Da_layer.Da_state.create ~ledger_hash:committed_ledger_hash
+              ~acc_set:(account_set_root acc_set) )
       in
 
       let[@warning "-26"] sequencer = free_sequencer sequencer in
@@ -469,8 +482,10 @@ let () =
               ~da_config:da_config_with3 ~da_quorum ~db_dir:(Some db_dir2)
               ~checkpoints_dir:(Some checkpoints_dir)
               ~postgres_uri:postgres_uri2 ~l1_uri:gql_uri ~archive_uri:gql_uri
-              ~signer:(get_test_signer ()) ~deposit_delay_blocks:0 ~mq_host
-              ~da_keys ~fee_modifier:1.0 ~minimum_fee:0.01 ~slot_acceptance
+              ~signer:(get_test_signer ())
+              ~da_poster_signer:(get_test_da_poster_signer ())
+              ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
+              ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())
               ~l1_config
               ~commit_validity_period:(Mina_numbers.Global_slot_span.of_int 10)
@@ -483,12 +498,12 @@ let () =
           let%bind _multisig =
             Da_layer.Client.get_multisig
               { new_sequencer.da_client with quorum = 3 }
-              ~ledger_hash
+              ~state:da_state
           in
           let%map da_nodes_synced =
             Deferred.List.map da_config_with3.nodes ~f:(fun node ->
                 Da_layer.Client.Rpc.has_diff ~logger ~node_location:node
-                  ~ledger_hash )
+                  ~state:da_state )
             >>| Result.all >>| Or_error.ok_exn >>| List.for_all ~f:Fn.id
           in
           [%test_eq: bool] da_nodes_synced true ) ;
@@ -577,6 +592,7 @@ let () =
               ~da_config:da_config_with2 ~da_quorum ~db_dir:(Some db_dir)
               ~checkpoints_dir:None ~postgres_uri ~l1_uri:gql_uri
               ~archive_uri:gql_uri ~signer:(get_test_signer ())
+              ~da_poster_signer:(get_test_da_poster_signer ())
               ~deposit_delay_blocks:0 ~mq_host ~da_keys ~fee_modifier:1.0
               ~minimum_fee:0.01 ~slot_acceptance
               ~proof_cache_db:(Proof_cache_tag.create_identity_db ())

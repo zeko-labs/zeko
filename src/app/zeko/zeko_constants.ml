@@ -41,6 +41,8 @@ let indexed_merkle_tree_merge_salt = "indexed merkle tree"
 
 let da_layer_check_salt = "zeko da layer check"
 
+let da_post_diff_salt = "zeko da layer post diff"
+
 let deposit_salt = "Deposit_params - qFB3jXP*)"
 
 let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"

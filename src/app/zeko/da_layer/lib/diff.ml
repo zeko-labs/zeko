@@ -126,6 +126,8 @@ module Pending = struct
       let to_latest = Fn.id
     end
   end]
+
+  let to_binable_string = Binable.to_string (module Stable.Latest)
 end
 
 type t = Stable.V4.t =
