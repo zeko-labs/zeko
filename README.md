@@ -1,7 +1,7 @@
 # Zeko
 
 [Zeko](https://twitter.com/ZekoLabs) is a fully isomorphic L2 for the Mina protocol ecosystem.
-We support recursion in smart contracts natively. Ethereum deployment is under development, and will be a separate instance of Zeko.
+We support recursion in smart contracts natively. The Zeko rollup can settle natively to Ethereum as well as Mina. The separate Ethereum settlement pipeline is located in the [ethereum-settlement repository](https://github.com/zeko-labs/ethereum-settlement).
 
 ## Security Audits
 
