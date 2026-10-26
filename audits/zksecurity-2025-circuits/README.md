@@ -32,7 +32,7 @@ IDs and severities follow the report; issue labels are paraphrased. Client respo
 
 ## Client Responses: High
 
-The published report's client responses report fixes for all seven High findings. Neither report lists a Critical finding.
+The published report's client responses report fixes for all seven High findings.
 
 - **[00](https://reports.zksecurity.xyz/reports/zeko/#finding-high-00-missing-merge-consistency): Resolved (per report).** Checked that the left proof's target equals the right proof's source.
 - **[01](https://reports.zksecurity.xyz/reports/zeko/#finding-high-01-unconstrained-account-set-update): Resolved (per report).** Used the original account-set root when insertion is skipped.
