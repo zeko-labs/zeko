@@ -10,7 +10,7 @@ Reviewed `src/app/zeko/circuits/`, including inner/outer bridge rules, and circu
 
 ## Findings
 
-IDs and severities follow the report; issue labels are paraphrased. Client responses for Critical and High findings are summarized below.
+IDs and severities follow the report; issue labels are paraphrased. Client responses for High findings are summarized below.
 
 | ID | Severity | Paraphrased issue |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ IDs and severities follow the report; issue labels are paraphrased. Client respo
 | [0d](https://reports.zksecurity.xyz/reports/zeko/#finding-low-hard-coded-decrement-constant) | Low | Decrement ignores parameter |
 | [0e](https://reports.zksecurity.xyz/reports/zeko/#finding-info-custom-bridge-rules-error) | Informational | Custom-token configuration mismatch |
 
-## Client Responses: Critical and High
+## Client Responses: High
 
 The published report's client responses report fixes for all seven High findings. Neither report lists a Critical finding.
 
