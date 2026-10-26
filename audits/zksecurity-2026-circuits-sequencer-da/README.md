@@ -10,7 +10,7 @@ Circuit changes, sequencer/proving, DA nodes and deployment are covered. Bridge-
 
 ## Findings
 
-IDs and severities follow the report; issue labels are paraphrased. Client responses for Critical and High findings are summarized below.
+IDs and severities follow the report; issue labels are paraphrased. Client responses for High findings are summarized below.
 
 | ID | Severity | Paraphrased issue |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ IDs and severities follow the report; issue labels are paraphrased. Client respo
 | [09](https://reports.zksecurity.xyz/reports/zeko-2/#finding-low-permissions) | Low | Signing keys bypass proof controls |
 | [0a](https://reports.zksecurity.xyz/reports/zeko-2/#finding-info-quorum-underflow) | Informational | Zero quorum blocks commits |
 
-## Client Responses: Critical and High
+## Client Responses: High
 
 The published report's client responses report fixes for all four High findings. Neither report lists a Critical finding.
 
