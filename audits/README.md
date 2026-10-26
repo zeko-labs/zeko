@@ -1,6 +1,11 @@
 # Security Audits
 
-This directory records external security assessments of specific Zeko components. The reports remain hosted by [zkSecurity](https://zksecurity.xyz/); these files provide stable links and scope notes for this repository.
+## Authoritative zkSecurity Reports
+
+- **Audit 1:** [Authoritative circuits audit report](https://reports.zksecurity.xyz/reports/zeko/) | [Audit 1 folder and README](./zksecurity-2025-circuits/README.md)
+- **Audit 2:** [Authoritative circuits, sequencer, and DA audit report](https://reports.zksecurity.xyz/reports/zeko-2/) | [Audit 2 folder and README](./zksecurity-2026-circuits-sequencer-da/README.md)
+
+The reports published by zkSecurity are the authoritative sources for scope, findings, recommendations, and client responses. The READMEs in this folder are unofficial, paraphrased guides prepared by Zeko for humans and agents.
 
 These assessments are **not** audits of the entire `zeko-labs` GitHub organization. They are also not blanket audits of every directory in this repository. Each report applies to the code, branch, commit, and component scope stated below.
 
