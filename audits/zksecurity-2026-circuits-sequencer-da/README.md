@@ -28,14 +28,14 @@ IDs and severities follow the report; issue labels are paraphrased. Client respo
 
 ## Client Responses: Critical and High
 
-Neither report classifies a finding as Critical. For this report's four High findings, the published client responses describe these fixes:
+The published report's client responses report fixes for all four High findings. Neither report lists a Critical finding.
 
-- **00:** Included actions in DA diffs and checked action-state updates ([PR #397](https://github.com/zeko-labs/zeko/pull/397)).
-- **01:** Added account-set transitions to emergency folding and required both ledger and account-set paths in emergency DA ([PR #398](https://github.com/zeko-labs/zeko/pull/398)).
-- **02:** Required equal source and target ledger hashes at initialization ([PR #395](https://github.com/zeko-labs/zeko/pull/395)).
-- **03:** Recomputed sparse-ledger hashes without trusting cached intermediate hashes ([PR #396](https://github.com/zeko-labs/zeko/pull/396)).
+- **[00](https://reports.zksecurity.xyz/reports/zeko-2/#finding-high-l2-actions-not-stored-in-da): Resolved (per report).** Included actions in DA diffs and verified action-state updates ([PR #397](https://github.com/zeko-labs/zeko/pull/397)).
+- **[01](https://reports.zksecurity.xyz/reports/zeko-2/#finding-high-transaction-reordering): Resolved (per report).** Added account-set transitions to emergency folding ([PR #398](https://github.com/zeko-labs/zeko/pull/398)).
+- **[02](https://reports.zksecurity.xyz/reports/zeko-2/#finding-high-unconstrained-da-folder-init): Resolved (per report).** Required equal source and target ledger hashes during initialization ([PR #395](https://github.com/zeko-labs/zeko/pull/395)).
+- **[03](https://reports.zksecurity.xyz/reports/zeko-2/#finding-high-unsafe-deserialization-sparse-ledger): Resolved (per report).** Recomputed sparse-ledger hashes without trusting cached intermediate values ([PR #396](https://github.com/zeko-labs/zeko/pull/396)).
 
-These summarize published client responses; current deployments were not independently checked. Each finding ID above links to the original response.
+Resolution status reflects the published client responses linked above.
 
 ## Original Diagrams
 
