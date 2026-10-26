@@ -15,7 +15,7 @@ These assessments are **not** audits of the entire `zeko-labs` GitHub organizati
 
 Taken together, these two zkSecurity assessments cover the full Zeko-specific rollup architecture required to operate the audited mainnet design: circuits and bridge rules, transaction-snark and recursive proof logic, the sequencer and prover pipeline, indexed-Merkle/account-set handling, commit, recovery and emergency paths, DA nodes, archive-relay interactions, and rollup deployment/configuration.
 
-Within this audited architecture, no additional Zeko-specific rollup subsystem is required to run the system beyond the components listed above. This is an architecture-coverage statement, not a claim that every file, external dependency, operational service, or later code revision was audited. Each report remains limited to its stated branch, commit, and scope.
+Within this audited architecture, no additional Zeko-specific rollup subsystem is required to run the system beyond the components listed above. Each report applies to its stated revision and scope.
 
 ## Open Source Protocol Development
 
