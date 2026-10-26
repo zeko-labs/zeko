@@ -10,8 +10,10 @@
 
 The audit primarily covered:
 
-- `src/app/zeko/circuits/`, including Zeko's outer contracts and inner contracts.
+- `src/app/zeko/circuits/`, including Zeko's outer and inner contracts and the bridge-related circuit rules in that area.
 - The diff from the original Mina repository where it affected Zeko's circuits, especially the transaction snark.
+
+This includes the circuit-level bridge logic present at the time, including the outer/inner bridge rules and their messaging, deposit, withdrawal, and cancellation paths.
 
 ## Coverage limitation
 
