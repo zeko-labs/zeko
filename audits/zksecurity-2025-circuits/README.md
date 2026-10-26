@@ -32,15 +32,17 @@ IDs and severities follow the report; issue labels are paraphrased. Client respo
 
 ## Client Responses: Critical and High
 
-Neither report classifies a finding as Critical. For this report's seven High findings, the published client responses describe these fixes:
+The published report's client responses report fixes for all seven High findings. Neither report lists a Critical finding.
 
-- **00:** Linked recursive transitions by checking that the left target equals the right source.
-- **01:** Corrected conditional account-set insertion checks.
-- **02:** Added the shared helper-token owner ([commit](https://github.com/zeko-labs/zeko/commit/cf78d9b84efbfe93f02dddf9004c51d1b04b3bc8)).
-- **03-05:** Corrected comparison canonicality, strictness, and range-checked slices.
-- **06:** Bound withdrawal evidence to its commit through the action-state extension ([commit](https://github.com/zeko-labs/zeko/commit/c291d4d37e7fcf0008670f73a5de135c0e93e43d)).
+- **[00](https://reports.zksecurity.xyz/reports/zeko/#finding-high-00-missing-merge-consistency): Resolved (per report).** Checked that the left proof's target equals the right proof's source.
+- **[01](https://reports.zksecurity.xyz/reports/zeko/#finding-high-01-unconstrained-account-set-update): Resolved (per report).** Used the original account-set root when insertion is skipped.
+- **[02](https://reports.zksecurity.xyz/reports/zeko/#finding-high-02-missing-helper-token-owner): Resolved (per report).** Added the shared helper-token owner.
+- **[03](https://reports.zksecurity.xyz/reports/zeko/#finding-high-03-range-check-not-canonical): Resolved (per report).** Checked canonicality of the correct comparison operand.
+- **[04](https://reports.zksecurity.xyz/reports/zeko/#finding-high-04-range-check-not-strict): Resolved (per report).** Range-checked the final decremented result.
+- **[05](https://reports.zksecurity.xyz/reports/zeko/#finding-high-05-range-check-missing-lookups): Resolved (per report).** Returned the correct slices for range checks.
+- **[06](https://reports.zksecurity.xyz/reports/zeko/#finding-high-06-no-withdrawal-delay): Resolved (per report).** Linked the withdrawal action-state extension to its containing commit.
 
-These summarize published client responses; current deployments were not independently checked. Each finding ID above links to the original response.
+Resolution status reflects the published client responses linked above.
 
 ## Protocol and Figures
 
