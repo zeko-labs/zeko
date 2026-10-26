@@ -23,6 +23,10 @@ The corresponding repository areas are primarily:
 - `src/app/zeko/da_layer/`
 - Deployment code, including `src/app/zeko/sequencer/deploy.ml`.
 
+## Bridge-related context
+
+The report discusses bridge-related withdrawal and action-witness flows in its impact analysis, including how DA availability and sequencer behavior can affect withdrawals. However, it does not identify a standalone bridge implementation or bridge folder as a separate audit scope item. The first audit provides the broader circuit and bridge-contract context; this second report focuses on the changes and components listed above.
+
 ## Coverage limitation
 
 This is still a component-level assessment. It does not constitute an audit of the entire `/zeko` repository or the `zeko-labs` GitHub organization. The authoritative report defines the final scope, threat model, assumptions, findings, and client responses.
