@@ -3,6 +3,14 @@
 [Zeko](https://twitter.com/ZekoLabs) is a fully isomorphic L2 for the Mina protocol ecosystem.
 We support recursion in smart contracts natively. Ethereum deployment is under development, and will be a separate instance of Zeko.
 
+## Security Audits
+
+This repository has component-specific security assessments by [zkSecurity](https://zksecurity.xyz/). The reports cover the reviewed Zeko code and revisions described in [`audits/`](./audits/), not the entire `/zeko` repository and not the wider `zeko-labs` GitHub organization.
+
+- [Audit index](./audits/)
+- [2025 circuits audit](./audits/zksecurity-2025-circuits.md)
+- [2026 circuits, sequencer, and DA layer audit](./audits/zksecurity-2026-circuits-sequencer-da.md)
+
 This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina).
 The Zeko related code is in the [`zeko`](./src/app/zeko) directory.
 
