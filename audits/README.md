@@ -8,8 +8,8 @@ These assessments are **not** audits of the entire `zeko-labs` GitHub organizati
 
 | Report | Reviewed scope |
 | --- | --- |
-| [Audit 1](./zksecurity-2025-circuits.md) | Direct review of Zeko circuit and bridge-contract logic in `src/app/zeko/circuits/`, plus circuit-relevant Mina changes. |
-| [Audit 2](./zksecurity-2026-circuits-sequencer-da.md) | Circuit changes since Audit 1, the sequencer and its prover/commit/recovery/emergency paths, the DA node, and rollup deployment code. It discusses bridge-related flows in those paths but is not a standalone re-audit of every bridge rule. |
+| [Audit 1](./zksecurity-2025-circuits/) | Direct review of Zeko circuit and bridge-contract logic in `src/app/zeko/circuits/`, plus circuit-relevant Mina changes. |
+| [Audit 2](./zksecurity-2026-circuits-sequencer-da/) | Circuit changes since Audit 1, the sequencer and its prover/commit/recovery/emergency paths, the DA node, and rollup deployment code. It discusses bridge-related flows in those paths but is not a standalone re-audit of every bridge rule. |
 
 ## Rollup Architecture Coverage
 
@@ -25,5 +25,7 @@ Independent teams may adapt these protocol-development features for their own de
 
 ## Reports
 
-- [Audit of Zeko's circuits (May 2025)](./zksecurity-2025-circuits.md)
-- [Audit of Zeko's circuits, sequencer and DA layer (June 2026)](./zksecurity-2026-circuits-sequencer-da.md)
+Each report directory includes an unofficial paraphrased README for agents, a complete finding index with source links, and the published response status. Detailed scope notes remain linked from each README. Original report text and diagrams remain at zkSecurity; this repository does not relicense those materials. The absence of a published client response does not establish whether an issue remains open today.
+
+- [Audit of Zeko's circuits (May 2025)](./zksecurity-2025-circuits/)
+- [Audit of Zeko's circuits, sequencer and DA layer (June 2026)](./zksecurity-2026-circuits-sequencer-da/)
