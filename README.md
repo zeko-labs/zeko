@@ -8,8 +8,8 @@ We support recursion in smart contracts natively. Ethereum deployment is under d
 This repository has component-specific security assessments by [zkSecurity](https://zksecurity.xyz/). The reports cover the reviewed Zeko code and revisions described in [`audits/`](./audits/), not the entire `/zeko` repository and not the wider `zeko-labs` GitHub organization.
 
 - [Audit index](./audits/)
-- [2025 circuits audit](./audits/zksecurity-2025-circuits.md)
-- [2026 circuits, sequencer, DA, deployment, and recovery audit](./audits/zksecurity-2026-circuits-sequencer-da.md)
+- [2025 circuits audit](./audits/zksecurity-2025-circuits/)
+- [2026 circuits, sequencer, DA, deployment, and recovery audit](./audits/zksecurity-2026-circuits-sequencer-da/)
 
 This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina).
 The Zeko related code is in the [`zeko`](./src/app/zeko) directory.
