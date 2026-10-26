@@ -4,6 +4,13 @@ This directory records external security assessments of specific Zeko components
 
 These assessments are **not** audits of the entire `zeko-labs` GitHub organization. They are also not blanket audits of every directory in this repository. Each report applies to the code, branch, commit, and component scope stated below.
 
+## Scope at a glance
+
+| Report | Reviewed scope |
+| --- | --- |
+| [Audit 1](./zksecurity-2025-circuits.md) | Direct review of Zeko circuit and bridge-contract logic in `src/app/zeko/circuits/`, plus circuit-relevant Mina changes. |
+| [Audit 2](./zksecurity-2026-circuits-sequencer-da.md) | Circuit changes since Audit 1, the sequencer and its prover/commit/recovery/emergency paths, the DA node, and rollup deployment code. It discusses bridge-related flows in those paths but is not a standalone re-audit of every bridge rule. |
+
 ## Reports
 
 - [Audit of Zeko's circuits (May 2025)](./zksecurity-2025-circuits.md)
