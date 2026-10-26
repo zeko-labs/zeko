@@ -1,6 +1,10 @@
 # Audit 1: Circuits and Bridge Rules
 
-Unofficial, paraphrased reading guide prepared by Zeko for humans and agents. The [authoritative zkSecurity report](https://reports.zksecurity.xyz/reports/zeko/) controls; this guide does not reproduce or relicense it. Consult the source for technical details and recommendations.
+**Authoritative report:** [zkSecurity Audit 1: Zeko's circuits](https://reports.zksecurity.xyz/reports/zeko/)
+
+**Companion audit:** [Other authoritative report: Audit 2](https://reports.zksecurity.xyz/reports/zeko-2/) | [Audit 2 folder and README](../zksecurity-2026-circuits-sequencer-da/README.md)
+
+This README is an unofficial, paraphrased guide prepared by Zeko for humans and agents. The linked zkSecurity reports are authoritative for their respective scopes, findings, recommendations, and client responses. This guide does not reproduce or relicense them.
 
 Published May 21, 2025. Reviewed revision: [`fab6a03555`](https://github.com/zeko-labs/zeko/commit/fab6a03555).
 
