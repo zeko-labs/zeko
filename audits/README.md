@@ -25,7 +25,7 @@ Independent teams may adapt these protocol-development features for their own de
 
 ## Reports
 
-Each report directory includes an unofficial paraphrased README for agents, a complete finding index with source links, and the published response status. Detailed scope notes remain linked from each README. Original report text and diagrams remain at zkSecurity; this repository does not relicense those materials. The absence of a published client response does not establish whether an issue remains open today.
+Each report directory includes an unofficial paraphrased README for agents, a complete finding index with source links, and a client-response summary focused on Critical and High findings. Detailed scope notes remain linked from each README. Original report text and diagrams remain at zkSecurity; this repository does not relicense those materials. The summaries describe the responses published with the reports.
 
 - [Audit of Zeko's circuits (May 2025)](./zksecurity-2025-circuits/)
 - [Audit of Zeko's circuits, sequencer and DA layer (June 2026)](./zksecurity-2026-circuits-sequencer-da/)
