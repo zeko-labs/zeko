@@ -1,6 +1,10 @@
 # Audit 2: Circuits and Rollup Operations
 
-Unofficial, paraphrased reading guide prepared by Zeko for humans and agents. The [authoritative zkSecurity report](https://reports.zksecurity.xyz/reports/zeko-2/) controls; this guide does not reproduce or relicense it. Consult the source for technical details and recommendations.
+**Authoritative report:** [zkSecurity Audit 2: Zeko's circuits, sequencer and DA layer](https://reports.zksecurity.xyz/reports/zeko-2/)
+
+**Companion audit:** [Other authoritative report: Audit 1](https://reports.zksecurity.xyz/reports/zeko/) | [Audit 1 folder and README](../zksecurity-2025-circuits/README.md)
+
+This README is an unofficial, paraphrased guide prepared by Zeko for humans and agents. The linked zkSecurity reports are authoritative for their respective scopes, findings, recommendations, and client responses. This guide does not reproduce or relicense them.
 
 Published June 3, 2026. Reviewed `compatible` revision: [`007b02e0cc`](https://github.com/zeko-labs/zeko/commit/007b02e0cc).
 
