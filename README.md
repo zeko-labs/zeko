@@ -9,7 +9,7 @@ This repository has component-specific security assessments by [zkSecurity](http
 
 - [Audit index](./audits/)
 - [2025 circuits audit](./audits/zksecurity-2025-circuits.md)
-- [2026 circuits, sequencer, and DA layer audit](./audits/zksecurity-2026-circuits-sequencer-da.md)
+- [2026 circuits, sequencer, DA, deployment, and recovery audit](./audits/zksecurity-2026-circuits-sequencer-da.md)
 
 This repository is a fork of the [Mina codebase](https://github.com/MinaProtocol/mina).
 The Zeko related code is in the [`zeko`](./src/app/zeko) directory.
