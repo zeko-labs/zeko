@@ -23,6 +23,14 @@ Zeko is open-source protocol software. Teams are welcome to inspect, fork, exten
 
 Independent teams may adapt these protocol-development features for their own deployments and experiments, subject to the applicable repository licenses, third-party notices, and trademark requirements. The audit reports describe specific reviewed revisions and should not be read as a guarantee about later modifications or independent deployments.
 
+## Infrastructure and Deployment Choices
+
+Teams can choose the hosting infrastructure and systems configuration used to run their Zeko rollup. Zeko's modular components can be integrated into an organization's existing infrastructure, security controls, and compliance processes.
+
+For one hosting example, the [Launch a rollup on Phala guide](https://docs.zeko.io/operators/guides/rollup-on-phala) describes running Zeko with Docker Compose in a Phala confidential virtual machine (TEE).
+
+The audit reports assess protocol code and its stated security assumptions, including the deployment code reviewed in Audit 2. They do not certify hosting providers, an operator's infrastructure, or its compliance posture. Each operating team is responsible for its systems setup and for satisfying the protocol's requirements and assumptions, including those concerning DA nodes, key management, permissions, and recovery.
+
 ## Reports
 
 Each report directory includes an unofficial paraphrased README for agents, a complete finding index with source links, and a client-response summary focused on High findings. Detailed scope notes remain linked from each README. Original report text and diagrams remain at zkSecurity; this repository does not relicense those materials. Every High finding has an individual client-response summary and is labeled resolved according to its published response: seven in Audit 1 and four in Audit 2.
