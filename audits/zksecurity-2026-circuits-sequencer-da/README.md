@@ -28,7 +28,7 @@ IDs and severities follow the report; issue labels are paraphrased. Client respo
 
 ## Client Responses: High
 
-The published report's client responses report fixes for all four High findings. Neither report lists a Critical finding.
+The published report's client responses report fixes for all four High findings.
 
 - **[00](https://reports.zksecurity.xyz/reports/zeko-2/#finding-high-l2-actions-not-stored-in-da): Resolved (per report).** Included actions in DA diffs and verified action-state updates ([PR #397](https://github.com/zeko-labs/zeko/pull/397)).
 - **[01](https://reports.zksecurity.xyz/reports/zeko-2/#finding-high-transaction-reordering): Resolved (per report).** Added account-set transitions to emergency folding ([PR #398](https://github.com/zeko-labs/zeko/pull/398)).
