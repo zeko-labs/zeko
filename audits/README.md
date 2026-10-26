@@ -11,6 +11,18 @@ These assessments are **not** audits of the entire `zeko-labs` GitHub organizati
 | [Audit 1](./zksecurity-2025-circuits.md) | Direct review of Zeko circuit and bridge-contract logic in `src/app/zeko/circuits/`, plus circuit-relevant Mina changes. |
 | [Audit 2](./zksecurity-2026-circuits-sequencer-da.md) | Circuit changes since Audit 1, the sequencer and its prover/commit/recovery/emergency paths, the DA node, and rollup deployment code. It discusses bridge-related flows in those paths but is not a standalone re-audit of every bridge rule. |
 
+## Rollup Architecture Coverage
+
+Taken together, these two zkSecurity assessments cover the full Zeko-specific rollup architecture required to operate the audited mainnet design: circuits and bridge rules, transaction-snark and recursive proof logic, the sequencer and prover pipeline, indexed-Merkle/account-set handling, commit, recovery and emergency paths, DA nodes, archive-relay interactions, and rollup deployment/configuration.
+
+Within this audited architecture, no additional Zeko-specific rollup subsystem is required to run the system beyond the components listed above. This is an architecture-coverage statement, not a claim that every file, external dependency, operational service, or later code revision was audited. Each report remains limited to its stated branch, commit, and scope.
+
+## Open Source Protocol Development
+
+Zeko is open-source protocol software. Teams are welcome to inspect, fork, extend, operate, and contribute to the protocol, including its circuits, bridge rules, sequencer, provers, DA layer, recovery paths, and deployment tooling.
+
+Independent teams may adapt these protocol-development features for their own deployments and experiments, subject to the applicable repository licenses, third-party notices, and trademark requirements. The audit reports describe specific reviewed revisions and should not be read as a guarantee about later modifications or independent deployments.
+
 ## Reports
 
 - [Audit of Zeko's circuits (May 2025)](./zksecurity-2025-circuits.md)
