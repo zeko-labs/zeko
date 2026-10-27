@@ -314,22 +314,25 @@ let command_slot_range (command : User_command.t) : Slot_range.t option =
              |> slot_range_intersection acc )
 
 module Slot = struct
-  type l1_config = { fork_timestamp : Time.t; fork_slot : Slot.t }
+  type l1_config =
+    { fork_timestamp : Time.t; fork_slot : Slot.t; slot_duration_sec : int }
 
   module For_tests = struct
     let add_to_global_slot = ref 0
   end
 
-  let global_slot ~l1_config =
+  let global_slot_at ~now ~l1_config =
     let after_fork_slot =
-      (Time.abs_diff (Time.now ()) l1_config.fork_timestamp |> Time.Span.to_sec)
-      /. 180.
+      (Time.abs_diff now l1_config.fork_timestamp |> Time.Span.to_sec)
+      /. Float.of_int l1_config.slot_duration_sec
       |> Float.to_int
       |> ( + ) !For_tests.add_to_global_slot
       |> Mina_numbers.Global_slot_span.of_int
     in
     Mina_numbers.Global_slot_since_genesis.add l1_config.fork_slot
       after_fork_slot
+
+  let global_slot ~l1_config = global_slot_at ~now:(Time.now ()) ~l1_config
 end
 
 let attach_proof_to_forest ~signature_kind ~proof_cache_db ~body ~calls ~proof =

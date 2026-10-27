@@ -87,10 +87,10 @@ struct
          | `Full of System.Stmt.t ] ) ~elems : out_t Promise.t =
     match elems with
     | [] -> (
-        (* No need for folding, everything goes to excess *)
         match source with
         | `Full source ->
-            Promise.return (None, source)
+            let%map.Promise trans, proof = System.leaf_option ([], source) in
+            (Some proof, trans.target)
         | `Extend (trans, proof) ->
             Promise.return (Some proof, trans.target) )
     | elems_to_prove ->
@@ -139,6 +139,10 @@ end
 module Folder_with_length = Make_folder (Ase.With_length)
 module Folder_without_length = Make_folder (Ase.Without_length)
 module Folder_check_accepted_mina = Make_folder (Bridge.Check_accepted_mina)
+module Folder_check_accepted_ethereum_token =
+  Make_folder (Bridge.Check_accepted_ethereum_token)
+module Folder_ethereum_asset_registry_scan =
+  Make_folder (Bridge.Ethereum_asset_registry.Scan)
 
 (* Unfortunately yojson doesn't support GADTs so it can't be one type, or maybe I'm just bad *)
 module Input = struct
@@ -163,6 +167,12 @@ module Input = struct
       | Check_accepted_mina of
           ( Bridge.Check_accepted_mina.Stmt.t
           * Bridge.Check_accepted_mina.Elem.t list )
+      | Check_accepted_ethereum_token of
+          ( Bridge.Check_accepted_ethereum_token.Stmt.t
+          * Bridge.Check_accepted_ethereum_token.Elem.t list )
+      | Ethereum_asset_registry_scan of
+          ( Bridge.Ethereum_asset_registry.Scan.Stmt.t
+          * Bridge.Ethereum_asset_registry.Scan.Elem.t list )
     [@@deriving yojson]
   end
 
@@ -171,9 +181,14 @@ module Input = struct
       | Outer_action_witness of Bridge.Outer_action_witness.serializable
       | Inner_action_witness of Bridge.Inner_action_witness.serializable
       | Finalize_deposit of Bridge.Finalize_deposit.serializable
+      | Finalize_ethereum_token_deposit of
+          Bridge.Finalize_ethereum_token_deposit.serializable
       | Finalize_cancelled_deposit of
           Bridge.Finalize_cancelled_deposit.serializable
       | Inner_receive of Bridge.Inner_receive.serializable
+      | Inner_receive_ethereum_token of
+          Bridge.Inner_receive_ethereum_token.serializable
+      | Register_ethereum_asset of Bridge.Ethereum_asset_registry.serializable
       | Finalize_withdrawal of Bridge.Finalize_withdrawal.serializable
       | Outer_token_owner of Bridge.Outer_token_owner.serializable
     [@@deriving yojson]
@@ -211,6 +226,8 @@ module Verification_key_hashes = struct
     ; bridge_mina_l1 : F.t
     ; bridge_mina_token_owner : F.t
     ; bridge_mina_l2 : F.t
+    ; bridge_ethereum_token_l2 : F.t
+    ; ethereum_asset_registry : F.t
     }
   [@@deriving yojson]
 end
@@ -221,6 +238,10 @@ module Output = struct
       | Ase_with_length of Folder_with_length.out_t
       | Ase_without_length of Folder_without_length.out_t
       | Check_accepted_mina of Folder_check_accepted_mina.out_t
+      | Check_accepted_ethereum_token of
+          Folder_check_accepted_ethereum_token.out_t
+      | Ethereum_asset_registry_scan of
+          Folder_ethereum_asset_registry_scan.out_t
     [@@deriving yojson]
   end
 
@@ -336,6 +357,24 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
           |> Promise.to_deferred )
       in
       Output.(Folder (Check_accepted_mina snark))
+  | Folder (Check_accepted_ethereum_token (source, elems)) ->
+      let%map snark =
+        time ?fake_proving_time ~logger
+          "Folder.Check_accepted_ethereum_token.fold"
+          ( Folder_check_accepted_ethereum_token.fold ~source:(`Full source)
+              ~elems
+          |> Promise.to_deferred )
+      in
+      Output.(Folder (Check_accepted_ethereum_token snark))
+  | Folder (Ethereum_asset_registry_scan (source, elems)) ->
+      let%map snark =
+        time ?fake_proving_time ~logger
+          "Folder.Ethereum_asset_registry_scan.fold"
+          ( Folder_ethereum_asset_registry_scan.fold ~source:(`Full source)
+              ~elems
+          |> Promise.to_deferred )
+      in
+      Output.(Folder (Ethereum_asset_registry_scan snark))
   | Verify_both_ases_commit (outer, inner) ->
       let Compile_simple.[ prove ] =
         Lazy.force Rule_commit.Verify_both_ases.provers
@@ -476,6 +515,32 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
               (Zkapp_command.Call_forest.map
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
+  | Bridge (Finalize_ethereum_token_deposit input) ->
+      if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+        return (Output.Error "Ethereum token bridge is not configured")
+      else
+        let Compile_simple.[ prove; _; _ ] =
+          Lazy.force Bridge_inst_ethereum_token.System_L2.provers
+        in
+        let%bind vk_hash =
+          Compile_simple.Verification_key.of_tag
+            (Lazy.force Bridge_inst_ethereum_token.System_L2.tag)
+          |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+        in
+        let%map (_stmt, parent_with_calls), proof =
+          time ?fake_proving_time ~logger
+            "Bridge_ethereum_token.System_L2.finalize_deposit"
+            ( prove
+                (Bridge.Finalize_ethereum_token_deposit.of_serializable
+                   ~proof_cache_db ~vk_hash input )
+            |> Promise.to_deferred )
+        in
+        Output.Call_forest
+          ( Tuple3.map_trd parent_with_calls
+              ~f:
+                (Zkapp_command.Call_forest.map
+                   ~f:Account_update.read_all_proofs_from_disk )
+          , proof )
   | Bridge (Finalize_cancelled_deposit input) ->
       let Compile_simple.[ prove; _; _; _ ] =
         Lazy.force Bridge_inst_mina.System_L1_enabled.provers
@@ -530,6 +595,55 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
               (Zkapp_command.Call_forest.map
                  ~f:Account_update.read_all_proofs_from_disk )
         , proof )
+  | Bridge (Inner_receive_ethereum_token input) ->
+      if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+        return (Output.Error "Ethereum token bridge is not configured")
+      else
+        let Compile_simple.[ _; prove; _ ] =
+          Lazy.force Bridge_inst_ethereum_token.System_L2.provers
+        in
+        let%bind vk_hash =
+          Compile_simple.Verification_key.of_tag
+            (Lazy.force Bridge_inst_ethereum_token.System_L2.tag)
+          |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+        in
+        let%map (_stmt, parent_with_calls), proof =
+          time ?fake_proving_time ~logger
+            "Bridge_ethereum_token.System_L2.inner_receive"
+            ( prove
+                (Bridge.Inner_receive_ethereum_token.of_serializable ~vk_hash
+                   input )
+            |> Promise.to_deferred )
+        in
+        Output.Call_forest
+          ( Tuple3.map_trd parent_with_calls
+              ~f:
+                (Zkapp_command.Call_forest.map
+                   ~f:Account_update.read_all_proofs_from_disk )
+          , proof )
+  | Bridge (Register_ethereum_asset input) ->
+      if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+        return (Output.Error "Ethereum asset registry is not configured")
+      else
+        let prove = Lazy.force Bridge_inst_ethereum_token.Registry.register in
+        let%bind registry_vk_hash =
+          Compile_simple.Verification_key.of_tag
+            (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
+          |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+        in
+        let%map (_stmt, parent_with_calls), proof =
+          time ?fake_proving_time ~logger "Ethereum_asset_registry.register"
+            ( prove
+                (Bridge.Ethereum_asset_registry.of_serializable
+                   ~registry_vk_hash input )
+            |> Promise.to_deferred )
+        in
+        Output.Call_forest
+          ( Tuple3.map_trd parent_with_calls
+              ~f:
+                (Zkapp_command.Call_forest.map
+                   ~f:Account_update.read_all_proofs_from_disk )
+          , proof )
   | Bridge (Finalize_withdrawal input) ->
       let Compile_simple.[ _; prove; _; _ ] =
         Lazy.force Bridge_inst_mina.System_L1_enabled.provers
@@ -612,6 +726,14 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
         Compile_simple.Verification_key.of_tag
           (Lazy.force Bridge_inst_mina.System_L2.tag)
         |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+      and bridge_ethereum_token_l2 =
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_ethereum_token.System_L2.tag)
+        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
+      and ethereum_asset_registry =
+        Compile_simple.Verification_key.of_tag
+          (Lazy.force Bridge_inst_ethereum_token.Registry.registry_tag)
+        |> Promise.to_deferred >>| Compile_simple.Verification_key.hash
       in
       return
         (Output.Verification_keys
@@ -620,6 +742,8 @@ let prove ?fake_proving_time ~logger ~proof_cache_db :
            ; bridge_mina_l1
            ; bridge_mina_token_owner
            ; bridge_mina_l2
+           ; bridge_ethereum_token_l2
+           ; ethereum_asset_registry
            } )
 
 let run ?fake_proving_time ~logger ~mq_host () =

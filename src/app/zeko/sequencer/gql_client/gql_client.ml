@@ -714,12 +714,14 @@ let infer_state ~logger uri ~zkapp_pk ~signer_pk =
           Continue new_state )
     ~finish:Fn.id
 
-let send_zkapp (uri : Uri.t) command =
+let send_zkapp ?settlement (uri : Uri.t) command =
   let q =
     object
       method query =
         String.substr_replace_all ~pattern:"\n" ~with_:" "
-          {|
+          (match settlement with
+          | None ->
+              {|
             mutation ($input: SendZkappInput!) {
               sendZkapp(input: $input){
                 zkapp {
@@ -732,15 +734,46 @@ let send_zkapp (uri : Uri.t) command =
               }
             } 
           |}
+          | Some _ ->
+              {|
+            mutation ($input: SendZkappInput!, $settlement: EthereumSettlementInput!, $gatewayToken: String!) {
+              sendZkapp(input: $input, settlement: $settlement, gatewayToken: $gatewayToken){
+                zkapp {
+                  id
+                  failureReason {
+                    index
+                    failures
+                  }
+                }
+              }
+            }
+          |})
 
       method variables =
-        `Assoc
-          [ ( "input"
-            , `Assoc
-                [ ( "zkappCommand"
-                  , Yojson.Safe.to_basic @@ Zkapp_command.to_json command )
-                ] )
-          ]
+        let input =
+          ( "input"
+          , `Assoc
+              [ ( "zkappCommand"
+                , Yojson.Safe.to_basic @@ Zkapp_command.to_json command )
+              ] )
+        in
+        match settlement with
+        | None ->
+            `Assoc [ input ]
+        | Some settlement ->
+            `Assoc
+              [ input
+              ; ("settlement", settlement)
+              ; ( "gatewayToken"
+                , `String
+                    (match Sys.getenv_opt "ZEKO_ETHEREUM_GATEWAY_TOKEN" with
+                    | Some token ->
+                        token
+                    | None ->
+                        failwith
+                          "ZEKO_ETHEREUM_GATEWAY_TOKEN must be set when using \
+                           the Ethereum settlement gateway" ) )
+              ]
     end
   in
   let%bind.Deferred.Result result = Graphql_client.Client.query_json q uri in
@@ -857,7 +890,7 @@ let fetch_fork_slot uri =
         |> to_int)
       |> Mina_numbers.Global_slot_since_genesis.of_int )
 
-module For_tests = struct
+module Local_l1 = struct
   let create_account ~logger uri pk =
     let q =
       object
@@ -1003,3 +1036,5 @@ module For_tests = struct
              |> List.map ~f:to_list
              |> List.map ~f:(List.map ~f:to_string) ))
 end
+
+module For_tests = Local_l1

@@ -9,6 +9,21 @@ module C = Zeko_circuits
 module L = Ledger
 module Field = Snark_params.Tick.Field
 
+let committed_account_ids ?(ethereum_asset_accounts = []) () =
+  Zeko_constants.inner_account_id
+  ::
+  ( if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+    [ Account_id.create
+        Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+        Token_id.default
+    ]
+    @ ethereum_asset_accounts
+  else [] )
+
+let compressed_public_key_of_fields x is_odd =
+  let (Typ typ) = Signature_lib.Public_key.Compressed.typ in
+  typ.value_of_fields ([| x; is_odd |], typ.constraint_system_auxiliary ())
+
 module Sequencer = struct
   let constraint_constants = Zeko_constants.constraint_constants
 
@@ -57,6 +72,18 @@ module Sequencer = struct
       type t = Sparse_ledger.t [@@deriving yojson]
 
       let key = "last_committed_ledger"
+    end)
+
+    module Last_finalized_ledger = Kvdb_base.Make_singleton (struct
+      type t = Sparse_ledger.t [@@deriving yojson]
+
+      let key = "last_finalized_ledger"
+    end)
+
+    module Settlement_owner = Kvdb_base.Make_singleton (struct
+      type t = string [@@deriving yojson]
+
+      let key = "settlement_owner"
     end)
   end
 
@@ -128,12 +155,13 @@ module Sequencer = struct
       type t =
         { new_inner_ledger : Sparse_ledger.t
         ; processed_actions_pointer : Field.t
+        ; tree_id : string
         }
       [@@deriving yojson]
 
       type out = unit -> (unit, Caqti_error.t) Result.t Deferred.t
 
-      let process
+      let rec process
           ({ da_client
            ; provers
            ; executor
@@ -145,23 +173,22 @@ module Sequencer = struct
            ; proof_cache_db
            ; _
            } :
-            Context.t ) { new_inner_ledger; processed_actions_pointer }
+            Context.t ) { new_inner_ledger; processed_actions_pointer; tree_id }
           txn_snark =
-        match%map
+        match%bind
           Utils.retry
             ~f:(fun () ->
               let open Deferred.Result.Let_syntax in
+              let old_inner_ledger =
+                State.Last_committed_ledger.get sequencer_state
+                |> Option.value_exn ~message:"No previous committed ledger"
+              in
               let%bind da_multisig =
                 Da_layer.Client.get_multisig da_client
                   ~ledger_hash:(Sparse_ledger.merkle_root new_inner_ledger)
                 |> Deferred.map ~f:(fun (quorum, multisig) ->
                        Multisig.Witness.make ~signatures:multisig ~quorum )
                 |> Deferred.map ~f:Result.return
-              in
-
-              let old_inner_ledger =
-                State.Last_committed_ledger.get sequencer_state
-                |> Option.value_exn ~message:"No previous committed ledger"
               in
               let commit_witness : Committer.Commit_witness.t =
                 { old_inner_ledger
@@ -171,16 +198,47 @@ module Sequencer = struct
                 ; txn_snark
                 }
               in
-              let%bind command =
-                Committer.prove_commit ~logger ~proof_cache_db ~provers
-                  ~executor ~l1_uri:config.l1_uri ~archive
-                  ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
-                  ~archive_uri:config.archive_uri ~l1_config:config.l1_config
-                  ~commit_validity_period:config.commit_validity_period
-                  ~commit_fee:config.commit_fee commit_witness
+              let saved =
+                Committer.Commit_table.
+                  { source_ledger_hash =
+                      Sparse_ledger.merkle_root old_inner_ledger
+                  ; target_ledger_hash =
+                      Sparse_ledger.merkle_root new_inner_ledger
+                  ; witness = commit_witness
+                  }
               in
-              let%bind _hash =
-                Executor.send_zkapp_command ~logger executor command
+              let%bind () =
+                if Settlement_finality.ethereum_gateway_enabled () then
+                  let%bind () =
+                    Relational_db.Pool.use
+                      (Relational_db.with_transaction ~f:(fun conn ->
+                           Committer.Commit_table.prepare ~tree_id conn saved )
+                      )
+                      db_pool
+                    |> Deferred.map ~f:Relational_db.caqti_to_err
+                  in
+                  Committer.submit_until_accepted ~logger ~proof_cache_db
+                    ~db_pool ~provers ~executor ~l1_uri:config.l1_uri ~archive
+                    ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+                    ~archive_uri:config.archive_uri ~l1_config:config.l1_config
+                    ~commit_validity_period:config.commit_validity_period
+                    ~commit_fee:config.commit_fee saved
+                  |> Deferred.map ~f:Or_error.return
+                else
+                  let%bind command, settlement_export =
+                    Committer.prove_commit ~logger ~proof_cache_db ~provers
+                      ~executor ~l1_uri:config.l1_uri ~archive
+                      ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+                      ~archive_uri:config.archive_uri
+                      ~l1_config:config.l1_config
+                      ~commit_validity_period:config.commit_validity_period
+                      ~commit_fee:config.commit_fee commit_witness
+                  in
+                  let%map _ =
+                    Executor.send_zkapp_command ~logger ?settlement_export
+                      executor command
+                  in
+                  ()
               in
               State.Last_committed_ledger.set sequencer_state
                 ~data:new_inner_ledger ;
@@ -199,10 +257,29 @@ module Sequencer = struct
             ()
         with
         | Ok result ->
-            result
+            return result
         | Error err ->
-            Monitor.send_exn Monitor.main (Error.to_exn err) ;
-            Error.raise err
+            if Settlement_finality.ethereum_gateway_enabled () then (
+              Executor.pause_settlement executor err ;
+              [%log error] "Preparing settlement is paused: %s"
+                (Error.to_string_hum err) ;
+              let%bind () = Clock_ns.after (Time_ns.Span.of_sec 30.) in
+              process
+                { da_client
+                ; provers
+                ; executor
+                ; config
+                ; sequencer_state
+                ; archive
+                ; logger
+                ; db_pool
+                ; proof_cache_db
+                }
+                { new_inner_ledger; processed_actions_pointer; tree_id }
+                txn_snark )
+            else (
+              Monitor.send_exn Monitor.main (Error.to_exn err) ;
+              Error.raise err )
     end
 
     module M = struct
@@ -224,6 +301,49 @@ module Sequencer = struct
       }
   end
 
+  module Commit_schedule = struct
+    type phase = Waiting | Committing | Disabled
+
+    type snapshot =
+      { period_seconds : float
+      ; phase : phase
+      ; last_attempt_started_at : Time_ns.t option
+      ; next_attempt_at : Time_ns.t option
+      }
+
+    type t =
+      { period_seconds : float
+      ; mutable phase : phase
+      ; mutable last_attempt_started_at : Time_ns.t option
+      ; mutable next_attempt_at : Time_ns.t option
+      }
+
+    let create period_seconds =
+      { period_seconds
+      ; phase = (if Float.(period_seconds <= 0.) then Disabled else Waiting)
+      ; last_attempt_started_at = None
+      ; next_attempt_at = None
+      }
+
+    let start_attempt t ~started_at ~next_attempt_at =
+      t.phase <- Committing ;
+      t.last_attempt_started_at <- Some started_at ;
+      t.next_attempt_at <- Some next_attempt_at
+
+    let wait t = t.phase <- Waiting
+
+    let disable t =
+      t.phase <- Disabled ;
+      t.next_attempt_at <- None
+
+    let snapshot (t : t) : snapshot =
+      { period_seconds = t.period_seconds
+      ; phase = t.phase
+      ; last_attempt_started_at = t.last_attempt_started_at
+      ; next_attempt_at = t.next_attempt_at
+      }
+  end
+
   type t =
     { ledger : L.Db.t
     ; imt : Indexed_merkle_tree.Db.t
@@ -236,14 +356,83 @@ module Sequencer = struct
     ; merger : Merger.M.t
     ; merger_ctx : Merger.Context.t
     ; da_client : Da_layer.Client.t
+    ; commit_schedule : Commit_schedule.t
     ; closed : unit Ivar.t
     ; apply_q : unit Sequencer.t
           (* Applying of the user command is async operation, but we need to keep the application synchronous *)
+    ; inner_sync_q : unit Sequencer.t
+          (* Fetching and applying outer actions must also be serialized. *)
+    ; finality_gate : Settlement_finality.Gate.t
     }
+
+  let wait_for_finalized_settlement t =
+    let open Deferred.Result.Let_syntax in
+    if not (Settlement_finality.ethereum_gateway_enabled ()) then
+      Deferred.Or_error.return ()
+    else
+      let%bind () =
+        Utils.retry ~max_attempts:1
+          ~f:(fun () ->
+            Committer.recommit_all
+              ~on_confirmed:(fun witness ->
+                State.Last_finalized_ledger.set t.state
+                  ~data:witness.Committer.Commit_witness.new_inner_ledger ;
+                (* Repair a crash before the accepted pointer was advanced, but
+                   never move it backwards: doing so could conceal a missing
+                   A -> B witness while successor B -> C work is still queued. *)
+                Option.iter (State.Last_committed_ledger.get t.state)
+                  ~f:(fun current ->
+                    if
+                      Ledger_hash.equal
+                        (Sparse_ledger.merkle_root current)
+                        (Sparse_ledger.merkle_root witness.old_inner_ledger)
+                    then
+                      State.Last_committed_ledger.set t.state
+                        ~data:witness.new_inner_ledger ) )
+              ~logger:t.logger ~proof_cache_db:t.merger_ctx.proof_cache_db
+              ~db_pool:t.db_pool ~provers:t.merger_ctx.provers
+              ~executor:t.merger_ctx.executor ~l1_uri:t.config.l1_uri
+              ~archive:t.archive ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+              ~archive_uri:t.config.archive_uri ~l1_config:t.config.l1_config
+              ~commit_validity_period:t.config.commit_validity_period
+              ~commit_fee:t.config.commit_fee )
+          ()
+      in
+      let old_inner_ledger =
+        State.Last_committed_ledger.get t.state
+        |> Option.value_exn ~message:"No previous committed ledger"
+      in
+      let expected_ledger_hash = Sparse_ledger.merkle_root old_inner_ledger in
+      let%bind state =
+        Gql_client.fetch_state ~logger:t.logger t.config.l1_uri
+          ( Account_id.of_public_key
+          @@ Public_key.decompress_exn Zeko_circuits_config.Inputs.zeko_l1 )
+      in
+      let ({ ledger_hash = finalized_ledger_hash; _ }
+            : C.Rollup_state.Outer_state.t ) =
+        Utils.value_of_zkapp_state C.Rollup_state.Outer_state.typ state
+      in
+      if Ledger_hash.equal finalized_ledger_hash expected_ledger_hash then (
+        State.Last_finalized_ledger.set t.state ~data:old_inner_ledger ;
+        Executor.settlement_status t.merger_ctx.executor ~ready:true "ready"
+          None ;
+        Deferred.Or_error.return () )
+      else
+        let error =
+          Error.createf
+            "Finalized Ethereum settlement ledger %s does not match the \
+             sequencer's last committed ledger %s"
+            (Ledger_hash.to_decimal_string finalized_ledger_hash)
+            (Ledger_hash.to_decimal_string expected_ledger_hash)
+        in
+        Executor.settlement_status t.merger_ctx.executor ~ready:false "blocked"
+          (Some (Error.to_string_hum error)) ;
+        Deferred.return (Error error)
 
   let shutdown t =
     let logger = t.logger in
     [%log info] "Shutting down sequencer" ;
+    Commit_schedule.disable t.commit_schedule ;
     Ivar.fill t.closed () ;
     Da_layer.Client.stop t.da_client ;
     L.Db.close t.ledger ;
@@ -259,6 +448,90 @@ module Sequencer = struct
     let account_id = Account_id.create public_key token_id in
     let%bind.Option location = L.Db.location_of_account t.ledger account_id in
     L.Db.get t.ledger location
+
+  module Ethereum_asset_registry_admission = struct
+    let account_id () =
+      Account_id.create
+        Zeko_circuits_config.Inputs.Ethereum_assets.registry_public_key
+        Token_id.default
+
+    let state_of_account account =
+      (Option.value_exn account.Account.zkapp).app_state
+      |> C.Asset_registry.Registry_state.value_of_app_state
+
+    let count_of_account account =
+      (state_of_account account).leaf_count |> C.Zeko_util.Checked32.to_int
+
+    let count_command_updates_for_account ~registry_id (command : User_command.t)
+        =
+      match command with
+      | Signed_command _ ->
+          0
+      | Zkapp_command command ->
+          Zkapp_command.all_account_updates_list command
+          |> List.count ~f:(fun update ->
+                 Account_id.equal (Account_update.account_id update) registry_id
+                 &&
+                 match Zkapp_state.V.to_list update.body.update.app_state with
+                 | _root :: leaf_count :: _ ->
+                     Zkapp_basic.Set_or_keep.is_set leaf_count
+                 | _ ->
+                     false )
+
+    let count_command_updates command =
+      if Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+        count_command_updates_for_account ~registry_id:(account_id ()) command
+      else 0
+
+    let validate_update_count registry_update_count =
+      if registry_update_count > 1 then
+        Or_error.errorf
+          "PoC settlement permits only one Ethereum asset registration update \
+           per command"
+      else if registry_update_count < 0 then
+        Or_error.error_string
+          "Ethereum asset registration update count cannot be negative"
+      else Ok ()
+
+    let validate_counts ~committed_count ~current_count ~registry_update_count =
+      let%bind.Result () = validate_update_count registry_update_count in
+      if Int.equal registry_update_count 0 then Ok ()
+      else if current_count < committed_count then
+        Or_error.errorf
+          "Ethereum asset registry count regressed from committed %d to %d"
+          committed_count current_count
+      else if current_count > committed_count then
+        Or_error.errorf
+          "PoC settlement permits only one pending Ethereum asset registration \
+           per commit"
+      else Ok ()
+
+    let validate t command =
+      let registry_update_count = count_command_updates command in
+      let%bind.Result () = validate_update_count registry_update_count in
+      if Int.equal registry_update_count 0 then Ok ()
+      else
+        let registry_id = account_id () in
+        let current_account =
+          get_account t
+            (Account_id.public_key registry_id)
+            (Account_id.token_id registry_id)
+          |> Option.value_exn
+               ~message:"Configured Ethereum asset registry is missing"
+        in
+        let committed_account =
+          let ledger =
+            State.Last_committed_ledger.get t.state
+            |> Option.value_exn ~message:"No previous committed ledger"
+          in
+          let index = Sparse_ledger.find_index_exn ledger registry_id in
+          Sparse_ledger.get_exn ledger index
+        in
+        validate_counts
+          ~committed_count:(count_of_account committed_account)
+          ~current_count:(count_of_account current_account)
+          ~registry_update_count
+  end
 
   let infer_nonce t public_key =
     match get_account t public_key Token_id.default with
@@ -278,6 +551,8 @@ module Sequencer = struct
       ; unproved_ledger_hash = get_root t
       ; committed_ledger_hash = Field.zero
       }
+
+  let commit_schedule t = Commit_schedule.snapshot t.commit_schedule
 
   let apply_events_and_actions ledger archive command =
     let ledger = L.of_database ledger in
@@ -332,7 +607,11 @@ module Sequencer = struct
   (** Apply user command to the sequencer's state, including the check of command validity *)
   let apply_user_command t ?(skip_validity_check = false)
       (command : User_command.t) =
-    if
+    if (not skip_validity_check) && not t.merger_ctx.executor.settlement_ready
+    then
+      Deferred.Or_error.error_string
+        "Sequencer settlement recovery is in progress; try again later"
+    else if
       Throttle.num_jobs_waiting_to_start t.apply_q >= t.config.max_pool_size
       && not skip_validity_check
     then
@@ -340,6 +619,13 @@ module Sequencer = struct
         (Error (Error.of_string "Sequencer is under the load, try again later"))
     else
       Throttle.enqueue t.apply_q (fun () ->
+          let%bind.Deferred.Result () =
+            if skip_validity_check || t.merger_ctx.executor.settlement_ready
+            then Deferred.Or_error.return ()
+            else
+              Deferred.Or_error.error_string
+                "Sequencer settlement recovery is in progress; try again later"
+          in
           (* TODO: instead apply directly from prover *)
           let is_deposit_finalization = Utils.is_deposit_finalization command in
           let%bind.Deferred.Result command =
@@ -366,6 +652,10 @@ module Sequencer = struct
               | _ ->
                   return (Ok command)
             else return (Ok command)
+          in
+
+          let%bind.Deferred.Result () =
+            return (Ethereum_asset_registry_admission.validate t command)
           in
 
           let%bind.Deferred.Result () =
@@ -612,7 +902,7 @@ module Sequencer = struct
   let current_synced_outer_action_state t =
     Utils.get_synced_outer_action_state_exn (L.of_database t.ledger)
 
-  let update_inner_account t =
+  let update_inner_account_unlocked ?(commits_only = false) t =
     let open Deferred.Result.Let_syntax in
     let logger = t.logger in
     let old_synced_outer_action_state, old_deposits_length =
@@ -641,8 +931,28 @@ module Sequencer = struct
           else (curr_state, curr_actions) )
       |> Tuple2.map_snd ~f:List.rev
     in
+    let contains_only_commits =
+      List.for_all processed_new_actions ~f:(function
+        | [ action ] -> (
+            match Utils.actions_to_outer_action action with
+            | Commit _ ->
+                true
+            | Witness _ ->
+                false )
+        | _ ->
+            false )
+    in
     let proof_cache_db = t.merger_ctx.proof_cache_db in
-    if Field.equal old_synced_outer_action_state processed_pointer then (
+    if
+      commits_only
+      && (not (Field.equal old_synced_outer_action_state processed_pointer))
+      && not contains_only_commits
+    then (
+      [%log info]
+        "Deferring inner sync because the pending outer actions include a \
+         Witness" ;
+      return (0, old_synced_outer_action_state) )
+    else if Field.equal old_synced_outer_action_state processed_pointer then (
       (* In case no new actions are to process, we don't need to update inner account *)
       [%log info] "No new actions to process" ;
       return (0, old_synced_outer_action_state) )
@@ -701,15 +1011,35 @@ module Sequencer = struct
       in
       (List.length processed_witnesses, processed_pointer) )
 
+  let update_inner_account t =
+    Throttle.enqueue t.inner_sync_q (fun () -> update_inner_account_unlocked t)
+
+  let sync_commits_only t =
+    Settlement_finality.Gate.with_ t.finality_gate ~f:(fun () ->
+        Settlement_finality.run_after_wait
+          ~wait:(fun () -> wait_for_finalized_settlement t)
+          (fun () ->
+            let open Deferred.Or_error.Let_syntax in
+            let%bind () = Executor.reserve_settlement t.merger_ctx.executor in
+            Monitor.protect
+              (fun () ->
+                Throttle.enqueue t.inner_sync_q (fun () ->
+                    update_inner_account_unlocked ~commits_only:true t ) )
+              ~finally:(fun () ->
+                Executor.release_reservation t.merger_ctx.executor ) ) )
+
   (** Double Deferred.t is deliberate, the first is filled after update of ledger, the second is filled after commit *)
-  let commit t :
+  let commit_unlocked t :
       Txn_snark.serializable option Deferred.Or_error.t Deferred.Or_error.t =
     let logger = t.logger in
     let open Deferred.Result.Let_syntax in
-    let%map processed_witnesses, processed_actions_pointer =
-      update_inner_account t
-    in
-    Throttle.enqueue t.apply_q (fun () ->
+    Settlement_finality.prepare_and_enqueue_after_wait
+      ~wait:(fun () -> wait_for_finalized_settlement t)
+      ~prepare:(fun () ->
+        let%bind () = Executor.reserve_settlement t.merger_ctx.executor in
+        update_inner_account t )
+      ~enqueue:(fun job -> Throttle.enqueue t.apply_q job)
+      (fun (processed_witnesses, processed_actions_pointer) () ->
         match%bind.Deferred apply_fee_transfer t with
         | `Skip ->
             [%log info]
@@ -730,10 +1060,89 @@ module Sequencer = struct
               [%log info] "Nothing to commit" ;
               return None )
             else
+              let full_ledger = L.of_database t.ledger in
+              let ethereum_asset_accounts =
+                if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+                  []
+                else
+                  let registry_id =
+                    Ethereum_asset_registry_admission.account_id ()
+                  in
+                  let old_registry =
+                    let ledger =
+                      State.Last_committed_ledger.get t.state
+                      |> Option.value_exn
+                           ~message:"No previous committed ledger"
+                    in
+                    let index =
+                      Sparse_ledger.find_index_exn ledger registry_id
+                    in
+                    Sparse_ledger.get_exn ledger index
+                    |> Ethereum_asset_registry_admission.state_of_account
+                  in
+                  let new_registry =
+                    let location =
+                      L.location_of_account full_ledger registry_id
+                      |> Option.value_exn
+                           ~message:
+                             "Configured Ethereum asset registry is missing"
+                    in
+                    L.get full_ledger location |> Option.value_exn
+                    |> Ethereum_asset_registry_admission.state_of_account
+                  in
+                  let old_count =
+                    C.Zeko_util.Checked32.to_int old_registry.leaf_count
+                  in
+                  let new_count =
+                    C.Zeko_util.Checked32.to_int new_registry.leaf_count
+                  in
+                  match new_count - old_count with
+                  | 0 ->
+                      []
+                  | 1 ->
+                      let candidate =
+                        Ethereum_settlement_export.registry_records_from_archive
+                          ~archive:t.archive
+                        |> Fn.flip List.nth_exn old_count
+                      in
+                      let owner_id =
+                        Account_id.create candidate.token_owner_l2
+                          Token_id.default
+                      in
+                      let owner =
+                        let location =
+                          L.location_of_account full_ledger owner_id
+                          |> Option.value_exn
+                               ~message:
+                                 "Registered Ethereum token owner is missing"
+                        in
+                        L.get full_ledger location |> Option.value_exn
+                      in
+                      let owner_state =
+                        (Option.value_exn owner.zkapp).app_state
+                        |> Zkapp_state.V.to_list
+                      in
+                      let admin_public_key =
+                        compressed_public_key_of_fields
+                          (List.nth_exn owner_state 1)
+                          (List.nth_exn owner_state 2)
+                      in
+                      [ owner_id
+                      ; Account_id.create admin_public_key Token_id.default
+                      ; Account_id.create candidate.vault_public_key
+                          candidate.token_id_l2
+                      ; Account_id.create candidate.token_owner_l2
+                          candidate.token_id_l2
+                      ]
+                  | delta ->
+                      failwithf
+                        "PoC settlement supports at most one Ethereum asset \
+                         registration per commit, observed count delta %d"
+                        delta ()
+              in
               let target_ledger =
-                Sparse_ledger.of_ledger_subset_exn
-                  L.(of_database t.ledger)
-                  [ Zeko_constants.inner_account_id ]
+                Sparse_ledger.of_ledger_subset_exn full_ledger
+                  (committed_account_ids ~ethereum_asset_accounts ())
               in
               let () =
                 match t.config.checkpoints_dir with
@@ -755,35 +1164,114 @@ module Sequencer = struct
                 | None ->
                     ()
               in
+              let commit_witness =
+                Merger.Commit.
+                  { new_inner_ledger = target_ledger
+                  ; processed_actions_pointer
+                  ; tree_id =
+                      (Option.value_exn (Merger.M.current_tree t.merger)).id
+                  }
+              in
               let%bind.Deferred result =
-                Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
-                  ~commit_witness:
-                    { new_inner_ledger = target_ledger
-                    ; processed_actions_pointer
-                    }
+                if Settlement_finality.ethereum_gateway_enabled () then
+                  (* Commit.process already handed this tree to the durable
+                     commit witness before sending. Do not perform another
+                     fallible database cleanup after gateway acceptance. *)
+                  Merger.M.commit_exn t.merger t.merger_ctx ~commit_witness
+                  |> Deferred.map ~f:(fun (_store_commit, _tree_id, result) ->
+                         result )
+                else
+                  Merger.P.commit_exn t.db_pool t.merger t.merger_ctx
+                    ~commit_witness
               in
               return (Some result) )
 
+  let commit t =
+    Settlement_finality.Gate.with_held_until t.finality_gate
+      ~f:(fun () -> commit_unlocked t)
+      ~until:(function
+        | Error _ ->
+            Executor.release_reservation t.merger_ctx.executor
+        | Ok commit_result -> (
+            let%bind result = commit_result in
+            match result with
+            | Ok (Some _) ->
+                Deferred.unit
+            | Ok None | Error _ ->
+                Executor.release_reservation t.merger_ctx.executor ) )
+
   let run_committer t =
-    if Float.(t.config.commitment_period_sec <= 0.) then ()
+    if Float.(t.config.commitment_period_sec <= 0.) then
+      Commit_schedule.disable t.commit_schedule
     else
       let logger = t.logger in
       let period = Time_ns.Span.of_sec t.config.commitment_period_sec in
       let rec go () =
-        let after = after period in
-        let%bind ledger_applied = commit t >>| Or_error.ok_exn in
-        let%bind () =
-          match%map ledger_applied >>| Or_error.ok_exn with
-          | Some (stmt, _) ->
-              [%log info] "Committed: %s -> %s"
-                (Ledger_hash.to_decimal_string stmt.source_ledger)
-                (Ledger_hash.to_decimal_string stmt.target_ledger)
-          | None ->
-              [%log info] "Skipped commit"
+        let started_at = Time_ns.now () in
+        let next_attempt_at = Time_ns.add started_at period in
+        Commit_schedule.start_attempt t.commit_schedule ~started_at
+          ~next_attempt_at ;
+        let after = Clock_ns.at next_attempt_at in
+        let%bind ledger_applied =
+          Utils.retry ~max_attempts:1 ~f:(fun () -> commit t) ()
         in
+        let%bind () =
+          let%map result =
+            match ledger_applied with
+            | Error error ->
+                Deferred.return (Error error)
+            | Ok result ->
+                Utils.retry ~max_attempts:1 ~f:(fun () -> result) ()
+          in
+          match result with
+          | Ok (Some (stmt, _)) ->
+              if Settlement_finality.ethereum_gateway_enabled () then
+                [%log info] "Settlement accepted: %s -> %s"
+                  (Ledger_hash.to_decimal_string stmt.source_ledger)
+                  (Ledger_hash.to_decimal_string stmt.target_ledger)
+              else
+                [%log info] "Committed: %s -> %s"
+                  (Ledger_hash.to_decimal_string stmt.source_ledger)
+                  (Ledger_hash.to_decimal_string stmt.target_ledger)
+          | Ok None ->
+              [%log info] "Skipped commit"
+          | Error error ->
+              if Settlement_finality.ethereum_gateway_enabled () then (
+                Executor.pause_settlement t.merger_ctx.executor error ;
+                [%log error] "Commit is paused: %s" (Error.to_string_hum error)
+                )
+              else Error.raise error
+        in
+        if Ivar.is_full t.closed then Commit_schedule.disable t.commit_schedule
+        else Commit_schedule.wait t.commit_schedule ;
         let%bind () = Deferred.any [ after; Ivar.read t.closed ] in
         if Ivar.is_full t.closed then return () else go ()
       in
+      don't_wait_for (within' ~monitor:Monitor.main (fun () -> go ()))
+
+  let run_inner_syncer t ~period_sec =
+    if Float.(period_sec <= 0.) then ()
+    else
+      let logger = t.logger in
+      let period = Time_ns.Span.of_sec period_sec in
+      let rec go () =
+        let after = after period in
+        let%bind result =
+          Utils.retry ~max_attempts:1 ~f:(fun () -> sync_commits_only t) ()
+        in
+        ( match result with
+        | Ok (processed_witnesses, _) ->
+            assert (processed_witnesses = 0)
+        | Error error ->
+            if Settlement_finality.ethereum_gateway_enabled () then (
+              Executor.pause_settlement t.merger_ctx.executor error ;
+              [%log error] "Inner sync is paused: %s"
+                (Error.to_string_hum error) )
+            else Error.raise error ) ;
+        let%bind () = Deferred.any [ after; Ivar.read t.closed ] in
+        if Ivar.is_full t.closed then return () else go ()
+      in
+      [%log info] "Running commit-only inner sync every %.3f seconds" period_sec ;
       don't_wait_for (within' ~monitor:Monitor.main (fun () -> go ()))
 
   let sync ~logger ({ config; _ } as t) da_config source =
@@ -929,7 +1417,7 @@ module Sequencer = struct
     let sparse_ledger =
       Sparse_ledger.of_ledger_subset_exn
         L.(of_database t.ledger)
-        [ Zeko_constants.inner_account_id ]
+        (committed_account_ids ())
     in
     State.Last_committed_ledger.set t.state ~data:sparse_ledger ;
     return ()
@@ -1076,9 +1564,19 @@ module Sequencer = struct
     in
     let kvdb = L.Db.zeko_kvdb ledger in
     let%bind provers = Zeko_prover.Client.create ~logger ~db_pool ~mq_host in
+    let settlement_owner =
+      match State.Settlement_owner.get kvdb with
+      | Some owner ->
+          owner
+      | None ->
+          let owner = Uuid_unix.create () |> Uuid.to_string in
+          State.Settlement_owner.set kvdb ~data:owner ;
+          owner
+    in
     let executor =
       Executor.create ~kind:(`L1 config.l1_uri)
-        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer ()
+        ~signature_kind:Zeko_circuits_config.Inputs.chain_l1 ~signer
+        ~settlement_owner ()
     in
     let archive = Archive.create ~kvdb in
     let merger_ctx =
@@ -1134,7 +1632,7 @@ module Sequencer = struct
       { fee_payer =
           { body =
               { public_key = fee_payer_pk
-              ; fee = Currency.Fee.of_mina_string_exn "0.1"
+              ; fee = bridge_txn_fee
               ; valid_until = None
               ; nonce
               }
@@ -1228,8 +1726,11 @@ module Sequencer = struct
       ; bridge_prover
       ; merger
       ; merger_ctx
+      ; commit_schedule = Commit_schedule.create commitment_period_sec
       ; closed = Ivar.create ()
       ; apply_q = Sequencer.create ()
+      ; inner_sync_q = Sequencer.create ()
+      ; finality_gate = Settlement_finality.Gate.create ()
       }
     in
     let%bind () =
@@ -1240,13 +1741,38 @@ module Sequencer = struct
           return ()
     in
     let%bind () =
-      Committer.recommit_all ~logger ~proof_cache_db
-        ~provers:t.bridge_prover.provers ~executor:t.merger_ctx.executor
-        ~l1_uri:config.l1_uri ~archive ~db_pool
-        ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
-        ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
-        ~commit_fee
-      >>| Or_error.ok_exn
+      if Settlement_finality.ethereum_gateway_enabled () then (
+        (* Bind the API while reconciliation runs. Mutations remain gated until
+           the local witness chain agrees with finalized Ethereum state. *)
+        let rec recover () =
+          let%bind result =
+            Utils.retry ~max_attempts:1
+              ~f:(fun () ->
+                Settlement_finality.Gate.with_ t.finality_gate ~f:(fun () ->
+                    wait_for_finalized_settlement t ) )
+              ()
+          in
+          match result with
+          | Ok () ->
+              Deferred.unit
+          | Error error ->
+              Executor.pause_settlement t.merger_ctx.executor error ;
+              [%log error] "Startup settlement recovery is paused: %s"
+                (Error.to_string_hum error) ;
+              let%bind () = Clock_ns.after (Time_ns.Span.of_sec 30.) in
+              if Ivar.is_full t.closed then Deferred.unit else recover ()
+        in
+        don't_wait_for (recover ()) ;
+        Deferred.unit )
+      else
+        Committer.recommit_all
+          ~on_confirmed:(fun _ -> ())
+          ~logger ~proof_cache_db ~provers:t.bridge_prover.provers
+          ~executor:t.merger_ctx.executor ~l1_uri:config.l1_uri ~archive
+          ~db_pool ~zkapp_pk:Zeko_circuits_config.Inputs.zeko_l1
+          ~archive_uri:config.archive_uri ~l1_config ~commit_validity_period
+          ~commit_fee
+        >>| Or_error.ok_exn
     in
     let () =
       Da_layer.Client.start_client da_client ~target_ledger_hash:(get_root t)

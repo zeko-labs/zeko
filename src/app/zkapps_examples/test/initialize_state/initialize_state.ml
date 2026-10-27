@@ -20,78 +20,86 @@ module Test_module = struct
 
   let account_id = Account_id.create pk_compressed Token_id.default
 
-  let ( tag
-      , _
-      , p_module
-      , Pickles.Provers.[ initialize_prover; update_state_prover ] ) =
-    Zkapps_examples.compile () ~cache:Cache_dir.cache
-      ~auxiliary_typ:Impl.Typ.unit
-      ~max_proofs_verified:(module Nat.N0)
-      ~name:"empty_update"
-      ~choices:(fun ~self:_ ->
-        [ Zkapps_initialize_state.initialize_rule pk_compressed
-        ; Zkapps_initialize_state.update_state_rule pk_compressed
-        ] )
-
-  module P = (val p_module)
-
-  let vk =
-    Async.Thread_safe.block_on_async_exn (fun () ->
-        Pickles.Side_loaded.Verification_key.of_compiled tag )
+  (* ZEKO NOTE: This fixture is also linked into the Zeko sequencer integration
+     test. Keep its independent Pickles compilation lazy so an executable can
+     establish the dependency order of its own recursive circuits before the
+     fixture is first used. *)
+  let compiled =
+    lazy
+      (let tag, _, _, Pickles.Provers.[ initialize_prover; update_state_prover ]
+           =
+         Zkapps_examples.compile () ~cache:Cache_dir.cache
+           ~auxiliary_typ:Impl.Typ.unit
+           ~max_proofs_verified:(module Nat.N0)
+           ~name:"empty_update"
+           ~choices:(fun ~self:_ ->
+             [ Zkapps_initialize_state.initialize_rule pk_compressed
+             ; Zkapps_initialize_state.update_state_rule pk_compressed
+             ] )
+       in
+       let vk =
+         Async.Thread_safe.block_on_async_exn (fun () ->
+             Pickles.Side_loaded.Verification_key.of_compiled tag )
+       in
+       (vk, initialize_prover, update_state_prover) )
 
   module Deploy_account_update = struct
-    let account_update_body : Account_update.Body.t =
-      { Account_update.Body.dummy with
-        public_key = pk_compressed
-      ; update =
-          { Account_update.Update.dummy with
-            verification_key =
-              Set
-                { data = vk
-                ; hash =
-                    (* TODO: This function should live in
-                       [Side_loaded_verification_key].
-                    *)
-                    Zkapp_account.digest_vk vk
-                }
-          ; permissions =
-              Set
-                { edit_state = Proof
-                ; send = Proof
-                ; receive = Proof
-                ; access = None
-                ; set_delegate = Proof
-                ; set_permissions = Proof
-                ; set_verification_key =
-                    (Proof, Mina_numbers.Txn_version.current)
-                ; set_zkapp_uri = Proof
-                ; edit_action_state = Proof
-                ; set_token_symbol = Proof
-                ; increment_nonce = Proof
-                ; set_voting_for = Proof
-                ; set_timing = Proof
-                }
-          }
-      ; use_full_commitment = true
-      ; preconditions =
-          { Account_update.Preconditions.network =
-              Zkapp_precondition.Protocol_state.accept
-          ; account = Zkapp_precondition.Account.accept
-          ; valid_while = Ignore
-          }
-      ; authorization_kind = Signature
-      ; implicit_account_creation_fee = false
-      }
-
-    let account_update : Account_update.t =
-      (* TODO: This is a pain. *)
-      Account_update.with_aux ~body:account_update_body
-        ~authorization:(Control.Poly.Signature Signature.dummy)
+    let account_update : Account_update.t Lazy.t =
+      lazy
+        (let vk, _, _ = Lazy.force compiled in
+         let account_update_body : Account_update.Body.t =
+           { Account_update.Body.dummy with
+             public_key = pk_compressed
+           ; update =
+               { Account_update.Update.dummy with
+                 verification_key =
+                   Set
+                     { data = vk
+                     ; hash =
+                         (* TODO: This function should live in
+                            [Side_loaded_verification_key].
+                         *)
+                         Zkapp_account.digest_vk vk
+                     }
+               ; permissions =
+                   Set
+                     { edit_state = Proof
+                     ; send = Proof
+                     ; receive = Proof
+                     ; access = None
+                     ; set_delegate = Proof
+                     ; set_permissions = Proof
+                     ; set_verification_key =
+                         (Proof, Mina_numbers.Txn_version.current)
+                     ; set_zkapp_uri = Proof
+                     ; edit_action_state = Proof
+                     ; set_token_symbol = Proof
+                     ; increment_nonce = Proof
+                     ; set_voting_for = Proof
+                     ; set_timing = Proof
+                     }
+               }
+           ; use_full_commitment = true
+           ; preconditions =
+               { Account_update.Preconditions.network =
+                   Zkapp_precondition.Protocol_state.accept
+               ; account = Zkapp_precondition.Account.accept
+               ; valid_while = Ignore
+               }
+           ; authorization_kind = Signature
+           ; implicit_account_creation_fee = false
+           }
+         in
+         (* TODO: This is a pain. *)
+         Account_update.with_aux ~body:account_update_body
+           ~authorization:(Control.Poly.Signature Signature.dummy) )
   end
 
   module Initialize_account_update = struct
-    let account_update, () =
-      Async.Thread_safe.block_on_async_exn initialize_prover
+    let account_update =
+      lazy
+        (let _, initialize_prover, _ = Lazy.force compiled in
+         Async.Thread_safe.block_on_async_exn initialize_prover |> fst )
   end
 
   module Update_state_account_update = struct
@@ -99,10 +107,13 @@ module Test_module = struct
       List.init Zkapp_state.max_size_int ~f:(fun _ ->
           Snark_params.Tick.Field.one )
 
-    let account_update, () =
-      Async.Thread_safe.block_on_async_exn
-        (update_state_prover
-           ~handler:(Zkapps_initialize_state.update_state_handler new_state) )
+    let account_update =
+      lazy
+        (let _, _, update_state_prover = Lazy.force compiled in
+         Async.Thread_safe.block_on_async_exn
+           (update_state_prover
+              ~handler:(Zkapps_initialize_state.update_state_handler new_state) )
+         |> fst )
   end
 
   let test_zkapp_command ?expected_failure zkapp_command =
@@ -190,9 +201,9 @@ module Test_module = struct
     let account =
       []
       |> Zkapp_command.Call_forest.cons_tree
-           Initialize_account_update.account_update
+           (Lazy.force Initialize_account_update.account_update)
       |> Zkapp_command.Call_forest.cons ~signature_kind
-           Deploy_account_update.account_update
+           (Lazy.force Deploy_account_update.account_update)
       |> test_zkapp_command
     in
     let zkapp_state =
@@ -206,11 +217,11 @@ module Test_module = struct
     let account =
       []
       |> Zkapp_command.Call_forest.cons_tree
-           Update_state_account_update.account_update
+           (Lazy.force Update_state_account_update.account_update)
       |> Zkapp_command.Call_forest.cons_tree
-           Initialize_account_update.account_update
+           (Lazy.force Initialize_account_update.account_update)
       |> Zkapp_command.Call_forest.cons ~signature_kind
-           Deploy_account_update.account_update
+           (Lazy.force Deploy_account_update.account_update)
       |> test_zkapp_command
     in
     let zkapp_state =
@@ -224,13 +235,13 @@ module Test_module = struct
     let account =
       []
       |> Zkapp_command.Call_forest.cons_tree
-           Update_state_account_update.account_update
+           (Lazy.force Update_state_account_update.account_update)
       |> Zkapp_command.Call_forest.cons_tree
-           Update_state_account_update.account_update
+           (Lazy.force Update_state_account_update.account_update)
       |> Zkapp_command.Call_forest.cons_tree
-           Initialize_account_update.account_update
+           (Lazy.force Initialize_account_update.account_update)
       |> Zkapp_command.Call_forest.cons ~signature_kind
-           Deploy_account_update.account_update
+           (Lazy.force Deploy_account_update.account_update)
       |> test_zkapp_command
     in
     let zkapp_state =
@@ -244,9 +255,9 @@ module Test_module = struct
     let account =
       []
       |> Zkapp_command.Call_forest.cons_tree
-           Update_state_account_update.account_update
+           (Lazy.force Update_state_account_update.account_update)
       |> Zkapp_command.Call_forest.cons ~signature_kind
-           Deploy_account_update.account_update
+           (Lazy.force Deploy_account_update.account_update)
       |> test_zkapp_command
            ~expected_failure:
              (Account_proved_state_precondition_unsatisfied, Pass_2)
@@ -257,11 +268,11 @@ module Test_module = struct
     let account =
       []
       |> Zkapp_command.Call_forest.cons_tree
-           Initialize_account_update.account_update
+           (Lazy.force Initialize_account_update.account_update)
       |> Zkapp_command.Call_forest.cons_tree
-           Initialize_account_update.account_update
+           (Lazy.force Initialize_account_update.account_update)
       |> Zkapp_command.Call_forest.cons ~signature_kind
-           Deploy_account_update.account_update
+           (Lazy.force Deploy_account_update.account_update)
       |> test_zkapp_command
            ~expected_failure:
              (Account_proved_state_precondition_unsatisfied, Pass_2)
@@ -272,13 +283,13 @@ module Test_module = struct
     let account =
       []
       |> Zkapp_command.Call_forest.cons_tree
-           Initialize_account_update.account_update
+           (Lazy.force Initialize_account_update.account_update)
       |> Zkapp_command.Call_forest.cons_tree
-           Update_state_account_update.account_update
+           (Lazy.force Update_state_account_update.account_update)
       |> Zkapp_command.Call_forest.cons_tree
-           Initialize_account_update.account_update
+           (Lazy.force Initialize_account_update.account_update)
       |> Zkapp_command.Call_forest.cons ~signature_kind
-           Deploy_account_update.account_update
+           (Lazy.force Deploy_account_update.account_update)
       |> test_zkapp_command
            ~expected_failure:
              (Account_proved_state_precondition_unsatisfied, Pass_2)
@@ -293,9 +304,9 @@ module Test_module = struct
           *)
           []
           |> Zkapp_command.Call_forest.cons_tree
-               Update_state_account_update.account_update
+               (Lazy.force Update_state_account_update.account_update)
           |> Zkapp_command.Call_forest.cons_tree
-               Initialize_account_update.account_update
+               (Lazy.force Initialize_account_update.account_update)
           |> test_zkapp_command )
     in
     assert (Or_error.is_error account)

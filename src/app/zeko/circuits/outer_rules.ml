@@ -12,10 +12,28 @@ module Make (Inputs : sig
   val max_sequencer_inactivity : int
 
   val emergency_da_public_key : Signature_lib.Public_key.Compressed.t
+
+  val ethereum_asset_registry_public_key :
+    Signature_lib.Public_key.Compressed.t option
+
+  val ethereum_asset_registry_schema_version : Zeko_util.Checked32.t
+
+  val ethereum_asset_approved_mft_standard_vk_id : Snark_params.Tick.Field.t
+
+  val ethereum_asset_approved_mft_token_vk_hash : Snark_params.Tick.Field.t
+
+  val ethereum_asset_approved_mft_admin_vk_hash : Snark_params.Tick.Field.t
+
+  val ethereum_asset_universal_bridge_vk_id : Snark_params.Tick.Field.t
+
+  val ethereum_asset_universal_bridge_vk_hash : Snark_params.Tick.Field.t
+
+  val ethereum_asset_vault_public_key : Signature_lib.Public_key.Compressed.t
 end)
 () =
 struct
-  module Rule_commit_inst = Rule_commit.Make (Inputs)
+  module Rule_commit_inst = Rule_commit.Make (Inputs) ()
+
   module Rule_action_witness_inst = Rule_action_witness.Make (Inputs)
   module Rule_pause_inst = Rule_pause.Make (Inputs)
 
@@ -37,4 +55,34 @@ struct
               ; Rule_multisig_update_inst.rule
               ]
             ~name:"Outer_rules" )
+
+  let internal_provers = provers
+
+  (* The wire-facing witnesses stay unchanged. Only the proving pipeline knows
+     that registration validation is now materialized as an intermediate
+     proof before the outer commit. *)
+  let provers =
+    lazy
+      (let Compile_simple.
+             [ commit
+             ; emergency_commit
+             ; action_witness
+             ; pause
+             ; multisig_update
+             ] =
+         Lazy.force internal_provers
+       in
+       Compile_simple.
+         [ (fun input ->
+             let%bind.Promise input = Rule_commit_inst.prepare input in
+             commit input )
+         ; (fun input ->
+             let%bind.Promise input =
+               Rule_commit_inst.Emergency_commit.prepare input
+             in
+             emergency_commit input )
+         ; action_witness
+         ; pause
+         ; multisig_update
+         ] )
 end

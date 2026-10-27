@@ -78,7 +78,7 @@ let send_direct ~logger ~l1_uri ~(signers : Keypair.t list)
     { fee_payer =
         { Account_update.Fee_payer.body =
             { public_key = Public_key.compress fee_signer.public_key
-            ; fee = Currency.Fee.of_mina_string_exn "0.1"
+            ; fee = Zeko_constants.transaction_fee
             ; valid_until = None
             ; nonce
             }
@@ -140,6 +140,33 @@ let generate_circuits_config =
        and deploy_config_output =
          flag "--deploy-config-output" (optional string)
            ~doc:"string Deploy config output"
+       and ethereum_bridge_address =
+         flag "--ethereum-bridge-address" (optional string)
+           ~doc:"string Ethereum bridge proxy address to bind as an L1 holder"
+       and ethereum_asset_registry_l2 =
+         flag "--ethereum-asset-registry-l2" (optional string)
+           ~doc:"public-key Append-only Ethereum asset registry zkApp"
+       and ethereum_registration_authority_l2 =
+         flag "--ethereum-registration-authority-l2" (optional string)
+           ~doc:"public-key Bridge administrator authorizing registry appends"
+       and ethereum_shared_vault_l2 =
+         flag "--ethereum-shared-vault-l2" (optional string)
+           ~doc:"public-key Shared proof-controlled multi-token bridge vault"
+       and ethereum_mft_standard_vk_id =
+         flag "--ethereum-mft-standard-vk-id" (optional string)
+           ~doc:"field Approved Mina FungibleToken implementation identifier"
+       and ethereum_mft_token_vk_hash =
+         flag "--ethereum-mft-token-vk-hash" (optional string)
+           ~doc:"field Approved Mina FungibleToken verification-key hash"
+       and ethereum_mft_admin_vk_hash =
+         flag "--ethereum-mft-admin-vk-hash" (optional string)
+           ~doc:"field Approved Mina FungibleTokenAdmin verification-key hash"
+       and ethereum_universal_bridge_vk_id =
+         flag "--ethereum-universal-bridge-vk-id" (optional string)
+           ~doc:"field Universal bridge circuit/version identifier"
+       and ethereum_universal_bridge_vk_hash =
+         flag "--ethereum-universal-bridge-vk-hash" (optional string)
+           ~doc:"field Universal bridge L2 verification-key hash"
        in
        fun () ->
          let generate_keypair () =
@@ -152,6 +179,58 @@ let generate_circuits_config =
          let emergency_da = generate_keypair () in
          let bridge_fee_recipient_l1 = generate_keypair () in
          let bridge_fee_recipient_l2 = generate_keypair () in
+         let ethereum_assets =
+           match
+             ( ethereum_asset_registry_l2
+             , ethereum_registration_authority_l2
+             , ethereum_shared_vault_l2
+             , ethereum_mft_standard_vk_id
+             , ethereum_mft_token_vk_hash
+             , ethereum_mft_admin_vk_hash
+             , ethereum_universal_bridge_vk_id
+             , ethereum_universal_bridge_vk_hash )
+           with
+           | None, None, None, None, None, None, None, None ->
+               None
+           | ( Some registry_public_key
+             , Some registration_authority
+             , Some vault_public_key
+             , Some approved_mft_standard_vk_id
+             , Some approved_mft_token_vk_hash
+             , Some approved_mft_admin_vk_hash
+             , Some universal_bridge_vk_id
+             , Some universal_bridge_vk_hash ) ->
+               if Option.is_none ethereum_bridge_address then
+                 failwith
+                   "--ethereum-bridge-address is required when configuring an \
+                    Ethereum asset registry"
+               else
+                 Some
+                   { Zeko_circuits_config.Ethereum_assets.registry_public_key =
+                       Public_key.Compressed.of_base58_check_exn
+                         registry_public_key
+                   ; registration_authority =
+                       Public_key.Compressed.of_base58_check_exn
+                         registration_authority
+                   ; vault_public_key =
+                       Public_key.Compressed.of_base58_check_exn
+                         vault_public_key
+                   ; approved_mft_standard_vk_id
+                   ; approved_mft_token_vk_hash
+                   ; approved_mft_admin_vk_hash
+                   ; universal_bridge_vk_id
+                   ; universal_bridge_vk_hash
+                   }
+           | _ ->
+               failwith
+                 "--ethereum-asset-registry-l2, \
+                  --ethereum-registration-authority-l2, \
+                  --ethereum-shared-vault-l2, --ethereum-mft-standard-vk-id, \
+                  --ethereum-mft-token-vk-hash, --ethereum-mft-admin-vk-hash, \
+                  --ethereum-universal-bridge-vk-id, and \
+                  --ethereum-universal-bridge-vk-hash must be supplied \
+                  together"
+         in
          let t : Zeko_circuits_config.t =
            { chain_l1 = Testnet
            ; chain_l2 = Testnet
@@ -161,13 +240,19 @@ let generate_circuits_config =
                ; quorum = Field.of_int 1
                }
            ; holder_accounts_l1 = List.map holder_accounts_l1 ~f:fst
+           ; ethereum_holder_account_l1 =
+               Option.map ethereum_bridge_address
+                 ~f:Zeko_circuits_config.ethereum_address_to_public_key
+           ; ethereum_token = None
+           ; ethereum_assets
            ; helper_token_owner_l1 = fst helper_token_owner_l1
            ; zeko_l1 = fst zeko_l1
            ; emergency_da_public_key = fst emergency_da
            ; withdrawal_delay = Mina_numbers.Global_slot_span.of_int 5
            ; bridge_fee_recipient_l1 = fst bridge_fee_recipient_l1
            ; bridge_fee_recipient_l2 = fst bridge_fee_recipient_l2
-           ; outer_account_creation_fee = Currency.Fee.of_mina_string_exn "1"
+           ; outer_account_creation_fee =
+               Zeko_constants.outer_account_creation_fee
            }
          in
          let deploy_config : Zeko_circuits_config.Deploy.t =
@@ -197,6 +282,43 @@ let generate_circuits_config =
                (Yojson.Safe.pretty_to_string deploy_config_json)
          | Some output_file ->
              Yojson.Safe.to_file output_file deploy_config_json ) )
+
+let ethereum_asset_vk_hashes =
+  ( "ethereum-asset-vk-hashes"
+  , Command.async
+      ~summary:
+        "Compile the registry-backed Ethereum asset circuits and print their \
+         verification-key hashes"
+      (let%map_open.Command output =
+         flag "--output" (optional string) ~doc:"string JSON output path"
+       in
+       fun () ->
+         if not Zeko_circuits_config.Inputs.Ethereum_assets.enabled then
+           failwith
+             "ZEKO_CIRCUITS_CONFIG must enable the Ethereum asset registry" ;
+         let%bind universal_bridge =
+           Compile_simple.Verification_key.of_tag
+             (Lazy.force Zeko_types.Bridge_inst_ethereum_token.System_L2.tag)
+           |> Promise.to_deferred
+         and registry =
+           Compile_simple.Verification_key.of_tag
+             (Lazy.force
+                Zeko_types.Bridge_inst_ethereum_token.Registry.registry_tag )
+           |> Promise.to_deferred
+         in
+         write_json ?output
+           (`Assoc
+             [ ( "universalBridgeVkHash"
+               , `String
+                   (Field.to_string
+                      (Compile_simple.Verification_key.hash universal_bridge) )
+               )
+             ; ( "registryVkHash"
+               , `String
+                   (Field.to_string
+                      (Compile_simple.Verification_key.hash registry) ) )
+             ] ) ;
+         return () ) )
 
 let update_outer_verification_keys =
   ( "update-outer-verification-keys"
@@ -925,8 +1047,8 @@ let multisig_submit =
                in
                let%bind command =
                  Deploy.submit_multisig_update ~kind:first.kind ~signer:sender
-                   ~fee:(Currency.Fee.of_mina_string_exn "0.1")
-                   ~nonce ~payload ~signatures
+                   ~fee:Zeko_constants.transaction_fee ~nonce ~payload
+                   ~signatures
                  >>| Zkapp_command.read_all_proofs_from_disk
                in
                match%map Gql_client.send_zkapp l1_uri command with
@@ -1371,6 +1493,7 @@ let () =
   Command.group ~summary:"Sequencer CLI"
     [ generate_even_key
     ; generate_circuits_config
+    ; ethereum_asset_vk_hashes
     ; update_outer_verification_keys
     ; update_inner_verification_keys
     ; update_da_key

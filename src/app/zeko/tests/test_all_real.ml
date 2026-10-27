@@ -177,12 +177,30 @@ open struct
 
         let chain_l1 = Mina_signature_kind.Testnet
 
+        let chain_l2 = Mina_signature_kind.Testnet
+
         let multisig_key =
           { Multisig.public_keys = [ multisig_update_pk ]; quorum = Field.one }
 
         let max_sequencer_inactivity = 128
 
         let emergency_da_public_key = point_of_string "223344"
+
+        let ethereum_asset_registry_public_key = None
+
+        let ethereum_asset_registry_schema_version = Zeko_util.Checked32.zero
+
+        let ethereum_asset_approved_mft_standard_vk_id = Field.zero
+
+        let ethereum_asset_approved_mft_token_vk_hash = Field.zero
+
+        let ethereum_asset_approved_mft_admin_vk_hash = Field.zero
+
+        let ethereum_asset_universal_bridge_vk_id = Field.zero
+
+        let ethereum_asset_universal_bridge_vk_hash = Field.zero
+
+        let ethereum_asset_vault_public_key = inner_public_key
       end)
       ()
 
@@ -291,7 +309,7 @@ open struct
         ; pending_coinbase_depth = 1
         ; coinbase_amount = Currency.Amount.zero
         ; supercharged_coinbase_factor = 1
-        ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
+        ; account_creation_fee = Zeko_constants.account_creation_fee
         ; fork = None
         }
 
@@ -582,6 +600,7 @@ open struct
                 }
             ; sequencer = point_of_string_even "1991991991"
             ; source_acc_set = to_account_set source_acc_set
+            ; global_slot = Zeko_util.Slot.zero
             ; witness =
                 { stack_frame = Mina_base.Stack_frame.empty
                 ; call_stack = []
@@ -698,6 +717,7 @@ open struct
             ; source_local_state = stmt0.target_local_state
             ; sequencer = point_of_string_even "1991991991"
             ; source_acc_set = stmt0.target_acc_set
+            ; global_slot = Zeko_util.Slot.zero
             ; witness =
                 { stack_frame =
                     { caller = Mina_base.Token_id.default
@@ -851,6 +871,43 @@ open struct
         }
 
       let base_witness : Outer_rules_inst.Rule_commit_inst.Base_witness.t =
+        let empty_registry_path =
+          List.init Zeko_constants.constraint_constants.ledger_depth
+            ~f:(fun _ : Outer_rules_inst.Rule_commit_inst.Registry_path.Step.t
+               -> { hash_other = Field.zero; is_right = false } )
+        in
+        let ethereum_asset_registration :
+            Outer_rules_inst.Rule_commit_inst.Registration_witness.t =
+          let candidate : Asset_registry.Asset_record.t =
+            { schema_version = Zeko_util.Checked32.zero
+            ; registry_index = Zeko_util.Checked32.zero
+            ; asset_id_high = Field.zero
+            ; asset_id_low = Field.zero
+            ; ethereum_token_address = Field.zero
+            ; token_owner_l2 = Public_key.Compressed.empty
+            ; token_id_l2 = Mina_base.Token_id.default
+            ; decimals = Zeko_util.Checked32.zero
+            ; inventory_cap = Currency.Amount.zero
+            ; mft_standard_vk_id = Field.zero
+            ; vault_public_key = Public_key.Compressed.empty
+            ; universal_bridge_vk_id = Field.zero
+            }
+          in
+          { did_append = false
+          ; candidate
+          ; append_path =
+              List.init Zeko_constants.Ethereum_asset_registry.depth
+                ~f:(fun _ -> Field.zero)
+          ; token_owner_acc = Mina_base.Account.empty
+          ; token_owner_path = empty_registry_path
+          ; admin_acc = Mina_base.Account.empty
+          ; admin_path = empty_registry_path
+          ; vault_acc = Mina_base.Account.empty
+          ; vault_path = empty_registry_path
+          ; circulation_acc = Mina_base.Account.empty
+          ; circulation_path = empty_registry_path
+          }
+        in
         { public_key = point_of_string "29421"
         ; vk_hash = Snark_params.Tick.Field.zero
         ; slot_range =
@@ -863,6 +920,11 @@ open struct
         ; new_inner_acc_path
         ; da_multisig
         ; emergency_mode = false
+        ; old_ethereum_asset_registry_acc = Mina_base.Account.empty
+        ; old_ethereum_asset_registry_path = empty_registry_path
+        ; new_ethereum_asset_registry_acc = Mina_base.Account.empty
+        ; new_ethereum_asset_registry_path = empty_registry_path
+        ; ethereum_asset_registration
         }
 
       let witness : Outer_rules_inst.Rule_commit_inst.Witness.t =
@@ -873,6 +935,86 @@ open struct
 
       let commit_stmt, commit_proof =
         Promise.block_on_async_exn @@ fun () -> commit witness
+
+      let () =
+        match Stdlib.Sys.getenv_opt "ZEKO_SETTLEMENT_FIXTURE_DIR" with
+        | None ->
+            ()
+        | Some fixture_dir ->
+            let verification_key =
+              Promise.block_on_async_exn
+              @@ fun () ->
+              Compile_simple.Verification_key.of_tag
+                (Lazy.force Outer_rules_inst.tag)
+            in
+            let app_statement, (body, _body_digest, calls) = commit_stmt in
+            let calls =
+              Mina_base.Zkapp_command.Call_forest.map calls
+                ~f:Mina_base.Account_update.read_all_proofs_from_disk
+            in
+            let state_before : Rollup_state.Outer_state.t =
+              { pause_key = point_of_string_even "987654321"
+              ; status_flags =
+                  Rollup_state.Outer_state.Status_flags.of_bools ~paused:false
+                    ~emergency:false
+              ; ledger_hash = stmt.source_ledger
+              ; inner_action_state =
+                  Rollup_state.Inner_action_state.With_length.empty
+              ; sequencer = stmt.sequencer
+              ; da_key =
+                  Multisig.commit
+                    { public_keys = [ Public_key.compress da_kp.public_key ]
+                    ; quorum = Field.one
+                    }
+              ; acc_set = stmt.source_acc_set
+              }
+            in
+            let settlement_export =
+              Async.Thread_safe.block_on_async_exn (fun () ->
+                  Sequencer_lib.Ethereum_settlement_export
+                  .create_with_verification_key ~signature_kind ~body ~calls
+                    ~state_before ~proof:commit_proof ~verification_key
+                    ?inner_action_batch:None ?asset_registry_batch:None )
+              |> Or_error.ok_exn
+            in
+            let transaction_hash = "0x" ^ String.make 64 '1' in
+            let settlement =
+              `Assoc
+                [ ("schemaVersion", `Int 1)
+                ; ("minaTransactionHash", `String transaction_hash)
+                ; ( "outerAccountPublicKey"
+                  , `String settlement_export.outer_account_public_key )
+                ; ( "feePayerPublicKey"
+                  , `String settlement_export.outer_account_public_key )
+                ; ("nonce", `Int 0)
+                ; ("commandBase64", `String "local-e2e-outer-commit")
+                ; ( "proof"
+                  , Sequencer_lib.Ethereum_settlement_export.proof_json
+                      settlement_export )
+                ]
+            in
+            let write name data =
+              Out_channel.write_all (Filename.concat fixture_dir name) ~data
+            in
+            write "vk.serde.json" settlement_export.vk_json ;
+            write "proof.serde.json" settlement_export.proof_json ;
+            write "public_input_skeleton.json"
+              settlement_export.public_input_skeleton_json ;
+            write "app_statement.json" settlement_export.app_statement_json ;
+            write "settlement.json"
+              (Yojson.Safe.pretty_to_string settlement ^ "\n") ;
+            let statement_fields =
+              Mina_base.Zkapp_statement.to_field_elements app_statement
+              |> Array.to_list
+              |> List.map ~f:(fun field ->
+                     `String
+                       (Kimchi_backend.Pasta.Basic.Bigint256.to_hex_string
+                          (Kimchi_backend.Pasta.Basic.Fp.to_bigint field) ) )
+            in
+            write "statement.json"
+              (Yojson.Safe.pretty_to_string (`List statement_fields) ^ "\n") ;
+            printf "Exported Ethereum settlement fixture to %s\n%!" fixture_dir ;
+            Stdlib.exit 0
 
       let Compile_simple.[ emergency_da_apply ] =
         Lazy.force Emergency_da_rules_inst.provers
@@ -909,8 +1051,15 @@ open struct
             failwith __LOC__
 
       let emergency_da_action ~source_ledger_hash ~target_ledger_hash
-          ~ledger_index ~account : Rule_emergency_da.Action.t =
-        { source_ledger_hash; target_ledger_hash; ledger_index; account }
+          ~source_acc_set ~target_acc_set ~ledger_index ~account :
+          Rule_emergency_da.Action.t =
+        { source_ledger_hash
+        ; target_ledger_hash
+        ; source_acc_set
+        ; target_acc_set
+        ; ledger_index
+        ; account
+        }
 
       let assert_action_fields_equal expected actual =
         assert (Int.(Array.length expected = Array.length actual)) ;
@@ -1024,12 +1173,32 @@ open struct
       let new_path_3 =
         Mina_ledger.Sparse_ledger.path_exn emergency_ledger_3 new_index
 
+      let make_single_update_acc_set_witness data =
+        let to_acc_set_path =
+          List.map ~f:(function
+            | `Left hash_other ->
+                ({ hash_other; is_right = false } : Account_set.PathStep.t)
+            | `Right hash_other ->
+                ({ hash_other; is_right = true } : Account_set.PathStep.t) )
+        in
+        { Txn_state.get_account_set_x = list_to_fun [ data.S.before ]
+        ; get_account_set_z = list_to_fun [ data.after ]
+        ; get_account_set_y_prev_hash = list_to_fun [ data.y_prev_hash ]
+        ; get_account_set_y_prev_path =
+            list_to_fun [ to_acc_set_path data.y_prev_path ]
+        ; get_account_set_x_path =
+            list_to_fun [ to_acc_set_path data.before_path ]
+        ; get_account_set_y_path = list_to_fun [ to_acc_set_path data.path ]
+        }
+
       let emergency_da_witness_1 : Rule_emergency_da.Witness.t =
         { public_key = point_of_string "281"
         ; vk_hash = Field.zero
         ; old_account = fee_payer_acc_source
         ; new_account = fee_payer_acc_after_first
         ; ledger_path = to_emergency_path fee_payer_path_0
+        ; source_acc_set = to_account_set source_acc_set
+        ; acc_set_witness = make_single_update_acc_set_witness acc_set_data_0
         }
 
       let emergency_da_witness_2 : Rule_emergency_da.Witness.t =
@@ -1038,6 +1207,8 @@ open struct
         ; old_account = old_inner_acc
         ; new_account = old_inner_acc
         ; ledger_path = to_emergency_path inner_path_1
+        ; source_acc_set = to_account_set acc_set_data_0.hash
+        ; acc_set_witness = make_single_update_acc_set_witness acc_set_data_1
         }
 
       let emergency_da_witness_3 : Rule_emergency_da.Witness.t =
@@ -1046,6 +1217,8 @@ open struct
         ; old_account = fee_payer_acc_after_first
         ; new_account = fee_payer_acc_after_third
         ; ledger_path = to_emergency_path fee_payer_path_2
+        ; source_acc_set = to_account_set acc_set_data_1.hash
+        ; acc_set_witness = make_single_update_acc_set_witness acc_set_data_2
         }
 
       let emergency_da_witness_4 : Rule_emergency_da.Witness.t =
@@ -1054,6 +1227,8 @@ open struct
         ; old_account = Mina_base.Account.empty
         ; new_account = new_account_created
         ; ledger_path = to_emergency_path new_path_3
+        ; source_acc_set = to_account_set acc_set_data_2.hash
+        ; acc_set_witness = make_single_update_acc_set_witness acc_set_data_3
         }
 
       let emergency_da_out_1, _emergency_da_proof_1 =
@@ -1087,25 +1262,33 @@ open struct
       let emergency_da_action_1 =
         emergency_da_action ~source_ledger_hash:ledger0
           ~target_ledger_hash:ledger1
-          ~ledger_index:(Zeko_util.Checked32.of_int fee_payer_index)
+          ~source_acc_set:(to_account_set source_acc_set)
+          ~target_acc_set:(to_account_set acc_set_data_0.hash)
+          ~ledger_index:(Zeko_util.Checked64.of_int fee_payer_index)
           ~account:fee_payer_acc_after_first
 
       let emergency_da_action_2 =
         emergency_da_action ~source_ledger_hash:ledger1
           ~target_ledger_hash:ledger2
-          ~ledger_index:(Zeko_util.Checked32.of_int inner_index)
+          ~source_acc_set:(to_account_set acc_set_data_0.hash)
+          ~target_acc_set:(to_account_set acc_set_data_1.hash)
+          ~ledger_index:(Zeko_util.Checked64.of_int inner_index)
           ~account:old_inner_acc
 
       let emergency_da_action_3 =
         emergency_da_action ~source_ledger_hash:ledger2
           ~target_ledger_hash:ledger3
-          ~ledger_index:(Zeko_util.Checked32.of_int fee_payer_index)
+          ~source_acc_set:(to_account_set acc_set_data_1.hash)
+          ~target_acc_set:(to_account_set acc_set_data_2.hash)
+          ~ledger_index:(Zeko_util.Checked64.of_int fee_payer_index)
           ~account:fee_payer_acc_after_third
 
       let emergency_da_action_4 =
         emergency_da_action ~source_ledger_hash:ledger3
           ~target_ledger_hash:ledger4
-          ~ledger_index:(Zeko_util.Checked32.of_int new_index)
+          ~source_acc_set:(to_account_set acc_set_data_2.hash)
+          ~target_acc_set:(to_account_set acc_set_data_3.hash)
+          ~ledger_index:(Zeko_util.Checked64.of_int new_index)
           ~account:new_account_created
 
       let expected_action_fields_1 = action_to_fields emergency_da_action_1
@@ -1193,6 +1376,8 @@ open struct
       let emergency_da_source_stmt : Emergency_da_folder.Stmt.t =
         { source_ledger = stmt.source_ledger
         ; target_ledger = stmt.source_ledger
+        ; source_acc_set = to_account_set source_acc_set
+        ; target_acc_set = to_account_set source_acc_set
         ; target_action_state =
             Mina_base.Zkapp_account.Actions.empty_state_element
         }
@@ -1424,6 +1609,8 @@ open struct
       ; point_of_string "46513"
       ]
 
+    let ethereum_holder_account_l1 = None
+
     let multisig_key =
       { Zeko_circuits.Multisig.public_keys = [ multisig_update_pk ]
       ; quorum = Snark_params.Tick.Field.of_int 1
@@ -1441,7 +1628,31 @@ open struct
 
     let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
 
+    let bridge_proof_fee = Currency.Amount.zero
+
+    let bridge_fee_recipient_l1 = point_of_string "765431"
+
+    let bridge_fee_recipient_l2 = point_of_string "765432"
+
+    let outer_account_creation_fee = Currency.Fee.zero
+
     let max_sequencer_inactivity = 128
+
+    let ethereum_asset_registry_public_key = None
+
+    let ethereum_asset_registry_schema_version = Zeko_util.Checked32.zero
+
+    let ethereum_asset_approved_mft_standard_vk_id = Field.zero
+
+    let ethereum_asset_approved_mft_token_vk_hash = Field.zero
+
+    let ethereum_asset_approved_mft_admin_vk_hash = Field.zero
+
+    let ethereum_asset_universal_bridge_vk_id = Field.zero
+
+    let ethereum_asset_universal_bridge_vk_hash = Field.zero
+
+    let ethereum_asset_vault_public_key = inner_public_key
 
     let holder_account_l1_permissions_enabled : Mina_base.Permissions.t =
       { edit_state = Proof
@@ -1606,7 +1817,20 @@ open struct
                ~authorization:
                  (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
                  Control.Poly.None_given )
-            []
+            (Zkapp_command.Call_forest.cons ~signature_kind:Inputs.chain_l1
+               (Account_update.with_aux
+                  ~body:
+                    { Mina_base.Account_update.Body.dummy with
+                      use_full_commitment = true
+                    ; public_key = Inputs.bridge_fee_recipient_l1
+                    ; balance_change =
+                        Currency.Amount.Signed.(
+                          of_unsigned Inputs.bridge_proof_fee)
+                    ; may_use_token = Parents_own_token
+                    ; authorization_kind = None_given
+                    }
+                  ~authorization:Control.Poly.None_given )
+               [] )
       ; slot_range = deposit_slot_range
       }
 
@@ -1741,6 +1965,7 @@ open struct
               Compile_simple.Verification_key.of_tag
                 (Lazy.force Bridge.System_L2.tag) )
               |> Compile_simple.Verification_key.hash
+          ; asset = ()
           ; may_use_token = Bridge.Rule_bridge_finalize_deposit.May_use_token.No
           ; inner_authorization_kind = Rule_bridge_finalize_deposit.A.None_given
           ; ase =
@@ -1759,6 +1984,8 @@ open struct
                  action_state [] )
           ; check_accepted
           ; prev_next_deposit = Checked32.zero
+          ; prev_nonce = Checked32.zero
+          ; helper_account_new = true
           }
       in
       assert (
@@ -1767,7 +1994,11 @@ open struct
       assert (Public_key.Compressed.equal au.public_key Inputs.holder_account_l2) ;
       let helper_account, witness_inner =
         match Zkapp_command.Call_forest.to_account_updates calls with
-        | [ helper_account; witness_inner ] ->
+        | [ helper_account
+          ; witness_inner
+          ; _recipient_payout
+          ; _sequencer_fee_payout
+          ] ->
             (helper_account, witness_inner)
         | _ ->
             failwith
@@ -1875,7 +2106,20 @@ open struct
                ~authorization:
                  (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
                  Control.Poly.None_given )
-            []
+            (Zkapp_command.Call_forest.cons ~signature_kind:Inputs.chain_l1
+               (Account_update.with_aux
+                  ~body:
+                    { Mina_base.Account_update.Body.dummy with
+                      use_full_commitment = true
+                    ; public_key = Inputs.bridge_fee_recipient_l1
+                    ; balance_change =
+                        Currency.Amount.Signed.(
+                          of_unsigned Inputs.bridge_proof_fee)
+                    ; may_use_token = Parents_own_token
+                    ; authorization_kind = None_given
+                    }
+                  ~authorization:Control.Poly.None_given )
+               [] )
       ; slot_range = deposit_slot_range
       }
 
@@ -2090,6 +2334,8 @@ open struct
           ; verify_two_outer_ases
           ; verify_check_accepted_and_ase
           ; prev_next_cancelled_deposit = Checked32.zero
+          ; prev_nonce = Checked32.zero
+          ; helper_account_new = true
           ; helper_token_owner_l1_vk_hash =
               ( Promise.block_on_async_exn
               @@ fun () ->
@@ -2117,6 +2363,8 @@ open struct
             ; _
             }
           ; { elt = { account_update = witness_outer; calls = []; _ }; _ }
+          ; { elt = { calls = []; _ }; _ }
+          ; { elt = { calls = []; _ }; _ }
           ] ->
             ((helper_token_owner, helper_account), witness_outer)
         | _ ->
@@ -2227,6 +2475,7 @@ open struct
               Compile_simple.Verification_key.of_tag
                 (Lazy.force Inner_rules.tag) )
               |> Compile_simple.Verification_key.hash
+          ; asset = ()
           ; amount
           }
       in
@@ -2247,7 +2496,20 @@ open struct
                ~authorization:
                  (* Account_update.Checked.t == Account_update.Body.Checked.t so authorization is dropped anyways *)
                  Control.Poly.None_given )
-            []
+            (Zkapp_command.Call_forest.cons ~signature_kind:Inputs.chain_l2
+               (Account_update.with_aux
+                  ~body:
+                    { Mina_base.Account_update.Body.dummy with
+                      use_full_commitment = true
+                    ; public_key = Inputs.bridge_fee_recipient_l2
+                    ; balance_change =
+                        Currency.Amount.Signed.(
+                          of_unsigned Inputs.bridge_proof_fee)
+                    ; may_use_token = Parents_own_token
+                    ; authorization_kind = None_given
+                    }
+                  ~authorization:Control.Poly.None_given )
+               [] )
       }
 
     let withdrawal_action =
@@ -2352,6 +2614,8 @@ open struct
           ; before_withdrawal = Rollup_state.Inner_action_state.empty
           ; withdrawal_ase
           ; prev_next_withdrawal = Checked32.zero
+          ; prev_nonce = Checked32.zero
+          ; helper_account_new = true
           ; withdrawal_params
           ; helper_token_owner_l1_vk_hash =
               ( Promise.block_on_async_exn
@@ -2386,6 +2650,8 @@ open struct
             ; _
             }
           ; { elt = { account_update = witness_outer; calls = []; _ }; _ }
+          ; { elt = { calls = []; _ }; _ }
+          ; { elt = { calls = []; _ }; _ }
           ] ->
             ((helper_token_owner, helper_account), witness_outer)
         | _ ->

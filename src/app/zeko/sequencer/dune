@@ -171,3 +171,21 @@
  (preprocess
   (pps ppx_jane ppx_mina))
  (modules cli_fake))
+
+(executable
+ (name deployment_export)
+ (libraries
+  sequencer_lib
+  signer_service
+  is_compile_simple_real_real
+  init
+  signature_lib
+  cli_lib
+  core
+  core_kernel
+  async
+  async_unix
+  core_unix.command_unix)
+ (preprocess
+  (pps ppx_let ppx_jane ppx_mina))
+ (modules deployment_export))

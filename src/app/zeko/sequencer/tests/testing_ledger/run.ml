@@ -63,7 +63,8 @@ let run ~logger ~port ~db_dir ~genesis_account ~block_period ~network_id
         (`Call
           (fun _ exn ->
             [%log error] "Unhandled exception: %s" (Exn.to_string exn) ) )
-      (Async.Tcp.Where_to_listen.of_port port)
+      (Tcp.Where_to_listen.bind_to Tcp.Bind_to_address.Localhost
+         (Tcp.Bind_to_port.On_port port) )
       (fun ~body _sock req ->
         let headers = Cohttp.Request.headers req in
         match Cohttp.Header.get headers "Connection" with

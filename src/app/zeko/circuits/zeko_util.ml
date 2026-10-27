@@ -114,6 +114,12 @@ module F = struct
 
   let pp : Format.formatter -> field -> unit =
    fun fmt f -> Format.pp_print_string fmt @@ Field.to_string f
+
+  let equal = Field.equal
+
+  let to_yojson = Field.to_yojson
+
+  let of_yojson = Field.of_yojson
 end
 
 module type V_S = sig

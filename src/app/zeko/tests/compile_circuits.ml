@@ -14,10 +14,14 @@ module Inputs = struct
 
   let holder_accounts_l1 = [ point_of_string "89888" ]
 
+  let ethereum_holder_account_l1 = None
+
   let multisig_update =
     { Zeko_circuits.Multisig.public_keys = holder_accounts_l1
     ; quorum = Snark_params.Tick.Field.of_int 1
     }
+
+  let multisig_key = multisig_update
 
   let holder_account_l2 = point_of_string "11111"
 
@@ -30,6 +34,14 @@ module Inputs = struct
   let emergency_da_public_key = point_of_string "43210"
 
   let withdrawal_delay = Mina_numbers.Global_slot_span.of_string "5"
+
+  let bridge_proof_fee = Currency.Amount.zero
+
+  let bridge_fee_recipient_l1 = point_of_string "765431"
+
+  let bridge_fee_recipient_l2 = point_of_string "765432"
+
+  let outer_account_creation_fee = Currency.Fee.zero
 
   let max_sequencer_inactivity = 128
 
@@ -74,6 +86,23 @@ module Inputs = struct
   let token_owner_l2 =
     Mina_base.Account_id.create (point_of_string "344213")
       Mina_base.Account_id.Digest.default
+
+  let ethereum_asset_registry_public_key = None
+
+  let ethereum_asset_registry_schema_version =
+    Zeko_circuits.Zeko_util.Checked32.zero
+
+  let ethereum_asset_approved_mft_standard_vk_id = Snark_params.Tick.Field.zero
+
+  let ethereum_asset_approved_mft_token_vk_hash = Snark_params.Tick.Field.zero
+
+  let ethereum_asset_approved_mft_admin_vk_hash = Snark_params.Tick.Field.zero
+
+  let ethereum_asset_universal_bridge_vk_id = Snark_params.Tick.Field.zero
+
+  let ethereum_asset_universal_bridge_vk_hash = Snark_params.Tick.Field.zero
+
+  let ethereum_asset_vault_public_key = inner_public_key
 end
 
 module Inner_rules_inst = Zeko_circuits.Inner_rules.Make (Inputs) ()

@@ -12,6 +12,7 @@ fi
 
 MODE="$1"
 NUM_PROVERS="$2"
+EXTERNAL_SERVICES="${ZEKO_TEST_EXTERNAL_SERVICES:-false}"
 PROVER_PIDS=()
 SIGNER_PIDS=()
 PROVERS=()
@@ -29,6 +30,14 @@ fake | real) ;;
 *)
   echo "Error: first argument must be 'fake' or 'real'" >&2
   usage
+  ;;
+esac
+
+case "$EXTERNAL_SERVICES" in
+true | false) ;;
+*)
+  echo "Error: ZEKO_TEST_EXTERNAL_SERVICES must be true or false" >&2
+  exit 1
   ;;
 esac
 
@@ -64,8 +73,10 @@ cleanup() {
   done
 
   rm -rf "$TMP_DIR"
-  docker rm -f pg-sequencer 2>/dev/null
-  docker rm -f rabbitmq-sequencer 2>/dev/null
+  if [ "$EXTERNAL_SERVICES" = "false" ]; then
+    docker rm -f pg-sequencer 2>/dev/null
+    docker rm -f rabbitmq-sequencer 2>/dev/null
+  fi
   exit ${exit_status:-0}
 }
 
@@ -76,8 +87,15 @@ SEQUENCER_ROOT="$(git rev-parse --show-toplevel)/src/app/zeko/sequencer"
 SEQUENCER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/sequencer"
 SIGNER_BUILD_ROOT="$(git rev-parse --show-toplevel)/_build/default/src/app/zeko/signer"
 
-export ZEKO_SIGNATURE_KIND=zeko-testnet
-export ZEKO_CIRCUITS_CONFIG=test
+# Keep the external signer and DA receipt validation on the same salt as the
+# circuit configuration. The retained Ethereum PoC uses Mina's built-in
+# `testnet` salt because Auro cannot currently sign a custom network ID;
+# existing test callers retain the historic `zeko-testnet` default.
+SIGNING_NETWORK_ID="${MINA_SIGNING_NETWORK_ID:-zeko-testnet}"
+export ZEKO_SIGNATURE_KIND="$SIGNING_NETWORK_ID"
+export ZEKO_CIRCUITS_CONFIG="${ZEKO_CIRCUITS_CONFIG:-test}"
+export ZEKO_CIRCUITS_MODE="$MODE"
+ZEKO_TEST_L1_NETWORK_ID="${ZEKO_TEST_L1_NETWORK_ID:-mainnet}"
 
 TMP_DIR=$(mktemp -d)
 
@@ -119,22 +137,74 @@ wait_for_port() {
   fi
 }
 
-KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli.exe"
+wait_for_provers() {
+  local expected=$1
+  local consumers=0
+
+  echo "Waiting for $expected prover(s) to finish compiling circuits..."
+  for _ in $(seq 1 600); do
+    if [ "$EXTERNAL_SERVICES" = "true" ]; then
+      local management_url="${ZEKO_TEST_RABBITMQ_MANAGEMENT_URL:-http://localhost:15672}"
+      local management_user="${ZEKO_TEST_RABBITMQ_MANAGEMENT_USER:-guest}"
+      local management_password="${ZEKO_TEST_RABBITMQ_MANAGEMENT_PASSWORD:-guest}"
+      consumers=$(
+        { curl --fail --silent --show-error --connect-timeout 1 --max-time 2 \
+          --user "$management_user:$management_password" \
+          "${management_url%/}/api/queues/%2F" 2>/dev/null || true; } \
+          | jq -r '[.[] | .consumers // 0] | add // 0' 2>/dev/null || true
+      )
+      if ! [[ "$consumers" =~ ^[0-9]+$ ]]; then
+        consumers=0
+      fi
+    else
+      consumers=$(
+        { docker exec rabbitmq-sequencer rabbitmqctl -q list_queues name consumers \
+          2>/dev/null || true; } \
+          | awk '$2 ~ /^[0-9]+$/ { total += $2 } END { print total + 0 }'
+      )
+    fi
+    if [ "$consumers" -ge "$expected" ]; then
+      echo "$consumers prover consumer(s) are ready"
+      return 0
+    fi
+    for pid in "${PROVER_PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "A prover exited before becoming ready" >&2
+        return 1
+      fi
+    done
+    sleep 1
+  done
+  echo "Timed out waiting for prover consumers" >&2
+  return 1
+}
+
+if [ "$MODE" = "fake" ]; then
+  KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli_fake.exe"
+else
+  KEYGEN_BIN="$SEQUENCER_BUILD_ROOT/cli.exe"
+fi
 
 generate_even_key() {
   "$KEYGEN_BIN" generate-even-key | awk -F': ' '/Private key:/ {print $2}'
 }
 
-docker run --rm --name pg-sequencer \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid \
-  -p 5433:5432 \
-  -d postgres:16-alpine
+if [ "$EXTERNAL_SERVICES" = "false" ]; then
+  docker run --rm --name pg-sequencer \
+    -e POSTGRES_USER=postgres \
+    -e POSTGRES_PASSWORD=postgres \
+    --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid \
+    -p 127.0.0.1:5433:5432 \
+    -d postgres:16-alpine
 
-docker run -d --name rabbitmq-sequencer \
-  -p 5672:5672 \
-  rabbitmq:latest
+  docker run -d --name rabbitmq-sequencer \
+    -p 127.0.0.1:5672:5672 \
+    rabbitmq:latest
+else
+  echo "Using externally managed PostgreSQL and RabbitMQ test services"
+  command -v curl >/dev/null
+  command -v jq >/dev/null
+fi
 
 wait_for_port 5433 $$
 wait_for_port 5672 $$
@@ -142,10 +212,10 @@ wait_for_port 5672 $$
 SEQUENCER_SIGNER_BIN="$SIGNER_BUILD_ROOT/cli.exe"
 DA_SIGNER_BIN="$SIGNER_BUILD_ROOT/cli.exe"
 
-ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY="$(generate_even_key)"
-DA1_SIGNER_PRIVATE_KEY="$(generate_even_key)"
-DA2_SIGNER_PRIVATE_KEY="$(generate_even_key)"
-DA3_SIGNER_PRIVATE_KEY="$(generate_even_key)"
+ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY="${ZEKO_TEST_SEQUENCER_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
+DA1_SIGNER_PRIVATE_KEY="${DA1_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
+DA2_SIGNER_PRIVATE_KEY="${DA2_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
+DA3_SIGNER_PRIVATE_KEY="${DA3_SIGNER_PRIVATE_KEY:-$(generate_even_key)}"
 ZEKO_SIGNER_AUTH_TOKEN="sequencer-test-signer-token"
 SIGNER_TLS_CERT="$TMP_DIR/signer-tls-cert.pem"
 SIGNER_TLS_KEY="$TMP_DIR/signer-tls-key.pem"
@@ -210,16 +280,16 @@ wait_for_port 8601 $signer_da1_pid
 wait_for_port 8602 $signer_da2_pid
 wait_for_port 8603 $signer_da3_pid
 
-run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id mainnet --block-period 9999999 &
+run "l1" $SEQUENCER_BUILD_ROOT/tests/testing_ledger/run.exe -p 8080 --db-dir "$TMP_DIR/l1_db" --network-id "$ZEKO_TEST_L1_NETWORK_ID" --block-period 9999999 &
 l1_pid=$!
 
-run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8555 --healthcheck-port 8558 --network-id zeko-testnet --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
+run "da1" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8555 --healthcheck-port 8558 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da1_db" --signer localhost:8601 &
 da1_pid=$!
 
-run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8556 --healthcheck-port 8559 --network-id zeko-testnet --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 &
+run "da2" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8556 --healthcheck-port 8559 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da2_db" --signer localhost:8602 &
 da2_pid=$!
 
-run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --port 8557 --healthcheck-port 8560 --network-id zeko-testnet --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 &
+run "da3" $SEQUENCER_BUILD_ROOT/../da_layer/cli.exe run-node --bind-localhost --port 8557 --healthcheck-port 8560 --network-id "$SIGNING_NETWORK_ID" --db-dir "$TMP_DIR/da3_db" --signer localhost:8603 &
 da3_pid=$!
 
 # Launch provers
@@ -247,6 +317,7 @@ wait_for_port 8080 $l1_pid
 wait_for_port 8555 $da1_pid
 wait_for_port 8556 $da2_pid
 wait_for_port 8557 $da3_pid
+wait_for_provers "$NUM_PROVERS"
 
 echo "All services started successfully"
 

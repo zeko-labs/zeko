@@ -10,7 +10,8 @@ module Sequencer = Zeko_sequencer.Sequencer
 let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
     ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-    ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee () =
+    ~slot_acceptance ~slot_duration_sec ~commit_validity_period ~commit_fee
+    ~bridge_txn_fee ~inner_sync_period () =
   let proof_cache_db = Proof_cache_tag.create_identity_db () in
   let l1_config : Utils.Slot.l1_config =
     let genesis_timestamp =
@@ -21,6 +22,7 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
     ; fork_slot =
         Thread_safe.block_on_async_exn (fun () ->
             Gql_client.fetch_fork_slot ~logger l1_uri >>| Or_error.ok_exn )
+    ; slot_duration_sec
     }
   in
   [%log info] "Current slot: %d"
@@ -43,6 +45,7 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
   in
 
   Sequencer.run_committer sequencer ;
+  Sequencer.run_inner_syncer sequencer ~period_sec:inner_sync_period ;
 
   let l2_executor =
     Executor.create
@@ -71,7 +74,19 @@ let run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
           (fun _ exn ->
             [%log error] "Unhandled exception: %s" (Exn.to_string exn) ) )
       (Async.Tcp.Where_to_listen.of_port port)
-      (fun ~body _sock req -> graphql_callback () req body)
+      (fun ~body _sock req ->
+        match Uri.path (Cohttp.Request.uri req) with
+        | "/healthz" ->
+            Graphql_cohttp_async.respond_string ~status:`OK ~body:"alive\n" ()
+        | "/readyz" ->
+            let executor = sequencer.merger_ctx.executor in
+            Graphql_cohttp_async.respond_string
+              ~status:
+                (if executor.settlement_ready then `OK else `Service_unavailable)
+              ~body:(executor.settlement_status ^ "\n")
+              ()
+        | _ ->
+            graphql_callback () req body )
     |> Deferred.ignore_m |> don't_wait_for
   in
   [%log info] "Sequencer listening on port %d" port ;
@@ -90,6 +105,12 @@ let () =
        flag "--commitment-period"
          (optional_with_default 120. float)
          ~doc:"float Commitment period in seconds"
+     and inner_sync_period =
+       flag "--inner-sync-period"
+         (optional_with_default 0. float)
+         ~doc:
+           "float Period in seconds for synchronizing commit-only outer action \
+            batches without emitting a commit (0 disables)"
      and max_pool_size =
        flag "--max-pool-size"
          (optional_with_default 20 int)
@@ -126,12 +147,16 @@ let () =
          ~doc:"float Fee modifier for the sequencer"
      and minimum_fee =
        flag "--minimum-fee"
-         (optional_with_default 0.01 float)
+         (optional_with_default Zeko_constants.minimum_fee float)
          ~doc:"float Minimum fee for the sequencer"
      and slot_acceptance_m =
        flag "--slot-acceptance"
          (optional_with_default 60. float)
          ~doc:"float Slot acceptance in minutes"
+     and slot_duration_sec =
+       flag "--slot-duration"
+         (optional_with_default 180 int)
+         ~doc:"int L1 slot duration in seconds"
      and commit_validity_period =
        flag "--commit-validity-period"
          (optional_with_default 20 int)
@@ -140,14 +165,16 @@ let () =
        flag "--signer" (required string) ~doc:"string Signer service host:port"
      and commit_fee =
        flag "--commit-fee"
-         (optional_with_default 0.1 float)
-         ~doc:"string Commit fee in mina"
+         (optional_with_default Zeko_constants.transaction_fee_string string)
+         ~doc:"string Commit fee in native units"
      and bridge_txn_fee =
        flag "--bridge-txn-fee"
-         (optional_with_default 0.1 float)
-         ~doc:"string Bridge transaction fee in mina"
+         (optional_with_default Zeko_constants.transaction_fee_string string)
+         ~doc:"string Bridge transaction fee in native units"
      in
      let slot_acceptance = Time.Span.of_min slot_acceptance_m in
+     if slot_duration_sec <= 0 then
+       failwith "--slot-duration must be a positive number of seconds" ;
      let da_config = Da_layer.Client.Config.of_string_list da_nodes in
      let da_keys =
        String.split ~on:',' da_keys
@@ -161,15 +188,12 @@ let () =
      let commit_validity_period =
        Mina_numbers.Global_slot_span.of_int commit_validity_period
      in
-     let commit_fee =
-       Currency.Fee.of_mina_string_exn (Float.to_string commit_fee)
-     in
-     let bridge_txn_fee =
-       Currency.Fee.of_mina_string_exn (Float.to_string bridge_txn_fee)
-     in
+     let commit_fee = Currency.Fee.of_mina_string_exn commit_fee in
+     let bridge_txn_fee = Currency.Fee.of_mina_string_exn bridge_txn_fee in
      Stdout_log.setup log_json log_level ;
      run ~logger ~port ~max_pool_size ~commitment_period ~da_config ~da_keys
        ~da_quorum ~db_dir ~checkpoints_dir ~postgres_uri ~l1_uri ~archive_uri
        ~signer ~deposit_delay_blocks ~mq_host ~fee_modifier ~minimum_fee
-       ~slot_acceptance ~commit_validity_period ~commit_fee ~bridge_txn_fee )
+       ~slot_acceptance ~slot_duration_sec ~commit_validity_period ~commit_fee
+       ~bridge_txn_fee ~inner_sync_period )
   |> Command_unix.run

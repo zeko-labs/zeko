@@ -50,7 +50,9 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
       let%bind nonce =
         Gql_client.infer_nonce ~logger l1_uri sender_pk >>| Or_error.ok_exn
       in
-      let%bind `Inner inner_account, `Holder holder_account =
+      let%bind ( `Inner inner_account
+               , `Holder holder_account
+               , `Ethereum_asset_registry registry_account ) =
         Sequencer_lib.Deploy.Z.Inner.initial_accounts ()
       in
       let old_ledger_witness, new_ledger, imt_hash, imt =
@@ -68,11 +70,9 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
               }
             in
             let genesis_accounts =
-              [ inner_account
-              ; holder_account
-              ; sequencer_account
-              ; fee_recipient_account
-              ]
+              [ inner_account; holder_account ]
+              @ Option.to_list registry_account
+              @ [ sequencer_account; fee_recipient_account ]
               @ ( match prefund_account with
                 | Some (signer, amount) ->
                     [ { Account.empty with
@@ -135,26 +135,40 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
             List.iteri [ inner_account; holder_account ] ~f:(fun i acc ->
                 L.set_at_index_exn ledger i acc ) ;
 
+            let registry_account_diff =
+              Option.bind registry_account ~f:(fun registry_account ->
+                  let account_id = Account.identifier registry_account in
+                  match L.location_of_account ledger account_id with
+                  | Some _ ->
+                      None
+                  | None ->
+                      L.create_new_account_exn ledger account_id
+                        registry_account ;
+                      Some
+                        ( L.index_of_account_exn ledger account_id
+                        , registry_account ) )
+            in
             let accounts_diff =
               (0, inner_account) :: (1, holder_account)
-              ::
-              ( match faucet_aid with
-              | None ->
-                  []
-              | Some faucet_aid ->
-                  let account =
-                    Account.create faucet_aid Currency.Balance.max_int
-                  in
-                  let location = L.location_of_account ledger faucet_aid in
-                  let () =
-                    match location with
-                    | None ->
-                        L.create_new_account_exn ledger faucet_aid account
-                    | Some location ->
-                        L.set ledger location account
-                  in
-                  let index = L.index_of_account_exn ledger faucet_aid in
-                  [ (index, account) ] )
+              :: ( Option.to_list registry_account_diff
+                 @
+                 match faucet_aid with
+                 | None ->
+                     []
+                 | Some faucet_aid ->
+                     let account =
+                       Account.create faucet_aid Currency.Balance.max_int
+                     in
+                     let location = L.location_of_account ledger faucet_aid in
+                     let () =
+                       match location with
+                       | None ->
+                           L.create_new_account_exn ledger faucet_aid account
+                       | Some location ->
+                           L.set ledger location account
+                     in
+                     let index = L.index_of_account_exn ledger faucet_aid in
+                     [ (index, account) ] )
             in
 
             printf "New ledger hash: %s\n%!"
@@ -185,8 +199,8 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
         Sequencer_lib.Deploy.deploy_command_exn
           ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
           ~signer_pk:sender_pk ~outer_pk ~holder_pk ~token_holder_pk
-          ~fee:(Currency.Fee.of_mina_int_exn 1)
-          ~nonce ~account_creation_fee ~initial_ledger:new_ledger
+          ~fee:Zeko_constants.outer_account_creation_fee ~nonce
+          ~account_creation_fee ~initial_ledger:new_ledger
           ~account_set_hash:imt_hash ~pause_key ~sequencer:sequencer_key
           ~da_key:
             (Multisig.commit
@@ -221,7 +235,8 @@ let generate ~l1_uri ~sender_pk ~ledger_input ~faucet_aid ~pause_key
 
       print_endline "(* Post genesis batch *)" ;
       let%bind () =
-        if List.length da_nodes = 0 || old_and_new_ledger_same then return ()
+        if List.length da_nodes = 0 then return ()
+        else if old_ledger_exists && old_and_new_ledger_same then return ()
         else if old_ledger_exists then
           let () =
             print_endline "(* Post only diff with updated inner account *)"
@@ -541,8 +556,8 @@ let deploy_token_owner =
                Sequencer_lib.Deploy.deploy_token_owner_exn
                  ~signature_kind:Zeko_circuits_config.Inputs.chain_l1
                  ~signer:sender_keypair ~token_owner_kp
-                 ~fee:(Currency.Fee.of_mina_int_exn 1)
-                 ~nonce ~account_creation_fee ()
+                 ~fee:Zeko_constants.outer_account_creation_fee ~nonce
+                 ~account_creation_fee ()
              in
              match%bind
                Gql_client.send_zkapp l1_uri

@@ -65,17 +65,7 @@ module Zeko_stmt = struct
 end
 
 let constraint_constants : Genesis_constants.Constraint_constants.t =
-  { sub_windows_per_window = 1
-  ; ledger_depth = Account_set.height
-  ; work_delay = 1
-  ; block_window_duration_ms = 1
-  ; transaction_capacity_log_2 = 1
-  ; pending_coinbase_depth = 1
-  ; coinbase_amount = Currency.Amount.zero
-  ; supercharged_coinbase_factor = 1
-  ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
-  ; fork = None
-  }
+  { Zeko_constants.constraint_constants with ledger_depth = Account_set.height }
 
 type update_acc_set_witness =
   { get_account_set_x : unit -> Token_id.t

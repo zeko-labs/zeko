@@ -2,6 +2,8 @@ module Proof : sig
   type t [@@deriving yojson]
 
   val of_pickles : Pickles.Side_loaded.Proof.t -> t
+
+  val to_pickles : t -> Pickles.Side_loaded.Proof.t option
 end
 
 type 'tag_var tag
@@ -16,6 +18,8 @@ module Verification_key : sig
   val typ : (var, t) Snark_params.Tick.Typ.t
 
   val of_pickles : Pickles.Side_loaded.Verification_key.t -> t
+
+  val to_pickles : t -> Pickles.Side_loaded.Verification_key.t option
 
   val of_tag : 'tag_var tag -> t Promise.t
 

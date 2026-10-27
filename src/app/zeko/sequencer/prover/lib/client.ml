@@ -266,6 +266,7 @@ let map_to_cached_source (type trans stmt) t
           (`Extend (trans, proof), List.drop elems extension_length) )
 
 let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
+    ?(prove_empty = false)
     (module Folder_iterations : Zeko_constants.FOLDER_ITERATIONS)
     ~(map_to_cached_source :
        source:stmt -> elems:elem list -> ('source * elem list) Deferred.t )
@@ -289,7 +290,7 @@ let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
         r )
   in
   match elems_to_prove with
-  | [] ->
+  | [] when not prove_empty ->
       return (Ok (None, source, excess))
   | elems_to_prove -> (
       let%bind input = map_to_cached_source ~source ~elems:elems_to_prove in
@@ -299,10 +300,10 @@ let folder' (type stmt elem) t ~(source : stmt) ~(elems : elem list) ~max_excess
       | Ok (proof, target) ->
           let%bind () =
             match proof with
-            | Some proof ->
+            | Some proof when not (List.is_empty elems_to_prove) ->
                 cache_ase_proof t ~source ~target ~proof
                   ~extension_length:(List.length elems_to_prove)
-            | None ->
+            | Some _ | None ->
                 return ()
           in
           return (Ok (proof, target, excess)) )
@@ -320,8 +321,15 @@ let check_accepted_folder t =
     ~cache_ase_proof:(fun _ ~source:_ ~target:_ ~proof:_ ~extension_length:_ ->
       return () )
 
-let ase_cached_folder_with_length t =
+let ethereum_asset_registry_folder t =
   folder' t
+    (module Zeko_constants.Folder_iterations.Ethereum_asset_registry_scan)
+    ~map_to_cached_source:(fun ~source ~elems -> return (source, elems))
+    ~cache_ase_proof:(fun _ ~source:_ ~target:_ ~proof:_ ~extension_length:_ ->
+      return () )
+
+let ase_cached_folder_with_length ?(prove_empty = false) t =
+  folder' t ~prove_empty
     (module Zeko_constants.Folder_iterations.Ase.With_length)
     ~map_to_cached_source:
       (map_to_cached_source t
@@ -330,8 +338,8 @@ let ase_cached_folder_with_length t =
          ~find_ase_by_source:Ase_cache_with_length_table.find_ase_by_source )
     ~cache_ase_proof:cache_ase_with_length
 
-let ase_cached_folder_without_length t =
-  folder' t
+let ase_cached_folder_without_length ?(prove_empty = false) t =
+  folder' t ~prove_empty
     (module Zeko_constants.Folder_iterations.Ase.Without_length)
     ~map_to_cached_source:
       (map_to_cached_source t
@@ -375,6 +383,26 @@ let check_accepted_mina t input =
   >>| function
   | Prover.Output.Folder (Check_accepted_mina check_accepted) ->
       Ok check_accepted
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let check_accepted_ethereum_token t input =
+  send t (Prover.Input.Folder (Check_accepted_ethereum_token input))
+  >>| function
+  | Prover.Output.Folder (Check_accepted_ethereum_token check_accepted) ->
+      Ok check_accepted
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let ethereum_asset_registry_scan t input =
+  send t (Prover.Input.Folder (Ethereum_asset_registry_scan input))
+  >>| function
+  | Prover.Output.Folder (Ethereum_asset_registry_scan scan) ->
+      Ok scan
   | Prover.Output.Error err ->
       Error (Error.of_string err)
   | _ ->
@@ -432,12 +460,16 @@ let verify_check_accepted_and_ase_cancelled_deposit t input =
 let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
     ~unprocessed_actions ~(old_inner_acc : Account.t) ~old_inner_acc_path
     ~(new_inner_acc : Account.t) ~new_inner_acc_path ~da_multisig ~slot_range
-    ~emergency_mode =
+    ~emergency_mode ~old_ethereum_asset_registry_acc
+    ~old_ethereum_asset_registry_path ~new_ethereum_asset_registry_acc
+    ~new_ethereum_asset_registry_path ~ethereum_asset_registration =
   (* Counting length of inner action state *)
   let%bind.Deferred.Result inner_ase =
     let%map.Deferred.Result proof, target, excess =
+      (* Pickles aggregation can reject conditional dummy proofs while wrapping.
+         Generate a zero-length leaf proof when there are no new actions. *)
       ase_cached_folder_with_length t ~source:inner_ase_source
-        ~elems:new_inner_actions
+        ~elems:new_inner_actions ~prove_empty:true
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.inner
         (ase_with_length ~sendfn:send_with_priority)
     in
@@ -454,8 +486,10 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
       Rollup_state.Outer_action_state.With_length.raw outer_action_state
     in
     let%map.Deferred.Result proof, target, excess =
+      (* See the inner ASE above: give the two-proof aggregator a concrete
+         predecessor for an empty transition too. *)
       ase_cached_folder_without_length t ~source:action_state
-        ~elems:unprocessed_actions
+        ~elems:unprocessed_actions ~prove_empty:true
         ~max_excess:Zeko_constants.Max_excess_actions.Commit.outer
         (ase_without_length ~sendfn:send_with_priority)
     in
@@ -477,6 +511,11 @@ let outer_commit t ~txn_snark ~public_key ~inner_ase_source ~new_inner_actions
        ; new_inner_acc_path
        ; da_multisig
        ; slot_range
+       ; old_ethereum_asset_registry_acc
+       ; old_ethereum_asset_registry_path
+       ; new_ethereum_asset_registry_acc
+       ; new_ethereum_asset_registry_path
+       ; ethereum_asset_registration
        } )
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
@@ -552,6 +591,74 @@ let finalize_deposit t ~public_key ~may_use_token ~inner_authorization_kind
       Bridge
         (Finalize_deposit
            { public_key
+           ; may_use_token
+           ; inner_authorization_kind
+           ; ase
+           ; check_accepted
+           ; prev_next_deposit
+           ; prev_nonce
+           ; helper_account_new
+           } ))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let finalize_ethereum_token_deposit t ~public_key ~asset ~may_use_token
+    ~inner_authorization_kind ~(ase : Ase.With_length.Stmt.t * Field.t list)
+    ~(check_accepted :
+       Bridge.Check_accepted_ethereum_token.Init.t
+       * Field.t
+       * Bridge.Check_accepted_ethereum_token.Elem.t list ) ~prev_next_deposit
+    ~prev_nonce ~helper_account_new =
+  let%bind.Deferred.Result ase =
+    let ase_source, ase_elms = ase in
+    let%map.Deferred.Result proof, target, excess =
+      ase_cached_folder_with_length t ~source:ase_source ~elems:ase_elms
+        ~max_excess:Zeko_constants.Max_excess_actions.Finalize_deposit.outer
+        (ase_with_length ~sendfn:send)
+    in
+    Bridge.Finalize_ethereum_token_deposit.Ase_inst.
+      { proof; proof_target = target; init = ase_source; excess }
+  in
+  let%bind.Deferred.Result check_accepted =
+    let init, deposit_hash, elems = check_accepted in
+    let source : Bridge.Check_accepted_ethereum_token.Stmt.t =
+      { params = init.params
+      ; action_state =
+          Zkapp_account.Actions_impl.push_hash
+            (Rollup_state.Outer_action_state.raw init.original_action_state)
+            deposit_hash
+          |> Rollup_state.Outer_action_state.unsafe_value_of_field
+      ; deposit_index = init.deposit_index
+      ; n_steps = Zeko_util.Checked32.zero
+      ; is_rejected = false
+      ; is_accepted = false
+      }
+    in
+    let%map.Deferred.Result proof, target, excess =
+      check_accepted_folder t ~source ~elems
+        ~max_excess:
+          Zeko_constants.Max_excess_actions.Finalize_deposit.check_accepted
+        check_accepted_ethereum_token
+    in
+    ( { proof
+      ; proof_source = source
+      ; proof_target = target
+      ; init = Bridge.Check_accepted_ethereum_token.Init.to_serializable init
+      ; excess
+      }
+      : Bridge.Check_accepted_ethereum_token.serializable )
+  in
+  send t
+    Prover.Input.(
+      Bridge
+        (Finalize_ethereum_token_deposit
+           { public_key
+           ; asset
            ; may_use_token
            ; inner_authorization_kind
            ; ase
@@ -668,6 +775,50 @@ let finalize_cancelled_deposit t ~public_key ~may_use_token
 
 let inner_receive t witness =
   send t Prover.Input.(Bridge (Inner_receive witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let inner_receive_ethereum_token t witness =
+  send t Prover.Input.(Bridge (Inner_receive_ethereum_token witness))
+  >>| function
+  | Prover.Output.Call_forest (parent_with_calls, proof) ->
+      Ok (parent_with_calls, proof)
+  | Prover.Output.Error err ->
+      Error (Error.of_string err)
+  | _ ->
+      failwith "Unexpected response from prover"
+
+let register_ethereum_asset t
+    ~(init : Bridge.Ethereum_asset_registry.Scan.Init.t)
+    ~(elems : Bridge.Ethereum_asset_registry.Scan.Elem.t list) ~append_path =
+  let source : Bridge.Ethereum_asset_registry.Scan.Stmt.t =
+    { old_root = init.old_state.root
+    ; leaf_count = init.old_state.leaf_count
+    ; candidate = init.candidate
+    ; next_expected_index = Zeko_util.Checked32.zero
+    ; traversed_count = Zeko_util.Checked32.zero
+    }
+  in
+  let%bind.Deferred.Result proof, proof_target, excess =
+    ethereum_asset_registry_folder t ~source ~elems ~max_excess:0
+      ethereum_asset_registry_scan
+  in
+  send t
+    Prover.Input.(
+      Bridge
+        (Register_ethereum_asset
+           { proof
+           ; proof_source = source
+           ; proof_target
+           ; init
+           ; excess
+           ; append_path
+           } ))
   >>| function
   | Prover.Output.Call_forest (parent_with_calls, proof) ->
       Ok (parent_with_calls, proof)

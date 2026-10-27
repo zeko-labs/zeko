@@ -14,7 +14,7 @@ from pathlib import Path
 # This script is designed to fetch relevant parameters from a running testnet
 # and run a Coda helm chart against that testnet.
 # Example Invocation:
-# python3 scripts/testnet-validation/helm_deploy.py run --working-directory ~/Desktop/config --coda-docker-image codaprotocol/coda-daemon:0.0.12-beta-rosetta-dockerfile-aec5631
+# python3 scripts/testnet-validation/helm_deploy.py run --working-directory ~/Desktop/config --chart-path ../coda-automation/helm/archive-node --release-name my-testnet
 
 SCRIPT_DIR = Path(__file__).parent.absolute()
 config.load_kube_config()
@@ -101,8 +101,11 @@ def fetch_daemon_json(working_directory, namespace="default", v1=client.CoreV1Ap
       print(f"Wrote daemon.json to {outpath}")
 
 def helm_install(namespace, overrides_file, chart_path, release_name):
-  command = f"helm install --values {overrides_file} {release_name} {chart_path}"
-  process = subprocess.Popen(command.split(), stdout=subprocess.PIPE)
+  command = [
+    "helm", "install", "--namespace", namespace,
+    "--values", str(overrides_file), release_name, str(chart_path),
+  ]
+  process = subprocess.Popen(command, stdout=subprocess.PIPE)
   output, error = process.communicate()
   if error:
     print(error)
@@ -119,7 +122,13 @@ def helm_install(namespace, overrides_file, chart_path, release_name):
 @click.option("--values-file", default=None, help="An Optional values.yaml, used to override chart defaults.")
 @click.option("--release-name", default=None, help="The name of the release to pull values from.")
 @click.option("--working-directory", default=".", help="The location to download temporary files to, namely the daemon.json")
-def run(namespace, values_file, release_name, working_directory):
+@click.option(
+  "--chart-path",
+  required=True,
+  type=click.Path(exists=True, file_okay=False, path_type=Path),
+  help="The archive-node Helm chart directory.",
+)
+def run(namespace, values_file, release_name, working_directory, chart_path):
   if working_directory == ".":
     working_directory = SCRIPT_DIR
   else:
@@ -147,7 +156,6 @@ def run(namespace, values_file, release_name, working_directory):
   #run_docker(docker_image, gossip_port, working_directory, peers=addresses)
 
   # `helm install` with merged values.yaml to specified namespace
-  chart_path = "/Users/connerswann/code/coda-automation/helm/archive-node"
   output = helm_install(namespace, overrides_file.absolute(), chart_path, "test-archive")
 
 

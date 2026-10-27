@@ -136,7 +136,24 @@ module Make (Inputs : sig
   val max_sequencer_inactivity : int
 
   val emergency_da_public_key : PC.t
-end) =
+
+  val ethereum_asset_registry_public_key : PC.t option
+
+  val ethereum_asset_registry_schema_version : Checked32.t
+
+  val ethereum_asset_approved_mft_standard_vk_id : F.t
+
+  val ethereum_asset_approved_mft_token_vk_hash : F.t
+
+  val ethereum_asset_approved_mft_admin_vk_hash : F.t
+
+  val ethereum_asset_universal_bridge_vk_id : F.t
+
+  val ethereum_asset_universal_bridge_vk_hash : F.t
+
+  val ethereum_asset_vault_public_key : PC.t
+end)
+() =
 struct
   open Inputs
 
@@ -152,6 +169,123 @@ struct
         let length = Account_set.height
       end)
 
+  module Registry_path = struct
+    module Step = struct
+      type t = { hash_other : F.t; is_right : Zeko_util.Boolean.t }
+      [@@deriving snarky]
+
+      let to_yojson ({ hash_other; is_right } : t) =
+        `Assoc
+          [ ("hash_other", Field.to_yojson hash_other)
+          ; ("is_right", `Bool is_right)
+          ]
+
+      let of_yojson json =
+        let open Yojson.Safe.Util in
+        try
+          let hash_other =
+            match member "hash_other" json |> Field.of_yojson with
+            | Ok hash ->
+                hash
+            | Error error ->
+                failwith error
+          in
+          Ok ({ hash_other; is_right = member "is_right" json |> to_bool } : t)
+        with exn -> Error (Exn.to_string exn)
+    end
+
+    include
+      SnarkList
+        (Step)
+        (struct
+          let length = Zeko_constants.constraint_constants.ledger_depth
+        end)
+
+    let to_yojson path = `List (List.map path ~f:Step.to_yojson)
+
+    let of_yojson = function
+      | `List values ->
+          List.fold_right values ~init:(Ok []) ~f:(fun value acc ->
+              match (Step.of_yojson value, acc) with
+              | Ok value, Ok rest ->
+                  Ok (value :: rest)
+              | Error error, _ | _, Error error ->
+                  Error error )
+      | _ ->
+          Error "registry account path must be a JSON list"
+  end
+
+  module Registration_witness = struct
+    type t =
+      { did_append : Zeko_util.Boolean.t
+      ; candidate : Asset_registry.Asset_record.t
+      ; append_path : Asset_registry.Path.t
+      ; token_owner_acc : Account.t
+      ; token_owner_path : Registry_path.t
+      ; admin_acc : Account.t
+      ; admin_path : Registry_path.t
+      ; vault_acc : Account.t
+      ; vault_path : Registry_path.t
+      ; circulation_acc : Account.t
+      ; circulation_path : Registry_path.t
+      }
+    [@@deriving snarky]
+
+    let to_yojson
+        ({ did_append
+         ; candidate
+         ; append_path
+         ; token_owner_acc
+         ; token_owner_path
+         ; admin_acc
+         ; admin_path
+         ; vault_acc
+         ; vault_path
+         ; circulation_acc
+         ; circulation_path
+         } :
+          t ) =
+      `Assoc
+        [ ("did_append", `Bool did_append)
+        ; ("candidate", Asset_registry.Asset_record.to_yojson candidate)
+        ; ("append_path", Asset_registry.Path.to_yojson append_path)
+        ; ("token_owner_acc", Account.to_yojson token_owner_acc)
+        ; ("token_owner_path", Registry_path.to_yojson token_owner_path)
+        ; ("admin_acc", Account.to_yojson admin_acc)
+        ; ("admin_path", Registry_path.to_yojson admin_path)
+        ; ("vault_acc", Account.to_yojson vault_acc)
+        ; ("vault_path", Registry_path.to_yojson vault_path)
+        ; ("circulation_acc", Account.to_yojson circulation_acc)
+        ; ("circulation_path", Registry_path.to_yojson circulation_path)
+        ]
+
+    let of_yojson json =
+      let open Yojson.Safe.Util in
+      let get parse name =
+        match member name json |> parse with
+        | Ok value ->
+            value
+        | Error error ->
+            failwith error
+      in
+      try
+        Ok
+          ( { did_append = member "did_append" json |> to_bool
+            ; candidate = get Asset_registry.Asset_record.of_yojson "candidate"
+            ; append_path = get Asset_registry.Path.of_yojson "append_path"
+            ; token_owner_acc = get Account.of_yojson "token_owner_acc"
+            ; token_owner_path = get Registry_path.of_yojson "token_owner_path"
+            ; admin_acc = get Account.of_yojson "admin_acc"
+            ; admin_path = get Registry_path.of_yojson "admin_path"
+            ; vault_acc = get Account.of_yojson "vault_acc"
+            ; vault_path = get Registry_path.of_yojson "vault_path"
+            ; circulation_acc = get Account.of_yojson "circulation_acc"
+            ; circulation_path = get Registry_path.of_yojson "circulation_path"
+            }
+            : t )
+      with exn -> Error (Exn.to_string exn)
+  end
+
   module Base_witness = struct
     type t =
       { public_key : PC.t  (** Our public key on the L2 *)
@@ -163,6 +297,11 @@ struct
       ; da_multisig : Multisig.Witness.t
       ; slot_range : Slot_range.t
       ; emergency_mode : Zeko_util.Boolean.t
+      ; old_ethereum_asset_registry_acc : Account.t
+      ; old_ethereum_asset_registry_path : Registry_path.t
+      ; new_ethereum_asset_registry_acc : Account.t
+      ; new_ethereum_asset_registry_path : Registry_path.t
+      ; ethereum_asset_registration : Registration_witness.t
       }
     [@@deriving snarky]
   end
@@ -181,6 +320,15 @@ struct
     Checked.List.foldi path ~init ~f:(fun height acc PathElt.{ right_side } ->
         make_checked @@ fun () -> Ledger_hash.merge_var ~height acc right_side )
 
+  let implied_registry_root (account : Account.var) (path : Registry_path.var) :
+      F.var Checked.t =
+    let* init = Account.Checked.digest account in
+    Checked.List.foldi path ~init
+      ~f:(fun height acc Registry_path.Step.{ hash_other; is_right } ->
+        let* left = Field.Checked.if_ is_right ~then_:hash_other ~else_:acc in
+        let* right = Field.Checked.if_ is_right ~then_:acc ~else_:hash_other in
+        make_checked @@ fun () -> Ledger_hash.merge_var ~height left right )
+
   let get_zkapp (a : Account.var) : Zkapp_account.Checked.t Checked.t =
     let hash, content = a.zkapp in
     let* content =
@@ -197,12 +345,410 @@ struct
     in
     content
 
+  let checked32_of_field field =
+    let* value =
+      exists Checked32.typ
+        ~compute:
+          (let+| value = As_prover.read_var field in
+           Field.to_string value |> Checked32.of_string )
+    in
+    let*| () =
+      assert_equal ~label:"32-bit registry account state" F.typ field
+        (Checked32.Checked.to_field value)
+    in
+    value
+
+  let registry_state_of_account ~registry_public_key (account : Account.var) =
+    let* () =
+      PC.Checked.Assert.equal account.public_key
+        (constant PC.typ registry_public_key)
+    in
+    let* () =
+      assert_equal ~label:"registry account token ID" Token_id.typ
+        account.token_id
+        (constant Token_id.typ Token_id.default)
+    in
+    let* zkapp = get_zkapp account in
+    let (root :: leaf_count_field :: schema_version_field :: _) =
+      zkapp.app_state
+    in
+    let* leaf_count = checked32_of_field leaf_count_field in
+    let* schema_version = checked32_of_field schema_version_field in
+    let* () =
+      assert_equal ~label:"registry account schema" Checked32.typ schema_version
+        (Checked32.Checked.constant
+           (Checked32.of_int
+              Zeko_constants.Ethereum_asset_registry.schema_version ) )
+    in
+    let* has_valid_count =
+      Checked32.Checked.(
+        leaf_count
+        < constant
+            (Checked32.of_int
+               (Zeko_constants.Ethereum_asset_registry.max_assets + 1) ))
+    in
+    let*| () = Boolean.Assert.is_true has_valid_count in
+    ( { Asset_registry.Registry_state.root; leaf_count; schema_version }
+      : Asset_registry.Registry_state.var )
+
+  let assert_equal_if ~label condition typ left right =
+    let* equal = var_equal typ left right in
+    with_label label (fun () ->
+        let open Boolean.Expr in
+        ((not !condition) || equal) |> assert_ )
+
+  let assert_true_if ~label condition value =
+    with_label label (fun () ->
+        let open Boolean.Expr in
+        ((not !condition) || !value) |> assert_ )
+
+  let authenticate_account_if ~label ~ledger_root ~active account path =
+    let* root = implied_registry_root account path in
+    assert_equal_if ~label active Ledger_hash.typ ledger_root
+      (Ledger_hash.var_of_hash_packed root)
+
+  let immutable_vk_permission =
+    (Permissions.Auth_required.Impossible, Mina_numbers.Txn_version.current)
+
+  let expected_zkapp_default_permissions : Permissions.t =
+    { Permissions.user_default with
+      edit_state = Proof
+    ; send = Proof
+    ; edit_action_state = Proof
+    }
+
+  let expected_token_owner_permissions : Permissions.t =
+    { expected_zkapp_default_permissions with
+      access = Proof
+    ; set_permissions = Impossible
+    ; set_verification_key = immutable_vk_permission
+    }
+
+  let expected_token_admin_permissions : Permissions.t =
+    { expected_zkapp_default_permissions with
+      set_permissions = Impossible
+    ; set_verification_key = immutable_vk_permission
+    }
+
+  let expected_vault_permissions : Permissions.t =
+    { expected_zkapp_default_permissions with
+      send = Proof
+    ; set_permissions = Impossible
+    ; set_verification_key = immutable_vk_permission
+    }
+
+  let expected_circulation_permissions : Permissions.t =
+    { expected_zkapp_default_permissions with
+      send = None
+    ; set_permissions = Impossible
+    }
+
+  let assert_vk_hash_if ~label active zkapp expected =
+    let verification_key = zkapp.Zkapp_account.Poly.verification_key in
+    let* () =
+      assert_true_if ~label:(label ^ " installed") active
+        (Zkapp_basic.Flagged_option.is_some verification_key)
+    in
+    assert_equal_if ~label active F.typ
+      (Data_as_hash.hash (Zkapp_basic.Flagged_option.data verification_key))
+      (constant F.typ expected)
+
+  let validate_registration_accounts ~target_ledger
+      ~(old_state : Asset_registry.Registry_state.var)
+      ~(new_state : Asset_registry.Registry_state.var)
+      (registration : Registration_witness.var) =
+    let active = registration.did_append in
+    let candidate = registration.candidate in
+    let* expected_count =
+      Checked32.Checked.succ_if old_state.leaf_count active
+    in
+    let* () =
+      assert_equal ~label:"registry count advances by at most one" Checked32.typ
+        new_state.leaf_count expected_count
+    in
+    let* candidate_leaf =
+      Asset_registry.Asset_record.commitment_var candidate
+    in
+    let* old_root =
+      Asset_registry.implied_root_var
+        ~leaf:(constant F.typ Field.zero)
+        ~index:old_state.leaf_count registration.append_path
+    in
+    let* appended_root =
+      Asset_registry.implied_root_var ~leaf:candidate_leaf
+        ~index:old_state.leaf_count registration.append_path
+    in
+    let* expected_root =
+      Field.Checked.if_ active ~then_:appended_root ~else_:old_state.root
+    in
+    let* () =
+      assert_equal ~label:"registry append root transition" F.typ new_state.root
+        expected_root
+    in
+    let* () =
+      assert_equal_if ~label:"registry empty append slot" active F.typ
+        old_state.root old_root
+    in
+    let* () =
+      assert_equal_if ~label:"registry append index" active Checked32.typ
+        candidate.registry_index old_state.leaf_count
+    in
+    let* () =
+      assert_equal_if ~label:"registry append schema" active Checked32.typ
+        candidate.schema_version
+        (Checked32.Checked.constant
+           Inputs.ethereum_asset_registry_schema_version )
+    in
+    let* () =
+      assert_equal_if ~label:"registry append MFT standard ID" active F.typ
+        candidate.mft_standard_vk_id
+        (constant F.typ Inputs.ethereum_asset_approved_mft_standard_vk_id)
+    in
+    let* () =
+      assert_equal_if ~label:"registry append universal bridge ID" active F.typ
+        candidate.universal_bridge_vk_id
+        (constant F.typ Inputs.ethereum_asset_universal_bridge_vk_id)
+    in
+    let* () =
+      assert_equal_if ~label:"registry append shared vault" active PC.typ
+        candidate.vault_public_key
+        (constant PC.typ Inputs.ethereum_asset_vault_public_key)
+    in
+    let owner_id =
+      Account_id.Checked.create candidate.token_owner_l2
+        (constant Token_id.typ Token_id.default)
+    in
+    let* derived_token_id =
+      make_checked (fun () ->
+          Account_id.Checked.derive_token_id ~owner:owner_id )
+    in
+    let* () =
+      assert_equal_if ~label:"registry append derived token ID" active
+        Token_id.typ candidate.token_id_l2 derived_token_id
+    in
+    let* () =
+      authenticate_account_if ~label:"registered token owner ledger opening"
+        ~ledger_root:target_ledger ~active registration.token_owner_acc
+        registration.token_owner_path
+    in
+    let* () =
+      assert_equal_if ~label:"registered token owner public key" active PC.typ
+        registration.token_owner_acc.public_key candidate.token_owner_l2
+    in
+    let* () =
+      assert_equal_if ~label:"registered token owner token ID" active
+        Token_id.typ registration.token_owner_acc.token_id
+        (constant Token_id.typ Token_id.default)
+    in
+    let* () =
+      assert_equal_if ~label:"registered token owner permissions" active
+        Permissions.typ registration.token_owner_acc.permissions
+        (constant Permissions.typ expected_token_owner_permissions)
+    in
+    let* token_owner_zkapp = get_zkapp registration.token_owner_acc in
+    let* () =
+      assert_vk_hash_if ~label:"registered token owner VK" active
+        token_owner_zkapp Inputs.ethereum_asset_approved_mft_token_vk_hash
+    in
+    let (owner_decimals :: admin_x :: admin_is_odd_field :: paused :: _) =
+      token_owner_zkapp.app_state
+    in
+    let* () =
+      assert_equal_if ~label:"registered token decimals" active F.typ
+        owner_decimals
+        (Checked32.Checked.to_field candidate.decimals)
+    in
+    let* admin_is_odd = Boolean.of_field admin_is_odd_field in
+    let admin_public_key : PC.var = { x = admin_x; is_odd = admin_is_odd } in
+    let* () =
+      assert_equal_if ~label:"registered token is unpaused" active F.typ paused
+        (constant F.typ Field.zero)
+    in
+    let* () =
+      authenticate_account_if ~label:"registered token admin ledger opening"
+        ~ledger_root:target_ledger ~active registration.admin_acc
+        registration.admin_path
+    in
+    let* () =
+      assert_equal_if ~label:"registered token admin public key" active PC.typ
+        registration.admin_acc.public_key admin_public_key
+    in
+    let* () =
+      assert_equal_if ~label:"registered token admin token ID" active
+        Token_id.typ registration.admin_acc.token_id
+        (constant Token_id.typ Token_id.default)
+    in
+    let* () =
+      assert_equal_if ~label:"registered token admin permissions" active
+        Permissions.typ registration.admin_acc.permissions
+        (constant Permissions.typ expected_token_admin_permissions)
+    in
+    let* admin_zkapp = get_zkapp registration.admin_acc in
+    let* () =
+      assert_vk_hash_if ~label:"registered token admin VK" active admin_zkapp
+        Inputs.ethereum_asset_approved_mft_admin_vk_hash
+    in
+    let (authority_x :: authority_is_odd_field :: _) = admin_zkapp.app_state in
+    let* authority_is_odd = Boolean.of_field authority_is_odd_field in
+    let admin_authority : PC.var =
+      { x = authority_x; is_odd = authority_is_odd }
+    in
+    let* () =
+      assert_equal_if ~label:"registered token admin authority revoked" active
+        PC.typ admin_authority (constant PC.typ PC.empty)
+    in
+    let* () =
+      authenticate_account_if ~label:"registered vault ledger opening"
+        ~ledger_root:target_ledger ~active registration.vault_acc
+        registration.vault_path
+    in
+    let* () =
+      assert_equal_if ~label:"registered vault public key" active PC.typ
+        registration.vault_acc.public_key candidate.vault_public_key
+    in
+    let* () =
+      assert_equal_if ~label:"registered vault token ID" active Token_id.typ
+        registration.vault_acc.token_id derived_token_id
+    in
+    let* () =
+      assert_equal_if ~label:"registered vault inventory" active
+        Currency.Amount.typ
+        (Currency.Balance.Checked.to_amount registration.vault_acc.balance)
+        candidate.inventory_cap
+    in
+    let* () =
+      assert_equal_if ~label:"registered vault permissions" active
+        Permissions.typ registration.vault_acc.permissions
+        (constant Permissions.typ expected_vault_permissions)
+    in
+    let* vault_zkapp = get_zkapp registration.vault_acc in
+    let* () =
+      assert_vk_hash_if ~label:"registered vault VK" active vault_zkapp
+        Inputs.ethereum_asset_universal_bridge_vk_hash
+    in
+    let* () =
+      authenticate_account_if ~label:"registered circulation ledger opening"
+        ~ledger_root:target_ledger ~active registration.circulation_acc
+        registration.circulation_path
+    in
+    let* () =
+      assert_equal_if ~label:"registered circulation public key" active PC.typ
+        registration.circulation_acc.public_key candidate.token_owner_l2
+    in
+    let* () =
+      assert_equal_if ~label:"registered circulation token ID" active
+        Token_id.typ registration.circulation_acc.token_id derived_token_id
+    in
+    let* () =
+      assert_equal_if ~label:"registered circulation supply" active
+        Currency.Amount.typ
+        (Currency.Balance.Checked.to_amount registration.circulation_acc.balance)
+        candidate.inventory_cap
+    in
+    assert_equal_if ~label:"registered circulation permissions" active
+      Permissions.typ registration.circulation_acc.permissions
+      (constant Permissions.typ expected_circulation_permissions)
+
+  (** Keeps the four registered-account ledger openings out of the recursive
+      outer rule. Pickles supports large non-recursive circuits, while its
+      recursive verifier currently assumes a single constraint chunk. *)
+  module Registration_validation = struct
+    module Stmt = struct
+      type t =
+        { source_ledger_root : F.t
+        ; target_ledger_root : F.t
+        ; new_state : Asset_registry.Registry_state.t
+        }
+      [@@deriving snarky]
+    end
+
+    module Witness = struct
+      type t =
+        { old_registry_acc : Account.t
+        ; old_registry_path : Registry_path.t
+        ; new_registry_acc : Account.t
+        ; new_registry_path : Registry_path.t
+        ; registration : Registration_witness.t
+        }
+      [@@deriving snarky]
+
+      let of_base_witness (w : Base_witness.t) : t =
+        { old_registry_acc = w.old_ethereum_asset_registry_acc
+        ; old_registry_path = w.old_ethereum_asset_registry_path
+        ; new_registry_acc = w.new_ethereum_asset_registry_acc
+        ; new_registry_path = w.new_ethereum_asset_registry_path
+        ; registration = w.ethereum_asset_registration
+        }
+    end
+
+    let main (w : Witness.t V.t) =
+      match Inputs.ethereum_asset_registry_public_key with
+      | None ->
+          let zero = constant F.typ Field.zero in
+          let zero32 = Checked32.Checked.constant Checked32.zero in
+          let out : Stmt.var =
+            { source_ledger_root = zero
+            ; target_ledger_root = zero
+            ; new_state =
+                { Asset_registry.Registry_state.root = zero
+                ; leaf_count = zero32
+                ; schema_version = zero32
+                }
+            }
+          in
+          Checked.return Compile_simple.{ prevs = No_prevs; out }
+      | Some registry_public_key ->
+          let* Witness.
+                 { old_registry_acc
+                 ; old_registry_path
+                 ; new_registry_acc
+                 ; new_registry_path
+                 ; registration
+                 } =
+            exists ~compute:(V.get w) Witness.typ
+          in
+          let* source_ledger_root =
+            implied_registry_root old_registry_acc old_registry_path
+          in
+          let* target_ledger_root =
+            implied_registry_root new_registry_acc new_registry_path
+          in
+          let* old_state =
+            registry_state_of_account ~registry_public_key old_registry_acc
+          in
+          let* new_state =
+            registry_state_of_account ~registry_public_key new_registry_acc
+          in
+          let*| () =
+            validate_registration_accounts
+              ~target_ledger:(Ledger_hash.var_of_hash_packed target_ledger_root)
+              ~old_state ~new_state registration
+          in
+          let out : Stmt.var =
+            { source_ledger_root; target_ledger_root; new_state }
+          in
+          Compile_simple.{ prevs = No_prevs; out }
+
+    let rule : _ Compile_simple.branch lazy_t =
+      lazy
+        { branch_name = "Ethereum asset registration validation"
+        ; tags = No_tags
+        ; main
+        }
+
+    include
+      ( val Compile_simple.compile ()
+              ~name:"Ethereum asset registration validation" ~branches:[ rule ]
+              ~out_typ:Stmt.typ )
+  end
+
   type da_mode = Multisig | Emergency of Emergency_da_folder.Stmt.var
 
   let main ?(check_sequencer_precondition = true) ~da_mode
       (w : Base_witness.var) (txn_stmt : Txn_state.Zeko_stmt.var)
       ((ase_outer, ase_inner) :
-        Ase_outer_inst.Stmt.var * Ase_inner_inst.Stmt.var ) =
+        Ase_outer_inst.Stmt.var * Ase_inner_inst.Stmt.var )
+      (registration_validation : Registration_validation.Stmt.var) =
     with_label __LOC__
     @@ fun () ->
     let ({ public_key
@@ -214,6 +760,7 @@ struct
          ; da_multisig
          ; slot_range
          ; emergency_mode
+         ; _
          }
           : Base_witness.var ) =
       w
@@ -241,6 +788,25 @@ struct
          }
           : Txn_state.Zeko_stmt.var ) =
       txn_stmt
+    in
+    let* ethereum_asset_registry_state =
+      match Inputs.ethereum_asset_registry_public_key with
+      | None ->
+          Checked.return None
+      | Some _ ->
+          let* () =
+            assert_equal ~label:"source registry account ledger opening"
+              Ledger_hash.typ source_ledger
+              (Ledger_hash.var_of_hash_packed
+                 registration_validation.source_ledger_root )
+          in
+          let* () =
+            assert_equal ~label:"target registry account ledger opening"
+              Ledger_hash.typ target_ledger
+              (Ledger_hash.var_of_hash_packed
+                 registration_validation.target_ledger_root )
+          in
+          Checked.return (Some registration_validation.new_state)
     in
     with_label __LOC__
     @@ fun () ->
@@ -530,9 +1096,27 @@ struct
       }
     in
 
+    (* Ethereum settlement needs the L2 registry checkpoint in the Pickles-bound
+       call forest, but Mina L1 has no registry account whose state can satisfy
+       an executable precondition. Bind the checkpoint into the signed
+       sequencer child's inert call data instead. *)
+    let* ethereum_asset_registry_call_data =
+      match
+        ( Inputs.ethereum_asset_registry_public_key
+        , ethereum_asset_registry_state )
+      with
+      | None, None ->
+          Checked.return (constant F.typ Field.zero)
+      | Some registry_public_key, Some registry_state ->
+          Asset_registry.Checkpoint.commitment_var ~registry_public_key
+            registry_state
+      | _ ->
+          failwith "inconsistent Ethereum asset registry circuit configuration"
+    in
     let sequencer_account_update =
       { default_account_update with
         public_key = Even_PC.to_pc_var sequencer
+      ; call_data = ethereum_asset_registry_call_data
       ; authorization_kind = authorization_signed ()
       ; use_full_commitment = Boolean.true_
       }
@@ -560,38 +1144,107 @@ struct
     in
 
     (* Assemble some stuff to help the prover and calculate public output *)
-    let*| out =
-      make_outputs ~chain:chain_l1 account_update
-        ( (sequencer_account_update, [])
-        ::
-        ( match emergency_da_account_update_opt with
-        | None ->
-            []
-        | Some emergency_da_au ->
-            [ (emergency_da_au, []) ] ) )
+    let calls : Calls.t =
+      match emergency_da_account_update_opt with
+      | None ->
+          [ (sequencer_account_update, []) ]
+      | Some emergency_da ->
+          [ (sequencer_account_update, []); (emergency_da, []) ]
     in
+    let*| out = make_outputs ~chain:chain_l1 account_update calls in
     out
+
+  module Internal_witness = struct
+    type t =
+      { base_witness : Base_witness.t
+      ; verify_base : Verify_base.t
+      ; registration_validation : Registration_validation.t
+      }
+    [@@deriving snarky]
+  end
 
   let rule : _ Compile_simple.branch lazy_t =
     lazy
       { branch_name = "Rollup step"
       ; tags =
-          Two_tags (Lazy.force Txn_rules.tag, Lazy.force Verify_both_ases.tag)
+          Two_tags
+            (Lazy.force Verify_base.tag, Lazy.force Registration_validation.tag)
       ; main =
-          (fun (w : Witness.t V.t) ->
-            let* Witness.{ txn_snark; base_witness; verify_both_ases } =
-              exists ~compute:(V.get w) Witness.typ
+          (fun (w : Internal_witness.t V.t) ->
+            let* Internal_witness.
+                   { base_witness; verify_base; registration_validation } =
+              exists ~compute:(V.get w) Internal_witness.typ
             in
-            let* txn_stmt, verify_txn_snark = Txn_rules.get txn_snark in
-            let* (ase_outer, ase_inner), verify_both_ases =
-              Verify_both_ases.get verify_both_ases
+            let* (txn_stmt, (ase_outer, ase_inner)), verify_base =
+              Verify_base.get verify_base
+            in
+            let* registration_validation, verify_registration =
+              Registration_validation.get registration_validation
             in
             let*| out =
-              main ~da_mode:Multisig base_witness txn_stmt (ase_outer, ase_inner)
+              main ~da_mode:Multisig base_witness txn_stmt
+                (ase_outer, ase_inner) registration_validation
             in
             Compile_simple.
-              { prevs = Two_prevs (verify_txn_snark, verify_both_ases); out } )
+              { prevs = Two_prevs (verify_base, verify_registration); out } )
       }
+
+  let prepare (Witness.{ txn_snark; base_witness; verify_both_ases } : Witness.t)
+      =
+    let Compile_simple.[ prove_base ] = Lazy.force Verify_base.provers in
+    let Compile_simple.[ prove_registration ] =
+      Lazy.force Registration_validation.provers
+    in
+    let%bind.Promise base_out, base_proof =
+      prove_base (txn_snark, verify_both_ases)
+    in
+    let%map.Promise registration_out, registration_proof =
+      prove_registration
+        (Registration_validation.Witness.of_base_witness base_witness)
+    in
+    ( { Internal_witness.base_witness
+      ; verify_base = Verify_base.make_unchecked ~proof:base_proof base_out
+      ; registration_validation =
+          Registration_validation.make_unchecked ~proof:registration_proof
+            registration_out
+      }
+      : Internal_witness.t )
+
+  module Verify_base_and_registration = struct
+    let main (w : (Verify_base.t * Registration_validation.t) V.t) =
+      let* verify_base, registration_validation =
+        exists ~compute:(V.get w)
+          Typ.(Verify_base.typ * Registration_validation.typ)
+      in
+      let* base, verify_base = Verify_base.get verify_base in
+      let*| registration_validation, verify_registration =
+        Registration_validation.get registration_validation
+      in
+      Compile_simple.
+        { prevs = Two_prevs (verify_base, verify_registration)
+        ; out = (base, registration_validation)
+        }
+
+    let rule : _ Compile_simple.branch lazy_t =
+      lazy
+        { branch_name = "Verify base and Ethereum asset registration"
+        ; tags =
+            Two_tags
+              ( Lazy.force Verify_base.tag
+              , Lazy.force Registration_validation.tag )
+        ; main
+        }
+
+    include
+      ( val Compile_simple.compile ()
+              ~name:"Verify base and Ethereum asset registration"
+              ~branches:[ rule ]
+              ~out_typ:
+                Typ.(
+                  Txn_state.Zeko_stmt.typ
+                  * (Ase_outer_inst.Stmt.typ * Ase_inner_inst.Stmt.typ)
+                  * Registration_validation.Stmt.typ) )
+  end
 
   (** Specialized version of the main function, used for emergency commits.
       Only usable after [max_sequencer_inactivity] slots of the sequencer not committing. *)
@@ -607,26 +1260,39 @@ struct
       [@@deriving snarky]
     end
 
+    module Internal_witness = struct
+      type t =
+        { base_witness : Base_witness.t
+        ; before_last_commit : Rollup_state.Outer_action_state.t
+        ; last_commit : Rollup_state.Outer_action.Commit.t
+        ; verify_emergency_folders : Verify_emergency_folders.t
+        ; verify_base_and_registration : Verify_base_and_registration.t
+        }
+      [@@deriving snarky]
+    end
+
     let rule : _ Compile_simple.branch lazy_t =
       lazy
         { branch_name = "Emergency step"
         ; tags =
             Two_tags
-              ( Lazy.force Verify_base.tag
+              ( Lazy.force Verify_base_and_registration.tag
               , Lazy.force Verify_emergency_folders.tag )
         ; main =
-            (fun (w : Witness.t V.t) ->
-              let* Witness.
+            (fun (w : Internal_witness.t V.t) ->
+              let* Internal_witness.
                      { base_witness
                      ; before_last_commit
                      ; last_commit
                      ; verify_emergency_folders
-                     ; verify_base
+                     ; verify_base_and_registration
                      } =
-                exists ~compute:(V.get w) Witness.typ
+                exists ~compute:(V.get w) Internal_witness.typ
               in
-              let* (txn_stmt, (ase_outer, ase_inner)), verify_base =
-                Verify_base.get verify_base
+              let* ( ( (txn_stmt, (ase_outer, ase_inner))
+                     , registration_validation )
+                   , verify_base_and_registration ) =
+                Verify_base_and_registration.get verify_base_and_registration
               in
               let* (count_commits, emergency_da_stmt), verify_emergency_folders
                   =
@@ -682,12 +1348,50 @@ struct
               let*| out =
                 main ~check_sequencer_precondition:false
                   ~da_mode:(Emergency emergency_da_stmt) base_witness txn_stmt
-                  (ase_outer, ase_inner)
+                  (ase_outer, ase_inner) registration_validation
               in
               Compile_simple.
-                { prevs = Two_prevs (verify_base, verify_emergency_folders)
+                { prevs =
+                    Two_prevs
+                      (verify_base_and_registration, verify_emergency_folders)
                 ; out
                 } )
         }
+
+    let prepare
+        (Witness.
+           { base_witness
+           ; before_last_commit
+           ; last_commit
+           ; verify_emergency_folders
+           ; verify_base
+           } :
+          Witness.t ) =
+      let Compile_simple.[ prove_registration ] =
+        Lazy.force Registration_validation.provers
+      in
+      let Compile_simple.[ prove_base_and_registration ] =
+        Lazy.force Verify_base_and_registration.provers
+      in
+      let%bind.Promise registration_out, registration_proof =
+        prove_registration
+          (Registration_validation.Witness.of_base_witness base_witness)
+      in
+      let registration_validation =
+        Registration_validation.make_unchecked ~proof:registration_proof
+          registration_out
+      in
+      let%map.Promise combined_out, combined_proof =
+        prove_base_and_registration (verify_base, registration_validation)
+      in
+      ( { Internal_witness.base_witness
+        ; before_last_commit
+        ; last_commit
+        ; verify_emergency_folders
+        ; verify_base_and_registration =
+            Verify_base_and_registration.make_unchecked ~proof:combined_proof
+              combined_out
+        }
+        : Internal_witness.t )
   end
 end

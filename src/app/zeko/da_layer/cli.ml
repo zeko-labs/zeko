@@ -19,6 +19,9 @@ let run_node =
          flag "--healthcheck-port"
            (optional_with_default 8081 int)
            ~doc:"int Optional HTTP port exposing /health for simple probes"
+       and bind_localhost =
+         flag "--bind-localhost" no_arg
+           ~doc:"Bind RPC and healthcheck servers to localhost only"
        and signer =
          flag "--signer" (required string)
            ~doc:"string Signer service host:port"
@@ -42,6 +45,10 @@ let run_node =
                Mina_signature_kind.Other_network network_id
          in
          let signer = Host_and_port.of_string signer in
+         let bind_address =
+           if bind_localhost then Tcp.Bind_to_address.Localhost
+           else Tcp.Bind_to_address.All_addresses
+         in
          let%bind signer =
            Signer_service.Client.create ~logger ~location:signer
            >>| Signer_service.Signer.of_client
@@ -49,7 +56,7 @@ let run_node =
          let%bind () =
            Deferred.ignore_m
            @@ Da_layer.Node.create_server ~chain ~logger ~port ~db_dir
-                ~healthcheck_port ~signer ~no_migrations ()
+                ~healthcheck_port ~bind_address ~signer ~no_migrations ()
          in
          [%log info] "Server started on port %d" port ;
          Async.never () ) )

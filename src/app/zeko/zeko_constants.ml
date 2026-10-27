@@ -3,6 +3,19 @@ open Mina_base
 open Signature_lib
 module Field = Snark_params.Tick.Run.Field
 
+(* Preserve the approximate fiat value and relative scale of the former
+   Mina-denominated defaults when the native asset is ETH. The conversion uses
+   25,000 native nanounits per former MINA and keeps every fee divisible by 10. *)
+let account_creation_fee = Currency.Fee.of_mina_string_exn "0.0000025"
+
+let minimum_fee = 0.00000025
+
+let transaction_fee_string = "0.0000025"
+
+let transaction_fee = Currency.Fee.of_mina_string_exn transaction_fee_string
+
+let outer_account_creation_fee = Currency.Fee.of_mina_string_exn "0.000025"
+
 let constraint_constants : Genesis_constants.Constraint_constants.t =
   { sub_windows_per_window = 1
   ; ledger_depth = 35
@@ -12,7 +25,7 @@ let constraint_constants : Genesis_constants.Constraint_constants.t =
   ; pending_coinbase_depth = 1
   ; coinbase_amount = Currency.Amount.zero
   ; supercharged_coinbase_factor = 1
-  ; account_creation_fee = Currency.Fee.of_mina_string_exn "0.1"
+  ; account_creation_fee
   ; fork = None
   }
 
@@ -43,9 +56,43 @@ let da_layer_check_salt = "zeko da layer check"
 
 let deposit_salt = "Deposit_params - qFB3jXP*)"
 
+(* Domain for an Ethereum-custodied native deposit. Unlike the Mina L1 bridge
+   action, this action has no Mina child call forest. *)
+let ethereum_deposit_salt = "Ethereum deposit V1"
+
+let ethereum_erc20_deposit_salt = "Ethereum ERC20 deposit V1"
+
+let ethereum_erc20_deposit_v2_salt = "Ethereum ERC20 deposit V2"
+
 let withdrawal_salt = "Withdrawal_params - qFB3jXP*)"
 
+let ethereum_erc20_withdrawal_salt = "Ethereum ERC20 withdrawal V1"
+
+let ethereum_erc20_withdrawal_v2_salt = "Ethereum ERC20 withdrawal V2"
+
+let ethereum_asset_registry_leaf_salt = "Ethereum asset registry leaf V1"
+
+let ethereum_asset_registry_node_salt = "Ethereum asset registry node V1"
+
+let ethereum_asset_registry_checkpoint_v2_salt = "Zeko registry checkpoint V2"
+
+let ethereum_asset_registry_registration_salt = "Ethereum asset reg V1"
+
+let ethereum_asset_bridge_call_salt = "Ethereum asset bridge call V1"
+
 let bridge_prover_cache = "bridge prover cache"
+
+module Ethereum_asset_registry = struct
+  let schema_version = 1
+
+  (* A depth-eight immutable list supports 256 mirrors. Registration proving is
+     recursive and linear in the current leaf count; normal bridge operations
+     authenticate one eight-element path. Keep this value synchronized with the
+     cross-language registry implementations and the proving benchmark. *)
+  let depth = 8
+
+  let max_assets = Int.pow 2 depth
+end
 
 module Max_excess_actions = struct
   module Inner_sync = struct
@@ -129,6 +176,16 @@ module Folder_iterations = struct
   module Count_commits : FOLDER_ITERATIONS = Check_accepted
 
   module Emergency_da : FOLDER_ITERATIONS = struct
+    let leaf_iterations = 8
+
+    let leaf_option_iterations = 4
+
+    let extend_iterations = 4
+
+    let extend_option_iterations = 2
+  end
+
+  module Ethereum_asset_registry_scan : FOLDER_ITERATIONS = struct
     let leaf_iterations = 8
 
     let leaf_option_iterations = 4
