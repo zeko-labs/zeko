@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Role: one-shot deployment export. Runs the real zeko deployment_export.exe
+# (packaged as zeko-deployment-export) against externally orchestrated
+# services, then post-processes: one settlement, manifest/settlement
+# consistency check, vk/proof extraction, settlementVkSha256. Output goes to a
+# mounted, initially empty directory.
+#
+# Required env: ZEKO_CIRCUITS_CONFIG, ZEKO_DEPLOY_CONFIG, ZEKO_BOOTSTRAP_L1,
+#   ZEKO_BOOTSTRAP_POSTGRES_HOST (+ ZEKO_BOOTSTRAP_POSTGRES_PASSWORD) or
+#   ZEKO_BOOTSTRAP_POSTGRES_URI, ZEKO_BOOTSTRAP_MQ (+ RABBITMQ_USER/
+#   RABBITMQ_PASSWORD read by Zeko's message_queue.ml), ZEKO_BOOTSTRAP_SIGNER,
+#   ZEKO_BOOTSTRAP_DA_NODES (space separated host:port), ZEKO_BOOTSTRAP_DA_QUORUM,
+#   ZEKO_BOOTSTRAP_WORKSPACE_HOST (external workspace guard)
+# Optional: ZEKO_ETHEREUM_COMMIT_VALIDITY_PERIOD (default 20, as upstream),
+#   ZEKO_BOOTSTRAP_OUTPUT_DIR (default /out), ZEKO_BOOTSTRAP_SOURCE_REVISION.
+source "$(dirname "${BASH_SOURCE[0]}")/zeko-bootstrap-common.sh"
+
+bootstrap_require_external_workspace
+bootstrap_require_circuit_config
+bootstrap_read_secret ZEKO_SIGNER_AUTH_TOKEN /run/secrets/signer_auth_token
+bootstrap_require_signer_tls
+bootstrap_require_mq_credentials
+for variable in ZEKO_BOOTSTRAP_L1 ZEKO_BOOTSTRAP_MQ \
+  ZEKO_BOOTSTRAP_SIGNER ZEKO_BOOTSTRAP_DA_NODES ZEKO_BOOTSTRAP_DA_QUORUM; do
+  [[ -n ${!variable:-} ]] || bootstrap_fail "$variable is required"
+done
+if [[ -z ${ZEKO_BOOTSTRAP_POSTGRES_URI:-} ]]; then
+  [[ -n ${ZEKO_BOOTSTRAP_POSTGRES_HOST:-} ]] \
+    || bootstrap_fail "ZEKO_BOOTSTRAP_POSTGRES_URI or ZEKO_BOOTSTRAP_POSTGRES_HOST is required"
+  [[ ${ZEKO_BOOTSTRAP_POSTGRES_PASSWORD:-} =~ ^[A-Za-z0-9]+$ ]] \
+    || bootstrap_fail "ZEKO_BOOTSTRAP_POSTGRES_PASSWORD is required ([A-Za-z0-9] only; it is embedded in the connection URI)"
+  ZEKO_BOOTSTRAP_POSTGRES_URI="postgres://postgres:$ZEKO_BOOTSTRAP_POSTGRES_PASSWORD@$ZEKO_BOOTSTRAP_POSTGRES_HOST/postgres"
+  unset ZEKO_BOOTSTRAP_POSTGRES_PASSWORD
+fi
+[[ $ZEKO_BOOTSTRAP_DA_QUORUM =~ ^[1-3]$ ]] || bootstrap_fail "ZEKO_BOOTSTRAP_DA_QUORUM must be 1-3"
+read -r -a da_nodes <<<"$ZEKO_BOOTSTRAP_DA_NODES"
+((${#da_nodes[@]} >= 1 && ${#da_nodes[@]} <= 3)) || bootstrap_fail "1-3 DA nodes required"
+((ZEKO_BOOTSTRAP_DA_QUORUM <= ${#da_nodes[@]})) || bootstrap_fail "quorum exceeds DA node count"
+
+output=${ZEKO_BOOTSTRAP_OUTPUT_DIR:-/out}
+[[ -d $output ]] || bootstrap_fail "output directory $output is not mounted"
+[[ -z $(ls -A "$output") ]] || bootstrap_fail "refusing to export into non-empty $output"
+state=${ZEKO_BOOTSTRAP_STATE_DIR:-/var/lib/zeko-bootstrap}
+mkdir -p "$state/sequencer"
+staging=$(mktemp -d "$output/.export.XXXXXX")
+
+bootstrap_wait_tcp "${ZEKO_BOOTSTRAP_L1%%:*}" "${ZEKO_BOOTSTRAP_L1##*:}"
+bootstrap_wait_tcp "${ZEKO_BOOTSTRAP_MQ%%:*}" "${ZEKO_BOOTSTRAP_MQ##*:}"
+bootstrap_wait_tcp "${ZEKO_BOOTSTRAP_SIGNER%%:*}" "${ZEKO_BOOTSTRAP_SIGNER##*:}"
+da_arguments=()
+for node in "${da_nodes[@]}"; do
+  bootstrap_wait_tcp "${node%%:*}" "${node##*:}"
+  da_arguments+=(--da-node "$node")
+done
+
+zeko-deployment-export \
+  --output-directory "$staging" \
+  --db-dir "$state/sequencer" \
+  --l1-uri "http://$ZEKO_BOOTSTRAP_L1/graphql" \
+  --postgres-uri "$ZEKO_BOOTSTRAP_POSTGRES_URI" \
+  "${da_arguments[@]}" --da-quorum "$ZEKO_BOOTSTRAP_DA_QUORUM" \
+  --mq-host "$ZEKO_BOOTSTRAP_MQ" \
+  --signer "$ZEKO_BOOTSTRAP_SIGNER" \
+  --commit-validity-period "${ZEKO_ETHEREUM_COMMIT_VALIDITY_PERIOD:-20}"
+
+mapfile -t settlements < <(find "$staging" -maxdepth 1 -type f -name 'settlement-*.json' -print)
+[[ ${#settlements[@]} -eq 1 ]] || bootstrap_fail "expected one settlement, got ${#settlements[@]}"
+for file in deployment-manifest.json genesis-ledger.json; do
+  [[ -f $staging/$file ]] || bootstrap_fail "exporter did not produce $file"
+done
+mv "${settlements[0]}" "$staging/settlement.json"
+manifest=$staging/deployment-manifest.json
+settlement=$staging/settlement.json
+jq -e --argjson nodeCount "${#da_nodes[@]}" --argjson quorum "$ZEKO_BOOTSTRAP_DA_QUORUM" \
+  --slurpfile settlement "$settlement" '
+    .schemaVersion == 1
+    and .daNodeCount == $nodeCount
+    and .daQuorum == $quorum
+    and (.daPublicKeys | length) == $nodeCount
+    and (.daPublicKeys | unique | length) == $nodeCount
+    and .outerPublicKey == $settlement[0].outerAccountPublicKey
+    and ((.outerActionState | ascii_downcase) ==
+      ($settlement[0].proof.binding.accountUpdateBody.fieldElements[36] |
+        ascii_downcase))
+    and ((.genesisLedgerField | ascii_downcase) ==
+      ($settlement[0].proof.binding.stateBefore.fields[2] | ascii_downcase))
+    and ((.daCommitment | ascii_downcase) ==
+      ($settlement[0].proof.binding.stateBefore.fields[6] | ascii_downcase))
+  ' "$manifest" >/dev/null || bootstrap_fail "deployment manifest does not match its settlement"
+
+jq -jr '.proof.vkJson' "$settlement" >"$staging/vk.serde.json"
+jq -jr '.proof.proofJson' "$settlement" >"$staging/proof.serde.json"
+jq -jr '.proof.publicInputSkeletonJson' "$settlement" >"$staging/public_input_skeleton.json"
+jq -jr '.proof.appStatementJson' "$settlement" >"$staging/app_statement.json"
+vk_sha256=$(sha256sum "$staging/vk.serde.json" | awk '{print $1}')
+circuits_sha256=$(sha256sum "$ZEKO_CIRCUITS_CONFIG" | awk '{print $1}')
+jq --arg settlementVkSha256 "$vk_sha256" \
+  --arg circuitsConfigSha256 "$circuits_sha256" \
+  --arg zekoSourceRevision "${ZEKO_BOOTSTRAP_SOURCE_REVISION:-unknown}" \
+  '. + {settlementVkSha256:$settlementVkSha256,
+    circuitsConfigSha256:$circuitsConfigSha256,
+    zekoSourceRevision:$zekoSourceRevision}' "$manifest" >"$manifest.tmp"
+mv "$manifest.tmp" "$manifest"
+# Public gateway input under the name the gateway artifacts directory expects
+# (settlement-vk.serde.json next to the guest ELFs).
+cp "$staging/vk.serde.json" "$staging/settlement-vk.serde.json"
+chmod 0640 "$staging"/*
+mv "$staging"/* "$output/"
+rmdir "$staging"
+echo "zeko-bootstrap: export complete; settlement VK sha256 $vk_sha256"
+echo "zeko-bootstrap: $output contains the first proof, genesis ledger, deployment manifest and public VK; keep it durable"
