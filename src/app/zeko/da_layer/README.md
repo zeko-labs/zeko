@@ -25,8 +25,12 @@ Each data batch has the all the account changes stored in the `diff`. The da nod
 2. Check that `batch.source_ledger_hash` is either in the database or an empty ledger.
 3. Check that the indices in `batch.diff` are unique.
 4. Set each account in `batch.diff` to the `ledger_openings` and call the resulting ledger root `target_ledger_hash`.
-5. Sign `target_ledger_hash`.
-6. Store the batch under the `target_ledger_hash`.
+5. Apply all actions in `batch.diff` to the `ledger_openings` and verify the resulting action states.
+6. Verify that after applying all receipts, the receipt chain hashes match the target ledger.
+7. Verify new accounts in ledger openings are in the same order as in the account set openings.
+8. Attach the timestamp and account set root to the diff.
+9. Store the batch under the target_ledger_hash.
+10. Sign a hash computed from `target_ledger_hash` and the account set Merkle root.
 
 For convenience, we store also the full command, which helps to not only reconstruct the ledger, but also have to full history of the state. To ensure that the command is a correct one we do one additional step:
 
