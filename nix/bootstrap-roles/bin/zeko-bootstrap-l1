@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Role: bootstrap L1 stand-in (sequencer/tests/testing_ledger run.exe,
+# packaged as zeko-testing-ledger). Mirrors
+# src/app/zeko/sequencer/run-deployment-export.sh: a single-block local chain
+# that zeko-deployment-export settles its first proof against. Compose service
+# name: bootstrap-l1.
+# Usage: zeko-bootstrap-l1 <port>
+source "$(dirname "${BASH_SOURCE[0]}")/zeko-bootstrap-common.sh"
+
+port=${1:-}
+[[ $port =~ ^[0-9]+$ ]] || bootstrap_fail "usage: zeko-bootstrap-l1 <port>"
+exec zeko-testing-ledger -p "$port" \
+  --db-dir "${ZEKO_BOOTSTRAP_STATE_DIR:-/var/lib/zeko-bootstrap}/l1" \
+  --network-id "${MINA_SIGNING_NETWORK_ID:-testnet}" \
+  --block-period 9999999

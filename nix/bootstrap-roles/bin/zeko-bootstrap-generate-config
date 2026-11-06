@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# One-shot: generate fresh operator circuit/deploy configuration with the
+# packaged `zeko-cli generate-circuits-config` (zeko sequencer/cli.ml). Writes
+# into the mounted operator workspace config directory (outside any source
+# checkout); refuses to overwrite. The deploy config contains fresh private
+# keys: the files are created with umask 077 as the workspace owner and are
+# never printed.
+# Usage: zeko-bootstrap-generate-config <0x bridge proxy address> [output-dir]
+source "$(dirname "${BASH_SOURCE[0]}")/zeko-bootstrap-common.sh"
+
+bootstrap_require_external_workspace
+bridge=${1:-}
+dir=${2:-/run/zeko/config}
+[[ $bridge =~ ^0x[0-9a-fA-F]{40}$ ]] || bootstrap_fail "usage: zeko-bootstrap-generate-config <0x bridge proxy address> [output-dir]"
+[[ -d $dir && -w $dir ]] || bootstrap_fail "output directory $dir is not a writable mount"
+for file in circuits-config.json deploy-config.json; do
+  [[ ! -e $dir/$file ]] || bootstrap_fail "refusing to overwrite $dir/$file"
+done
+umask 077
+zeko-cli generate-circuits-config \
+  --ethereum-bridge-address "$bridge" \
+  --circuits-config-output "$dir/circuits-config.json" \
+  --deploy-config-output "$dir/deploy-config.json"
+chmod 0600 "$dir/circuits-config.json" "$dir/deploy-config.json"
+echo "zeko-bootstrap: wrote $dir/circuits-config.json and $dir/deploy-config.json (private; back them up offline)"

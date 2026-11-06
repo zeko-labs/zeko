@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# One-off: create the self-signed signer TLS certificate used by every
+# bootstrap signer, as src/app/zeko/sequencer/run-deployment-export.sh does
+# with openssl. The certificate CN/SAN is the fixed name
+# ZEKO_SIGNER_TLS_HOSTNAME that signer clients verify (signer_service.ml
+# Tls.Client_config.of_env), so one certificate serves all signer containers.
+# Writes into the mounted operator workspace tls/ directory as the workspace
+# owner: ca/signer.crt (public, read by clients and signers) and
+# private/signer.key (0600, mounted into signers only). Idempotent: existing
+# material is kept.
+source "$(dirname "${BASH_SOURCE[0]}")/zeko-bootstrap-common.sh"
+
+bootstrap_require_external_workspace
+dir=${ZEKO_SIGNER_TLS_DIR:-/run/zeko/signer-tls}
+name=${ZEKO_SIGNER_TLS_HOSTNAME:-}
+[[ -n $name ]] || bootstrap_fail "ZEKO_SIGNER_TLS_HOSTNAME is required"
+[[ -d $dir && -w $dir ]] || bootstrap_fail "TLS directory $dir is not a writable mount"
+cert=$dir/ca/signer.crt
+key=$dir/private/signer.key
+if [[ -f $cert && -f $key ]]; then
+  echo "zeko-bootstrap: reusing existing signer TLS material in $dir"
+  exit 0
+fi
+[[ ! -e $cert && ! -e $key ]] || bootstrap_fail "incomplete signer TLS material in $dir; remove both files to regenerate"
+umask 077
+mkdir -p "$dir/ca" "$dir/private"
+chmod 0700 "$dir/private"
+openssl req -x509 -newkey rsa:2048 -nodes -days "${ZEKO_SIGNER_TLS_DAYS:-7}" \
+  -keyout "$key" -out "$cert" \
+  -subj "/CN=$name" -addext "subjectAltName=DNS:$name" >/dev/null 2>&1
+chmod 0600 "$key"
+chmod 0644 "$cert"
+chmod 0755 "$dir/ca"
+echo "zeko-bootstrap: wrote signer TLS certificate for $name to $cert (key in $dir/private, signers only)"
